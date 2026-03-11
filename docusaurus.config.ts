@@ -53,7 +53,7 @@ const config: Config = {
   themeConfig: {
     image: 'img/contexa-social-card.png',
     colorMode: {
-      defaultMode: 'dark',
+      defaultMode: 'light',
       disableSwitch: false,
       respectPrefersColorScheme: true,
     },
@@ -64,6 +64,7 @@ const config: Config = {
         src: 'img/logo.png',
       },
       items: [
+        {to: '/', label: 'Overview', position: 'left', activeBaseRegex: '^/$'},
         {to: '/get-started', label: 'Get Started', position: 'left'},
         {
           type: 'docSidebar',
@@ -71,11 +72,26 @@ const config: Config = {
           label: 'Docs',
           position: 'left',
         },
+        {
+          label: 'Community',
+          position: 'left',
+          items: [
+            {
+              label: 'GitHub',
+              href: 'https://github.com/contexa-security/contexa',
+            },
+            {
+              label: 'Discussions',
+              href: 'https://github.com/contexa-security/contexa/discussions',
+            },
+          ],
+        },
         {type: 'localeDropdown', position: 'right'},
         {
           href: 'https://github.com/contexa-security/contexa',
-          label: 'GitHub',
+          'aria-label': 'GitHub',
           position: 'right',
+          className: 'header-github-link',
         },
       ],
     },
@@ -83,20 +99,22 @@ const config: Config = {
       style: 'dark',
       links: [
         {
-          title: 'Getting Started',
+          title: 'Documentation',
           items: [
             {label: 'Quick Start', to: '/docs/install/quickstart'},
-            {label: 'Installation Guide', to: '/docs/install/installation-guide'},
+            {label: 'Spring Boot Integration', to: '/docs/install/spring-boot'},
             {label: 'Configuration', to: '/docs/install/configuration'},
+            {label: 'API Reference', to: '/docs/reference/'},
+            {label: 'Shadow Mode', to: '/docs/install/shadow-mode'},
           ],
         },
         {
-          title: 'Reference',
+          title: 'Platform',
           items: [
-            {label: 'Architecture', to: '/docs/reference/architecture/overview'},
-            {label: 'Identity', to: '/docs/reference/identity/dsl'},
-            {label: 'IAM', to: '/docs/reference/iam/xacml'},
-            {label: 'AI Engine', to: '/docs/reference/core/ai-lab'},
+            {label: 'AI Engine', to: '/docs/reference/core/overview'},
+            {label: 'Identity DSL', to: '/docs/reference/identity/dsl'},
+            {label: '@Protectable', to: '/docs/reference/iam/protectable'},
+            {label: 'XACML Engine', to: '/docs/reference/iam/xacml'},
           ],
         },
         {
@@ -110,10 +128,14 @@ const config: Config = {
               label: 'Discussions',
               href: 'https://github.com/contexa-security/contexa/discussions',
             },
+            {
+              label: 'Issues',
+              href: 'https://github.com/contexa-security/contexa/issues',
+            },
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Contexa. Built with Docusaurus.`,
+      copyright: `© ${new Date().getFullYear()} Contexa. Released under the Apache License 2.0.`,
     },
     prism: {
       theme: prismThemes.github,
