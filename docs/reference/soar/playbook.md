@@ -1,5 +1,0 @@
----
-title: playbook
----
-
-Placeholder
