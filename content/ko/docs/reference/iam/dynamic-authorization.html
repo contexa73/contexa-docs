@@ -1,0 +1,937 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/iam/protectable.html">IAM</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Dynamic Authorization</span>
+          </nav>
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-warning">contexa-iam</span>
+            </div>
+            <h1>동적 URL 인가</h1>
+            <p class="lead">CustomDynamicAuthorizationManager를 사용한 데이터베이스 기반 URL 인가. Admin Dashboard를 통해 접근 정책을 정의하면 재배포 없이 자동으로 적용됩니다.</p>
+          </div>
+
+          <!-- What is Dynamic Authorization -->
+          <section>
+            <h2 id="overview">동적 인가란?</h2>
+            <p>기존 Spring Security는 Java 코드에 정의된 정적 URL 매처를 사용합니다. 인가 규칙을 변경하려면 코드 수정, 빌드, 재배포가 필요합니다. Contexa의 <code>CustomDynamicAuthorizationManager</code>는 근본적으로 다른 접근 방식을 취합니다: 인가 정책을 데이터베이스에서 로드하여 런타임에 평가합니다.</p>
+            <p>이 아키텍처는 세 가지 핵심 기능을 가능하게 합니다:</p>
+            <ul>
+              <li><strong>재배포 없는 정책 변경</strong> — 애플리케이션을 다시 빌드하거나 배포하지 않고도 인가 규칙을 수정, 추가, 삭제할 수 있습니다. 편집 후 핫 리로드를 트리거하면 재초기화됩니다.</li>
+              <li><strong>Admin Dashboard 관리</strong> — Admin Dashboard UI를 통해 정책을 생성하고 관리할 수 있어 비개발자도 인가를 관리할 수 있습니다.</li>
+              <li><strong>AI 생성 정책 통합</strong> — AI가 생성하고 발전시킨 정책을 사람의 승인 후 인가 파이프라인에 통합할 수 있습니다.</li>
+            </ul>
+          </section>
+
+          <!-- How It Works -->
+          <section>
+            <h2 id="how-it-works">동작 방식</h2>
+            <p><code>CustomDynamicAuthorizationManager</code>는 Spring Security의 <code>AuthorizationManager&lt;RequestAuthorizationContext&gt;</code> 인터페이스를 구현합니다. 데이터베이스에 저장된 정책과 Spring Security의 런타임 평가 엔진 사이의 다리 역할을 합니다.</p>
+
+            <h3 id="policy-flow">정책 평가 흐름</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Text</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <div class="diagram-container">
+                <div class="diagram-flow-vertical">
+                  <div class="diagram-group">
+                    <div class="diagram-group-title">초기화</div>
+                    <div class="diagram-flow">
+                      <div class="diagram-box">
+                        <div class="diagram-box-name">애플리케이션 시작</div>
+                      </div>
+                      <div class="diagram-box">
+                        <div class="diagram-box-name">Admin Dashboard / PAP REST API</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="diagram-arrow-down"></div>
+                  <div class="diagram-flow">
+                    <div class="diagram-box">
+                      <div class="diagram-box-name">PolicyRetrievalPoint (PRP)</div>
+                      <div class="diagram-box-desc">정책 로드</div>
+                    </div>
+                    <div class="diagram-arrow"></div>
+                    <div class="diagram-box">
+                      <div class="diagram-box-name">데이터베이스 (Policies)</div>
+                      <div class="diagram-box-desc">규칙, 조건, 대상</div>
+                    </div>
+                  </div>
+                  <div class="diagram-arrow-down"></div>
+                  <div class="diagram-box diagram-highlight">
+                    <div class="diagram-box-name">CustomDynamicAuthorizationManager</div>
+                    <div class="diagram-box-desc">정책 + URL 대상에서 RequestMatcherEntry 목록 생성</div>
+                  </div>
+                  <div class="diagram-arrow-down"></div>
+                  <div class="diagram-group">
+                    <div class="diagram-group-title">요청별 평가</div>
+                    <div class="diagram-flow-vertical">
+                      <div class="diagram-box">
+                        <div class="diagram-box-name">PolicyTranslator</div>
+                        <div class="diagram-box-desc">정책 조건을 SpEL ExpressionNode 트리로 변환</div>
+                      </div>
+                      <div class="diagram-arrow-down"></div>
+                      <div class="diagram-box">
+                        <div class="diagram-box-name">ExpressionAuthorizationManagerResolver</div>
+                        <div class="diagram-box-desc">요청 URL을 적용 가능한 정책에 매칭</div>
+                      </div>
+                      <div class="diagram-arrow-down"></div>
+                      <div class="diagram-box">
+                        <div class="diagram-box-name">SpEL 평가</div>
+                        <div class="diagram-box-desc">hasAnyAuthority(), hasPermission(), isAllowed(), 사용자 정의 표현식</div>
+                      </div>
+                      <div class="diagram-arrow-down"></div>
+                      <div class="diagram-box">
+                        <div class="diagram-box-name">AI 정책 게이트</div>
+                        <div class="diagram-box-desc">AI 생성 정책은 approvalStatus = APPROVED가 아니면 건너뜀</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="diagram-arrow-down"></div>
+                  <div class="diagram-box">
+                    <div class="diagram-box-name">CentralAuditFacade</div>
+                    <div class="diagram-box-desc">모든 인가 시도를 로깅</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <h3 id="step-by-step">단계별 평가</h3>
+            <ol>
+              <li><strong>PolicyRetrievalPoint (PRP)</strong>가 <code>ContextRefreshedEvent</code> 리스너를 통해 애플리케이션 시작 시 데이터베이스에서 모든 정책을 로드합니다.</li>
+              <li>각 정책에 대해 <code>CustomDynamicAuthorizationManager</code>가 URL 대상을 추출하고 정책을 SpEL 표현식 문자열로 변환합니다.</li>
+              <li><strong>PolicyTranslator</strong>가 정책 조건을 SpEL 표현식 트리(<code>ExpressionNode</code>)로 변환합니다.</li>
+              <li>요청 시, <strong>ExpressionAuthorizationManagerResolver</strong>가 수신 요청 URL을 캐시된 <code>RequestMatcherEntry</code> 목록에 매칭합니다.</li>
+              <li>매칭된 SpEL 표현식이 현재 <code>Authentication</code> 컨텍스트에 대해 평가됩니다.</li>
+              <li>AI 생성 정책(source = <code>AI_GENERATED</code> 또는 <code>AI_EVOLVED</code>)은 <code>approvalStatus</code>가 <code>APPROVED</code>가 아닌 한 <strong>완전히 건너뜁니다</strong>.</li>
+              <li>인가 결정(허용 또는 거부)이 적용되고, 시도가 <code>CentralAuditFacade</code>에 기록됩니다.</li>
+            </ol>
+          </section>
+
+          <!-- Static + Dynamic Integration -->
+          <section>
+            <h2 id="integration">정적 + 동적 통합</h2>
+            <p>Contexa의 동적 인가는 표준 Spring Security 정적 규칙과 공존합니다. 정적 규칙이 필터 체인(Filter Chain)에서 먼저 평가되며, <code>.anyRequest()</code>에 도달하는 요청만 동적 인가 매니저가 처리합니다.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Bean
+public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    http.authorizeHttpRequests(auth -&gt; auth
+        // Static rules: evaluated first, bypasses dynamic authorization
+        .requestMatchers("/", "/home", "/css/**", "/js/**").permitAll()
+        .requestMatchers("/login", "/register").permitAll()
+        .requestMatchers("/user/list/**").hasRole("USER")
+
+        // Dynamic authorization: all remaining requests
+        // Policies loaded from database, hot-reloadable at runtime
+        .anyRequest().access(customDynamicAuthorizationManager)
+    );
+    return http.build();
+}</code></pre>
+            </div>
+
+            <h3>평가 흐름</h3>
+            <div class="diagram-container">
+              <div class="diagram-flow">
+                <div class="diagram-box">
+                  <div class="diagram-box-name">수신 요청</div>
+                  <div class="diagram-box-desc">GET /admin/dashboard</div>
+                </div>
+                <div class="diagram-arrow"></div>
+                <div class="diagram-box">
+                  <div class="diagram-box-name">정적 매처</div>
+                  <div class="diagram-box-desc">/css/**, /js/**, /images/**, /favicon.ico</div>
+                </div>
+                <div class="diagram-arrow"></div>
+                <div class="diagram-box diagram-highlight">
+                  <div class="diagram-box-name">매칭 발견?</div>
+                  <div class="diagram-box-desc">예: 즉시 permitAll() 반환 | 아니오: 계속</div>
+                </div>
+                <div class="diagram-arrow"></div>
+                <div class="diagram-box">
+                  <div class="diagram-box-name">CustomDynamicAuthorizationManager</div>
+                  <div class="diagram-box-desc">데이터베이스의 XACML 정책 평가</div>
+                </div>
+                <div class="diagram-arrow"></div>
+                <div class="diagram-box">
+                  <div class="diagram-box-name">AuthorizationDecision</div>
+                  <div class="diagram-box-desc">정책 평가 결과에 따라 허용 또는 거부</div>
+                </div>
+              </div>
+            </div>
+
+            <h3>중요 동작</h3>
+            <ul>
+              <li><strong>순서가 중요합니다</strong> — 정적 <code>requestMatchers</code>는 <code>.anyRequest()</code> 앞에 선언해야 합니다. Spring Security는 위에서 아래로 평가하며 첫 번째 매칭을 사용합니다.</li>
+              <li><strong>단락 평가(Short-circuit evaluation)</strong> — 정적 매처가 매칭되면 동적 매니저는 호출되지 않습니다. 이는 <code>permitAll()</code> 라우트가 데이터베이스 정책으로 제한될 수 없음을 의미합니다.</li>
+              <li><strong>중복 지정 비권장</strong> — 이미 정적으로 매칭된 URL에 대해 데이터베이스 정책을 정의하지 마십시오. 정적 규칙이 항상 우선합니다.</li>
+              <li><strong>감사(Audit) 영향</strong> — 정적으로 허용된 요청은 XACML 엔진을 통과하지 않으며 인가 감사 추적(Audit Trail)에 나타나지 않습니다.</li>
+            </ul>
+
+            <div class="callout callout-warning">
+              <strong>주의:</strong> URL을 <code>requestMatchers().permitAll()</code>에 추가하면 해당 URL을 대상으로 하는 데이터베이스 정책은 조용히 무시됩니다. 정적 매처가 항상 우선합니다.
+            </div>
+
+            <h3 id="default-decision">매칭되지 않는 요청의 기본 결정</h3>
+            <p>요청 URL이 데이터베이스의 어떤 정책과도 매칭되지 않으면 <code>CustomDynamicAuthorizationManager</code>는 기본 인가 결정을 반환합니다. 기본적으로 매칭되지 않는 요청은 <strong>허용</strong>(<code>AuthorizationDecision(true)</code>)됩니다. 즉, 명시적으로 정의된 DENY 정책만 접근을 차단합니다.</p>
+            <div class="callout callout-warning">
+              <strong>보안 고려사항:</strong> 기본 허용 동작은 초기 설정 및 마이그레이션 중에 적합합니다. 엄격한 보안 요구사항이 있는 프로덕션 환경에서는 낮은 우선순위의 전체 DENY 정책을 생성하여 기본 거부(deny-by-default) 태세를 적용하는 것을 고려하십시오.
+            </div>
+          </section>
+
+          <!-- Configuration Patterns -->
+          <section>
+            <h2 id="patterns">구성 패턴</h2>
+            <p>글로벌 커스터마이저 내의 <code>authorizeHttpRequests</code> 블록은 정적 매처가 동적 인가 엔진과 어떻게 상호작용하는지를 결정합니다. 보안 태세에 맞는 패턴을 선택하십시오.</p>
+
+            <h3>패턴 1: 공개 자산 + 완전 동적</h3>
+            <p>가장 일반적인 패턴입니다. 정적 자산은 인가를 완전히 우회하고, 나머지 모든 것은 XACML 정책 엔진이 평가합니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">http.authorizeHttpRequests(authReq -&gt; authReq
+    .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
+    .anyRequest().access(customDynamicAuthorizationManager)
+);</code></pre>
+            </div>
+
+            <h3>패턴 2: 관리자 고정 + 나머지 동적</h3>
+            <p>특정 잘 알려진 라우트가 자산 경로와 함께 정적으로 허용되고, 나머지 라우트는 동적 평가를 거치는 하이브리드 접근 방식입니다. 정책 상태와 관계없이 특정 페이지에 대한 보장된 접근이 필요할 때 유용합니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">http.authorizeHttpRequests(authReq -&gt; authReq
+    .requestMatchers("/css/**", "/js/**").permitAll()
+    .requestMatchers("/home", "/user/list/**").permitAll()
+    .anyRequest().access(customDynamicAuthorizationManager)
+);</code></pre>
+            </div>
+
+            <h3>패턴 3: 완전 동적</h3>
+            <p>정적 자산을 포함한 모든 요청이 정책 엔진에 의해 평가되는 엔터프라이즈 패턴입니다. 모든 접근 규칙이 컴파일 시점 예외 없이 데이터베이스에 있습니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">http.authorizeHttpRequests(authReq -&gt; authReq
+    .anyRequest().access(customDynamicAuthorizationManager)
+);</code></pre>
+            </div>
+
+            <h3>패턴 비교</h3>
+            <table>
+              <thead>
+                <tr><th>기준</th><th>패턴 1: 공개 자산 + 동적</th><th>패턴 2: 하이브리드</th><th>패턴 3: 완전 동적</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>정적 자산 성능</td><td>최고 — 정책 조회 없음</td><td>양호 — 자산에 대한 정책 조회 없음</td><td>가장 느림 — 모든 요청 평가</td></tr>
+                <tr><td>정책 유연성</td><td>비자산 라우트에 대해 높음</td><td>중간 — 일부 라우트가 하드코딩됨</td><td>최대 — 모든 것이 정책 기반</td></tr>
+                <tr><td>운영 안전성</td><td>안전 — 자산 항상 로드</td><td>안전 — 중요 페이지 항상 접근 가능</td><td>신중한 정책 설정 필요</td></tr>
+                <tr><td>적합 대상</td><td>대부분의 애플리케이션</td><td>보장된 접근이 필요한 관리 패널</td><td>완전한 정책 거버넌스가 필요한 엔터프라이즈</td></tr>
+                <tr><td>잘못된 설정 위험</td><td>낮음</td><td>낮음</td><td>높음 — 누락된 정책이 모든 것을 차단</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- Core Implementation -->
+          <section>
+            <h2 id="implementation">핵심 구현</h2>
+            <p>매니저는 Spring 컨텍스트 리프레시 시 초기화되며 런타임 정책 업데이트를 위한 핫 리로드를 지원합니다.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">public class CustomDynamicAuthorizationManager
+        implements AuthorizationManager&lt;RequestAuthorizationContext&gt; {
+
+    private final PolicyRetrievalPoint policyRetrievalPoint;
+    private final ExpressionAuthorizationManagerResolver managerResolver;
+    private final ContextHandler contextHandler;
+    private final ZeroTrustEventPublisher zeroTrustEventPublisher;
+    private final AuthorizationMetrics metricsCollector;
+
+    // Initializes on application context refresh
+    @EventListener
+    public void onApplicationEvent(ContextRefreshedEvent event) {
+        initialize();
+    }
+
+    @Override
+    public AuthorizationDecision check(
+            Supplier&lt;Authentication&gt; authenticationSupplier,
+            RequestAuthorizationContext context) {
+        // 1. Match request URL to cached RequestMatcherEntry
+        // 2. Resolve the SpEL expression for the matched policy
+        // 3. Evaluate the expression against the Authentication
+        // 4. Log result to CentralAuditFacade
+        // 5. Return AuthorizationDecision(granted/denied)
+    }
+
+    // Hot-reload: clears PRP cache and re-initializes mappings
+    public synchronized void reload() {
+        policyRetrievalPoint.clearCache();
+        initialize();
+    }
+}</code></pre>
+            </div>
+          </section>
+
+          <!-- Policy Model -->
+          <section>
+            <h2 id="policy-model">정책 모델</h2>
+            <p>데이터베이스에 저장된 각 <code>Policy</code> 엔티티는 대상, 규칙, AI 생성 정책 메타데이터를 포함한 전체 인가 정의를 담고 있습니다.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">public class Policy {
+    String name;               // Human-readable policy name
+    String description;        // Purpose and scope of the policy
+    PolicyEffect effect;       // ALLOW or DENY
+    int priority;              // Higher priority policies evaluated first
+    List&lt;PolicyTarget&gt; targets; // URL patterns + HTTP methods
+    List&lt;PolicyRule&gt; rules;     // Conditions with SpEL expressions
+    PolicySource source;        // MANUAL, AI_GENERATED, AI_EVOLVED, IMPORTED
+    ApprovalStatus approvalStatus; // NOT_REQUIRED, PENDING, APPROVED, REJECTED
+    Double confidenceScore;    // AI confidence (0.0 - 1.0), null for manual
+    String aiModel;            // AI model identifier, null for manual
+}</code></pre>
+            </div>
+
+            <h3 id="policy-fields">정책 필드 참조</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>필드</th><th>타입</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>name</code></td>
+                  <td>String</td>
+                  <td>Admin Dashboard 및 감사 로그에 표시되는 사람이 읽을 수 있는 정책 식별자.</td>
+                </tr>
+                <tr>
+                  <td><code>description</code></td>
+                  <td>String</td>
+                  <td>정책이 보호하는 대상과 존재 이유를 설명하는 사람이 읽을 수 있는 설명.</td>
+                </tr>
+                <tr>
+                  <td><code>effect</code></td>
+                  <td>PolicyEffect</td>
+                  <td>정책 효과. <code>ALLOW</code>는 조건이 충족되면 접근을 허용하고, <code>DENY</code>는 조건이 충족되면 접근을 차단합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>priority</code></td>
+                  <td>int</td>
+                  <td>여러 정책이 같은 요청에 매칭될 때 평가 순서를 결정합니다. 높은 우선순위 정책이 먼저 평가되고 우선합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>targets</code></td>
+                  <td>List&lt;PolicyTarget&gt;</td>
+                  <td>이 정책이 적용되는 리소스 대상으로, Ant 스타일 URL 패턴과 HTTP 메서드의 쌍으로 정의됩니다.</td>
+                </tr>
+                <tr>
+                  <td><code>rules</code></td>
+                  <td>List&lt;PolicyRule&gt;</td>
+                  <td>이 정책의 인가 규칙. 각 규칙은 요청 시 평가되는 하나 이상의 SpEL 조건을 포함합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>source</code></td>
+                  <td>PolicySource</td>
+                  <td>정책이 어떻게 생성되었는지를 나타냅니다: <code>MANUAL</code>, <code>AI_GENERATED</code>, <code>AI_EVOLVED</code>, 또는 <code>IMPORTED</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>approvalStatus</code></td>
+                  <td>ApprovalStatus</td>
+                  <td>승인 워크플로 상태: <code>NOT_REQUIRED</code>, <code>PENDING</code>, <code>APPROVED</code>, 또는 <code>REJECTED</code>. AI 생성 정책은 적용되기 전에 <code>APPROVED</code>여야 합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>confidenceScore</code></td>
+                  <td>Double</td>
+                  <td>이 정책에 대한 AI 모델의 신뢰도 점수, 0.0에서 1.0 범위. 수동 생성 정책의 경우 Null.</td>
+                </tr>
+                <tr>
+                  <td><code>aiModel</code></td>
+                  <td>String</td>
+                  <td>이 정책을 생성한 AI 모델의 식별자. 수동 생성 정책의 경우 Null.</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="policy-target">PolicyTarget</h3>
+            <p>각 대상은 URL 패턴을 하나 이상의 HTTP 메서드에 바인딩합니다.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">public class PolicyTarget {
+    String urlPattern;          // Ant-style URL pattern, e.g. "/api/admin/**"
+    List&lt;HttpMethod&gt; methods;   // GET, POST, PUT, DELETE, etc.
+}</code></pre>
+            </div>
+
+            <h3 id="policy-rule">PolicyRule과 Conditions</h3>
+            <p>각 규칙은 하나 이상의 조건을 포함합니다. 조건은 요청 시 평가되는 실제 SpEL 표현식 문자열을 담고 있습니다.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">public class PolicyRule {
+    String name;
+    List&lt;PolicyCondition&gt; conditions;
+}
+
+public class PolicyCondition {
+    String expression;  // SpEL expression, e.g. "hasAnyAuthority('ROLE_ADMIN')"
+}</code></pre>
+            </div>
+          </section>
+
+          <!-- SpEL Expression Support -->
+          <section>
+            <h2 id="spel-expressions">SpEL 표현식 지원</h2>
+            <p>Contexa는 Zero Trust AI 액션 검사를 위한 <code>AbstractAISecurityExpressionRoot</code>의 커스텀 메서드로 표준 Spring Security SpEL 표현식을 확장합니다.</p>
+
+            <h3 id="standard-expressions">표준 Spring Security 표현식</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>표현식</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>hasAnyAuthority('ROLE_ADMIN', 'ROLE_USER')</code></td>
+                  <td>주체(Principal)가 나열된 권한 중 하나라도 가지고 있으면 접근을 허용합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>hasAuthority('ROLE_ADMIN')</code></td>
+                  <td>주체가 지정된 권한을 가지고 있으면 접근을 허용합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>hasPermission('resource', 'action')</code></td>
+                  <td><code>PermissionEvaluator</code> 체인에 평가를 위임합니다. 이 표현식은 메서드 레벨 평가에만 관련되므로 URL 레벨 정책에서 자동으로 제거됩니다.</td>
+                </tr>
+                <tr>
+                  <td><code>permitAll</code></td>
+                  <td>인증 상태나 조건에 관계없이 항상 접근을 허용합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>denyAll</code></td>
+                  <td>인증 상태나 조건에 관계없이 항상 접근을 거부합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>isAuthenticated()</code></td>
+                  <td>사용자가 인증되었고 익명 사용자가 아닌 경우 접근을 허용합니다.</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="zero-trust-expressions">Zero Trust AI 표현식</h3>
+            <p>이 표현식들은 <code>AbstractAISecurityExpressionRoot</code>에서 제공되며 Contexa의 Zero Trust AI 평가 파이프라인과 통합됩니다.</p>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>표현식</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>isAllowed()</code></td>
+                  <td>현재 요청의 Zero Trust AI 액션이 <code>ALLOW</code>이면 true를 반환합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>isBlocked()</code></td>
+                  <td>현재 요청의 Zero Trust AI 액션이 <code>BLOCK</code>이면 true를 반환합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>needsChallenge()</code></td>
+                  <td>AI 평가에서 접근 허용 전 단계별 MFA 챌린지가 필요하다고 판단하면 true를 반환합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>needsEscalation()</code></td>
+                  <td>AI 평가에서 사람의 검토 또는 보안 팀 에스컬레이션이 필요하다고 판단하면 true를 반환합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>isPendingAnalysis()</code></td>
+                  <td>현재 요청에 대한 비동기 AI 분석이 아직 진행 중이면 true를 반환합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>hasAction('ALLOW')</code></td>
+                  <td>Zero Trust 액션이 특정 액션 이름과 일치하는지 확인합니다.</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="expression-conversion">정책-표현식 변환 규칙</h3>
+            <p><code>CustomDynamicAuthorizationManager</code>의 <code>getExpressionFromPolicy()</code> 메서드는 다음 변환 로직을 적용합니다:</p>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>조건</th><th>결과 표현식</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>조건 없음 + ALLOW 효과</td>
+                  <td><code>permitAll</code></td>
+                </tr>
+                <tr>
+                  <td>조건 없음 + DENY 효과</td>
+                  <td><code>denyAll</code></td>
+                </tr>
+                <tr>
+                  <td>단일 조건</td>
+                  <td>표현식을 직접 사용</td>
+                </tr>
+                <tr>
+                  <td>여러 단순 권한 조건</td>
+                  <td><code>hasAnyAuthority('A', 'B', 'C')</code></td>
+                </tr>
+                <tr>
+                  <td>여러 혼합 조건</td>
+                  <td><code>or</code> 연산자로 결합</td>
+                </tr>
+                <tr>
+                  <td>DENY 효과</td>
+                  <td>표현식을 <code>!(expression)</code>으로 래핑</td>
+                </tr>
+                <tr>
+                  <td>URL 정책의 <code>hasPermission()</code></td>
+                  <td>제거됨 (메서드 레벨 평가에만 관련)</td>
+                </tr>
+              </tbody>
+            </table></div>
+          </section>
+
+          <!-- XACML Integration -->
+          <section>
+            <h2 id="xacml-integration">XACML 통합</h2>
+            <p>동적 인가는 XACML 엔진(eXtensible Access Control Markup Language)에 의해 구동됩니다. 5개의 XACML 컴포넌트가 함께 작동하여 완전한 정책 생명주기를 관리합니다. 자세한 내용은 <a href="../../../docs/reference/iam/xacml.html">XACML 엔진</a> 페이지를 참조하십시오.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>컴포넌트</th><th>전체 이름</th><th>동적 인가에서의 역할</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>PAP</strong></td>
+                  <td>Policy Administration Point</td>
+                  <td>REST API 또는 Admin Dashboard를 통해 정책을 생성, 조회, 수정, 삭제합니다.</td>
+                </tr>
+                <tr>
+                  <td><strong>PDP</strong></td>
+                  <td>Policy Decision Point</td>
+                  <td>보안 컨텍스트에 대해 SpEL 표현식으로 정책 조건을 평가하고 허용 또는 거부 결정을 반환합니다.</td>
+                </tr>
+                <tr>
+                  <td><strong>PEP</strong></td>
+                  <td>Policy Enforcement Point</td>
+                  <td><code>CustomDynamicAuthorizationManager</code>에 의해 구현됩니다. Spring Security 필터 체인 내에서 PDP 결정을 적용합니다.</td>
+                </tr>
+                <tr>
+                  <td><strong>PIP</strong></td>
+                  <td>Policy Information Point</td>
+                  <td>SpEL 표현식 평가에 사용할 사용자 역할, 권한, 요청 메타데이터 등의 컨텍스트 속성을 제공합니다.</td>
+                </tr>
+                <tr>
+                  <td><strong>PRP</strong></td>
+                  <td>Policy Retrieval Point</td>
+                  <td>애플리케이션 시작 시 데이터베이스에서 정책을 로드하고 핫 리로드 이벤트 시 갱신합니다.</td>
+                </tr>
+              </tbody>
+            </table></div>
+          </section>
+
+          <!-- Usage Example -->
+          <section>
+            <h2 id="usage-example">사용 예제</h2>
+            <p>다음 예제는 동적 인가 정책의 생성부터 적용까지의 전체 생명주기를 보여줍니다.</p>
+
+            <h3 id="step1-create-policy">1단계: 정책 생성</h3>
+            <p>정책은 Admin Dashboard UI 또는 PAP REST API를 통해 프로그래밍 방식으로 생성할 수 있습니다.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">HTTP</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>POST /api/iam/policies
+Content-Type: application/json
+
+{
+  "name": "Admin API Access",
+  "description": "Restrict /api/admin/** endpoints to users with ROLE_ADMIN",
+  "effect": "ALLOW",
+  "priority": 100,
+  "targets": [
+    {
+      "urlPattern": "/api/admin/**",
+      "methods": ["GET", "POST", "PUT", "DELETE"]
+    }
+  ],
+  "rules": [
+    {
+      "name": "Require admin role",
+      "conditions": [
+        {
+          "expression": "hasAuthority('ROLE_ADMIN')"
+        }
+      ]
+    }
+  ]
+}</code></pre>
+            </div>
+
+            <h3 id="step2-database-storage">2단계: 데이터베이스에 정책 저장</h3>
+            <p>PAP가 정책을 JPA 엔티티로 저장합니다: <code>Policy</code>, <code>PolicyTarget</code>, <code>PolicyRule</code>, <code>PolicyCondition</code>. 수동 생성 정책의 경우 <code>source</code>는 <code>MANUAL</code>로, <code>approvalStatus</code>는 <code>NOT_REQUIRED</code>로 설정됩니다.</p>
+
+            <h3 id="step3-manager-picks-up">3단계: 매니저가 정책을 인식</h3>
+            <p>다음 핫 리로드(또는 애플리케이션 재시작) 시, <code>CustomDynamicAuthorizationManager</code>가 PRP에서 새 정책을 로드하고 <code>RequestMatcherEntry</code> 매핑을 생성합니다:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Text</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>URL Pattern: /api/admin/**
+HTTP Methods: GET, POST, PUT, DELETE
+SpEL Expression: hasAuthority('ROLE_ADMIN')
+Source: MANUAL
+Approval: NOT_REQUIRED (active immediately)</code></pre>
+            </div>
+
+            <h3 id="step4-request-secured">4단계: 요청이 자동으로 보호됨</h3>
+            <p><code>/api/admin/users</code>로 요청이 들어올 때:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Text</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>1. Request: GET /api/admin/users
+2. CustomDynamicAuthorizationManager.check() is invoked
+3. URL matches pattern /api/admin/** (Ant path matching)
+4. SpEL expression "hasAuthority('ROLE_ADMIN')" is evaluated
+5a. User has ROLE_ADMIN -&gt; AuthorizationDecision(granted=true)
+5b. User lacks ROLE_ADMIN -&gt; AuthorizationDecision(granted=false) -&gt; 403
+6. CentralAuditFacade logs: policy="Admin API Access", decision=GRANT/DENY</code></pre>
+            </div>
+
+            <h3 id="ai-policy-example">AI 생성 정책 예제</h3>
+            <p>AI 모델이 정책을 생성하면 <code>PENDING</code> 승인 상태로 시스템에 입력되며, 사람 검토자가 승인할 때까지 <strong>적용되지 않습니다</strong>.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">JSON</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>{
+  "name": "AI: Restrict Sensitive Reports",
+  "description": "AI-detected sensitive data endpoint requiring elevated access",
+  "effect": "ALLOW",
+  "priority": 90,
+  "targets": [
+    {
+      "urlPattern": "/api/reports/sensitive/**",
+      "methods": ["GET"]
+    }
+  ],
+  "rules": [
+    {
+      "name": "Require manager role and AI clearance",
+      "conditions": [
+        { "expression": "hasAuthority('ROLE_MANAGER')" },
+        { "expression": "isAllowed()" }
+      ]
+    }
+  ],
+  "source": "AI_GENERATED",
+  "approvalStatus": "PENDING",
+  "confidenceScore": 0.87,
+  "aiModel": "contexa-policy-gen-v2"
+}</code></pre>
+            </div>
+            <p>이 정책은 관리자가 Admin Dashboard 또는 PAP API를 통해 <code>approvalStatus</code>를 <code>APPROVED</code>로 설정할 때까지 인가 평가 중 <strong>건너뜁니다</strong>.</p>
+          </section>
+
+          <!-- Configuration -->
+          <section>
+            <h2 id="configuration">구성</h2>
+            <p>동적 인가는 <code>contexa-iam</code> 모듈이 클래스패스에 있으면 자동으로 활성화됩니다. 기본 구성은 <a href="../../../docs/reference/iam/admin.html">Admin Dashboard</a>를 통해 관리됩니다.</p>
+
+            <h3 id="hot-reload">핫 리로드</h3>
+            <p>Admin Dashboard 또는 PAP API를 통해 정책을 수정한 후, 애플리케이션을 재시작하지 않고 변경 사항을 적용하려면 핫 리로드를 트리거합니다:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">HTTP</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>POST /api/iam/policies/reload
+Authorization: Bearer &lt;admin-token&gt;</code></pre>
+            </div>
+            <p>이 호출은 <code>CustomDynamicAuthorizationManager.reload()</code>를 실행하여 PRP 캐시를 지우고 데이터베이스에서 모든 <code>RequestMatcherEntry</code> 매핑을 다시 초기화합니다.</p>
+
+            <h3 id="related-configuration">관련 구성</h3>
+            <p>IAM 속성 구성에 대해서는 <a href="../../../docs/install/configuration.html">구성</a> 참조를 확인하십시오. 주요 속성은 다음과 같습니다:</p>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>속성</th><th>기본값</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>contexa.iam.enabled</code></td>
+                  <td><code>true</code></td>
+                  <td>전체 IAM 모듈을 활성화하거나 비활성화합니다. 비활성화하면 동적 인가가 적용되지 않습니다.</td>
+                </tr>
+                <tr>
+                  <td><code>contexa.iam.policy.ai-approval-required</code></td>
+                  <td><code>true</code></td>
+                  <td>활성화하면 AI 생성 정책은 적용되기 전에 관리자의 명시적 승인이 필요합니다.</td>
+                </tr>
+                <tr>
+                  <td><code>contexa.iam.policy.cache-ttl</code></td>
+                  <td><code>3600</code></td>
+                  <td>PRP 정책 캐시의 TTL(Time-to-Live), 초 단위. 0으로 설정하면 캐싱이 완전히 비활성화됩니다.</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <h3>Zero Trust 속성</h3>
+            <table>
+              <thead>
+                <tr><th>속성</th><th>기본값</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>security.zerotrust.enabled</code></td><td><code>true</code></td><td>Zero Trust 인가 프레임워크를 전역적으로 활성화 또는 비활성화</td></tr>
+                <tr><td><code>security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>인가 모드: <code>SHADOW</code> (감사만) 또는 <code>ENFORCE</code> (실시간 적용)</td></tr>
+                <tr><td><code>security.zerotrust.sampling.rate</code></td><td><code>1.0</code></td><td>인가 평가의 샘플링 비율 (1.0 = 모든 요청 평가)</td></tr>
+                <tr><td><code>security.zerotrust.hotpath.enabled</code></td><td><code>true</code></td><td>자주 접근하는 리소스에 대한 핫 패스 최적화 활성화</td></tr>
+                <tr><td><code>security.zerotrust.threat.initial</code></td><td><code>0.3</code></td><td>새 세션에 할당되는 초기 위협 점수</td></tr>
+              </tbody>
+            </table>
+
+            <h3>임계값 속성</h3>
+            <table>
+              <thead>
+                <tr><th>속성</th><th>기본값</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>security.zerotrust.thresholds.skip</code></td><td><code>0.3</code></td><td>인가 검사를 건너뛸 수 있는 위협 점수 임계값</td></tr>
+                <tr><td><code>security.zerotrust.thresholds.optional</code></td><td><code>0.5</code></td><td>선택적 추가 검증을 위한 위협 점수 임계값</td></tr>
+                <tr><td><code>security.zerotrust.thresholds.required</code></td><td><code>0.7</code></td><td>필수 검증이 필요한 위협 점수 임계값</td></tr>
+                <tr><td><code>security.zerotrust.thresholds.strict</code></td><td><code>0.9</code></td><td>엄격한 보안 조치를 트리거하는 위협 점수 임계값</td></tr>
+              </tbody>
+            </table>
+
+            <h3>캐시 및 세션 속성</h3>
+            <table>
+              <thead>
+                <tr><th>속성</th><th>기본값</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>security.zerotrust.cache.ttl-hours</code></td><td><code>24</code></td><td>캐시된 인가 결정의 TTL (시간)</td></tr>
+                <tr><td><code>security.zerotrust.cache.session-ttl-minutes</code></td><td><code>30</code></td><td>세션별 캐시 TTL (분)</td></tr>
+                <tr><td><code>security.zerotrust.cache.invalidated-ttl-minutes</code></td><td><code>60</code></td><td>무효화된 캐시 항목이 제거되기 전 TTL (분)</td></tr>
+                <tr><td><code>security.zerotrust.session.tracking-enabled</code></td><td><code>true</code></td><td>행동 분석을 위한 AI 세션 추적 활성화</td></tr>
+                <tr><td><code>security.zerotrust.redis.timeout</code></td><td><code>5</code></td><td>Redis 연결 타임아웃 (초)</td></tr>
+                <tr><td><code>security.zerotrust.redis.update-interval-seconds</code></td><td><code>30</code></td><td>Redis에 세션 메트릭을 푸시하는 간격</td></tr>
+              </tbody>
+            </table>
+
+            <div class="callout callout-info">
+              <strong>참고:</strong> <code>contexa.iam.admin.*</code>과 같은 IAM 관리 UI 속성에 대해서는 <a href="../../../docs/reference/iam/admin.html">Admin Dashboard</a> 참조 페이지를 확인하십시오.
+            </div>
+          </section>
+
+          <!-- See Also -->
+          <section>
+            <h2 id="see-also">관련 문서</h2>
+            <ul>
+              <li><a href="../../../docs/reference/iam/xacml.html">인가 개요</a> — 전체 XACML 아키텍처, AI 표현식, 빠른 시작</li>
+              <li><a href="../../../docs/reference/iam/policy.html">정책 관리</a> — 정책 생명주기, Policy Builder, 조건 템플릿</li>
+              <li><a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> — 자동 리소스 발견 및 엔드투엔드 워크플로</li>
+              <li><a href="../../../docs/reference/iam/permission-evaluators.html">Permission Evaluators</a> — <code>hasPermission()</code>을 사용한 메서드 레벨 권한 평가</li>
+              <li><a href="../../../docs/reference/iam/admin.html">Admin Dashboard</a> — 정책, 역할, 권한 관리를 위한 UI</li>
+            </ul>
+          </section>
+
+          <!-- Default Policy Management -->
+          <section>
+            <h2 id="default-policy">기본 정책 관리</h2>
+            <p>수신 요청이 구성된 어떤 정책과도 매칭되지 않으면 인가 매니저는 기본 결정으로 폴백합니다. 기본적으로 기본값은 <strong>허용</strong>입니다:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// Default behavior: unmatched requests are allowed
+return new AuthorizationDecision(true);</code></pre>
+            </div>
+
+            <h3>보안 영향</h3>
+            <table>
+              <thead>
+                <tr><th>기본 정책</th><th>동작</th><th>사용 사례</th><th>위험</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>AuthorizationDecision(true)</code></td><td>정책이 매칭되지 않으면 접근 허용</td><td>개발, 점진적 마이그레이션</td><td>보호되지 않은 리소스가 기본적으로 열려 있음</td></tr>
+                <tr><td><code>AuthorizationDecision(false)</code></td><td>정책이 매칭되지 않으면 접근 거부</td><td>프로덕션, Zero Trust 환경</td><td>정책이 생성될 때까지 새 엔드포인트가 차단됨</td></tr>
+              </tbody>
+            </table>
+
+            <h3>기본 거부로 전환</h3>
+            <p>더 엄격한 보안 태세를 위해(프로덕션에 권장), 기본 정책을 매칭되지 않는 요청을 <strong>거부</strong>하도록 구성합니다. 이렇게 하면 접근 가능한 모든 엔드포인트에 명시적 ALLOW 정책이 있어야 합니다.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">contexa:
+  security:
+    zero-trust:
+      default-policy: DENY</code></pre>
+            </div>
+            <p><a href="../../../docs/reference/iam/admin.html">Admin Dashboard</a>의 <strong>Authorization Policies &gt; Global Settings</strong>에서 런타임에 기본 정책을 변경할 수도 있어, 재배포 없이 무중단 정책 변경이 가능합니다.</p>
+            <div class="callout callout-info">
+              <strong>팁:</strong> 기본 거부로 전환하기 전에 <a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a>를 사용하여 모든 엔드포인트를 발견하고 정책을 생성하십시오.
+            </div>
+          </section>
+
+          <!-- Admin UI: Creating URL Policies -->
+          <section>
+            <h2 id="admin-url-policies">Admin을 통한 URL 정책 생성</h2>
+            <p>Admin Dashboard는 URL 기반 인가 정책을 생성하기 위한 시각적 워크플로를 제공합니다. 다음 단계에 따라 URL 패턴을 보호하는 정책을 생성합니다:</p>
+            <ol>
+              <li><strong>Policies로 이동</strong> — Admin Dashboard에서 <strong>Admin &gt; Authorization Policies &gt; Policy List</strong>로 이동합니다.</li>
+              <li><strong>새 정책 생성</strong> — <strong>"Create New Policy"</strong> 버튼을 클릭하여 정책 편집기를 엽니다.</li>
+              <li><strong>정책 메타데이터 설정</strong> — 설명적인 정책 이름을 입력하고, 효과(<code>ALLOW</code> 또는 <code>DENY</code>)를 선택하고, 우선순위를 설정합니다(낮은 숫자가 먼저 평가됨).</li>
+              <li><strong>URL 대상 추가</strong> — Targets 섹션에서 다음을 지정하여 URL 대상을 추가합니다:
+                <ul>
+                  <li>URL 패턴 (예: <code>/api/admin/**</code>)</li>
+                  <li>HTTP 메서드 (<code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>DELETE</code>, 또는 <code>ANY</code>)</li>
+                </ul>
+              </li>
+              <li><strong>조건이 있는 규칙 추가</strong> — SpEL 조건 표현식을 포함하는 규칙을 추가합니다. 예를 들어:
+                <div class="code-block">
+                  <div class="code-block-header">
+                    <span class="code-block-lang">SpEL</span>
+                    <button class="code-copy-btn" type="button" aria-label="Copy code">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                      <span>Copy</span>
+                    </button>
+                  </div>
+                  <pre><code>hasAnyAuthority('ROLE_ADMIN')</code></pre>
+                </div>
+              </li>
+              <li><strong>저장 및 검증</strong> — 정책을 저장합니다. <code>CustomDynamicAuthorizationManager</code>가 자동으로 새 정책을 핫 리로드합니다. <a href="../../../docs/reference/iam/admin.html">Authorization Studio</a> 시뮬레이션 도구를 사용하여 적용을 검증합니다.</li>
+            </ol>
+            <div class="callout callout-info">
+              <strong>팁:</strong> 복잡한 조건의 경우 AI 지원 SpEL 표현식 생성 및 검증을 제공하는 <strong>Policy Builder</strong> 마법사를 사용하십시오. 자세한 내용은 <a href="../../../docs/reference/iam/policy.html">정책 관리</a>를 참조하십시오.
+            </div>
+          </section>
+
+          <!-- Policy Hot-Reload -->
+          <section>
+            <h2 id="policy-hot-reload">정책 핫 리로드</h2>
+            <p><code>CustomDynamicAuthorizationManager</code>는 애플리케이션 재시작 없이 정책의 핫 리로딩을 지원합니다. 이를 통해 인가 변경이 즉시 적용됩니다.</p>
+
+            <h3>자동 리로드</h3>
+            <p>애플리케이션 컨텍스트가 <code>ContextRefreshedEvent</code>를 발행하면 정책이 자동으로 리로드됩니다. 리로드 프로세스:</p>
+            <ol>
+              <li><code>PolicyRetrievalPoint</code>가 데이터베이스에서 최신 정책을 가져옵니다.</li>
+              <li><code>CustomDynamicAuthorizationManager</code>가 <code>RequestMatcherEntry</code> 목록을 다시 구축합니다.</li>
+              <li>새 요청은 업데이트된 정책 세트에 대해 평가됩니다.</li>
+            </ol>
+
+            <h3>수동 리로드</h3>
+            <p>두 가지 메커니즘을 통해 정책 리로드를 수동으로 트리거할 수 있습니다:</p>
+            <ul>
+              <li><strong>Admin Dashboard</strong> — <strong>Authorization Policies &gt; Global Settings</strong>에서 <strong>"Reload Policies"</strong> 버튼을 클릭합니다.</li>
+              <li><strong>REST API</strong> — 정책 리로드 엔드포인트에 <code>POST</code> 요청을 보냅니다:
+                <div class="code-block">
+                  <div class="code-block-header">
+                    <span class="code-block-lang">HTTP</span>
+                    <button class="code-copy-btn" type="button" aria-label="Copy code">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                      <span>Copy</span>
+                    </button>
+                  </div>
+                  <pre><code>POST /api/admin/policies/reload
+Authorization: Bearer &lt;admin-token&gt;</code></pre>
+                </div>
+              </li>
+            </ul>
+
+            <h3>캐시 무효화</h3>
+            <p>정책이 리로드되면 <code>PolicyRetrievalPoint</code>가 내부 캐시를 무효화하여 오래된 정책이 제공되지 않도록 합니다. 캐시는 다음 정책 조회 시 지연 방식으로 다시 구축됩니다. 분산 캐시(예: Redis)를 사용하는 경우 무효화 이벤트가 모든 애플리케이션 인스턴스에 전파됩니다.</p>
+          </section>
+
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/iam/xacml.html" class="docs-nav-prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">인가 개요</span>
+            </a>
+            <a href="../../../docs/reference/iam/protectable.html" class="docs-nav-next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">@Protectable</span>
+            </a>
+          </div>

@@ -1,0 +1,485 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Permission Evaluators</span>
+          </nav>
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-warning">contexa-iam</span>
+            </div>
+            <h1>Permission Evaluators</h1>
+            <p class="lead">세밀한 메서드 레벨 접근 제어를 위한 도메인별 평가기가 포함된 Spring Security의 <code>PermissionEvaluator</code>를 구현하는 복합 권한 평가 시스템.</p>
+          </div>
+
+          <!-- Choosing the Right Approach -->
+          <section>
+            <h3>올바른 접근 방식 선택</h3>
+            <table>
+              <thead>
+                <tr><th>접근 방식</th><th>범위</th><th>사용 사례</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>hasPermission()</code></td>
+                  <td>객체 레벨</td>
+                  <td>특정 도메인 객체에 대한 세밀한 CRUD 권한</td>
+                </tr>
+                <tr>
+                  <td><code>hasRole()</code></td>
+                  <td>전역</td>
+                  <td>사용자 역할 기반의 광범위한 접근 제어</td>
+                </tr>
+                <tr>
+                  <td><code>@Protectable</code></td>
+                  <td>메서드 레벨</td>
+                  <td>AI 통합이 포함된 동적 정책 기반 인가</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- Quick Start -->
+          <section>
+            <h2 id="quickstart">빠른 시작</h2>
+            <p><code>@PreAuthorize</code> 어노테이션 또는 SpEL 정책 조건에서 <code>hasPermission()</code>을 사용하여 세밀한 권한을 확인합니다.</p>
+
+            <h3>어노테이션에서 사용</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@PreAuthorize("hasPermission(#id, 'USER', 'READ')")
+public User getUser(Long id) { ... }
+
+@PreAuthorize("hasPermission(#id, 'ORDER', 'UPDATE')")
+public void updateOrder(Long id, OrderDto dto) { ... }</code></pre>
+            </div>
+
+            <h3>정책 조건에서 사용</h3>
+            <p>Admin Dashboard 또는 Policy Builder를 통해 정책을 생성할 때 SpEL 조건 표현식에서 <code>hasPermission()</code>을 사용합니다:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">SpEL</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>hasPermission(#targetId, 'DOCUMENT', 'DELETE')
+hasPermission(#targetId, 'REPORT', 'READ') and #ai.isAllowed()</code></pre>
+            </div>
+          </section>
+
+          <!-- CRUD Synonym Mapping -->
+          <section>
+            <h2 id="crud-synonyms">CRUD 동의어 매핑</h2>
+            <p>Permission Evaluator는 동의어 그룹을 사용하여 동등한 액션이 같은 권한으로 처리됩니다. 예를 들어 <code>GET</code>, <code>FIND</code>, <code>READ</code>, <code>FETCH</code>, <code>VIEW</code>, <code>RETRIEVE</code>는 모두 동일한 READ 그룹으로 해석됩니다.</p>
+            <table>
+              <thead>
+                <tr><th>권한 그룹</th><th>동의어</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>READ</td><td><code>GET</code>, <code>FIND</code>, <code>READ</code>, <code>FETCH</code>, <code>VIEW</code>, <code>RETRIEVE</code></td></tr>
+                <tr><td>CREATE</td><td><code>CREATE</code>, <code>SAVE</code>, <code>ADD</code>, <code>INSERT</code>, <code>REGISTER</code>, <code>POST</code></td></tr>
+                <tr><td>UPDATE</td><td><code>UPDATE</code>, <code>EDIT</code>, <code>MODIFY</code>, <code>CHANGE</code>, <code>PATCH</code>, <code>PUT</code></td></tr>
+                <tr><td>DELETE</td><td><code>DELETE</code>, <code>REMOVE</code>, <code>DESTROY</code>, <code>DROP</code>, <code>ERASE</code>, <code>PURGE</code></td></tr>
+              </tbody>
+            </table>
+            <p>즉, <code>hasPermission(#id, 'USER', 'FETCH')</code>는 <code>hasPermission(#id, 'USER', 'READ')</code>와 동등합니다.</p>
+          </section>
+
+          <!-- Architecture -->
+          <section>
+            <h2 id="architecture">아키텍처</h2>
+            <p>권한 평가 시스템은 복합(Composite) 패턴을 따릅니다. <code>CompositePermissionEvaluator</code>가 진입점 역할을 하며, 권한 문자열 접두사 또는 대상 타입을 기반으로 <code>hasPermission()</code> 호출을 적절한 도메인별 평가기로 라우팅합니다.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Text</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <div class="diagram-container">
+                <div class="diagram-flow-vertical">
+                  <div class="diagram-box">
+                    <div class="diagram-box-name">hasPermission(auth, target, 'USER_READ')</div>
+                    <div class="diagram-box-desc">SpEL 표현식이 권한 평가를 트리거</div>
+                  </div>
+                  <div class="diagram-arrow-down"></div>
+                  <div class="diagram-box diagram-highlight">
+                    <div class="diagram-box-name">CompositePermissionEvaluator</div>
+                    <div class="diagram-box-desc">도메인 길이 순으로 정렬된 도메인 평가기로 라우팅 (가장 긴 것 우선)</div>
+                  </div>
+                  <div class="diagram-arrow-down"></div>
+                  <div class="diagram-box">
+                    <div class="diagram-box-name">UserPermissionEvaluator</div>
+                    <div class="diagram-box-desc">domain: "USER"</div>
+                  </div>
+                  <div class="diagram-arrow-down"></div>
+                  <div class="diagram-box">
+                    <div class="diagram-box-name">RolePermissionEvaluator</div>
+                    <div class="diagram-box-desc">domain: "ROLE"</div>
+                  </div>
+                  <div class="diagram-arrow-down"></div>
+                  <div class="diagram-box">
+                    <div class="diagram-box-name">RoleHierarchyPermissionEvaluator</div>
+                    <div class="diagram-box-desc">domain: "ROLE_HIERARCHY"</div>
+                  </div>
+                  <div class="diagram-arrow-down"></div>
+                  <div class="diagram-box">
+                    <div class="diagram-box-name">GroupPermissionEvaluator</div>
+                    <div class="diagram-box-desc">domain: "GROUP"</div>
+                  </div>
+                  <div class="diagram-arrow-down"></div>
+                  <div class="diagram-box">
+                    <div class="diagram-box-name">DomainPermissionEvaluator</div>
+                    <div class="diagram-box-desc">domain: 사용자 정의</div>
+                  </div>
+                  <div class="diagram-arrow-down"></div>
+                  <div class="diagram-box">
+                    <div class="diagram-box-name">PermissionTargetPermissionEvaluator</div>
+                    <div class="diagram-box-desc">domain: "PERMISSION"</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- CompositePermissionEvaluator -->
+          <section>
+            <h2 id="composite">CompositePermissionEvaluator</h2>
+            <p>Spring Security의 <code>PermissionEvaluator</code> 인터페이스를 구현하고 권한 검사를 도메인별 평가기로 라우팅합니다.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">public class CompositePermissionEvaluator implements PermissionEvaluator {
+
+    // Sorted by domain length (descending) for longest-prefix matching
+    // e.g., ROLE_HIERARCHY matches before ROLE
+    private final List&lt;DomainPermissionEvaluator&gt; evaluators;
+
+    // Permission-string routing (e.g., "USER_READ" -&gt; UserPermissionEvaluator)
+    @Override
+    public boolean hasPermission(Authentication authentication,
+                                 Object targetDomainObject,
+                                 Object permission) { ... }
+
+    // Target-type routing (e.g., targetType="ROLE" -&gt; RolePermissionEvaluator)
+    @Override
+    public boolean hasPermission(Authentication authentication,
+                                 Serializable targetId,
+                                 String targetType,
+                                 Object permissionAction) { ... }
+
+    // Entity resolution for UI display
+    public Object resolveEntity(Serializable targetId, String targetType) { ... }
+}</code></pre>
+            </div>
+
+            <h3>라우팅 로직</h3>
+            <table>
+              <thead>
+                <tr><th>메서드 시그니처</th><th>라우팅 전략</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>hasPermission(auth, target, permission)</code></td>
+                  <td>주어진 권한 문자열에 대해 <code>supportsPermission()</code> 메서드가 <code>true</code>를 반환하는 첫 번째 평가기로 라우팅합니다. 권한은 도메인 접두사로 평가기에 매칭됩니다 (예: <code>USER_READ</code>는 User 평가기로 라우팅).</td>
+                </tr>
+                <tr>
+                  <td><code>hasPermission(auth, targetId, targetType, action)</code></td>
+                  <td>주어진 대상 타입에 대해 <code>supportsTargetType()</code> 메서드가 <code>true</code>를 반환하는 첫 번째 평가기로 라우팅합니다. 대상 타입 매칭은 대소문자를 구분하지 않습니다.</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- DomainPermissionEvaluator Interface -->
+          <section>
+            <h2 id="interface">DomainPermissionEvaluator 인터페이스</h2>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">public interface DomainPermissionEvaluator {
+    boolean supportsTargetType(String targetType);
+    boolean supportsPermission(String permission);
+    boolean hasPermission(Authentication auth, Object target, Object permission);
+    boolean hasPermission(Authentication auth, Serializable targetId,
+                          String targetType, Object permission);
+    Object resolveEntity(Serializable targetId);
+}</code></pre>
+            </div>
+          </section>
+
+          <!-- AbstractDomainPermissionEvaluator -->
+          <section>
+            <h2 id="abstract-base">AbstractDomainPermissionEvaluator</h2>
+            <p>모든 도메인 평가기를 위한 공통 기능을 제공하는 기본 클래스입니다. CRUD 동의어 해석 및 <code>PermissionAuthority</code> 기반 권한 매칭을 구현합니다.</p>
+
+            <h3>권한 매칭</h3>
+            <p>권한 문자열은 사용자의 <code>PermissionAuthority</code> 부여에 대해 매칭됩니다. 매칭 프로세스:</p>
+            <ol>
+              <li>도메인 접두사 제거 (예: <code>USER_READ</code> &rarr; <code>READ</code>)</li>
+              <li>액션 동사에 대한 CRUD 동의어 해석</li>
+              <li>대상 타입 <code>METHOD</code>이면서 액션 동의어와 도메인 이름을 모두 포함하는 권한에 대해 매칭</li>
+            </ol>
+
+            <h3>CRUD 동의어 그룹</h3>
+            <table>
+              <thead>
+                <tr><th>그룹</th><th>동의어</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Read</td><td><code>GET</code>, <code>FIND</code>, <code>READ</code>, <code>FETCH</code>, <code>VIEW</code>, <code>RETRIEVE</code>, <code>LIST</code>, <code>SEARCH</code></td></tr>
+                <tr><td>Create</td><td><code>CREATE</code>, <code>SAVE</code>, <code>ADD</code>, <code>INSERT</code>, <code>REGISTER</code>, <code>POST</code></td></tr>
+                <tr><td>Update</td><td><code>UPDATE</code>, <code>EDIT</code>, <code>MODIFY</code>, <code>CHANGE</code>, <code>PATCH</code>, <code>PUT</code></td></tr>
+                <tr><td>Delete</td><td><code>DELETE</code>, <code>REMOVE</code>, <code>DESTROY</code>, <code>DROP</code>, <code>ERASE</code>, <code>PURGE</code>, <code>CLEAR</code>, <code>TRUNCATE</code></td></tr>
+              </tbody>
+            </table>
+            <p>예를 들어, <code>hasPermission(auth, null, 'USER_FETCH')</code>는 사용자가 <code>USER</code>와 <code>GET</code>, <code>FIND</code>, <code>READ</code>, <code>FETCH</code>, <code>VIEW</code>, <code>RETRIEVE</code>, <code>LIST</code>, <code>SEARCH</code> 중 하나를 포함하는 권한을 가지고 있으면 매칭됩니다.</p>
+
+            <h3>엔티티 해석</h3>
+            <p>각 평가기는 <code>ApplicationContext</code>에서 이름이 지정된 리포지토리 빈을 통해 엔티티를 해석합니다. <code>resolveEntity()</code> 메서드는 리플렉션을 사용하여 해석된 리포지토리에서 <code>findById()</code>를 호출합니다.</p>
+          </section>
+
+          <!-- Individual Evaluators -->
+          <section>
+            <h2 id="evaluators">도메인 평가기</h2>
+            <table>
+              <thead>
+                <tr><th>평가기</th><th>도메인</th><th>리포지토리 빈</th><th>권한 접두사</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>UserPermissionEvaluator</code></td>
+                  <td><code>USER</code></td>
+                  <td><code>userRepository</code></td>
+                  <td><code>USER_*</code></td>
+                </tr>
+                <tr>
+                  <td><code>RolePermissionEvaluator</code></td>
+                  <td><code>ROLE</code></td>
+                  <td><code>roleRepository</code></td>
+                  <td><code>ROLE_*</code></td>
+                </tr>
+                <tr>
+                  <td><code>RoleHierarchyPermissionEvaluator</code></td>
+                  <td><code>ROLE_HIERARCHY</code></td>
+                  <td><code>roleHierarchyRepository</code></td>
+                  <td><code>ROLE_HIERARCHY_*</code></td>
+                </tr>
+                <tr>
+                  <td><code>GroupPermissionEvaluator</code></td>
+                  <td><code>GROUP</code></td>
+                  <td><code>groupRepository</code></td>
+                  <td><code>GROUP_*</code></td>
+                </tr>
+                <tr>
+                  <td><code>PermissionTargetPermissionEvaluator</code></td>
+                  <td><code>PERMISSION</code></td>
+                  <td><code>permissionRepository</code></td>
+                  <td><code>PERMISSION_*</code></td>
+                </tr>
+              </tbody>
+            </table>
+            <p>모든 평가기는 <code>AbstractDomainPermissionEvaluator</code>를 확장하며 <code>domain()</code>, <code>repositoryBeanName()</code>, <code>getApplicationContext()</code> 메서드만 정의합니다. 권한 검사 로직은 추상 기본 클래스에서 상속됩니다.</p>
+          </section>
+
+          <!-- Evaluation Order -->
+          <section>
+            <h2 id="evaluation-order">평가 순서</h2>
+            <p>평가기는 도메인 문자열 길이의 내림차순으로 정렬됩니다. 이를 통해 더 구체적인 도메인이 먼저 매칭됩니다:</p>
+            <ol>
+              <li><code>ROLE_HIERARCHY</code> (14자) — 가장 먼저 확인</li>
+              <li><code>PERMISSION</code> (10자)</li>
+              <li><code>GROUP</code> (5자)</li>
+              <li><code>USER</code> (4자)</li>
+              <li><code>ROLE</code> (4자)</li>
+            </ol>
+            <p>이 순서는 <code>ROLE_HIERARCHY_READ</code>가 <code>ROLE</code> 평가기에 의해 잘못 매칭되는 것을 방지합니다.</p>
+          </section>
+
+          <!-- Usage with SpEL -->
+          <section>
+            <h2 id="usage">SpEL 표현식에서의 사용</h2>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// Permission-string based (routed by prefix)
+@PreAuthorize("hasPermission(null, 'USER_READ')")
+public List&lt;UserDto&gt; getUsers() { ... }
+
+// Target-type based (routed by targetType parameter)
+@PreAuthorize("hasPermission(#id, 'ROLE', 'EDIT')")
+public void updateRole(@PathVariable Long id, @RequestBody RoleDto dto) { ... }
+
+// Group-scoped permission
+@PreAuthorize("hasPermission(#groupId, 'GROUP', 'DELETE')")
+public void deleteGroup(@PathVariable Long groupId) { ... }</code></pre>
+            </div>
+          </section>
+
+          <!-- Managing Permissions in Admin -->
+          <section>
+            <h2 id="admin-permissions">Admin Dashboard를 통한 권한 관리</h2>
+            <p>Admin Dashboard UI를 통해 권한을 생성하고 관리할 수 있으며, <code>CompositePermissionEvaluator</code> 라우팅 시스템과 통합되는 세밀한 접근 제어를 정의하기 위한 시각적 인터페이스를 제공합니다.</p>
+
+            <h3>권한 관리로 이동</h3>
+            <p><strong>Admin &gt; ID &amp; Access Management &gt; Permission Management</strong>로 이동합니다. 이 뷰는 대상 타입, 액션 타입, 연관된 역할과 함께 정의된 모든 권한을 나열합니다.</p>
+
+            <h3>새 권한 생성</h3>
+            <p>"Create Permission"을 클릭하고 다음 필드를 입력합니다:</p>
+            <table>
+              <thead>
+                <tr><th>필드</th><th>설명</th><th>예시</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Name</strong></td>
+                  <td>일반적으로 <code>DOMAIN_ACTION</code> 형식의 고유한 권한 식별자</td>
+                  <td><code>ORDER_UPDATE</code></td>
+                </tr>
+                <tr>
+                  <td><strong>Description</strong></td>
+                  <td>이 권한이 무엇을 부여하는지에 대한 사람이 읽을 수 있는 설명</td>
+                  <td>"기존 고객 주문 수정을 허용"</td>
+                </tr>
+                <tr>
+                  <td><strong>Target Type</strong></td>
+                  <td>리소스 범위: 엔드포인트 레벨은 <code>URL</code>, 메서드 레벨 권한은 <code>METHOD</code></td>
+                  <td><code>METHOD</code></td>
+                </tr>
+                <tr>
+                  <td><strong>Action Type</strong></td>
+                  <td>CRUD 액션: <code>READ</code>, <code>CREATE</code>, <code>UPDATE</code>, <code>DELETE</code>, 또는 사용자 정의 액션</td>
+                  <td><code>UPDATE</code></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3>역할에 권한 연결</h3>
+            <p>권한을 생성한 후 역할 관리 섹션으로 이동하여 연결합니다. 대상 역할을 열고 "Permissions" 탭으로 이동하여 새로 생성한 권한을 추가합니다. 해당 역할을 가진 사용자가 <code>hasPermission()</code>을 호출하면 <code>CompositePermissionEvaluator</code>가 사용자의 <code>PermissionAuthority</code> 부여에 매칭되는 도메인과 액션이 포함되어 있는지 확인합니다.</p>
+
+            <h3>권한이 DomainPermissionEvaluator 라우팅에 연결되는 방식</h3>
+            <p>Admin Dashboard에서 생성된 권한은 사용자의 인증 토큰에 <code>PermissionAuthority</code> 부여로 저장됩니다. <code>hasPermission()</code>이 호출되면 <code>CompositePermissionEvaluator</code>가 도메인 접두사를 기반으로 적절한 <code>DomainPermissionEvaluator</code>에 호출을 라우팅합니다. 평가기는 사용자의 권한에 올바른 액션 동의어 그룹과 매칭되는 권한이 포함되어 있는지 확인합니다.</p>
+          </section>
+
+          <!-- Using hasPermission() in Policy Builder -->
+          <section>
+            <h2 id="policy-builder-permission">Policy Builder에서 hasPermission() 사용</h2>
+            <p><a href="../../../docs/reference/iam/policy.html">Policy Builder</a>에서 정책을 생성할 때, <code>hasPermission()</code>을 SpEL 조건 표현식 내에서 사용하여 권한 기반 접근 제어를 다른 인가 검사와 결합할 수 있습니다.</p>
+
+            <div class="callout callout-warning">
+              <strong>중요:</strong> <code>hasPermission()</code>은 <strong>URL 레벨 정책에서 제거됩니다</strong>. 메서드 레벨 정책(즉, <code>@Protectable</code> 메서드와 같은 <code>METHOD</code> 리소스를 대상으로 하는 정책)에서만 작동합니다. URL 레벨 정책 조건에 <code>hasPermission()</code>을 포함하면 평가 중 무시됩니다.
+            </div>
+
+            <h3>정책 조건 예제</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">SpEL</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>// Permission check only
+hasPermission(#targetId, 'DOCUMENT', 'READ')
+
+// Combined with AI security expression
+hasPermission(#targetId, 'ORDER', 'UPDATE') and #ai.isAllowed()
+
+// Combined with role check
+hasPermission(#targetId, 'REPORT', 'DELETE') or hasRole('ADMIN')
+
+// Combined with time-based condition
+hasPermission(#targetId, 'PAYMENT', 'CREATE') and #time.isBusinessHours()</code></pre>
+            </div>
+            <p>Policy Builder UI에서 이 표현식은 정책 규칙을 정의할 때 "Condition" 필드에 입력합니다. 대상 리소스 타입이 <code>METHOD</code>인 경우 표현식 편집기가 <code>hasPermission()</code> 매개변수에 대한 자동 완성을 제공합니다.</p>
+          </section>
+
+          <!-- Custom DomainPermissionEvaluator -->
+          <section>
+            <h2 id="custom-evaluator">사용자 정의 도메인 평가기 생성</h2>
+            <p>자체 도메인 타입을 위해 <code>DomainPermissionEvaluator</code> 인터페이스를 구현하여 권한 평가 시스템을 확장할 수 있습니다. 사용자 정의 평가기는 Spring 빈으로 등록되면 <code>CompositePermissionEvaluator</code>에 의해 자동으로 감지됩니다.</p>
+
+            <h3>구현 단계</h3>
+            <ol>
+              <li><code>DomainPermissionEvaluator</code> 인터페이스 구현</li>
+              <li>도메인 이름을 반환하도록 <code>domain()</code> 정의 (예: <code>"DOCUMENT"</code>)</li>
+              <li>도메인 엔티티를 처리하는 리포지토리의 Spring 빈 이름을 반환하도록 <code>repositoryBeanName()</code> 정의</li>
+              <li>클래스를 Spring <code>@Component</code>로 등록 — <code>CompositePermissionEvaluator</code>가 애플리케이션 컨텍스트의 모든 <code>DomainPermissionEvaluator</code> 빈을 자동 감지</li>
+            </ol>
+
+            <h3>구현 예제</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Component
+public class DocumentPermissionEvaluator
+        extends AbstractDomainPermissionEvaluator {
+
+    private final ApplicationContext applicationContext;
+
+    public DocumentPermissionEvaluator(ApplicationContext applicationContext) {
+        this.applicationContext = applicationContext;
+    }
+
+    @Override
+    public String domain() {
+        return "DOCUMENT";
+    }
+
+    @Override
+    public String repositoryBeanName() {
+        return "documentRepository";
+    }
+
+    @Override
+    protected ApplicationContext getApplicationContext() {
+        return applicationContext;
+    }
+}</code></pre>
+            </div>
+            <p>이 빈이 등록되면 <code>hasPermission(#id, 'DOCUMENT', 'READ')</code>이 자동으로 <code>DocumentPermissionEvaluator</code>로 라우팅됩니다. 기본 클래스 <code>AbstractDomainPermissionEvaluator</code>가 CRUD 동의어 해석, <code>PermissionAuthority</code> 매칭, 이름이 지정된 리포지토리 빈을 통한 엔티티 해석을 처리합니다.</p>
+
+            <h3>자동 감지 및 순서</h3>
+            <p><code>CompositePermissionEvaluator</code>는 시작 시 모든 <code>DomainPermissionEvaluator</code> 빈을 수집하고 도메인 문자열 길이순(가장 긴 것 우선)으로 정렬합니다. 이를 통해 도메인 <code>"DOCUMENT_ARCHIVE"</code>의 사용자 정의 평가기가 도메인 <code>"DOCUMENT"</code>의 평가기보다 먼저 매칭됩니다. 빈 등록 외에 추가 구성은 필요 없습니다.</p>
+          </section>
+
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/iam/ai-security-expressions.html" class="docs-nav-prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">AI Security Expressions</span>
+            </a>
+            <a href="../../../docs/reference/iam/policy.html" class="docs-nav-next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">정책 관리</span>
+            </a>
+          </div>

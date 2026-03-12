@@ -1,0 +1,537 @@
+<!-- Breadcrumb -->
+          <nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">AI Security Expressions</span>
+          </nav>
+
+          <!-- Page Header -->
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-warning">contexa-iam</span>
+            </div>
+            <h1>AI Security Expressions</h1>
+            <p class="lead">Spring Security의 SpEL 표현식 시스템을 AI 기반 위험 평가 함수로 확장합니다. Contexa의 <code>AbstractAISecurityExpressionRoot</code>는 URL 레벨 및 메서드 레벨 인가 결정에 실시간 Zero Trust 액션 평가를 제공합니다.</p>
+          </div>
+
+          <!-- Overview -->
+          <section>
+            <h2 id="overview">개요</h2>
+            <p>Contexa는 Spring Security의 표현식 기반 접근 제어를 실시간으로 <code>ZeroTrustAction</code> 결과를 평가하는 AI 통합 함수로 확장합니다. 이 표현식은 URL 레벨 보안 구성과 메서드 레벨 어노테이션 모두에서 사용할 수 있습니다.</p>
+            <p>표현식 시스템은 두 개의 레벨로 구축됩니다:</p>
+            <ul>
+              <li><strong>URL 레벨</strong> — URL 정책에서 HTTP 요청 매칭을 위한 <code>CustomWebSecurityExpressionRoot</code></li>
+              <li><strong>메서드 레벨</strong> — <code>@Protectable</code>을 사용한 어노테이션 기반 인가를 위한 <code>CustomMethodSecurityExpressionRoot</code></li>
+            </ul>
+            <p>두 클래스 모두 공유 <code>#ai.*</code> 표현식 API를 제공하는 <code>AbstractAISecurityExpressionRoot</code>를 확장합니다. AI 표현식은 Zero Trust 파이프라인과 통합되어 있으며 — <code>ZeroTrustAction</code> 객체는 Redis(메서드 레벨에서는 선택적으로 Caffeine 캐시)에서 검색되어 AI 위험 평가를 기반으로 인가 결정을 내립니다.</p>
+          </section>
+
+          <!-- Expression API Reference -->
+          <section>
+            <h2 id="api">Expression API 참조</h2>
+            <p>모든 표현식은 SpEL에서 <code>#ai</code> 접두사를 통해 접근합니다. 이들은 <code>AbstractAISecurityExpressionRoot</code>에 정의되어 있으며 URL과 메서드 레벨 모두에서 사용할 수 있습니다.</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>표현식</th>
+                  <th>반환 타입</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>#ai.isAllowed()</code></td>
+                  <td><code>boolean</code></td>
+                  <td>AI 평가 결과가 <code>ALLOW</code>이면 <code>true</code>를 반환</td>
+                </tr>
+                <tr>
+                  <td><code>#ai.isBlocked()</code></td>
+                  <td><code>boolean</code></td>
+                  <td>AI 평가 결과가 <code>BLOCK</code>이면 <code>true</code>를 반환</td>
+                </tr>
+                <tr>
+                  <td><code>#ai.needsChallenge()</code></td>
+                  <td><code>boolean</code></td>
+                  <td>AI 평가 결과가 <code>CHALLENGE</code>이면 <code>true</code>를 반환</td>
+                </tr>
+                <tr>
+                  <td><code>#ai.needsEscalation()</code></td>
+                  <td><code>boolean</code></td>
+                  <td>AI 평가 결과가 <code>ESCALATE</code>이면 <code>true</code>를 반환</td>
+                </tr>
+                <tr>
+                  <td><code>#ai.isPendingAnalysis()</code></td>
+                  <td><code>boolean</code></td>
+                  <td>AI 평가 결과가 <code>PENDING_ANALYSIS</code>이면 <code>true</code>를 반환</td>
+                </tr>
+                <tr>
+                  <td><code>#ai.hasAction(String)</code></td>
+                  <td><code>boolean</code></td>
+                  <td>현재 <code>ZeroTrustAction</code>이 특정 액션 문자열과 일치하는지 확인</td>
+                </tr>
+                <tr>
+                  <td><code>#ai.hasActionIn(String...)</code></td>
+                  <td><code>boolean</code></td>
+                  <td>현재 액션이 제공된 액션 문자열 중 하나와 일치하면 <code>true</code>를 반환</td>
+                </tr>
+                <tr>
+                  <td><code>#ai.hasActionOrDefault(default, actions...)</code></td>
+                  <td><code>boolean</code></td>
+                  <td>제공된 액션을 확인하며, <code>ZeroTrustAction</code>을 사용할 수 없는 경우 <code>default</code> boolean 값을 반환</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- URL-Level Expressions -->
+          <section>
+            <h2 id="url-level">URL 레벨 표현식</h2>
+            <p><code>CustomWebSecurityExpressionRoot</code>는 <code>AbstractAISecurityExpressionRoot</code>를 확장하고 HTTP 요청 매칭을 위한 URL 특화 헬퍼 메서드를 추가합니다. Policy Builder를 통해 생성된 URL 정책에서 사용됩니다.</p>
+
+            <h3>추가 URL 레벨 메서드</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>메서드</th>
+                  <th>반환 타입</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>hasIpAddress(String ipAddress)</code></td>
+                  <td><code>boolean</code></td>
+                  <td>요청이 주어진 IP 주소 또는 CIDR 범위에서 발생했는지 확인</td>
+                </tr>
+                <tr>
+                  <td><code>getHttpMethod()</code></td>
+                  <td><code>String</code></td>
+                  <td>현재 요청의 HTTP 메서드(GET, POST 등)를 반환</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3>사용 예제</h3>
+            <p>이 표현식은 Admin Dashboard 또는 Policy Builder를 통해 생성된 URL 정책 조건에서 사용됩니다:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">SpEL</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>// Allow only if AI approves AND user has USER role
+#ai.isAllowed() and hasRole('USER')
+
+// Allow if AI approves AND request is from internal network
+#ai.isAllowed() and hasIpAddress('10.0.0.0/8')
+
+// Deny only if AI explicitly blocks (permissive mode)
+!(#ai.isBlocked())
+
+// Allow or challenge actions only
+#ai.hasActionIn('ALLOW', 'CHALLENGE')</code></pre>
+            </div>
+          </section>
+
+          <!-- Method-Level Expressions -->
+          <section>
+            <h2 id="method-level">메서드 레벨 표현식</h2>
+            <p><code>CustomMethodSecurityExpressionRoot</code>는 <code>AbstractAISecurityExpressionRoot</code>를 확장하고 소유권 검증 및 전체 <code>hasPermission()</code> 지원을 포함한 메서드 레벨 인가 기능을 추가합니다.</p>
+
+            <h3>추가 메서드 레벨 메서드</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>메서드</th>
+                  <th>반환 타입</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>hasPermission(Object, Object)</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>CompositePermissionEvaluator</code>를 통한 소유권 검사를 포함한 전체 권한 평가</td>
+                </tr>
+                <tr>
+                  <td><code>hasPermission(Object, String, Object)</code></td>
+                  <td><code>boolean</code></td>
+                  <td>도메인별 라우팅이 포함된 대상 타입 기반 권한 평가</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3>캐싱</h3>
+            <p>메서드 레벨 표현식은 <code>ZeroTrustAction</code> 조회를 위해 2단계 캐시를 사용합니다:</p>
+            <ul>
+              <li><strong>Caffeine 로컬 캐시</strong> — 5초 TTL, 최대 10,000개 항목</li>
+              <li><strong>Redis</strong> — 기본 분산 저장소, 세션 범위</li>
+            </ul>
+
+            <h3>@Protectable과 함께 사용</h3>
+            <p>메서드 레벨 AI 표현식은 일반적으로 <code>@Protectable</code> 어노테이션 및 <code>@PreAuthorize</code>와 함께 사용됩니다:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@PreAuthorize("#ai.isAllowed() and hasPermission(#id, 'USER', 'READ')")
+@Protectable(ownerField = "userId")
+public User getUser(Long id) { ... }
+
+@PreAuthorize("#ai.isAllowed() and hasPermission(#orderId, 'ORDER', 'UPDATE')")
+@Protectable(ownerField = "customerId", sync = true)
+public void updateOrder(Long orderId, OrderDto dto) { ... }
+
+@PreAuthorize("!(#ai.isBlocked()) and hasRole('ADMIN')")
+@Protectable
+public List&lt;AuditLog&gt; getAuditLogs() { ... }</code></pre>
+            </div>
+          </section>
+
+          <!-- URL vs Method Comparison -->
+          <section>
+            <h2 id="comparison">URL vs 메서드 비교</h2>
+            <p>두 표현식 루트는 서로 다른 인가 레이어를 담당하며 고유한 기능을 가집니다:</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>기능</th>
+                  <th>URL 레벨</th>
+                  <th>메서드 레벨</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Expression Root</td>
+                  <td><code>CustomWebSecurityExpressionRoot</code></td>
+                  <td><code>CustomMethodSecurityExpressionRoot</code></td>
+                </tr>
+                <tr>
+                  <td>캐시</td>
+                  <td>Redis만</td>
+                  <td>Caffeine (5초 TTL) + Redis</td>
+                </tr>
+                <tr>
+                  <td>소유권 검사</td>
+                  <td>아니오</td>
+                  <td>예 (<code>ownerField</code> 사용)</td>
+                </tr>
+                <tr>
+                  <td><code>hasPermission()</code></td>
+                  <td>제거됨 (URL 레벨 전용)</td>
+                  <td>전체 지원</td>
+                </tr>
+                <tr>
+                  <td><code>hasIpAddress()</code></td>
+                  <td>예</td>
+                  <td>아니오</td>
+                </tr>
+                <tr>
+                  <td>트리거</td>
+                  <td>HTTP 요청 매칭</td>
+                  <td><code>@Protectable</code> 어노테이션</td>
+                </tr>
+                <tr>
+                  <td>일반적 사용</td>
+                  <td>Policy Builder를 통한 URL 정책</td>
+                  <td>서비스 메서드 어노테이션</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- ZeroTrustAction Flow -->
+          <section>
+            <h2 id="zerotrust-flow">ZeroTrustAction 흐름</h2>
+            <p>AI 보안 표현식은 AI 분석 파이프라인에서 생성된 <code>ZeroTrustAction</code>을 평가합니다. 다음 다이어그램은 초기 분석에서 인가 결정까지의 요청 흐름을 보여줍니다:</p>
+
+            <div class="diagram-container">
+              <div class="diagram-title">ZeroTrustAction 평가 흐름</div>
+              <div class="diagram-flow-vertical">
+                <div class="diagram-box">
+                  <span class="diagram-box-name">HTTP 요청</span>
+                  <span class="diagram-box-desc">수신 요청이 필터 체인에 진입</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-box diagram-highlight">
+                  <span class="diagram-box-name">AI 분석 파이프라인</span>
+                  <span class="diagram-box-desc">위험 점수 계산, 행동 분석, 위협 감지</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-box diagram-accent">
+                  <span class="diagram-box-name">ZeroTrustAction 생성</span>
+                  <span class="diagram-box-desc">ALLOW | BLOCK | CHALLENGE | ESCALATE | PENDING_ANALYSIS</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-box">
+                  <span class="diagram-box-name">Redis에 저장</span>
+                  <span class="diagram-box-desc">후속 평가를 위한 세션 범위 캐시</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-box">
+                  <span class="diagram-box-name">표현식 평가</span>
+                  <span class="diagram-box-desc">#ai.isAllowed(), #ai.isBlocked() 등</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-box diagram-success">
+                  <span class="diagram-box-name">인가 결정</span>
+                  <span class="diagram-box-desc">표현식 결과에 따라 접근 허용 또는 거부</span>
+                </div>
+              </div>
+            </div>
+
+            <h3>액션 타입</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>액션</th>
+                  <th>의미</th>
+                  <th>일반적 응답</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>ALLOW</code></td>
+                  <td>AI 평가가 낮은 위험을 나타냄</td>
+                  <td>정상적으로 접근 허용</td>
+                </tr>
+                <tr>
+                  <td><code>BLOCK</code></td>
+                  <td>AI 평가가 높은 위험 또는 위협을 나타냄</td>
+                  <td>접근 거부, 인시던트 기록</td>
+                </tr>
+                <tr>
+                  <td><code>CHALLENGE</code></td>
+                  <td>AI 평가가 중간 위험을 나타냄</td>
+                  <td>추가 검증 필요 (MFA, CAPTCHA)</td>
+                </tr>
+                <tr>
+                  <td><code>ESCALATE</code></td>
+                  <td>AI 평가가 사람의 검토를 필요로 함</td>
+                  <td>수동 승인을 위해 보안 팀에 라우팅</td>
+                </tr>
+                <tr>
+                  <td><code>PENDING_ANALYSIS</code></td>
+                  <td>AI 분석이 아직 진행 중</td>
+                  <td>기본 정책 적용 또는 완료 대기</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3>위험 점수 계산</h3>
+            <p>위험 점수는 AI 평가 신뢰도에서 도출됩니다:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Text</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>riskScore = 1.0 - aiAssessmentScore
+
+Example:
+  AI confidence = 0.92 (high confidence of safety)
+  Risk score   = 1.0 - 0.92 = 0.08 (low risk)
+  Action       = ALLOW
+
+  AI confidence = 0.25 (low confidence of safety)
+  Risk score   = 1.0 - 0.25 = 0.75 (high risk)
+  Action       = BLOCK or CHALLENGE</code></pre>
+            </div>
+          </section>
+
+          <!-- Practical Scenarios -->
+          <section>
+            <h2 id="scenarios">실전 시나리오</h2>
+
+            <h3>시나리오 1: 위험 기반 접근 제어</h3>
+            <p>AI 표현식을 사용하여 위험 수준에 따른 계층적 접근 제어를 구현합니다:</p>
+            <ul>
+              <li><strong>낮은 위험</strong> — AI가 <code>ALLOW</code>를 반환, 접근 허용</li>
+              <li><strong>중간 위험</strong> — AI가 <code>CHALLENGE</code>를 반환, 추가 인증(MFA) 필요</li>
+              <li><strong>높은 위험</strong> — AI가 <code>BLOCK</code>을 반환, 접근 거부</li>
+            </ul>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">SpEL</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>// Strict mode: only allow if AI explicitly approves
+#ai.isAllowed()
+
+// Permissive mode: allow unless AI explicitly blocks
+!(#ai.isBlocked())
+
+// Challenge-aware: allow if permitted or after challenge completion
+#ai.hasActionIn('ALLOW', 'CHALLENGE')</code></pre>
+            </div>
+
+            <h3>시나리오 2: AI + 역할 기반 하이브리드</h3>
+            <p>심층 방어를 위해 AI 위험 평가와 전통적인 역할 기반 접근 제어를 결합합니다:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">SpEL</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>// Require both AI approval and appropriate role
+#ai.isAllowed() and hasAnyAuthority('ROLE_USER', 'ROLE_ADMIN')
+
+// Admin bypass with AI monitoring (AI can still block suspicious admin activity)
+hasRole('ADMIN') and !(#ai.isBlocked())
+
+// Elevated access requires both AI approval and specific authority
+#ai.isAllowed() and hasAuthority('PERMISSION_SENSITIVE_DATA_READ')</code></pre>
+            </div>
+
+            <h3>시나리오 3: 소유권 + AI 검증</h3>
+            <p>세밀한 접근 제어를 위해 AI 표현식을 <code>@Protectable</code> 소유권 검사 및 권한 평가와 결합합니다:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// AI + ownership + permission: triple-layered authorization
+@Protectable(ownerField = "createdBy", sync = true)
+@PreAuthorize("#ai.isAllowed() and hasPermission(#id, 'DOCUMENT', 'UPDATE')")
+public void updateDocument(Long id, DocumentDto dto) { ... }
+
+// AI + ownership for read operations
+@Protectable(ownerField = "patientId")
+@PreAuthorize("#ai.isAllowed() and hasPermission(#id, 'MEDICAL_RECORD', 'READ')")
+public MedicalRecord getRecord(Long id) { ... }
+
+// Fallback when AI is unavailable: default to deny
+@Protectable(ownerField = "accountId")
+@PreAuthorize("#ai.hasActionOrDefault(false, 'ALLOW') and hasPermission(#id, 'ACCOUNT', 'UPDATE')")
+public void updateAccount(Long id, AccountDto dto) { ... }</code></pre>
+            </div>
+          </section>
+
+          <!-- Creating AI-Aware Policies in Admin -->
+          <section>
+            <h2 id="admin-guide">Admin에서 AI 인식 정책 생성</h2>
+            <p>AI 보안 표현식은 Admin Dashboard의 Policy Builder를 통해 생성된 정책에서 사용할 수 있습니다. 이를 통해 관리자는 코드 작성 없이 AI 위험 평가를 통합하는 인가 규칙을 정의할 수 있습니다.</p>
+
+            <h3>1단계: Policy Builder 열기</h3>
+            <p>Admin Dashboard에서 <strong>IAM &rarr; Policies &rarr; Create Policy</strong>로 이동합니다. 정책의 대상 리소스와 HTTP 메서드 패턴을 선택합니다.</p>
+
+            <h3>2단계: AI 조건 템플릿 선택</h3>
+            <p>조건 편집기에서 사전 정의된 AI 표현식 템플릿 중 선택하거나 사용자 정의 SpEL 표현식을 작성합니다. 사용 가능한 템플릿:</p>
+            <ul>
+              <li><strong>AI Approved</strong> — <code>#ai.isAllowed()</code></li>
+              <li><strong>AI Not Blocked</strong> — <code>!(#ai.isBlocked())</code></li>
+              <li><strong>AI Approved + Role</strong> — <code>#ai.isAllowed() and hasRole('...')</code></li>
+              <li><strong>Custom AI Expression</strong> — <code>#ai.*</code> 함수를 사용한 유효한 SpEL 작성</li>
+            </ul>
+
+            <h3>3단계: 승인 워크플로 구성</h3>
+            <p>AI 생성 정책의 경우 승인 워크플로를 사용할 수 있습니다. AI 표현식이 포함된 정책은 다음과 같이 설정할 수 있습니다:</p>
+            <ul>
+              <li><strong>자동 승인</strong> — 낮은 위험의 정책 변경에 즉시 적용</li>
+              <li><strong>검토 필요</strong> — 활성화 전 보안 팀 검토를 위해 대기열에 추가</li>
+              <li><strong>Shadow 모드</strong> — 평가하되 적용하지 않음, AI 정책 효과 테스트용</li>
+            </ul>
+
+            <h3>4단계: 정책 효과 모니터링</h3>
+            <p>활성화 후 Admin Dashboard에서 AI 정책 결과를 모니터링합니다:</p>
+            <ul>
+              <li>정책별 허용/거부/챌린지 비율 확인</li>
+              <li>오탐(False Positive) 및 미탐(False Negative) 비율 추적</li>
+              <li>보호 리소스의 위험 점수 분포 분석</li>
+              <li>에스컬레이션 패턴 및 응답 시간 검토</li>
+            </ul>
+          </section>
+
+          <!-- Cache Architecture -->
+          <section>
+            <h2 id="cache">캐시 아키텍처</h2>
+            <p>AI 보안 표현식은 모든 표현식 평가마다 AI 분석을 다시 실행하지 않도록 캐시된 <code>ZeroTrustAction</code> 객체에 의존합니다. 캐싱 전략은 URL 레벨과 메서드 레벨 표현식 간에 다릅니다.</p>
+
+            <h3>캐시 레이어</h3>
+            <div class="diagram-container">
+              <div class="diagram-title">ZeroTrustAction 캐시 조회 순서</div>
+              <div class="diagram-flow-vertical">
+                <div class="diagram-box diagram-highlight">
+                  <span class="diagram-box-name">Request Attribute</span>
+                  <span class="diagram-box-desc">가장 먼저 확인 — 현재 HTTP 요청의 인-리퀘스트 캐시</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-box">
+                  <span class="diagram-box-name">Caffeine 로컬 캐시</span>
+                  <span class="diagram-box-desc">메서드 레벨 전용 — 5초 TTL, 최대 10K 항목</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-box diagram-accent">
+                  <span class="diagram-box-name">Redis</span>
+                  <span class="diagram-box-desc">기본 분산 저장소 — 세션 범위 TTL</span>
+                </div>
+              </div>
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>캐시 레이어</th>
+                  <th>범위</th>
+                  <th>TTL</th>
+                  <th>최대 항목</th>
+                  <th>사용 대상</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Request Attribute</td>
+                  <td>단일 HTTP 요청</td>
+                  <td>요청 생명주기</td>
+                  <td>요청당 1개</td>
+                  <td>URL 및 메서드 레벨 모두</td>
+                </tr>
+                <tr>
+                  <td>Caffeine</td>
+                  <td>JVM 로컬</td>
+                  <td>5초</td>
+                  <td>10,000</td>
+                  <td>메서드 레벨 전용</td>
+                </tr>
+                <tr>
+                  <td>Redis</td>
+                  <td>분산 (세션 범위)</td>
+                  <td>세션 TTL</td>
+                  <td>무제한</td>
+                  <td>URL 및 메서드 레벨 모두</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <p>Request Attribute 캐시는 단일 HTTP 요청 내에서 참조하는 표현식 수에 관계없이 <code>ZeroTrustAction</code>이 한 번만 해석되도록 보장합니다. 메서드 레벨의 Caffeine 캐시는 짧은 시간 내 반복 평가에 대해 저지연 접근을 제공합니다.</p>
+          </section>
+
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/iam/protectable.html" class="docs-nav-prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">@Protectable</span>
+            </a>
+            <a href="../../../docs/reference/iam/permission-evaluators.html" class="docs-nav-next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">Permission Evaluators</span>
+            </a>
+          </div>

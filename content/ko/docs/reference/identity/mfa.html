@@ -1,0 +1,522 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">레퍼런스</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">적응형 MFA</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-info">contexa-identity</span>
+            </div>
+            <h1>적응형 MFA</h1>
+            <p class="lead">MFA(Multi-Factor Authentication) 설정 가이드입니다. 1차 인증(Form/REST) 후 2차 요소(OTT, Passkey)를 결합하여 보안을 강화합니다. AI 기반 적응형 정책, 커스텀 페이지, Device Trust, Step-up 인증을 지원합니다.</p>
+          </div>
+
+          <!-- Overview -->
+          <section class="docs-section">
+            <h2 id="overview">개요</h2>
+            <p>Contexa MFA는 1차 인증 + 2차 요소로 구성됩니다. 정책 엔진이 MFA 필요 여부를 결정하고, 상태 머신이 인증 플로우를 관리합니다.</p>
+
+<pre class="arch-diagram"><code>
+  MFA Architecture
+  ================
+
+  [Primary Auth: Form/REST]
+          |
+          v
+  [MfaPolicyProvider] ---&gt; MFA Not Required ---&gt; Auth Complete
+          |
+          v (MFA Required)
+  [Factor Selection: OTT / Passkey]
+          |
+          v
+  [State Machine: Challenge -&gt; Verification]
+          |
+          v
+  [MFA Success] ---&gt; Auth Complete
+</code></pre>
+
+            <p>기본 MFA order는 <strong>200</strong>입니다. <code>.mfa()</code>에서 직접 <code>.form()</code>이나 <code>.rest()</code>를 호출하면 <code>UnsupportedOperationException</code>이 발생합니다. 반드시 <code>.primaryAuthentication()</code>을 사용해야 합니다.</p>
+          </section>
+
+          <!-- Quick Start -->
+          <section class="docs-section">
+            <h2 id="quick-start">빠른 시작</h2>
+            <p>Form 1차 인증 + Passkey 2차 인증의 가장 간단한 MFA 설정입니다.</p>
+
+<pre><code class="language-java">registry
+    .mfa(mfa -&gt; mfa
+        .primaryAuthentication(primary -&gt; primary
+            .formLogin(form -&gt; form.loginPage("/login")))
+        .passkey(Customizer.withDefaults())
+    )
+    .session(Customizer.withDefaults())
+    .build();</code></pre>
+          </section>
+
+          <!-- Primary Authentication -->
+          <section class="docs-section">
+            <h2 id="primary-authentication">1차 인증</h2>
+            <p><code>primaryAuthentication()</code>을 통해 1차 인증 방법을 설정합니다. <code>formLogin()</code>과 <code>restLogin()</code> 중 하나만 선택 가능합니다 (상호 배타적).</p>
+
+            <h3>Form 1차 인증</h3>
+<pre><code class="language-java">.mfa(mfa -&gt; mfa
+    .primaryAuthentication(primary -&gt; primary
+        .formLogin(form -&gt; form
+            .loginPage("/login")
+            .usernameParameter("email")
+            .failureUrl("/login?error")))
+    .ott(Customizer.withDefaults())
+)</code></pre>
+
+            <h3>REST 1차 인증</h3>
+<pre><code class="language-java">.mfa(mfa -&gt; mfa
+    .primaryAuthentication(primary -&gt; primary
+        .restLogin(rest -&gt; rest
+            .loginProcessingUrl("/api/auth/login")))
+    .passkey(Customizer.withDefaults())
+)</code></pre>
+
+            <div class="callout callout-info">
+              <strong>1차 인증 Order</strong><br>
+              1차 인증은 자동으로 order 0이 할당됩니다. 2차 요소는 <code>currentStepOrderCounter</code>를 통해 자동으로 순차적 order 값(1, 2, 3...)이 할당됩니다.
+            </div>
+          </section>
+
+          <!-- MFA Factors -->
+          <section class="docs-section">
+            <h2 id="mfa-factors">MFA 요소 (2차 인증)</h2>
+            <p>2차 인증 요소를 추가합니다. 최소 하나의 2차 요소가 필요하며, 여러 요소를 결합할 수 있습니다.</p>
+
+            <h3>사용 가능한 2차 요소</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>메서드</th><th>요소</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.ott()</code></td><td>One-Time Token</td><td>이메일/SMS 일회용 코드</td></tr>
+                <tr><td><code>.passkey()</code></td><td>WebAuthn / Passkey</td><td>생체 인증 / 하드웨어 키</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3>다중 요소 결합</h3>
+<pre><code class="language-java">.mfa(mfa -&gt; mfa
+    .primaryAuthentication(primary -&gt; primary
+        .formLogin(form -&gt; form.loginPage("/login")))
+    .ott(ott -&gt; ott
+        .tokenService(emailTokenService))
+    .passkey(passkey -&gt; passkey
+        .rpName("My App")
+        .rpId("example.com"))
+)</code></pre>
+            <p>각 요소는 <code>currentStepOrderCounter</code>를 통해 순차적 order(1, 2, 3...)가 자동 할당됩니다. 사용자는 요소 선택 페이지에서 원하는 요소를 선택합니다.</p>
+          </section>
+
+          <!-- MFA Pages -->
+          <section class="docs-section">
+            <h2 id="mfa-pages">MFA 페이지</h2>
+            <p><code>mfaPage()</code>를 통해 MFA 플로우의 각 단계에 대한 페이지 URL을 커스터마이즈합니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>메서드</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>selectFactorPage(String)</code></td><td>요소 선택 페이지 URL</td></tr>
+                <tr><td><code>ottPages(String requestUrl, String verifyUrl)</code></td><td>OTT 요청/검증 페이지 URL (동시 설정)</td></tr>
+                <tr><td><code>ottRequestPage(String)</code></td><td>OTT 코드 요청 페이지 URL</td></tr>
+                <tr><td><code>ottVerifyPage(String)</code></td><td>OTT 코드 검증 페이지 URL</td></tr>
+                <tr><td><code>passkeyChallengePages(String)</code></td><td>Passkey 챌린지 페이지 URL</td></tr>
+                <tr><td><code>configurePageUrl(String)</code></td><td>MFA 설정 페이지 URL</td></tr>
+                <tr><td><code>failurePageUrl(String)</code></td><td>MFA 실패 페이지 URL</td></tr>
+              </tbody>
+            </table></div>
+
+<pre><code class="language-java">.mfa(mfa -&gt; mfa
+    .primaryAuthentication(primary -&gt; primary
+        .formLogin(form -&gt; form.loginPage("/login")))
+    .ott(Customizer.withDefaults())
+    .mfaPage(page -&gt; page
+        .selectFactorPage("/mfa/select")
+        .ottPages("/mfa/ott/request", "/mfa/ott/verify")
+        .failurePageUrl("/mfa/failed"))
+)</code></pre>
+
+            <h3 id="custom-mfa-pages">커스텀 MFA 페이지 만들기</h3>
+            <p>MFA 페이지의 CSS와 레이아웃은 자유롭게 수정할 수 있습니다. 다만 다음 요소는 반드시 유지해야 합니다.</p>
+
+            <h4>수정 불가</h4>
+            <ul>
+              <li>CSRF meta 태그: <code>&lt;meta name="_csrf" th:content="${csrfToken}"&gt;</code></li>
+              <li><code>id="contexa-page-config"</code> div와 <code>data-*</code> 속성</li>
+              <li>Input name 속성: <code>username</code>, <code>password</code>, <code>token</code>, <code>_csrf</code>, <code>mfaSessionId</code></li>
+              <li>Form <code>id</code>, <code>method</code>, <code>th:action</code></li>
+              <li>button id: <code>loginButton</code>, <code>sendCodeButton</code>, <code>verifyButton</code>, <code>resendButton</code>, <code>authButton</code></li>
+              <li><code>th:utext="${hiddenInputsHtml}"</code> -- CSRF + mfaSessionId hidden input을 자동 생성</li>
+            </ul>
+
+            <h4>수정 가능</h4>
+            <ul>
+              <li>CSS 색상, 레이아웃, 배경</li>
+              <li>로고, 아이콘</li>
+              <li>텍스트 콘텐츠</li>
+              <li>폼 필드 스타일</li>
+            </ul>
+
+            <h4>필수 JavaScript 파일</h4>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>파일</th><th>대상 페이지</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>/js/contexa-mfa-sdk.js</code></td><td>모든 MFA 페이지 (필수)</td></tr>
+                <tr><td><code>/js/contexa-login-page.js</code></td><td>로그인 페이지</td></tr>
+                <tr><td><code>/js/contexa-ott-request-page.js</code></td><td>OTT 코드 요청 페이지</td></tr>
+                <tr><td><code>/js/contexa-ott-verify-page.js</code></td><td>OTT 코드 검증 페이지</td></tr>
+                <tr><td><code>/js/contexa-passkey-page.js</code></td><td>Passkey 챌린지 페이지</td></tr>
+              </tbody>
+            </table></div>
+
+            <h4>MFA 데이터 플로우</h4>
+<pre class="arch-diagram"><code>
+  Login (/login)
+    |
+    v
+  POST /login (API) ---&gt; MFA Not Required ---&gt; Home
+    |
+    v (MFA Required)
+  /mfa/select-factor
+    |
+    +--- OTT ---+
+    |            |
+    |   /mfa/ott/request-code-ui
+    |            |
+    |   POST /mfa/ott/generate-code
+    |            |
+    |   /mfa/challenge/ott
+    |            |
+    |   POST /login/mfa-ott ---&gt; Success/Failure
+    |
+    +--- Passkey ---+
+                    |
+       /mfa/challenge/passkey
+                    |
+       WebAuthn navigator.credentials.get()
+                    |
+       POST /mfa/webauthn/authenticate ---&gt; Success/Failure
+</code></pre>
+          </section>
+
+          <!-- MFA Policy Customization -->
+          <section class="docs-section">
+            <h2 id="mfa-policy">MFA 정책 커스터마이제이션</h2>
+            <p><code>MfaPolicyProvider</code>를 구현하여 MFA 요구 결정을 커스터마이즈합니다. <code>@ConditionalOnMissingBean</code>으로 등록되므로, 동일한 타입의 빈을 정의하면 자동으로 오버라이드됩니다.</p>
+
+            <h3>내장 구현체</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>구현체</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>DefaultMfaPolicyProvider</code></td><td>정적 규칙 기반. 사용자 역할과 MFA 설정에 따라 MFA 필요 여부를 결정</td></tr>
+                <tr><td><code>AIAdaptiveMfaPolicyProvider</code></td><td>AI 리스크 분석 기반 동적 정책. AI Core 사용 불가 시 DefaultMfaPolicyProvider로 폴백</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3>커스텀 정책 구현 예제</h3>
+<pre><code class="language-java">@Bean
+public MfaPolicyProvider mfaPolicyProvider() {
+    return new MfaPolicyProvider() {
+        @Override
+        public MfaDecision evaluateInitialMfaRequirement(FactorContext ctx) {
+            String ip = ctx.getRequest().getRemoteAddr();
+            if (trustedIpRanges.contains(ip)) {
+                return MfaDecision.noMfaRequired();
+            }
+            return MfaDecision.challenged("Untrusted IP");
+        }
+        // ... other methods
+    };
+}</code></pre>
+
+            <h3>MfaDecision 유형</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>DecisionType</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>NO_MFA_REQUIRED</code></td><td>MFA 불필요. 인증이 즉시 완료됨</td></tr>
+                <tr><td><code>CHALLENGED</code></td><td>MFA 필요. 2차 요소 인증 요구</td></tr>
+                <tr><td><code>BLOCKED</code></td><td>인증 차단. 접근 거부</td></tr>
+                <tr><td><code>ESCALATED</code></td><td>관리자 검토로 에스컬레이션. 관리자만 해결 가능</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3>DSL을 통한 정책 주입</h3>
+<pre><code class="language-java">.mfa(mfa -&gt; mfa
+    .policyProvider(customMfaPolicyProvider)
+    .primaryAuthentication(primary -&gt; primary
+        .formLogin(form -&gt; form.loginPage("/login")))
+    .passkey(Customizer.withDefaults())
+)</code></pre>
+          </section>
+
+          <!-- Device Trust -->
+          <section class="docs-section">
+            <h2 id="device-trust">Device Trust</h2>
+            <p>신뢰할 수 있는 디바이스에서 MFA를 건너뛸 수 있습니다. 기본적으로 비활성화되어 있습니다.</p>
+
+<pre><code class="language-java">.mfa(mfa -&gt; mfa
+    .defaultDeviceTrustEnabled(true)
+    .primaryAuthentication(primary -&gt; primary
+        .formLogin(form -&gt; form.loginPage("/login")))
+    .passkey(Customizer.withDefaults())
+)</code></pre>
+
+<pre class="arch-diagram"><code>
+  Device Trust Flow
+  =================
+
+  Client                              Server
+    |                                    |
+    | [localStorage: deviceId]           |
+    | X-Device-Id header  -------------&gt;  |
+    |                                    | JWT device_id claim verification
+    |                                    | HCAD device behavior analysis
+    |                                    |
+    | Trusted Device -----&gt; Skip MFA     |
+    | Untrusted Device ---&gt; Proceed MFA  |
+</code></pre>
+
+            <h3>설정</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>프로퍼티</th><th>기본값</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>spring.auth.mfa.device-remember-duration-ms</code></td><td>2592000000 (30일)</td><td>디바이스 신뢰 유지 기간</td></tr>
+              </tbody>
+            </table></div>
+          </section>
+
+          <!-- Step-up Authentication -->
+          <section class="docs-section">
+            <h2 id="step-up">Step-up 인증</h2>
+            <p>이미 인증된 사용자가 민감한 리소스에 접근할 때 추가 인증을 요구합니다.</p>
+
+<pre class="arch-diagram"><code>
+  Step-up Authentication Flow
+  ============================
+
+  [Authenticated User] ---&gt; [Sensitive Resource Access]
+                           |
+                           v
+                  Server: 401 MFA_CHALLENGE_REQUIRED
+                           |
+                           v
+            SDK Global Interceptor: Auto-detect fetch/XHR responses
+                           |
+                           v
+                  Redirect to MFA factor selection page
+                           |
+                           v
+                  Additional auth complete ---&gt; Auto-retry original request
+</code></pre>
+
+            <p>ContexaMFA SDK Global Interceptor는 모든 HTTP 요청에서 <code>401</code>/<code>403</code>/<code>423</code> 응답을 자동 감지하고 MFA 챌린지로 리다이렉트합니다. 인증이 완료되면 원래 요청이 자동으로 재시도됩니다.</p>
+          </section>
+
+          <!-- MFA State Machine Events -->
+          <section class="docs-section">
+            <h2 id="mfa-events">MFA 상태 머신 이벤트</h2>
+            <p><code>@EventListener</code>를 사용하여 MFA 상태 변경 이벤트를 수신하고 감사 로그, 알림 등을 구현할 수 있습니다.</p>
+
+            <h3>이벤트 유형</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>이벤트</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>StateChangeEvent</code></td><td>MFA 상태 전이 (예: FACTOR_SELECTION -&gt; OTT_CHALLENGE)</td></tr>
+                <tr><td><code>ErrorEvent</code></td><td>오류 발생 (SECURITY, TIMEOUT, LIMIT_EXCEEDED, SYSTEM)</td></tr>
+                <tr><td><code>PerformanceAlertEvent</code></td><td>성능 경고 (느린 응답 등)</td></tr>
+                <tr><td><code>CustomEvent</code></td><td>사용자 정의 이벤트</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3>종료 상태</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>상태</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>MFA_SUCCESSFUL</code></td><td>MFA 성공. 완전한 인증 완료</td></tr>
+                <tr><td><code>MFA_NOT_REQUIRED</code></td><td>MFA 불필요. 정책에 의해 건너뜀</td></tr>
+                <tr><td><code>MFA_FAILED_TERMINAL</code></td><td>MFA 영구 실패. 재시도 불가</td></tr>
+                <tr><td><code>MFA_CANCELLED</code></td><td>사용자가 MFA 취소</td></tr>
+                <tr><td><code>MFA_TIMEOUT</code></td><td>세션 타임아웃</td></tr>
+                <tr><td><code>MFA_SESSION_EXPIRED</code></td><td>MFA 세션 만료</td></tr>
+                <tr><td><code>MFA_ACCOUNT_LOCKED</code></td><td>계정 잠금</td></tr>
+                <tr><td><code>MFA_SYSTEM_ERROR</code></td><td>시스템 오류</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3>감사 로그 구현 예제</h3>
+<pre><code class="language-java">@EventListener
+public void onMfaStateChange(MfaStateMachineEvents.StateChangeEvent event) {
+    auditService.log(
+        event.getUserId(),
+        event.getFromState(),
+        event.getToState()
+    );
+}
+
+@EventListener
+public void onMfaError(MfaStateMachineEvents.ErrorEvent event) {
+    alertService.notify(
+        event.getErrorType(),
+        event.getMessage()
+    );
+}</code></pre>
+          </section>
+
+          <!-- MFA + Single Auth -->
+          <section class="docs-section">
+            <h2 id="mfa-with-single">MFA + 단일 인증 동시 설정</h2>
+            <p>MFA와 단일 인증을 함께 등록하여 서로 다른 요청 경로에 서로 다른 인증 수준을 적용합니다.</p>
+
+<pre><code class="language-java">registry
+    // 관리자: Form + OAuth2 (단일 인증)
+    .form(f -&gt; f.order(20).loginPage("/admin/login")
+        .rawHttp(http -&gt; http.securityMatcher("/admin/**")))
+    .oauth2(Customizer.withDefaults())
+
+    // 사용자: MFA (Form 1차 + Passkey) + Session
+    .mfa(m -&gt; m.order(100)
+        .primaryAuthentication(auth -&gt; auth
+            .formLogin(form -&gt; form.loginPage("/login")))
+        .passkey(Customizer.withDefaults()))
+    .session(Customizer.withDefaults())
+
+    .build();</code></pre>
+
+            <p><code>order()</code>를 사용하여 Filter Chain 우선순위를 제어하고, <code>rawHttp()</code>의 <code>securityMatcher()</code>로 어떤 체인이 어떤 요청을 처리할지 결정합니다. 각 인증 방법에 대해 서로 다른 상태 관리(session/oauth2)를 설정할 수 있습니다.</p>
+          </section>
+
+          <!-- MFA Handlers -->
+          <section class="docs-section">
+            <h2 id="mfa-handlers">MFA 핸들러</h2>
+            <p>MFA 성공 및 실패에 대한 커스텀 핸들러를 지정할 수 있습니다.</p>
+
+<pre><code class="language-java">.mfa(mfa -&gt; mfa
+    .mfaSuccessHandler(customSuccessHandler)
+    .mfaFailureHandler(customFailureHandler)
+    .primaryAuthentication(primary -&gt; primary
+        .formLogin(form -&gt; form.loginPage("/login")))
+    .passkey(Customizer.withDefaults())
+)</code></pre>
+
+            <p>핸들러 인터페이스 및 구현 가이드는 <a href="authentication.html#handler-resolution">인증</a> 문서의 핸들러 자동 선택 섹션을 참조하세요.</p>
+          </section>
+
+          <!-- MFA REST API -->
+          <section class="docs-section">
+            <h2 id="mfa-rest-api">MFA REST API</h2>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>메서드</th><th>URL</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>GET</code></td><td><code>/api/mfa/config</code></td><td>MFA 설정 조회</td></tr>
+                <tr><td><code>GET</code></td><td><code>/api/mfa/status</code></td><td>MFA 상태 조회</td></tr>
+                <tr><td><code>POST</code></td><td><code>/mfa/select-factor</code></td><td>MFA 요소 선택</td></tr>
+                <tr><td><code>POST</code></td><td><code>/mfa/ott/generate-code</code></td><td>MFA OTT 코드 생성</td></tr>
+                <tr><td><code>POST</code></td><td><code>/login/mfa-ott</code></td><td>MFA OTT 로그인 처리</td></tr>
+                <tr><td><code>POST</code></td><td><code>/mfa/webauthn/authenticate</code></td><td>MFA Passkey 인증</td></tr>
+                <tr><td><code>POST</code></td><td><code>/mfa/cancel</code></td><td>MFA 취소</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3>응답 형식</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>시나리오</th><th>응답</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>인증 성공</td><td><code>{ "success": true, "redirectUrl": "..." }</code></td></tr>
+                <tr><td>MFA 필요</td><td><code>{ "mfaRequired": true, "selectFactorUrl": "...", "mfaSessionId": "..." }</code></td></tr>
+                <tr><td>인증 실패</td><td><code>{ "success": false, "error": "...", "failureType": "..." }</code></td></tr>
+                <tr><td>Step-up 필요</td><td><code>401 MFA_CHALLENGE_REQUIRED</code></td></tr>
+              </tbody>
+            </table></div>
+          </section>
+
+          <!-- ContexaMFA JavaScript SDK -->
+          <section class="docs-section">
+            <h2 id="js-sdk">ContexaMFA JavaScript SDK</h2>
+            <p>브라우저에서 MFA 플로우를 제어하는 JavaScript SDK (v2.2.0)입니다.</p>
+
+            <h3>빠른 시작</h3>
+<pre><code class="language-html">&lt;script src="../../../js/contexa-mfa-sdk.js?v=1773190937296"&gt;&lt;/script&gt;
+&lt;script&gt;
+const mfa = new ContexaMFA.Client({
+    autoInit: true,
+    tokenPersistence: 'localstorage'
+});
+mfa.loginForm('username', 'password')
+    .then(result =&gt; { /* handle result */ });
+&lt;/script&gt;</code></pre>
+
+            <h3>Client API</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>메서드</th><th>반환 타입</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>init()</code></td><td>Promise</td><td>SDK 초기화, 서버 설정 로드</td></tr>
+                <tr><td><code>login(username, password)</code></td><td>Promise&lt;LoginResult&gt;</td><td>JSON 로그인 요청</td></tr>
+                <tr><td><code>loginForm(username, password)</code></td><td>Promise&lt;LoginResult&gt;</td><td>Form POST 로그인</td></tr>
+                <tr><td><code>selectFactor(factorType)</code></td><td>Promise&lt;FactorResult&gt;</td><td>MFA 요소 선택</td></tr>
+                <tr><td><code>verifyOtt(token)</code></td><td>Promise&lt;VerifyResult&gt;</td><td>OTT 토큰 검증</td></tr>
+                <tr><td><code>verifyPasskey()</code></td><td>Promise&lt;VerifyResult&gt;</td><td>WebAuthn Passkey 인증</td></tr>
+                <tr><td><code>requestOttCode(username)</code></td><td>Promise&lt;RequestResult&gt;</td><td>OTT 코드 재발송 요청</td></tr>
+                <tr><td><code>logout()</code></td><td>Promise</td><td>로그아웃</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3>생성자 옵션</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>옵션</th><th>타입</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>autoInit</code></td><td>boolean</td><td>자동 초기화 여부</td></tr>
+                <tr><td><code>autoRedirect</code></td><td>boolean</td><td>인증 후 자동 리다이렉트</td></tr>
+                <tr><td><code>tokenPersistence</code></td><td>'memory' | 'localstorage'</td><td>토큰 저장소 (메모리 또는 localStorage)</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3>Global Interceptor</h3>
+            <p>모든 <code>fetch</code>/<code>XMLHttpRequest</code> 호출에서 <code>401</code>/<code>403</code>/<code>423</code> 응답을 자동 감지하고 Step-up 인증 페이지로 리다이렉트합니다. 인증이 완료되면 원래 요청이 자동으로 재시도됩니다.</p>
+          </section>
+
+          <!-- MFA Configuration -->
+          <section>
+            <div class="callout callout-info">
+              <strong>MFA 설정 프로퍼티</strong><br>
+              <code>spring.auth.mfa.*</code> 네임스페이스는 타임아웃(sessionTimeoutMs, challengeTimeoutMs), 재시도 설정(maxRetryAttempts, accountLockoutDurationMs), OTP(otpTokenValiditySeconds, otpTokenLength), 세션 저장소(sessionStorageType) 등 40개 이상의 설정 옵션을 제공합니다. 전체 목록은 <a href="state-management.html">상태 관리</a> 문서를 참조하세요.
+            </div>
+          </section>
+
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/identity/authentication.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">인증</span>
+            </a>
+            <a href="../../../docs/reference/identity/asep.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">ASEP 어노테이션</span>
+            </a>
+          </div>

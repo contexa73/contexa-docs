@@ -1,0 +1,296 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Advisor 시스템</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+            </div>
+            <h1>Advisor 시스템</h1>
+            <p class="lead">Advisor 시스템은 Spring AI의 <code>CallAdvisor</code> 및 <code>StreamAdvisor</code> 인터페이스와 통합되어 모든 LLM 요청과 응답을 가로채고 보강합니다. <code>AdvisorRegistry</code>는 Advisor 수명 주기, 도메인 조직, 활성화/비활성화 상태를 관리합니다. <code>UnifiedLLMOrchestrator</code>는 생성하는 모든 <code>ChatClient</code>에 활성화된 모든 Advisor를 자동으로 적용합니다.</p>
+          </div>
+
+          <!-- Overview -->
+          <section class="docs-section">
+            <h2 id="overview">개요</h2>
+            <p>Advisor는 모든 LLM 호출 주위에 책임 체인을 형성합니다. 각 Advisor는 LLM에 도달하기 전 요청을 수정하고, 이후 응답을 검사하거나 변환하며, 하위 Advisor를 위한 컨텍스트 메타데이터를 추가할 수 있습니다. Advisor는 도메인별로 구성되며 (예: "SECURITY", "AUDIT") 우선순위에 따라 정렬됩니다.</p>
+            <p>시스템이 제공하는 기능:</p>
+            <ul>
+              <li><strong>도메인 기반 조직</strong> — Advisor가 도메인별로 그룹화되어 일괄 활성화/비활성화 작업이 가능합니다.</li>
+              <li><strong>우선순위 정렬</strong> — Advisor는 <code>getOrder()</code> 값 순서대로 실행됩니다 (낮을수록 먼저 실행).</li>
+              <li><strong>핫 리로드</strong> — Advisor를 런타임에 등록, 해제, 활성화, 비활성화할 수 있습니다.</li>
+              <li><strong>오류 격리</strong> — 비차단 Advisor 오류는 해당 Advisor를 건너뛰고 체인을 계속합니다; 차단 오류는 실행을 중단합니다.</li>
+            </ul>
+          </section>
+
+          <!-- AdvisorRegistry -->
+          <section class="docs-section">
+            <h2 id="advisor-registry">AdvisorRegistry</h2>
+            <p>Advisor 수명 주기 관리를 위한 중앙 레지스트리입니다. 활성화된 Advisor 목록의 내부 캐싱을 통해 스레드 안전합니다.</p>
+
+            <div class="api-signature">
+              <code>public class AdvisorRegistry</code>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">register(Advisor advisor)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">Advisor를 등록합니다. Advisor가 <code>BaseAdvisor</code>를 확장하는 경우 검증되고 도메인별로 인덱싱됩니다. 활성화 캐시를 무효화합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">registerAll(Collection&lt;? extends Advisor&gt; advisors)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">여러 Advisor를 일괄 등록합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">unregister(String advisorName)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">이름으로 Advisor를 제거하고 도메인 매핑을 정리합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">get(String advisorName)</span>
+                <span class="api-method-return">Optional&lt;Advisor&gt;</span>
+              </div>
+              <div class="api-method-desc">전체 이름 (형식: <code>domain.name</code>)으로 특정 Advisor를 검색합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getEnabled()</span>
+                <span class="api-method-return">List&lt;Advisor&gt;</span>
+              </div>
+              <div class="api-method-desc">순서대로 정렬된 모든 활성화된 Advisor를 반환합니다. 레지스트리가 수정될 때까지 결과가 캐시됩니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getByDomain(String domain)</span>
+                <span class="api-method-return">List&lt;Advisor&gt;</span>
+              </div>
+              <div class="api-method-desc">주어진 도메인의 모든 Advisor를 순서대로 정렬하여 반환합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">enableDomain(String domain) / disableDomain(String domain)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">도메인의 모든 Advisor를 일괄 활성화 또는 비활성화합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">enableAll() / disableAll()</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">등록된 모든 Advisor를 활성화 또는 비활성화합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getStats()</span>
+                <span class="api-method-return">RegistryStats</span>
+              </div>
+              <div class="api-method-desc">총 Advisor 수, 총 도메인 수, 도메인별 Advisor 수를 포함한 통계를 반환합니다.</div>
+            </div>
+          </section>
+
+          <!-- BaseAdvisor -->
+          <section class="docs-section">
+            <h2 id="base-advisor">BaseAdvisor</h2>
+            <p><code>CallAdvisor</code>와 <code>StreamAdvisor</code>를 모두 구현하는 추상 기본 클래스입니다. 수명 주기 훅, 오류 처리, 컨텍스트 보강과 함께 템플릿 메서드 패턴을 제공합니다.</p>
+
+            <div class="api-signature">
+              <code>public abstract class BaseAdvisor implements CallAdvisor, StreamAdvisor</code>
+            </div>
+
+            <h3>생성자</h3>
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">BaseAdvisor(String domain, String name, int order)</span>
+              </div>
+              <div class="api-method-desc">주어진 도메인, 이름, 실행 순서로 Advisor를 생성합니다. 전체 Advisor 이름은 <code>domain.name</code> 형식입니다.</div>
+            </div>
+
+            <h3>추상 메서드 (구현 필수)</h3>
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">beforeCall(ChatClientRequest request)</span>
+                <span class="api-method-return">ChatClientRequest</span>
+              </div>
+              <div class="api-method-desc">LLM 요청 전에 호출됩니다. 컨텍스트를 보강하기 위해 요청을 수정하고 반환합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">afterCall(ChatClientResponse response, ChatClientRequest request)</span>
+                <span class="api-method-return">ChatClientResponse</span>
+              </div>
+              <div class="api-method-desc">LLM 응답 후에 호출됩니다. 후처리, 감사, 검증을 위해 응답을 수정하고 반환합니다.</div>
+            </div>
+
+            <h3>오버라이드 가능한 훅</h3>
+            <ul>
+              <li><code>beforeStream()</code> — 기본적으로 <code>beforeCall()</code>을 호출합니다. Stream 전용 전처리를 위해 오버라이드하세요.</li>
+              <li><code>afterStream()</code> — 기본적으로 아무 작업도 수행하지 않습니다. Stream 전용 후처리를 위해 오버라이드하세요.</li>
+              <li><code>enrichContext(Map&lt;String, Object&gt; context)</code> — 컨텍스트에 <code>advisor.domain</code>, <code>advisor.name</code>, <code>advisor.timestamp</code>를 추가합니다.</li>
+              <li><code>handleBlockingError(AdvisorException e, ChatClientRequest request)</code> — 차단 오류를 처리하여 오류 컨텍스트를 설정하고 다시 던집니다.</li>
+            </ul>
+
+            <h3>오류 처리</h3>
+            <p><code>AdvisorException</code>은 두 가지 모드를 지원합니다:</p>
+            <ul>
+              <li><strong>차단</strong> — Advisor 체인을 중단하고 LLM 호출을 방지합니다. 보안 적용에 사용됩니다.</li>
+              <li><strong>비차단</strong> — 오류를 로깅하고 체인을 계속합니다. 선택적 보강에 사용됩니다.</li>
+            </ul>
+          </section>
+
+          <!-- SecurityContextAdvisor -->
+          <section class="docs-section">
+            <h2 id="security-context-advisor">SecurityContextAdvisor</h2>
+            <p>보안 컨텍스트 (사용자 ID, 세션, 인증 상태, 권한)를 모든 LLM 요청에 주입합니다. 비HTTP 스레드를 위한 Redis 기반 비동기 보안 컨텍스트 복구를 지원합니다.</p>
+
+            <div class="api-signature">
+              <code>public class SecurityContextAdvisor extends BaseAdvisor</code>
+            </div>
+
+            <h3>주입되는 컨텍스트 키</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>키</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>user.id</code></td><td>인증된 사용자 식별자.</td></tr>
+                <tr><td><code>session.id</code></td><td>세션 식별자.</td></tr>
+                <tr><td><code>authenticated</code></td><td>불리언 인증 상태.</td></tr>
+                <tr><td><code>authorities</code></td><td>부여된 권한의 문자열 표현.</td></tr>
+                <tr><td><code>principal.type</code></td><td>인증 주체의 타입.</td></tr>
+                <tr><td><code>async.context</code></td><td>항상 <code>true</code>, 비동기 컨텍스트 모드를 나타냄.</td></tr>
+                <tr><td><code>timestamp</code></td><td>밀리초 단위의 요청 타임스탬프.</td></tr>
+              </tbody>
+            </table></div>
+
+            <div class="callout callout-warning">
+              <p><strong>인증 강제:</strong> <code>contexa.advisor.security.require-authentication</code>이 <code>true</code>일 때, 인증되지 않은 요청은 LLM 호출을 방지하는 차단 <code>AdvisorException</code>을 던집니다.</p>
+            </div>
+          </section>
+
+          <!-- Code Examples -->
+          <section class="docs-section">
+            <h2 id="examples">코드 예제</h2>
+
+            <h3>커스텀 Advisor 구현</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Component
+public class RateLimitAdvisor extends BaseAdvisor {
+
+    private final RateLimiter rateLimiter;
+
+    public RateLimitAdvisor(RateLimiter rateLimiter) {
+        super("INFRASTRUCTURE", "rate-limit", 10);
+        this.rateLimiter = rateLimiter;
+    }
+
+    @Override
+    protected ChatClientRequest beforeCall(
+            ChatClientRequest request) {
+        String userId = (String) request.context()
+                .get("user.id");
+
+        if (!rateLimiter.tryAcquire(userId)) {
+            throw AdvisorException.blocking(
+                    getDomain(), getName(),
+                    "Rate limit exceeded for user: " + userId);
+        }
+
+        return request;
+    }
+
+    @Override
+    protected ChatClientResponse afterCall(
+            ChatClientResponse response,
+            ChatClientRequest request) {
+        return response;
+    }
+}</code></pre>
+            </div>
+
+            <h3>런타임 Advisor 관리</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// Disable all security advisors during maintenance
+advisorRegistry.disableDomain("SECURITY");
+
+// Re-enable after maintenance
+advisorRegistry.enableDomain("SECURITY");
+
+// Check registry health
+AdvisorRegistry.RegistryStats stats =
+        advisorRegistry.getStats();
+// stats.totalAdvisors, stats.totalDomains,
+// stats.advisorsPerDomain</code></pre>
+            </div>
+          </section>
+
+          <!-- Related -->
+          <section class="docs-section">
+            <h2 id="related">관련 문서</h2>
+            <div class="related-links">
+              <div class="related-links-grid">
+                <a href="../../../docs/reference/core/llm-orchestrator.html" class="related-link-card">
+                  <h3>LLM Orchestrator</h3>
+                  <p>AdvisorRegistry를 통해 모든 활성화된 Advisor를 자동 적용합니다.</p>
+                </a>
+                <a href="../../../docs/reference/security/zero-trust.html" class="related-link-card">
+                  <h3>Zero Trust</h3>
+                  <p>SecurityContextAdvisor가 Zero Trust 컨텍스트를 LLM 호출에 전파합니다.</p>
+                </a>
+              </div>
+            </div>
+          </section>
+
+          <!-- Configuration Reference -->
+          <section>
+            <div class="callout callout-info">
+              <strong>설정 레퍼런스</strong><br>
+              Advisor <code>application.yml</code> 속성 (활성화된 Advisor, 순서, 보안 컨텍스트 전파)은 <a href="../../../docs/install/configuration/ai.html">AI 설정</a>을 참조하세요 — <code>ContexaAdvisorProperties</code>를 다룹니다.
+            </div>
+          </section>
+
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/core/streaming.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">Streaming</span>
+            </a>
+            <a href="../../../docs/reference/core/strategy.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">AI Strategy</span>
+            </a>
+          </div>

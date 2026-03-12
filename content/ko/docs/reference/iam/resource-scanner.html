@@ -1,0 +1,524 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">레퍼런스</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Resource Scanner</span>
+          </nav>
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-warning">contexa-iam</span>
+            </div>
+            <h1>Resource Scanner</h1>
+            <p class="lead">애플리케이션 시작 시 <code>@Protectable</code> 메서드와 MVC 엔드포인트를 스캔하여 <code>ManagedResource</code> 엔티티로 등록하는 자동 리소스 탐색 시스템입니다.</p>
+          </div>
+
+          <!-- Overview -->
+          <section>
+            <h2 id="overview">개요</h2>
+            <p>Contexa는 애플리케이션 내의 보호 가능한 리소스를 탐지하는 두 가지 상호 보완적인 리소스 스캐너를 제공합니다:</p>
+            <ul>
+              <li><strong>MethodResourceScanner</strong> — <code>@Protectable</code>이 부여된 비컨트롤러 메서드를 탐색합니다</li>
+              <li><strong>MvcResourceScanner</strong> — <code>RequestMappingHandlerMapping</code>을 통해 Spring MVC 컨트롤러 엔드포인트를 탐색합니다</li>
+            </ul>
+            <p>두 스캐너 모두 <code>ResourceScanner</code> 인터페이스를 구현하며, 초기 상태가 <code>NEEDS_DEFINITION</code>인 <code>ManagedResource</code> 엔티티를 생성합니다.</p>
+
+            <h3>전체 파이프라인</h3>
+            <p>리소스 스캔은 4단계 리소스 관리 파이프라인의 첫 번째 단계입니다: <strong>스캔 → 정의 → 정책 → 동적 인가</strong>. 애플리케이션 시작 시 <code>ResourceScanner</code> 구현체가 모든 <code>@RequestMapping</code> 엔드포인트와 <code>@Protectable</code> 메서드를 탐색하여 데이터베이스에 <code>ManagedResource</code> 엔티티로 저장합니다. 이후 AI 엔진이 탐색된 리소스에 대해 사람이 읽기 쉬운 친숙한 이름을 일괄 생성합니다.</p>
+            <p>관리자는 Admin Dashboard의 <strong>Resource Workbench</strong>(<code>/admin/resources</code>)를 사용하여 탐색된 리소스를 검토하고, 권한으로 정의하며, 인가 정책을 생성합니다. 정책이 생성되면 <code>CustomDynamicAuthorizationManager</code>가 <code>.anyRequest().access(customDynamicAuthorizationManager)</code>를 통해 런타임에 정책을 적용합니다. 이 접근 방식은 정적 <code>.requestMatchers().hasRole()</code> 설정의 필요성을 제거합니다 — 모든 인가 결정은 관리자 인터페이스를 통해 정의된 정책에 의해 구동됩니다.</p>
+
+            <div class="diagram-container">
+              <div class="diagram-title">리소스 스캔 파이프라인</div>
+              <div class="diagram-flow-vertical">
+                <div class="diagram-box diagram-highlight">
+                  <span class="diagram-box-name">애플리케이션 시작</span>
+                  <span class="diagram-box-desc">WorkbenchInitializer가 리소스 스캔을 트리거</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-grid diagram-grid-2">
+                  <div class="diagram-box diagram-accent">
+                    <span class="diagram-box-name">MethodResourceScanner.scan()</span>
+                    <span class="diagram-box-desc">io.contexa.contexaiam 내의 빈 스캔 -- @Controller / @RestController 제외 -- @Protectable이 있는 public 메서드 탐색 -- ManagedResource (METHOD)로 등록</span>
+                  </div>
+                  <div class="diagram-box diagram-accent">
+                    <span class="diagram-box-name">MvcResourceScanner.scan()</span>
+                    <span class="diagram-box-desc">RequestMappingHandlerMapping 조회 -- 핸들러 메서드 순회 -- URL 패턴 및 HTTP 메서드 추출 -- ManagedResource (URL)로 등록</span>
+                  </div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-box">
+                  <span class="diagram-box-name">ManagedResource 엔티티</span>
+                  <span class="diagram-box-desc">status: NEEDS_DEFINITION</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-box">
+                  <span class="diagram-box-name">관리자 권한 할당</span>
+                  <span class="diagram-box-desc">status: PERMISSION_CREATED</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-box diagram-success">
+                  <span class="diagram-box-name">정책 연결 완료</span>
+                  <span class="diagram-box-desc">status: POLICY_CONNECTED</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ResourceScanner Interface -->
+          <section>
+            <h2 id="interface">ResourceScanner 인터페이스</h2>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">public interface ResourceScanner {
+    List&lt;ManagedResource&gt; scan();
+}</code></pre>
+            </div>
+          </section>
+
+          <!-- MethodResourceScanner -->
+          <section>
+            <h2 id="method-scanner">MethodResourceScanner</h2>
+            <p><code>io.contexa.contexaiam</code> 패키지 내의 모든 Spring 빈에서 <code>@Protectable</code>이 부여된 public 메서드를 스캔합니다. 컨트롤러 클래스는 <code>MvcResourceScanner</code>에서 처리하므로 명시적으로 제외됩니다.</p>
+
+            <h3>스캔 로직</h3>
+            <ol>
+              <li><code>ApplicationContext</code>의 모든 빈 정의를 순회합니다</li>
+              <li>대상 클래스를 해석합니다 (<code>AopUtils.getTargetClass()</code>를 통해 AOP 프록시 언래핑)</li>
+              <li><code>io.contexa.contexaiam</code> 패키지 외부의 클래스는 건너뜁니다</li>
+              <li><code>@Controller</code> 또는 <code>@RestController</code>가 부여된 클래스는 건너뜁니다</li>
+              <li><code>@Protectable</code>이 있는 각 public 메서드에 대해 <code>ManagedResource</code>를 생성합니다</li>
+            </ol>
+
+            <h3>리소스 식별자 형식</h3>
+            <p>메서드 리소스는 정규화된 메서드 시그니처를 식별자로 사용합니다:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Text</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>io.contexa.contexaiam.service.AccountService.updateAccount(Long,AccountDto)</code></pre>
+            </div>
+
+            <h3>ManagedResource 필드 (METHOD 타입)</h3>
+            <table>
+              <thead>
+                <tr><th>필드</th><th>값 출처</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>resourceIdentifier</code></td><td>파라미터 타입이 포함된 정규화된 메서드 시그니처</td></tr>
+                <tr><td><code>resourceType</code></td><td><code>METHOD</code></td></tr>
+                <tr><td><code>serviceOwner</code></td><td>선언 클래스의 단순 클래스명</td></tr>
+                <tr><td><code>parameterTypes</code></td><td>정규화된 파라미터 타입명의 JSON 배열</td></tr>
+                <tr><td><code>returnType</code></td><td>정규화된 반환 타입명</td></tr>
+                <tr><td><code>sourceCodeLocation</code></td><td>클래스명에서 파생: <code>io/contexa/.../ClassName.java</code></td></tr>
+                <tr><td><code>status</code></td><td><code>NEEDS_DEFINITION</code></td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- MvcResourceScanner -->
+          <section>
+            <h2 id="mvc-scanner">MvcResourceScanner</h2>
+            <p><code>RequestMappingHandlerMapping</code>을 사용하여 Spring MVC <code>@Controller</code> 및 <code>@RestController</code> 클래스의 URL 매핑된 엔드포인트를 스캔합니다.</p>
+
+            <h3>스캔 로직</h3>
+            <ol>
+              <li><code>requestMappingHandlerMapping</code> 빈을 조회합니다</li>
+              <li>등록된 모든 핸들러 메서드를 순회합니다</li>
+              <li><code>io.contexa.contexaiam</code> 패키지 외부의 클래스는 건너뜁니다</li>
+              <li><code>@Controller</code> 또는 <code>@RestController</code>가 부여되지 않은 클래스는 건너뜁니다</li>
+              <li><code>PathPatternsRequestCondition</code>에서 URL 패턴을 추출합니다</li>
+              <li>HTTP 메서드를 추출합니다 (기본값은 <code>ANY</code>)</li>
+              <li><code>IamAdminProperties.restDocsPath</code>를 사용하여 API 문서 URL을 생성합니다</li>
+            </ol>
+
+            <h3>ManagedResource 필드 (URL 타입)</h3>
+            <table>
+              <thead>
+                <tr><th>필드</th><th>값 출처</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>resourceIdentifier</code></td><td>URL 패턴 문자열 (예: <code>/admin/users/{id}</code>)</td></tr>
+                <tr><td><code>resourceType</code></td><td><code>URL</code></td></tr>
+                <tr><td><code>httpMethod</code></td><td><code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>DELETE</code>, <code>PATCH</code>, 또는 <code>ANY</code></td></tr>
+                <tr><td><code>friendlyName</code></td><td>핸들러 메서드명</td></tr>
+                <tr><td><code>description</code></td><td><code>URL: [HTTP_METHOD] /path/pattern</code></td></tr>
+                <tr><td><code>serviceOwner</code></td><td>컨트롤러의 단순 클래스명</td></tr>
+                <tr><td><code>apiDocsUrl</code></td><td><code>{restDocsPath}#{controller}_{method}</code></td></tr>
+                <tr><td><code>status</code></td><td><code>NEEDS_DEFINITION</code></td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- ManagedResource Entity -->
+          <section>
+            <h2 id="managed-resource">ManagedResource 엔티티</h2>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Entity
+@Table(name = "MANAGED_RESOURCE")
+public class ManagedResource {
+    private Long id;
+    private String resourceIdentifier;    // URL pattern or method signature
+    private ResourceType resourceType;    // URL or METHOD
+    private HttpMethod httpMethod;        // GET, POST, PUT, DELETE, PATCH, ANY
+    private String friendlyName;
+    private String description;
+    private String serviceOwner;
+    private String parameterTypes;        // JSON array (METHOD only)
+    private String returnType;            // Fully qualified type (METHOD only)
+    private String apiDocsUrl;            // Link to API documentation
+    private String sourceCodeLocation;    // Source file path (METHOD only)
+    private String availableContextVariables;
+    private Status status;                // NEEDS_DEFINITION, PERMISSION_CREATED,
+                                          // POLICY_CONNECTED, EXCLUDED
+    private Permission permission;        // OneToOne mapping
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+
+    public enum ResourceType { URL, METHOD }
+    public enum HttpMethod { GET, POST, PUT, DELETE, PATCH, ANY }
+    public enum Status {
+        NEEDS_DEFINITION,
+        PERMISSION_CREATED,
+        POLICY_CONNECTED,
+        EXCLUDED
+    }
+}</code></pre>
+            </div>
+
+            <h3>리소스 생명주기</h3>
+            <table>
+              <thead>
+                <tr><th>상태</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>NEEDS_DEFINITION</code></td><td>스캐너에 의해 탐색됨; 아직 권한이 할당되지 않음</td></tr>
+                <tr><td><code>PERMISSION_CREATED</code></td><td><code>Permission</code> 엔티티가 이 리소스에 연결됨</td></tr>
+                <tr><td><code>POLICY_CONNECTED</code></td><td>정책이 대상(targets)을 통해 이 리소스를 참조함</td></tr>
+                <tr><td><code>EXCLUDED</code></td><td>인가에서 명시적으로 제외됨 (예: 공개 엔드포인트)</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- ManagedResource Lifecycle -->
+          <section>
+            <h2 id="lifecycle">ManagedResource 생명주기</h2>
+
+            <h3>상태 전이</h3>
+            <div class="diagram-container">
+              <div class="diagram-title">ManagedResource 상태 전이</div>
+              <div class="diagram-flow-vertical">
+                <div class="diagram-box diagram-warning">
+                  <span class="diagram-box-name">NEEDS_DEFINITION</span>
+                  <span class="diagram-box-desc">스캐너에 의해 탐색된 리소스, 아직 설정되지 않음</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-grid diagram-grid-2">
+                  <div class="diagram-group">
+                    <div class="diagram-box diagram-accent">
+                      <span class="diagram-box-name">PERMISSION_CREATED</span>
+                      <span class="diagram-box-desc">defineResourceAsPermission() 호출됨</span>
+                    </div>
+                    <div class="diagram-arrow-down"></div>
+                    <div class="diagram-box diagram-success">
+                      <span class="diagram-box-name">POLICY_CONNECTED</span>
+                      <span class="diagram-box-desc">정책이 생성되고 연결됨</span>
+                    </div>
+                  </div>
+                  <div class="diagram-box diagram-muted">
+                    <span class="diagram-box-name">EXCLUDED</span>
+                    <span class="diagram-box-desc">관리자가 제외로 표시 (공개 엔드포인트, 정적 자산)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <table>
+              <thead>
+                <tr><th>상태</th><th>설명</th><th>전이 트리거</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>NEEDS_DEFINITION</code></td><td>스캐너에 의해 탐색된 리소스, 아직 설정되지 않음</td><td>초기 스캔</td></tr>
+                <tr><td><code>PERMISSION_CREATED</code></td><td><code>defineResourceAsPermission()</code> 호출, <code>Permission</code> 엔티티 생성됨</td><td>Workbench에서 관리자 작업</td></tr>
+                <tr><td><code>POLICY_CONNECTED</code></td><td>정책이 생성되어 이 리소스에 연결됨</td><td>Policy Builder / Policy Wizard</td></tr>
+                <tr><td><code>EXCLUDED</code></td><td>리소스가 인가 관리에서 제외됨</td><td>관리자가 제외로 표시</td></tr>
+              </tbody>
+            </table>
+
+            <h3>ManagedResource 엔티티 필드</h3>
+            <table>
+              <thead>
+                <tr><th>필드</th><th>타입</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>resourceIdentifier</code></td><td><code>String</code></td><td>고유 ID (URL 패턴 + 메서드, 또는 정규화된 메서드 시그니처)</td></tr>
+                <tr><td><code>resourceType</code></td><td><code>ResourceType</code></td><td><code>URL</code> 또는 <code>METHOD</code></td></tr>
+                <tr><td><code>friendlyName</code></td><td><code>String</code></td><td>AI가 생성한 사람이 읽기 쉬운 이름</td></tr>
+                <tr><td><code>status</code></td><td><code>ResourceStatus</code></td><td><code>NEEDS_DEFINITION</code>, <code>PERMISSION_CREATED</code>, <code>POLICY_CONNECTED</code>, <code>EXCLUDED</code></td></tr>
+                <tr><td><code>scanSource</code></td><td><code>String</code></td><td>이 리소스를 탐색한 스캐너</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- Resource Workbench -->
+          <section>
+            <h2 id="workbench">Resource Workbench</h2>
+            <p>Admin Dashboard의 Resource Workbench(<code>/admin/resources</code>)는 탐색된 리소스를 관리하기 위한 시각적 인터페이스를 제공합니다.</p>
+
+            <h3>리소스 탐색</h3>
+            <ul>
+              <li>상태 기반 필터링으로 모든 스캔된 리소스를 조회</li>
+              <li>필요 시 스캔 결과를 새로 고침</li>
+              <li>리소스 유형, 상태 또는 이름으로 검색 및 필터링</li>
+            </ul>
+
+            <h3>리소스를 권한으로 정의</h3>
+            <p><code>NEEDS_DEFINITION</code> 상태의 리소스에서 <strong>"Define as Permission"</strong>을 클릭하여:</p>
+            <ol>
+              <li>대응하는 <code>Permission</code> 엔티티를 생성합니다</li>
+              <li>리소스 상태를 <code>PERMISSION_CREATED</code>로 업데이트합니다</li>
+              <li>해당 리소스를 정책 생성에 사용할 수 있도록 합니다</li>
+            </ol>
+
+            <h3>Workbench에서의 두 가지 경로</h3>
+            <p>리소스를 권한으로 정의한 후, 두 가지 정책 생성 옵션을 사용할 수 있습니다:</p>
+            <table>
+              <thead>
+                <tr><th>경로</th><th>동작</th><th>사용 사례</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>빠른 부여</strong></td><td>"Grant via Wizard" → Policy Wizard (3단계)</td><td>간단한 역할-권한 할당</td></tr>
+                <tr><td><strong>고급 정책</strong></td><td>"Create Policy" → Policy Builder (5단계, from-resource 모드)</td><td>복잡한 조건, AI 표현식, 다중 규칙 정책</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- End-to-End Workflow -->
+          <section>
+            <h2 id="e2e-workflow">전체 워크플로우</h2>
+            <div class="diagram-container">
+              <div class="diagram-title">전체 리소스 관리 파이프라인</div>
+              <div class="diagram-flow">
+                <div class="diagram-group">
+                  <div class="diagram-group-title">1단계: 스캔</div>
+                  <div class="diagram-box diagram-highlight">
+                    <span class="diagram-box-name">MvcResourceScanner + MethodResourceScanner</span>
+                    <span class="diagram-box-desc">ManagedResource (NEEDS_DEFINITION)</span>
+                  </div>
+                </div>
+                <div class="diagram-arrow diagram-arrow-long"></div>
+                <div class="diagram-group">
+                  <div class="diagram-group-title">2단계: 정의</div>
+                  <div class="diagram-box diagram-accent">
+                    <span class="diagram-box-name">Resource Workbench</span>
+                    <span class="diagram-box-desc">/admin/resources -- 권한으로 정의 (PERMISSION_CREATED)</span>
+                  </div>
+                </div>
+                <div class="diagram-arrow diagram-arrow-long"></div>
+                <div class="diagram-group">
+                  <div class="diagram-group-title">3단계: 정책</div>
+                  <div class="diagram-box diagram-accent">
+                    <span class="diagram-box-name">Policy Builder / Wizard</span>
+                    <span class="diagram-box-desc">/admin/policies -- from-resource 모드 (POLICY_CONNECTED)</span>
+                  </div>
+                </div>
+                <div class="diagram-arrow diagram-arrow-long"></div>
+                <div class="diagram-group">
+                  <div class="diagram-group-title">4단계: 적용</div>
+                  <div class="diagram-box diagram-success">
+                    <span class="diagram-box-name">CustomDynamicAuthorizationManager</span>
+                    <span class="diagram-box-desc">reload() -- .anyRequest().access(dynamic)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <h3>1단계: 스캔</h3>
+            <p><code>WorkbenchInitializer</code>를 통해 애플리케이션 시작 시 자동으로 수행됩니다. <code>MvcResourceScanner</code>는 모든 <code>@Controller</code> 및 <code>@RestController</code> 클래스를 스캔합니다. <code>MethodResourceScanner</code>는 모든 <code>@Protectable</code> 메서드를 스캔합니다. AI가 일괄적으로 친숙한 이름을 생성합니다.</p>
+
+            <h3>2단계: 검토 &amp; 정의</h3>
+            <p>Resource Workbench에서 <code>NEEDS_DEFINITION</code> 리소스를 검토합니다. 관련 리소스를 권한으로 정의합니다. 인가가 필요 없는 리소스(정적 자산, 공개 엔드포인트)는 제외합니다.</p>
+
+            <h3>3단계: 정책 생성</h3>
+            <p>Workbench에서 <strong>"Create Policy"</strong>를 클릭하여 from-resource 모드로 Policy Builder에 진입합니다. 호환되는 조건 템플릿이 자동으로 필터링됩니다. 규칙과 조건을 구성한 후 저장합니다.</p>
+
+            <h3>4단계: 동적 인가</h3>
+            <p>정책이 저장되면 <code>reloadAuthorizationSystem()</code>이 <code>CustomDynamicAuthorizationManager.reload()</code>를 트리거합니다. 정책은 즉시 적용됩니다. 보안 설정에 <code>.anyRequest().access(customDynamicAuthorizationManager)</code>가 있으므로 정적 인가 규칙이 필요 없습니다.</p>
+          </section>
+
+          <!-- Resource Workbench Operations Guide -->
+          <section>
+            <h2 id="workbench-operations">Resource Workbench: 운영 가이드</h2>
+            <p>Resource Workbench(<code>/admin/resources</code>)는 탐색된 모든 리소스를 관리하기 위한 중앙 인터페이스입니다. 이 섹션에서는 상세한 운영 워크플로우를 다룹니다.</p>
+
+            <h3>리소스 필터링</h3>
+            <p>Workbench는 리소스를 빠르게 찾기 위한 다양한 필터링 옵션을 제공합니다:</p>
+            <table>
+              <thead>
+                <tr><th>필터</th><th>옵션</th><th>사용 사례</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>상태별</strong></td><td><code>NEEDS_DEFINITION</code>, <code>PERMISSION_CREATED</code>, <code>POLICY_CONNECTED</code>, <code>EXCLUDED</code></td><td>특정 생명주기 단계의 리소스 찾기</td></tr>
+                <tr><td><strong>서비스 소유자별</strong></td><td>컨트롤러 또는 서비스 클래스명</td><td>특정 모듈에 속한 리소스 필터링</td></tr>
+                <tr><td><strong>키워드별</strong></td><td>자유 텍스트 검색</td><td>리소스 식별자, 친숙한 이름 또는 설명으로 검색</td></tr>
+                <tr><td><strong>리소스 유형별</strong></td><td><code>URL</code> 또는 <code>METHOD</code></td><td>엔드포인트 유형 vs. 메서드 수준 리소스 필터링</td></tr>
+              </tbody>
+            </table>
+
+            <h3>리소스 정의</h3>
+            <p>리소스를 정의하면 다음 단계가 순서대로 진행됩니다:</p>
+            <ol>
+              <li><code>NEEDS_DEFINITION</code> 리소스에서 <strong>"Define as Permission"</strong>을 클릭합니다</li>
+              <li>권한에 대한 친숙한 이름을 입력합니다 (또는 AI가 제안한 이름을 수락합니다)</li>
+              <li><code>Permission</code> 엔티티가 자동으로 생성되어 리소스에 연결됩니다</li>
+              <li>리소스 상태가 <code>PERMISSION_CREATED</code>로 변경됩니다</li>
+              <li>이제 리소스가 정책 할당에 사용할 수 있는 상태가 됩니다</li>
+            </ol>
+
+            <h3>Workbench에서 정책 설정</h3>
+            <p>리소스를 정의한 후 두 가지 정책 생성 경로를 제공하는 모달이 나타납니다:</p>
+            <div class="diagram-container">
+              <div class="diagram-compare">
+                <div class="diagram-compare-side">
+                  <h4>빠른 부여 (Wizard)</h4>
+                  <p><strong>"Grant via Wizard"</strong>를 클릭하여 3단계 Policy Wizard를 엽니다.</p>
+                  <ul>
+                    <li>리소스 권한이 미리 선택됩니다</li>
+                    <li>대상 역할을 선택하고 확인합니다</li>
+                    <li>간단한 ALLOW 정책을 생성합니다</li>
+                  </ul>
+                </div>
+                <div class="diagram-compare-vs">VS</div>
+                <div class="diagram-compare-side">
+                  <h4>고급 (Policy Builder)</h4>
+                  <p><strong>"Create Policy"</strong>를 클릭하여 5단계 Policy Builder를 엽니다.</p>
+                  <ul>
+                    <li>대상이 미리 채워집니다 (from-resource 모드)</li>
+                    <li>전체 조건 템플릿 선택 가능</li>
+                    <li>복잡한 규칙과 AI 조건을 지원합니다</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <h3>리소스 제외 및 복원</h3>
+            <p>인가가 필요 없는 리소스(공개 엔드포인트, 정적 자산, 헬스 체크)는 제외할 수 있습니다:</p>
+            <ul>
+              <li><strong>제외:</strong> <code>NEEDS_DEFINITION</code> 리소스에서 <strong>"Exclude"</strong>를 클릭합니다. 상태가 <code>EXCLUDED</code>로 변경되고, 리소스가 인가 관리에서 제거됩니다.</li>
+              <li><strong>복원:</strong> 제외된 리소스는 <strong>"Restore"</strong>를 클릭하여 복원할 수 있습니다. 상태가 <code>NEEDS_DEFINITION</code>으로 되돌아가고, 리소스가 관리 생명주기에 다시 진입합니다.</li>
+            </ul>
+            <p><strong>제외해야 할 경우:</strong> 공개 API 엔드포인트, 정적 자산 경로, 헬스 체크 엔드포인트(<code>/actuator/health</code>), 문서 경로.</p>
+            <p><strong>복원해야 할 경우:</strong> 이전에 공개였지만 이제 인가가 필요한 엔드포인트, 또는 실수로 제외된 리소스.</p>
+
+            <h3>상태 전이 다이어그램</h3>
+            <div class="diagram-container">
+              <div class="diagram-title">Resource Workbench 상태 흐름</div>
+              <div class="diagram-flow-vertical">
+                <div class="diagram-box diagram-warning">
+                  <span class="diagram-box-name">NEEDS_DEFINITION</span>
+                  <span class="diagram-box-desc">시작 시 스캐너에 의해 탐색됨</span>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-grid diagram-grid-2">
+                  <div class="diagram-group">
+                    <div class="diagram-box diagram-accent">
+                      <span class="diagram-box-name">PERMISSION_CREATED</span>
+                      <span class="diagram-box-desc">"Define as Permission" 클릭 -- Permission 엔티티 연결됨</span>
+                    </div>
+                    <div class="diagram-arrow-down"></div>
+                    <div class="diagram-box diagram-success">
+                      <span class="diagram-box-name">POLICY_CONNECTED</span>
+                      <span class="diagram-box-desc">Wizard 또는 Builder를 통해 정책 생성됨 -- 리소스가 완전히 관리됨</span>
+                    </div>
+                  </div>
+                  <div class="diagram-group">
+                    <div class="diagram-box diagram-muted">
+                      <span class="diagram-box-name">EXCLUDED</span>
+                      <span class="diagram-box-desc">"Exclude" 클릭 -- 관리 대상 아님 -- 복원 가능</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- AI Auto-Naming -->
+          <section>
+            <h2 id="ai-naming">AI 자동 이름 지정</h2>
+            <p>스캐너에 의해 리소스가 탐색되면, 기술적 식별자(URL 패턴 또는 메서드 시그니처)는 사용자 친화적이지 않습니다. AI 자동 이름 지정 시스템은 자동으로 사람이 읽기 쉬운 이름과 설명을 생성합니다.</p>
+
+            <h3>작동 방식</h3>
+            <p><code>ResourceRegistryServiceImpl</code>은 스캔이 완료된 후 AI <code>ResourceNaming</code> 서비스를 호출합니다. AI는 각 기술적 식별자를 분석하여 다음을 생성합니다:</p>
+            <ul>
+              <li><strong>친숙한 이름:</strong> 간결하고 비즈니스 지향적인 이름 (예: <code>PUT /api/users/{id}</code>에 대해 "Update User Profile")</li>
+              <li><strong>설명:</strong> 리소스가 수행하는 작업에 대한 더 긴 설명</li>
+            </ul>
+
+            <h3>일괄 처리</h3>
+            <p>AI API 사용을 최적화하기 위해, 자동 이름 지정은 <strong>배치당 10개 항목</strong>으로 리소스를 처리합니다. 이 접근 방식은:</p>
+            <ul>
+              <li>AI API 호출 횟수를 줄입니다</li>
+              <li>같은 배치 내의 관련 리소스에 대한 문맥 인식을 제공합니다</li>
+              <li>개별 배치를 재시도하여 실패를 우아하게 처리합니다</li>
+            </ul>
+
+            <h3>이름 생성 전략</h3>
+            <div class="diagram-container">
+              <div class="diagram-title">AI 자동 이름 지정 파이프라인</div>
+              <div class="diagram-flow">
+                <div class="diagram-box diagram-highlight">
+                  <span class="diagram-box-name">기술적 식별자</span>
+                  <span class="diagram-box-desc">URL 패턴 + 메서드 시그니처</span>
+                </div>
+                <div class="diagram-arrow"></div>
+                <div class="diagram-box diagram-accent">
+                  <span class="diagram-box-name">AI ResourceNaming</span>
+                  <span class="diagram-box-desc">10개 항목 배치 분석</span>
+                </div>
+                <div class="diagram-arrow"></div>
+                <div class="diagram-box diagram-success">
+                  <span class="diagram-box-name">친숙한 이름</span>
+                  <span class="diagram-box-desc">비즈니스 가독성 높은 이름 + 설명</span>
+                </div>
+              </div>
+            </div>
+
+            <table>
+              <thead>
+                <tr><th>기술적 식별자</th><th>AI 생성 친숙한 이름</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>GET /api/users</code></td><td>List All Users</td></tr>
+                <tr><td><code>PUT /api/users/{id}</code></td><td>Update User Profile</td></tr>
+                <tr><td><code>DELETE /admin/roles/{id}</code></td><td>Delete Role</td></tr>
+                <tr><td><code>AccountService.updateAccount(Long,AccountDto)</code></td><td>Update Account Details</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/iam/policy.html" class="docs-nav-prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">Policy Management</span>
+            </a>
+            <a href="../../../docs/reference/iam/admin.html" class="docs-nav-next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">Admin Dashboard</span>
+            </a>
+          </div>

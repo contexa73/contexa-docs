@@ -1,0 +1,988 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">레퍼런스</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Identity DSL</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-info">contexa-identity</span>
+            </div>
+            <h1>Identity DSL</h1>
+            <p class="lead">Identity DSL은 전체 인증 플랫폼을 설정하기 위한 플루언트, 타입 세이프 Java API입니다. 인증 방법, 상태 관리, Spring Security 설정을 단일 <code>PlatformSecurityConfig</code> 클래스에서 정의합니다.</p>
+          </div>
+
+          <!-- Quick Start -->
+          <section class="docs-section">
+            <h2 id="quick-start">빠른 시작</h2>
+            <p>가장 간단한 설정 -- 세션 기반 상태의 폼 로그인:</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Configuration
+@EnableWebSecurity
+public class PlatformSecurityConfig {
+
+    @Bean
+    public PlatformConfig platformDslConfig(
+            IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
+        return registry
+            .form(form -&gt; form.loginPage("/login").defaultSuccessUrl("/home"))
+            .session(Customizer.withDefaults())
+            .build();
+    }
+}</code></pre>
+            </div>
+          </section>
+
+          <!-- Why Contexa DSL? -->
+          <section class="docs-section">
+            <h2 id="why-contexa-dsl">왜 Contexa DSL인가?</h2>
+            <p>Spring Security는 모든 <code>SecurityFilterChain</code>에 대해 별도의 <code>@Bean</code> 메서드가 필요합니다. 3개의 로그인 페이지는 반복되는 보일러플레이트를 가진 3개의 메서드를 의미합니다. Contexa의 Identity DSL은 이를 완전히 제거합니다 -- 하나의 플루언트 체인, 하나의 메서드, 무제한 Filter Chain.</p>
+
+            <h3>Spring Security: 3개의 Filter Chain</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean @Order(1)
+    public SecurityFilterChain adminChain(HttpSecurity http) throws Exception {
+        return http
+            .securityMatcher("/admin/**")
+            .csrf(AbstractHttpConfigurer::disable)
+            .formLogin(form -&gt; form.loginPage("/admin/login").defaultSuccessUrl("/admin"))
+            .sessionManagement(session -&gt; session.sessionFixation().changeSessionId())
+            .authorizeHttpRequests(auth -&gt; auth.anyRequest().authenticated())
+            .build();
+    }
+
+    @Bean @Order(2)
+    public SecurityFilterChain apiChain(HttpSecurity http) throws Exception {
+        return http
+            .securityMatcher("/api/**")
+            .csrf(AbstractHttpConfigurer::disable)
+            .formLogin(form -&gt; form.loginPage("/api/login").defaultSuccessUrl("/api"))
+            .sessionManagement(session -&gt; session.sessionFixation().changeSessionId())
+            .authorizeHttpRequests(auth -&gt; auth.anyRequest().authenticated())
+            .build();
+    }
+
+    @Bean @Order(3)
+    public SecurityFilterChain userChain(HttpSecurity http) throws Exception {
+        return http
+            .csrf(AbstractHttpConfigurer::disable)
+            .formLogin(form -&gt; form.loginPage("/login").defaultSuccessUrl("/home"))
+            .sessionManagement(session -&gt; session.sessionFixation().changeSessionId())
+            .authorizeHttpRequests(auth -&gt; auth.anyRequest().authenticated())
+            .build();
+    }
+}
+// 3개의 @Bean 메서드, ~40줄, 체인마다 반복되는 보일러플레이트</code></pre>
+            </div>
+
+            <h3>Contexa Identity DSL: 동일한 결과</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Bean
+public PlatformConfig platformDslConfig(
+        IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
+    return registry
+        .global(http -&gt; {
+            http.csrf(AbstractHttpConfigurer::disable)
+                .sessionManagement(session -&gt; session.sessionFixation().changeSessionId())
+                .authorizeHttpRequests(auth -&gt; auth.anyRequest().authenticated());
+        })
+        .form(f -&gt; f.order(10).loginPage("/admin/login").defaultSuccessUrl("/admin")
+            .rawHttp(http -&gt; http.securityMatcher("/admin/**")))
+        .session(Customizer.withDefaults())
+        .form(f -&gt; f.order(20).loginPage("/api/login").defaultSuccessUrl("/api")
+            .rawHttp(http -&gt; http.securityMatcher("/api/**")))
+        .session(Customizer.withDefaults())
+        .form(f -&gt; f.order(30).loginPage("/login").defaultSuccessUrl("/home"))
+        .session(Customizer.withDefaults())
+        .build();
+}
+// 1개 메서드, ~15줄, 보일러플레이트 제로, 런타임에 3개의 SecurityFilterChain 빈 등록</code></pre>
+            </div>
+
+            <div class="diagram-container">
+              <div class="diagram-grid diagram-grid-3">
+                <div class="diagram-box diagram-highlight">
+                  <div class="diagram-box-name">플루언트 체이닝</div>
+                  <div class="diagram-box-desc"><code>.form().session().form().session().build()</code> -- 하나의 플루언트 체인이 자동으로 여러 Filter Chain을 생성</div>
+                </div>
+                <div class="diagram-box diagram-accent">
+                  <div class="diagram-box-name">동적 빈 등록</div>
+                  <div class="diagram-box-desc"><code>SecurityFilterChainRegistrar</code>가 <code>BeanDefinitionRegistry</code>를 통해 런타임에 <code>SecurityFilterChain</code> 빈을 등록</div>
+                </div>
+                <div class="diagram-box diagram-success">
+                  <div class="diagram-box-name">인증 + 상태 분리</div>
+                  <div class="diagram-box-desc">모든 인증 방법이 모든 상태(<code>.session()</code> 또는 <code>.oauth2()</code>)와 결합 가능. Spring Security는 세션 전용으로 제한됨.</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- DSL Architecture -->
+          <section class="docs-section">
+            <h2 id="architecture">DSL 아키텍처</h2>
+            <p>DSL은 <strong>2단계 체인 빌더</strong> 패턴을 따릅니다. 각 <code>.auth().state()</code> 쌍이 독립적인 <code>SecurityFilterChain</code>을 생성하며, 우선순위에 따라 정렬됩니다.</p>
+
+            <h3>2단계 빌더 패턴</h3>
+            <div class="diagram-container">
+              <div class="diagram-flow">
+                <div class="diagram-box">
+                  <div class="diagram-box-name">IdentityDslRegistry</div>
+                  <div class="diagram-box-desc">진입점</div>
+                </div>
+                <div class="diagram-arrow"></div>
+                <div class="diagram-box">
+                  <div class="diagram-box-name">.global()</div>
+                  <div class="diagram-box-desc">공유 HttpSecurity 설정</div>
+                </div>
+                <div class="diagram-arrow"></div>
+                <div class="diagram-box diagram-highlight">
+                  <div class="diagram-box-name">인증 단계</div>
+                  <div class="diagram-box-desc">form / rest / ott / passkey / mfa</div>
+                </div>
+                <div class="diagram-arrow"></div>
+                <div class="diagram-box diagram-accent">
+                  <div class="diagram-box-name">상태 단계</div>
+                  <div class="diagram-box-desc">session / oauth2</div>
+                </div>
+                <div class="diagram-arrow"></div>
+                <div class="diagram-box diagram-success">
+                  <div class="diagram-box-name">.build()</div>
+                  <div class="diagram-box-desc">PlatformConfig</div>
+                </div>
+              </div>
+            </div>
+
+            <h3>하나의 Registry에서 다중 Chain</h3>
+            <p>각 <code>.auth().state()</code> 쌍이 별도의 <code>SecurityFilterChain</code>을 생성합니다. Registry가 모든 쌍을 수집하고 <code>SecurityFilterChainRegistrar</code>가 런타임에 Spring 빈으로 등록합니다.</p>
+
+            <div class="diagram-container">
+              <div class="diagram-flow-vertical">
+                <div class="diagram-box">
+                  <div class="diagram-box-name">IdentityDslRegistry</div>
+                  <div class="diagram-box-desc">.global(http -&gt; { /* 공유 CSRF, 인가, 컨텍스트 */ })</div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+              </div>
+              <div class="diagram-grid diagram-grid-3">
+                <div class="diagram-group">
+                  <div class="diagram-group-title">Chain 1 (order: 20)</div>
+                  <div class="diagram-box diagram-highlight">
+                    <div class="diagram-box-name">.form()</div>
+                    <div class="diagram-box-desc">loginPage("/admin/login")</div>
+                  </div>
+                  <div class="diagram-line-down"></div>
+                  <div class="diagram-box diagram-accent">
+                    <div class="diagram-box-name">.oauth2()</div>
+                  </div>
+                  <div class="diagram-line-down"></div>
+                  <div class="diagram-box diagram-success">
+                    <div class="diagram-box-name">SecurityFilterChain</div>
+                    <div class="diagram-box-desc">/admin/**</div>
+                  </div>
+                </div>
+                <div class="diagram-group">
+                  <div class="diagram-group-title">Chain 2 (order: 50)</div>
+                  <div class="diagram-box diagram-highlight">
+                    <div class="diagram-box-name">.rest()</div>
+                    <div class="diagram-box-desc">loginProcessingUrl("/api/auth")</div>
+                  </div>
+                  <div class="diagram-line-down"></div>
+                  <div class="diagram-box diagram-accent">
+                    <div class="diagram-box-name">.oauth2()</div>
+                  </div>
+                  <div class="diagram-line-down"></div>
+                  <div class="diagram-box diagram-success">
+                    <div class="diagram-box-name">SecurityFilterChain</div>
+                    <div class="diagram-box-desc">/api/**</div>
+                  </div>
+                </div>
+                <div class="diagram-group">
+                  <div class="diagram-group-title">Chain 3 (order: 100)</div>
+                  <div class="diagram-box diagram-highlight">
+                    <div class="diagram-box-name">.mfa()</div>
+                    <div class="diagram-box-desc">formLogin + passkey</div>
+                  </div>
+                  <div class="diagram-line-down"></div>
+                  <div class="diagram-box diagram-accent">
+                    <div class="diagram-box-name">.session()</div>
+                  </div>
+                  <div class="diagram-line-down"></div>
+                  <div class="diagram-box diagram-success">
+                    <div class="diagram-box-name">SecurityFilterChain</div>
+                    <div class="diagram-box-desc">/** (catch-all)</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="callout callout-info">
+              <p>각 체인은 자체 필터, 인증 전략 및 상태 관리로 격리됩니다. 요청은 <code>order()</code>와 <code>securityMatcher</code>에 의해 라우팅됩니다 -- 첫 번째 매칭 체인이 요청을 처리합니다.</p>
+            </div>
+          </section>
+
+          <!-- How It Works: Dynamic Bean Registration -->
+          <section class="docs-section">
+            <h2 id="dynamic-registration">동작 원리: 동적 빈 등록</h2>
+            <p><code>PlatformConfig</code>를 반환하는 <strong>하나의 <code>@Bean</code> 메서드</strong>를 작성합니다. Contexa의 부트스트랩 파이프라인이 이를 읽고 자동으로 여러 <code>SecurityFilterChain</code> 빈을 등록합니다 -- 추가 <code>@Bean</code> 어노테이션이 필요 없습니다.</p>
+
+            <!-- Phase 1: What You Write -> What Spring Sees -->
+            <h3>작성하는 것 vs. Spring이 보는 것</h3>
+            <div class="diagram-container">
+              <div class="diagram-flow">
+                <div class="diagram-box diagram-highlight" style="min-width: 200px;">
+                  <div class="diagram-box-name">작성하는 것</div>
+                  <div class="diagram-box-desc">1개의 <code>@Bean</code> 메서드<br><code>PlatformConfig</code> 반환</div>
+                </div>
+                <div class="diagram-arrow">
+                  <span class="diagram-label">부트스트랩 파이프라인</span>
+                </div>
+                <div class="diagram-box diagram-accent" style="min-width: 200px;">
+                  <div class="diagram-box-name">Contexa가 생성</div>
+                  <div class="diagram-box-desc">N개의 <code>SecurityFilterChain</code> 빈<br>런타임에 등록</div>
+                </div>
+                <div class="diagram-arrow">
+                  <span class="diagram-label">Spring이 보는 것</span>
+                </div>
+                <div class="diagram-box diagram-success" style="min-width: 200px;">
+                  <div class="diagram-box-name">Spring Context</div>
+                  <div class="diagram-box-desc"><code>formSecurityFilterChain1</code><br><code>restSecurityFilterChain2</code><br><code>ottSecurityFilterChain3</code></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Phase 2: 4-Step Pipeline as Visual Flow -->
+            <h3>부트스트랩 파이프라인</h3>
+            <div class="diagram-container">
+              <div class="diagram-flow-vertical">
+
+                <!-- Step 1 -->
+                <div class="diagram-step">
+                  <div class="diagram-step-number">1</div>
+                  <div class="diagram-step-title">PlatformConfig 빌드</div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+
+                <!-- Step 1 -> 2 visual: PlatformConfig splits into flows -->
+                <div class="diagram-grid diagram-grid-3">
+                  <div class="diagram-box">
+                    <div class="diagram-box-name">FlowConfig #1</div>
+                    <div class="diagram-box-desc">form + session<br>order=10, matcher=/admin/**</div>
+                  </div>
+                  <div class="diagram-box">
+                    <div class="diagram-box-name">FlowConfig #2</div>
+                    <div class="diagram-box-desc">rest + oauth2<br>order=20, matcher=/api/**</div>
+                  </div>
+                  <div class="diagram-box">
+                    <div class="diagram-box-name">FlowConfig #3</div>
+                    <div class="diagram-box-desc">ott + session<br>order=30, matcher=/**</div>
+                  </div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+
+                <!-- Step 2 -->
+                <div class="diagram-step">
+                  <div class="diagram-step-number">2</div>
+                  <div class="diagram-step-title">Flow별 HttpSecurity 생성</div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+
+                <!-- Step 2 visual: independent HttpSecurity instances -->
+                <div class="diagram-grid diagram-grid-3">
+                  <div class="diagram-box diagram-highlight">
+                    <div class="diagram-box-name">HttpSecurity #1</div>
+                    <div class="diagram-box-desc">격리된 컨텍스트<br>독립 필터</div>
+                  </div>
+                  <div class="diagram-box diagram-highlight">
+                    <div class="diagram-box-name">HttpSecurity #2</div>
+                    <div class="diagram-box-desc">격리된 컨텍스트<br>독립 필터</div>
+                  </div>
+                  <div class="diagram-box diagram-highlight">
+                    <div class="diagram-box-name">HttpSecurity #3</div>
+                    <div class="diagram-box-desc">격리된 컨텍스트<br>독립 필터</div>
+                  </div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+
+                <!-- Step 3 -->
+                <div class="diagram-step">
+                  <div class="diagram-step-number">3</div>
+                  <div class="diagram-step-title">설정 적용</div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+
+                <!-- Step 3 visual: global + flow-specific applied -->
+                <div class="diagram-grid diagram-grid-3">
+                  <div class="diagram-box diagram-accent">
+                    <div class="diagram-box-name">global() + form()</div>
+                    <div class="diagram-box-desc">CSRF, 세션 고정,<br>로그인 페이지, 필터</div>
+                  </div>
+                  <div class="diagram-box diagram-accent">
+                    <div class="diagram-box-name">global() + rest()</div>
+                    <div class="diagram-box-desc">CSRF, 토큰 검증,<br>bearer 필터</div>
+                  </div>
+                  <div class="diagram-box diagram-accent">
+                    <div class="diagram-box-name">global() + ott()</div>
+                    <div class="diagram-box-desc">CSRF, OTT 생성,<br>매직 링크 필터</div>
+                  </div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+
+                <!-- Step 4 -->
+                <div class="diagram-step diagram-step-active">
+                  <div class="diagram-step-number">4</div>
+                  <div class="diagram-step-title">Spring 빈으로 등록</div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+
+                <!-- Step 4 visual: final beans in Spring context -->
+                <div class="diagram-grid diagram-grid-3">
+                  <div class="diagram-box diagram-success">
+                    <div class="diagram-box-name">formSecurityFilterChain1</div>
+                    <div class="diagram-box-desc">OrderedSecurityFilterChain<br>order=10</div>
+                  </div>
+                  <div class="diagram-box diagram-success">
+                    <div class="diagram-box-name">restSecurityFilterChain2</div>
+                    <div class="diagram-box-desc">OrderedSecurityFilterChain<br>order=20</div>
+                  </div>
+                  <div class="diagram-box diagram-success">
+                    <div class="diagram-box-name">ottSecurityFilterChain3</div>
+                    <div class="diagram-box-desc">OrderedSecurityFilterChain<br>order=30</div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            <div class="callout callout-info">
+              <strong>핵심 인사이트:</strong> <code>SecurityFilterChainRegistrar</code>는 Spring의 <code>BeanDefinitionRegistry</code>에 직접 접근합니다. <code>PlatformConfig</code>를 반환하는 하나의 <code>@Bean</code> 메서드를 작성하면, Spring은 각각에 대해 별도의 <code>@Bean</code> 메서드를 작성한 것과 정확히 동일하게 여러 <code>SecurityFilterChain</code> 빈을 인식합니다.
+            </div>
+          </section>
+
+          <!-- Global Configuration -->
+          <section class="docs-section">
+            <h2 id="global-configuration">글로벌 설정</h2>
+            <p><code>global()</code>은 공유 HTTP 보안 설정을 <strong>모든</strong> Filter Chain에 적용합니다. 개별 인증 방법 설정은 충돌 시 글로벌 설정을 오버라이드합니다 (<code>SecurityConfigurerOrchestrator</code>가 글로벌을 먼저 적용한 후 플로우별 설정을 적용).</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">registry
+    .global(http -&gt; {
+        http
+            .csrf(AbstractHttpConfigurer::disable)
+            .authorizeHttpRequests(authReq -&gt; authReq
+                .requestMatchers("/css/**", "/js/**", "/images/**").permitAll()
+                .anyRequest().access(customAuthorizationManager))
+            .securityContext(sc -&gt;
+                sc.securityContextRepository(customRepository));
+    })
+    // ... 인증 방법이 이어짐</code></pre>
+            </div>
+
+            <div class="callout callout-warning">
+              <p><strong>오버라이드 규칙:</strong> 글로벌 설정기가 먼저 실행되고, 각 플로우의 자체 설정기가 실행됩니다. 플로우가 <code>disableCsrf()</code> 또는 <code>rawHttp()</code>를 설정하면, 해당 특정 체인에 대해서만 글로벌 CSRF 설정이 오버라이드됩니다.</p>
+            </div>
+          </section>
+
+          <!-- Filter Chain Order -->
+          <section class="docs-section">
+            <h2 id="filter-chain-order">Filter Chain 순서 &amp; 요청 라우팅</h2>
+            <p>각 인증 방법에는 기본 <code>order()</code> 값이 있습니다. 낮은 order = 높은 우선순위 = 먼저 요청을 가로챕니다. 여러 Filter Chain이 등록되면 Spring Security는 순서대로 평가하고 <code>securityMatcher</code>가 요청과 매칭되는 첫 번째 체인을 사용합니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>인증 방법</th><th>기본 Order</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Form Login</td><td>100</td><td>기존 폼 기반 로그인</td></tr>
+                <tr><td>MFA</td><td>200</td><td>다중 인증</td></tr>
+                <tr><td>REST API</td><td>200</td><td>JSON 자격 증명 제출</td></tr>
+                <tr><td>One-Time Token</td><td>300</td><td>매직 링크 / OTT</td></tr>
+                <tr><td>Passkey</td><td>400</td><td>WebAuthn / FIDO2</td></tr>
+              </tbody>
+            </table></div>
+
+            <p><code>order()</code>와 <code>rawHttp(http -&gt; http.securityMatcher(...))</code>를 사용하여 어떤 체인이 어떤 요청을 처리할지 제어합니다:</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">registry
+    .global(http -&gt; { /* 공유 설정 */ })
+    // 관리자 페이지: Form 로그인, order 20 (최고 우선순위)
+    .form(f -&gt; f.order(20).loginPage("/admin/login")
+        .rawHttp(http -&gt; http.securityMatcher("/admin/**")))
+    .session(Customizer.withDefaults())
+    // API 엔드포인트: REST 로그인, order 50
+    .rest(r -&gt; r.order(50).loginProcessingUrl("/api/auth")
+        .rawHttp(http -&gt; http.securityMatcher("/api/**")))
+    .oauth2(Customizer.withDefaults())
+    // 일반 사용자: MFA, order 100
+    .mfa(m -&gt; m.order(100)
+        .primaryAuthentication(p -&gt; p.formLogin(form -&gt; form.loginPage("/login")))
+        .passkey(Customizer.withDefaults()))
+    .session(Customizer.withDefaults())
+    .build();</code></pre>
+            </div>
+
+            <div class="callout callout-info">
+              <p><code>securityMatcher</code> 없이는 체인이 <strong>모든</strong> 요청에 매칭됩니다. 여러 체인을 사용할 때는 겹침을 방지하기 위해 항상 <code>rawHttp()</code>를 통해 <code>securityMatcher</code>를 설정하세요.</p>
+            </div>
+          </section>
+
+          <!-- Authentication + State Combinations -->
+          <section class="docs-section">
+            <h2 id="combinations">인증 + 상태 조합</h2>
+            <p>모든 인증 방법은 세션 또는 OAuth2 상태와 결합할 수 있습니다. 서로 다른 체인에 걸쳐 다른 상태 전략을 혼합할 수 있습니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>인증 방법</th><th>+ Session</th><th>+ OAuth2</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Form Login</td><td><code>.form(...).session(...)</code></td><td><code>.form(...).oauth2(...)</code></td></tr>
+                <tr><td>REST API</td><td><code>.rest(...).session(...)</code></td><td><code>.rest(...).oauth2(...)</code></td></tr>
+                <tr><td>One-Time Token</td><td><code>.ott(...).session(...)</code></td><td><code>.ott(...).oauth2(...)</code></td></tr>
+                <tr><td>Passkey</td><td><code>.passkey(...).session(...)</code></td><td><code>.passkey(...).oauth2(...)</code></td></tr>
+                <tr><td>MFA</td><td><code>.mfa(...).session(...)</code></td><td><code>.mfa(...).oauth2(...)</code></td></tr>
+              </tbody>
+            </table></div>
+
+            <p><strong>플로우별 상태:</strong> <code>.state()</code> 호출은 <em>가장 최근에 등록된</em> 인증 방법에 적용됩니다. 이를 통해 체인별로 다른 상태 전략을 사용할 수 있습니다:</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">registry
+    .form(f -&gt; f.loginPage("/login"))
+    .session(Customizer.withDefaults())      // form -&gt; Session
+    .rest(r -&gt; r.loginProcessingUrl("/api/auth"))
+    .oauth2(Customizer.withDefaults())       // rest -&gt; OAuth2
+    .mfa(m -&gt; m.primaryAuthentication(...).passkey(...))
+    .session(Customizer.withDefaults())      // mfa -&gt; Session
+    .build();</code></pre>
+            </div>
+
+            <p>동일한 인증 방법을 여러 번 등록할 수 있습니다 (자동 명명: <code>form_flow</code>, <code>form_flow_2</code> 등).</p>
+
+            <h3>Spring Security: 세션 전용</h3>
+            <p>Spring Security의 <code>formLogin()</code>은 세션 기반 상태 관리에 고정되어 있습니다. 토큰 기반 인증을 위해서는 <code>oauth2ResourceServer()</code>로 완전히 별도의 <code>SecurityFilterChain</code>을 수동으로 설정해야 합니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// Spring Security: 세션 상태가 암묵적, 체인별 전환 불가
+http.formLogin(form -&gt; form.loginPage("/login"));
+// 항상 세션 기반. 변경 불가.
+
+// 토큰 기반 인증을 위해서는 완전히 별도의 체인이 필요:
+@Bean
+public SecurityFilterChain resourceServerChain(HttpSecurity http) throws Exception {
+    return http
+        .securityMatcher("/api/**")
+        .oauth2ResourceServer(oauth2 -&gt; oauth2.jwt(Customizer.withDefaults()))
+        .sessionManagement(s -&gt; s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        .build();
+}
+// 두 가지 다른 패러다임, 두 가지 다른 설정, 통합 없음</code></pre>
+            </div>
+
+            <h3>Contexa DSL: 모든 인증 x 모든 상태</h3>
+            <p>Contexa는 인증과 상태 관리를 분리합니다. 동일한 <code>.form()</code>이 한 체인에서는 <code>.session()</code>을, 다른 체인에서는 <code>.oauth2()</code>를 사용할 수 있습니다 -- 단일 메서드에서.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">registry
+    // 관리자: OAuth2 토큰 상태의 폼 로그인
+    .form(f -&gt; f.order(20).loginPage("/admin/login")
+        .rawHttp(http -&gt; http.securityMatcher("/admin/**")))
+    .oauth2(Customizer.withDefaults())
+
+    // API: OAuth2 토큰 상태의 REST 로그인 (Stateless)
+    .rest(r -&gt; r.order(50).loginProcessingUrl("/api/auth")
+        .rawHttp(http -&gt; http.securityMatcher("/api/**")))
+    .oauth2(Customizer.withDefaults())
+
+    // 사용자: 세션 상태의 MFA
+    .mfa(m -&gt; m.order(100)
+        .primaryAuthentication(auth -&gt; auth.formLogin(form -&gt; form.loginPage("/login")))
+        .passkey(Customizer.withDefaults()))
+    .session(Customizer.withDefaults())
+    .build();
+// 5가지 인증 방법 x 2가지 상태 유형 = 10가지 조합, 모두 하나의 메서드에서</code></pre>
+            </div>
+
+            <div class="callout callout-success">
+              <strong>모든 인증 x 모든 상태:</strong> Contexa는 인증과 상태를 직교적 관심사로 취급합니다. 세션이 있는 폼 로그인, OAuth2가 있는 폼 로그인, 세션이 있는 REST, OAuth2가 있는 MFA -- 모든 조합이 가능합니다. 이는 전체 설정 클래스를 복제하지 않고는 바닐라 Spring Security에서 아키텍처적으로 불가능합니다.
+            </div>
+          </section>
+
+          <!-- rawHttp -->
+          <section class="docs-section">
+            <h2 id="raw-http">rawHttp() -- 전체 Spring Security 접근</h2>
+            <p><code>rawHttp()</code>는 <strong>전체</strong> Spring Security <code>HttpSecurity</code> API를 노출하는 <code>SafeHttpCustomizer&lt;HttpSecurity&gt;</code> 훅을 제공합니다. 체크 예외를 지원하며 여러 번 호출할 수 있습니다 (각 호출이 누적됨).</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">.form(f -&gt; f.order(20)
+    .rawHttp(http -&gt; http
+        .securityMatcher("/admin/**")
+        .sessionManagement(session -&gt;
+            session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        .addFilterBefore(customFilter, UsernamePasswordAuthenticationFilter.class))
+    .rawHttp(http -&gt; http
+        .headers(headers -&gt; headers.frameOptions(fo -&gt; fo.deny())))
+)</code></pre>
+            </div>
+
+            <p>모든 인증 방법과 <code>global()</code>에서 사용 가능합니다. 폼 로그인의 경우 <code>HttpSecurity.formLogin()</code> 내부를 직접 커스터마이즈하는 <code>rawFormLogin()</code>도 있습니다.</p>
+          </section>
+
+          <!-- SecurityFilterChain Customization -->
+          <section class="docs-section">
+            <h2 id="customization">SecurityFilterChain 커스터마이제이션</h2>
+            <p><code>globalHttpCustomizer</code> 람다는 <code>HttpSecurity</code> 빌더를 수신하여 Spring Security의 설정 API에 대한 완전한 접근을 제공합니다. 아래는 일반적인 커스터마이제이션 포인트입니다.</p>
+
+            <h3>CSRF 설정</h3>
+            <p>기본 설정은 CSRF를 비활성화합니다. HTML 폼을 서빙하는 애플리케이션의 경우 쿠키 기반 토큰 리포지토리와 함께 CSRF를 활성화하는 것을 고려하세요:</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// CSRF 비활성화 (기본값 - Stateless API에 적합)
+http.csrf(AbstractHttpConfigurer::disable);
+
+// 쿠키 리포지토리로 CSRF 활성화 (HTML 폼 애플리케이션용)
+http.csrf(csrf -&gt; csrf
+    .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+);</code></pre>
+            </div>
+
+            <h3>AISessionSecurityContextRepository를 사용한 세션 관리</h3>
+            <p><code>AISessionSecurityContextRepository</code>는 Spring의 <code>HttpSessionSecurityContextRepository</code>를 AI 강화 세션 추적으로 확장합니다. 행동 데이터(세션 패턴, 접근 빈도, 이상 점수)를 인가 파이프라인에 제공합니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// AI 세션 컨텍스트를 보안 Filter Chain에 연결
+http.securityContext(sc -&gt;
+    sc.securityContextRepository(aiSessionSecurityContextRepository)
+);
+
+// Stateless REST API의 경우, form/rest 체인 설정에서
+// Stateless 세션 관리를 사용:
+registry.form(form -&gt; form
+    .order(20)
+    .loginPage("/admin/login")
+    .defaultSuccessUrl("/admin")
+    .rawHttp(http -&gt; http.sessionManagement(session -&gt;
+        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)))
+);</code></pre>
+            </div>
+
+            <h3>CORS 설정</h3>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">SafeHttpCustomizer&lt;HttpSecurity&gt; globalHttpCustomizer = http -&gt; {
+    http
+        .cors(cors -&gt; cors.configurationSource(request -&gt; {
+            CorsConfiguration config = new CorsConfiguration();
+            config.setAllowedOrigins(List.of("https://app.example.com"));
+            config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE"));
+            config.setAllowCredentials(true);
+            return config;
+        }))
+        .csrf(AbstractHttpConfigurer::disable)
+        .authorizeHttpRequests(authReq -&gt; authReq
+            .requestMatchers("/css/**", "/js/**", "/images/**").permitAll()
+            .anyRequest().access(customDynamicAuthorizationManager)
+        )
+        .securityContext(sc -&gt;
+            sc.securityContextRepository(aiSessionSecurityContextRepository));
+};</code></pre>
+            </div>
+
+            <h3>커스텀 필터</h3>
+            <p>개별 체인 설정의 <code>rawHttp</code> 메서드를 사용하여 커스텀 필터를 추가하거나, 크로스 체인 적용을 위해 글로벌 커스터마이저에 포함합니다:</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// 인가 필터 앞에 커스텀 필터 추가
+SafeHttpCustomizer&lt;HttpSecurity&gt; globalHttpCustomizer = http -&gt; {
+    http
+        .addFilterBefore(new TenantContextFilter(),
+            AuthorizationFilter.class)
+        .authorizeHttpRequests(authReq -&gt; authReq
+            .anyRequest().access(customDynamicAuthorizationManager)
+        );
+};</code></pre>
+            </div>
+          </section>
+
+          <!-- Common Options -->
+          <section class="docs-section">
+            <h2 id="common-options">공통 옵션</h2>
+            <p>모든 인증 방법이 공유하는 옵션입니다 (<code>AbstractOptions</code>에서 제공):</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>옵션</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>order(int)</code></td><td>Filter Chain 우선순위 (낮을수록 우선순위 높음)</td></tr>
+                <tr><td><code>loginProcessingUrl(String)</code></td><td>로그인 요청을 처리하는 URL</td></tr>
+                <tr><td><code>defaultSuccessUrl(String)</code></td><td>로그인 성공 후 리다이렉트</td></tr>
+                <tr><td><code>failureUrl(String)</code></td><td>로그인 실패 후 리다이렉트</td></tr>
+                <tr><td><code>successHandler(PlatformAuthenticationSuccessHandler)</code></td><td>커스텀 성공 핸들러</td></tr>
+                <tr><td><code>failureHandler(PlatformAuthenticationFailureHandler)</code></td><td>커스텀 실패 핸들러</td></tr>
+                <tr><td><code>securityContextRepository(SecurityContextRepository)</code></td><td>보안 컨텍스트 저장소 오버라이드</td></tr>
+                <tr><td><code>disableCsrf()</code></td><td>이 체인의 CSRF 비활성화</td></tr>
+                <tr><td><code>cors(Customizer)</code></td><td>CORS 설정</td></tr>
+                <tr><td><code>headers(Customizer)</code></td><td>HTTP 헤더 설정</td></tr>
+                <tr><td><code>sessionManagement(Customizer)</code></td><td>세션 관리 설정</td></tr>
+                <tr><td><code>logout(Customizer)</code></td><td>로그아웃 설정</td></tr>
+                <tr><td><code>rawHttp(SafeHttpCustomizer)</code></td><td>전체 Spring Security API 접근 (누적됨)</td></tr>
+                <tr><td><code>authorizeStaticPermitAll(String...)</code></td><td>인증 없이 정적 리소스 허용</td></tr>
+                <tr><td><code>asep(Customizer)</code></td><td>이 플로우의 ASEP 어노테이션 속성</td></tr>
+              </tbody>
+            </table></div>
+          </section>
+
+          <!-- Complete Example -->
+          <section class="docs-section">
+            <h2 id="complete-example">완전한 예제</h2>
+            <p>관리자 폼 로그인(OAuth2), 사용자 MFA(Session), API REST 엔드포인트(OAuth2)를 포함한 프로덕션 레디 설정:</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Configuration
+@RequiredArgsConstructor
+@EnableWebSecurity
+public class PlatformSecurityConfig {
+
+    private final CustomDynamicAuthorizationManager authorizationManager;
+    private final AISessionSecurityContextRepository securityContextRepository;
+
+    @Bean
+    public PlatformConfig platformDslConfig(
+            IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
+
+        return registry
+            // 글로벌: 모든 체인에 공유
+            .global(http -&gt; {
+                http
+                    .csrf(AbstractHttpConfigurer::disable)
+                    .authorizeHttpRequests(authReq -&gt; authReq
+                        .requestMatchers("/css/**", "/js/**", "/images/**").permitAll()
+                        .anyRequest().access(authorizationManager))
+                    .securityContext(sc -&gt;
+                        sc.securityContextRepository(securityContextRepository));
+            })
+            // 관리자: OAuth2를 사용하는 폼 로그인, 최고 우선순위
+            .form(f -&gt; f.order(20).loginPage("/admin/login")
+                .defaultSuccessUrl("/admin/dashboard")
+                .rawHttp(http -&gt; http.securityMatcher("/admin/**")))
+            .oauth2(Customizer.withDefaults())
+            // API: OAuth2를 사용하는 REST 로그인
+            .rest(r -&gt; r.order(50).loginProcessingUrl("/api/auth")
+                .rawHttp(http -&gt; http
+                    .securityMatcher("/api/**")
+                    .sessionManagement(s -&gt;
+                        s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))))
+            .oauth2(Customizer.withDefaults())
+            // 사용자: 세션을 사용하는 MFA
+            .mfa(m -&gt; m.order(100)
+                .primaryAuthentication(auth -&gt;
+                    auth.formLogin(form -&gt; form
+                        .loginPage("/login")
+                        .defaultSuccessUrl("/home")))
+                .passkey(Customizer.withDefaults()))
+            .session(Customizer.withDefaults())
+            .build();
+    }
+}</code></pre>
+            </div>
+          </section>
+
+          <!-- Migration Guide -->
+          <section class="docs-section">
+            <h2 id="migration">마이그레이션 가이드</h2>
+            <p>기존 Spring Security 설정에서 Contexa의 <code>PlatformSecurityConfig</code>로 마이그레이션하려면 <code>SecurityFilterChain</code> 빈을 DSL 레지스트리 패턴으로 교체하고 동적 인가 매니저를 연결해야 합니다.</p>
+
+            <h3>변경 전: 기존 Spring Security</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain filterChain(
+            HttpSecurity http) throws Exception {
+        return http
+            .csrf(AbstractHttpConfigurer::disable)
+            .authorizeHttpRequests(auth -&gt; auth
+                .requestMatchers("/admin/**").hasRole("ADMIN")
+                .requestMatchers("/api/**").hasRole("USER")
+                .anyRequest().authenticated()
+            )
+            .formLogin(form -&gt; form
+                .loginPage("/login")
+                .defaultSuccessUrl("/admin")
+            )
+            .build();
+    }
+}</code></pre>
+            </div>
+
+            <h3>변경 후: Contexa PlatformSecurityConfig</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@EnableWebSecurity
+@RequiredArgsConstructor
+public class PlatformSecurityConfig {
+
+    private final CustomDynamicAuthorizationManager customDynamicAuthorizationManager;
+    private final AISessionSecurityContextRepository aiSessionSecurityContextRepository;
+
+    @Bean
+    public PlatformConfig platformDslConfig(
+            IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
+
+        SafeHttpCustomizer&lt;HttpSecurity&gt; globalHttpCustomizer = http -&gt; {
+            http
+                .csrf(AbstractHttpConfigurer::disable)
+                .authorizeHttpRequests(auth -&gt; auth
+                    .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico")
+                        .permitAll()
+                    .anyRequest()
+                        .access(customDynamicAuthorizationManager)
+                )
+                .securityContext(sc -&gt; sc
+                    .securityContextRepository(aiSessionSecurityContextRepository));
+        };
+
+        return registry
+            .global(globalHttpCustomizer)
+            .form(form -&gt; form.order(20)
+                .loginPage("/admin/login")
+                .defaultSuccessUrl("/admin"))
+            .oauth2(Customizer.withDefaults())
+            .build();
+    }
+}</code></pre>
+            </div>
+
+            <h3>마이그레이션 단계</h3>
+            <div class="diagram-container">
+              <div class="diagram-flow-vertical">
+                <div class="diagram-step">
+                  <div class="diagram-step-number">1</div>
+                  <div class="diagram-step-title">Contexa 의존성 추가</div>
+                  <div class="diagram-step-desc">프로젝트에 <code>spring-boot-starter-contexa</code>를 추가합니다. 이는 contexa-iam, contexa-core, contexa-identity 모듈을 전이적으로 포함합니다.</div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-step">
+                  <div class="diagram-step-number">2</div>
+                  <div class="diagram-step-title">리소스 스캐너 실행</div>
+                  <div class="diagram-step-desc"><a href="../iam/resource-scanner.html">리소스 스캐너</a>를 사용하여 기존 엔드포인트를 모두 검색하고 현재의 <code>hasRole()</code> / <code>hasAuthority()</code> 규칙과 일치하는 초기 XACML 정책을 생성합니다.</div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-step">
+                  <div class="diagram-step-number">3</div>
+                  <div class="diagram-step-title">Shadow Mode 활성화</div>
+                  <div class="diagram-step-desc"><code>security.zerotrust.mode=SHADOW</code>를 설정하여 동적 인가를 감사 전용 모드로 실행합니다. 결정은 로그에 기록되지만 적용되지 않아 정책이 예상 동작과 일치하는지 확인할 수 있습니다.</div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-step">
+                  <div class="diagram-step-number">4</div>
+                  <div class="diagram-step-title">SecurityFilterChain 교체</div>
+                  <div class="diagram-step-desc">기존 <code>SecurityFilterChain</code> 빈을 <code>PlatformConfig</code> 패턴으로 교체합니다. 정적 <code>permitAll()</code> 규칙을 <code>requestMatchers</code>로 이동하고 모든 <code>hasRole()</code> / <code>hasAuthority()</code>를 <code>.anyRequest().access(customDynamicAuthorizationManager)</code>로 교체합니다.</div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-step">
+                  <div class="diagram-step-number">5</div>
+                  <div class="diagram-step-title">Shadow Mode에서 검증</div>
+                  <div class="diagram-step-desc">애플리케이션을 실행하고 감사 로그를 검토하여 동적 정책이 이전 정적 규칙과 동일한 결정을 생성하는지 확인합니다. 정책 격차를 수정합니다.</div>
+                </div>
+                <div class="diagram-arrow-down"></div>
+                <div class="diagram-step">
+                  <div class="diagram-step-number">6</div>
+                  <div class="diagram-step-title">Enforce Mode로 전환</div>
+                  <div class="diagram-step-desc"><code>security.zerotrust.mode=ENFORCE</code>를 설정하여 실시간 정책 적용을 활성화합니다. 전환 기간 동안 인가 감사 로그를 면밀히 모니터링합니다.</div>
+                </div>
+              </div>
+            </div>
+
+            <h3>마이그레이션 체크리스트</h3>
+            <table>
+              <thead>
+                <tr><th>단계</th><th>액션</th><th>검증</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>1</td><td><code>spring-boot-starter-contexa</code> 의존성 추가</td><td>오류 없이 애플리케이션 시작</td></tr>
+                <tr><td>2</td><td>리소스 스캐너를 실행하여 엔드포인트 검색</td><td>관리자 대시보드에서 모든 엔드포인트 확인 가능</td></tr>
+                <tr><td>3</td><td>각 엔드포인트에 대한 XACML 정책 생성</td><td>정책 빌더에서 정책 확인 가능</td></tr>
+                <tr><td>4</td><td>Shadow Mode 활성화 (<code>security.zerotrust.mode=SHADOW</code>)</td><td>감사 로그에 인가 결정 표시</td></tr>
+                <tr><td>5</td><td><code>SecurityFilterChain</code>을 <code>PlatformConfig</code>로 교체</td><td>모든 Filter Chain이 성공적으로 빌드</td></tr>
+                <tr><td>6</td><td>정적 <code>hasRole()</code> / <code>hasAuthority()</code> 규칙 제거</td><td>컴파일 타임 인가 어노테이션 잔여 없음</td></tr>
+                <tr><td>7</td><td>Shadow Mode 감사 로그가 예상 동작과 일치하는지 확인</td><td>예상치 못한 거부/허용 결정 없음</td></tr>
+                <tr><td>8</td><td>Enforce Mode로 전환 (<code>security.zerotrust.mode=ENFORCE</code>)</td><td>애플리케이션이 Shadow Mode와 동일하게 동작</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- DSL API Reference -->
+          <section class="docs-section">
+            <h2 id="api-reference">DSL API 레퍼런스</h2>
+
+            <h3>IdentityAuthDsl</h3>
+            <p>인증 단계 인터페이스입니다. 각 메서드는 상태 선택을 위한 <code>IdentityStateDsl</code>을 반환합니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>메서드</th><th>반환 타입</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>global(SafeHttpCustomizer&lt;HttpSecurity&gt;)</code></td><td><code>IdentityAuthDsl</code></td><td>모든 체인에 대한 공유 HTTP 보안 설정</td></tr>
+                <tr><td><code>form(Customizer&lt;FormConfigurerConfigurer&gt;)</code></td><td><code>IdentityStateDsl</code></td><td>폼 로그인 등록 (기본 order: 100)</td></tr>
+                <tr><td><code>rest(Customizer&lt;RestConfigurerConfigurer&gt;)</code></td><td><code>IdentityStateDsl</code></td><td>REST API 로그인 등록 (기본 order: 200)</td></tr>
+                <tr><td><code>ott(Customizer&lt;OttConfigurerConfigurer&gt;)</code></td><td><code>IdentityStateDsl</code></td><td>One-Time Token 등록 (기본 order: 300)</td></tr>
+                <tr><td><code>passkey(Customizer&lt;PasskeyConfigurerConfigurer&gt;)</code></td><td><code>IdentityStateDsl</code></td><td>Passkey/WebAuthn 등록 (기본 order: 400)</td></tr>
+                <tr><td><code>mfa(Customizer&lt;MfaDslConfigurer&gt;)</code></td><td><code>IdentityStateDsl</code></td><td>다중 인증 등록 (기본 order: 200)</td></tr>
+                <tr><td><code>build()</code></td><td><code>PlatformConfig</code></td><td>확정하고 불변 설정 생성</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3>IdentityStateDsl</h3>
+            <p>상태 관리 단계입니다. 인증 방법 등록 후 반환됩니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>메서드</th><th>반환 타입</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>session(Customizer&lt;SessionStateConfigurer&gt;)</code></td><td><code>IdentityAuthDsl</code></td><td>세션 기반 상태 (자동: sessionFixation.changeSessionId)</td></tr>
+                <tr><td><code>oauth2(Customizer&lt;OAuth2StateConfigurer&gt;)</code></td><td><code>IdentityAuthDsl</code></td><td>OAuth2/JWT 상태 (자동: Resource Server + Auth Server)</td></tr>
+              </tbody>
+            </table></div>
+          </section>
+
+          <!-- Configuration Reference -->
+          <section>
+            <div class="callout callout-info">
+              <strong>설정 레퍼런스</strong><br>
+              <code>application.yml</code> 프로퍼티(로그인/로그아웃 URI, OAuth2 클라이언트 설정, 토큰 엔드포인트, MFA 설정)에 대해서는 <a href="../../../docs/reference/identity/state-management.html">상태 관리</a> 및 <a href="../../../docs/install/configuration/identity.html">Identity 설정</a>을 참조하세요.
+            </div>
+          </section>
+
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">Zero Trust Flow</span>
+            </a>
+            <a href="../../../docs/reference/identity/authentication.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">인증</span>
+            </a>
+          </div>

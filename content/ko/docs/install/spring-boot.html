@@ -1,0 +1,188 @@
+<!-- Breadcrumb -->
+          <nav class="breadcrumb">
+            <a href="../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../docs/install/index.html">설치</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Spring Boot 통합</span>
+          </nav>
+
+          <!-- Page Header -->
+          <div class="docs-page-header">
+            <h1>Spring Boot 통합</h1>
+            <p class="lead">Contexa는 Identity DSL을 통해 Spring Security와 통합됩니다. Identity DSL은 인증, 인가, 세션 관리를 통합된 <code>PlatformConfig</code>로 구성하는 플루언트 API입니다. 이 페이지에서는 핵심 통합 포인트를 다룹니다. 각 컴포넌트의 상세 구성은 링크된 참조 페이지를 확인하세요.</p>
+          </div>
+
+          <!-- PlatformSecurityConfig -->
+          <section>
+            <h2 id="platform-security-config">PlatformSecurityConfig</h2>
+            <p>중앙 보안 구성 빈은 <code>IdentityDslRegistry</code>를 사용하여 <code>PlatformConfig</code>를 빌드합니다. 이 구성은 Spring Security 필터 체인의 구성 방식과 Contexa의 Zero Trust 레이어가 요청을 인터셉트하는 방식을 결정합니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Configuration
+@RequiredArgsConstructor
+@EnableWebSecurity
+public class PlatformSecurityConfig {
+
+    private final CustomDynamicAuthorizationManager customDynamicAuthorizationManager;
+    private final AISessionSecurityContextRepository aiSessionSecurityContextRepository;
+
+    @Bean
+    public PlatformConfig platformDslConfig(IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
+
+        SafeHttpCustomizer&lt;HttpSecurity&gt; globalHttpCustomizer = http -&gt; {
+            http
+                .csrf(AbstractHttpConfigurer::disable)
+                .authorizeHttpRequests(authReq -&gt; authReq
+                    .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
+                    .anyRequest().access(customDynamicAuthorizationManager)
+                )
+                .securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository));
+        };
+
+        return registry
+            .global(globalHttpCustomizer)
+            .mfa(mfa -&gt; mfa
+                .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+                .passkey(Customizer.withDefaults())
+            )
+            .session(Customizer.withDefaults())
+            .build();
+    }
+}</code></pre>
+            </div>
+
+            <div class="callout callout-note">
+              <p><strong>기본 동작</strong> — 애플리케이션에 <code>@EnableAISecurity</code>를 추가하고 <code>PlatformConfig</code> 빈을 정의하지 않으면 기본 구성이 자동으로 생성됩니다. 인증 흐름이나 인가 규칙을 커스터마이즈해야 할 때만 직접 빈을 정의하세요.</p>
+            </div>
+          </section>
+
+          <!-- Three Pillars -->
+          <section>
+            <h2 id="three-pillars">세 가지 통합 핵심 요소</h2>
+            <p>위의 예제는 Contexa가 Spring Security 위에 제공하는 세 가지 핵심 통합 포인트를 보여줍니다:</p>
+
+            <!-- Identity DSL -->
+            <div style="margin-bottom:var(--space-8);">
+              <h3 id="identity-dsl">1. Identity DSL - 인증 흐름</h3>
+              <p><code>IdentityDslRegistry</code>는 인증 흐름을 구성하기 위한 플루언트 API입니다. 각 DSL 메서드 - <code>form()</code>, <code>rest()</code>, <code>mfa()</code>, <code>ott()</code>, <code>passkey()</code> - 는 구성 가능한 순서를 가진 별도의 <code>SecurityFilterChain</code>을 생성합니다. 이를 조합하여 단일 애플리케이션에서 여러 인증 전략을 지원할 수 있습니다.</p>
+
+              <div class="code-block">
+                <div class="code-block-header">
+                  <span class="code-block-lang">Java</span>
+                  <button class="code-copy-btn" type="button" aria-label="Copy code">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <span>Copy</span>
+                  </button>
+                </div>
+                <pre><code class="language-java">// Example: REST API + Form Login with MFA
+return registry
+    .global(globalHttpCustomizer)
+    .rest(rest -&gt; rest.order(10))
+    .mfa(mfa -&gt; mfa
+        .primaryAuthentication(auth -&gt; auth.formLogin(form -&gt;
+            form.defaultSuccessUrl("/dashboard")))
+        .passkey(Customizer.withDefaults())
+    )
+    .session(Customizer.withDefaults())
+    .build();</code></pre>
+              </div>
+
+              <p>
+                <a href="../reference/identity/dsl.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Identity DSL 참조 →</a> &nbsp;|&nbsp;
+                <a href="../reference/identity/authentication.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">인증 흐름 →</a> &nbsp;|&nbsp;
+                <a href="../reference/identity/mfa.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">적응형 MFA →</a>
+              </p>
+            </div>
+
+            <!-- Dynamic Authorization -->
+            <div style="margin-bottom:var(--space-8);">
+              <h3 id="dynamic-authorization">2. 동적 인가 - AI 기반 접근 제어</h3>
+              <p><code>CustomDynamicAuthorizationManager</code>는 정적 Spring Security 규칙을 AI 기반 결정으로 대체합니다. <code>.anyRequest().access(customDynamicAuthorizationManager)</code>를 통해 등록되며, 애플리케이션 코드에 도달하기 전에 XACML 정책 엔진, Zero Trust 평가, HCAD 이상 탐지를 통해 모든 요청을 평가합니다.</p>
+              <p>컨트롤러 메서드에 <code>@Protectable</code> 어노테이션을 사용하여 엔드포인트별 세분화된 보안 정책을 정의하세요.</p>
+
+              <p>
+                <a href="../reference/iam/dynamic-authorization.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">동적 인가 →</a> &nbsp;|&nbsp;
+                <a href="../reference/iam/xacml.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">XACML 엔진 →</a> &nbsp;|&nbsp;
+                <a href="../reference/iam/protectable.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">@Protectable 참조 →</a>
+              </p>
+            </div>
+
+            <!-- AI Session Context -->
+            <div style="margin-bottom:var(--space-8);">
+              <h3 id="ai-session-context">3. AI 세션 컨텍스트 - 지속적 신뢰 평가</h3>
+              <p><code>AISessionSecurityContextRepository</code>는 기본 Spring Security 컨텍스트 저장소를 대체합니다. 세션 기반 컨텍스트에 AI가 계산한 신뢰 점수, 행동 기준선, 위협 평가를 추가하여 요청 간 지속적인 인증 인식을 가능하게 합니다.</p>
+              <p>글로벌 HTTP 커스터마이저에서 <code>.securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository))</code>를 통해 등록됩니다.</p>
+
+              <p>
+                <a href="../reference/identity/state-management.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">상태 관리 →</a> &nbsp;|&nbsp;
+                <a href="../reference/identity/zero-trust-filters.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Zero Trust 필터 →</a>
+              </p>
+            </div>
+          </section>
+
+          <!-- Static Resource Configuration -->
+          <section>
+            <h2 id="static-resources">정적 리소스 구성</h2>
+            <p>정적 리소스는 불필요한 LLM 호출을 방지하기 위해 AI 보안 평가에서 제외해야 합니다. 글로벌 커스터마이저를 사용하여 자산 경로에 대한 접근을 허용하세요:</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">.authorizeHttpRequests(authReq -&gt; authReq
+    .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
+    .requestMatchers("/api/public/**").permitAll()
+    .anyRequest().access(customDynamicAuthorizationManager)
+)</code></pre>
+            </div>
+          </section>
+
+          <!-- Required Imports -->
+          <section>
+            <h2 id="imports">필수 임포트</h2>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">import io.contexa.contexacore.security.AISessionSecurityContextRepository;
+import io.contexa.contexaiam.security.xacml.pep.CustomDynamicAuthorizationManager;
+import io.contexa.contexaidentity.security.core.config.PlatformConfig;
+import io.contexa.contexaidentity.security.core.dsl.IdentityDslRegistry;
+import io.contexa.contexaidentity.security.core.dsl.common.SafeHttpCustomizer;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;</code></pre>
+            </div>
+          </section>
+
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="quickstart.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">빠른 시작</span>
+            </a>
+            <a href="configuration.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">구성</span>
+            </a>
+          </div>

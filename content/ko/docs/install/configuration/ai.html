@@ -1,0 +1,621 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/install/configuration.html">구성</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">AI 엔진</span>
+          </nav>
+          <div class="docs-page-header">
+            <h1>AI 엔진 구성</h1>
+            <p class="lead">계층형 LLM 전략, 보안 작업 매핑, RAG (Retrieval-Augmented Generation), Advisor 체인, 스트리밍 파이프라인을 포함한 Contexa AI 엔진의 구성 속성입니다.</p>
+          </div>
+
+          <!-- TieredLLMProperties -->
+          <section>
+            <h2 id="tiered-llm">계층형 LLM 속성</h2>
+            <p><code>spring.ai.security</code> 접두사 아래의 속성으로, <code>TieredLLMProperties</code>에 바인딩됩니다. 기본 및 백업 모델명, 레이어별 타임아웃, Temperature 설정을 포함한 2계층 분석 파이프라인의 LLM 모델 할당을 구성합니다.</p>
+            <p><strong>관련 문서:</strong> <a href="../../../docs/reference/core/llm-orchestrator.html">LLM Orchestrator 참조</a>, <a href="../../../docs/reference/core/strategy.html">AI 전략 참조</a></p>
+
+            <h3 id="tiered-llm-layer1">Layer 1 (컨텍스트 분석)</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>spring.ai.security.layer1</code></td></tr>
+                <tr><td><code>.model</code></td><td><code>String</code></td><td><code>qwen2.5:14b</code></td><td>Layer 1(빠른 분석)의 기본 모델</td></tr>
+                <tr><td><code>.backup.model</code></td><td><code>String</code></td><td>—</td><td>Layer 1 기본 모델을 사용할 수 없을 때의 대체 모델</td></tr>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>spring.ai.security.tiered.layer1</code></td></tr>
+                <tr><td><code>.timeout-ms</code></td><td><code>Integer</code></td><td><code>30000</code></td><td>Layer 1 추론 타임아웃 (ms 단위, 최대 120000)</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="tiered-llm-layer2">Layer 2 (전문가 분석)</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>spring.ai.security.layer2</code></td></tr>
+                <tr><td><code>.model</code></td><td><code>String</code></td><td><code>exaone3.5:latest</code></td><td>Layer 2(심층 분석)의 기본 모델</td></tr>
+                <tr><td><code>.backup.model</code></td><td><code>String</code></td><td>—</td><td>Layer 2 기본 모델을 사용할 수 없을 때의 대체 모델</td></tr>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>spring.ai.security.tiered.layer2</code></td></tr>
+                <tr><td><code>.timeout-ms</code></td><td><code>Integer</code></td><td><code>60000</code></td><td>Layer 2 추론 타임아웃 (ms 단위, 최대 120000)</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3>Temperature 기본값</h3>
+            <p>Temperature는 속성으로 직접 구성할 수 없으며 계층별로 프로그래밍 방식으로 설정됩니다: Layer 1 = <code>0.3</code> (더 결정론적), Layer 2 = <code>0.7</code> (더 창의적).</p>
+
+            <h3>구성 예제</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+              </div>
+              <pre><code class="language-yaml">spring:
+  ai:
+    security:
+      layer1:
+        model: qwen2.5:14b
+        backup:
+          model: llama3.2:latest
+      layer2:
+        model: exaone3.5:latest
+        backup:
+          model: deepseek-r1:14b
+      tiered:
+        layer1:
+          timeout-ms: 30000
+        layer2:
+          timeout-ms: 60000</code></pre>
+            </div>
+          </section>
+
+          <!-- TieredStrategyProperties -->
+          <section>
+            <h2 id="tiered-strategy">계층형 전략 속성</h2>
+            <p><code>spring.ai.security.tiered</code> 접두사 아래의 속성으로, <code>TieredStrategyProperties</code>에 바인딩됩니다. RAG 임계값, 캐싱, 프롬프트 구성, 잘림 제한, 각 계층의 벡터 캐시 동작을 포함한 다중 레이어 AI 분석 파이프라인을 제어합니다.</p>
+
+            <h3 id="tiered-layer1">Layer 1 설정</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>속성</th>
+                  <th>타입</th>
+                  <th>기본값</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>spring.ai.security.tiered.layer1</code></td></tr>
+                <tr>
+                  <td><code>.rag.similarityThreshold</code></td>
+                  <td><code>double</code></td>
+                  <td><code>0.5</code></td>
+                  <td>Layer 1에서 RAG 검색의 최소 유사도</td>
+                </tr>
+                <tr>
+                  <td><code>.session.maxRecentActions</code></td>
+                  <td><code>int</code></td>
+                  <td><code>100</code></td>
+                  <td>분석 컨텍스트의 최대 최근 세션 액션 수</td>
+                </tr>
+                <tr>
+                  <td><code>.cache.maxSize</code></td>
+                  <td><code>int</code></td>
+                  <td><code>1000</code></td>
+                  <td>Layer 1 결과 캐시의 최대 항목 수</td>
+                </tr>
+                <tr>
+                  <td><code>.cache.ttlMinutes</code></td>
+                  <td><code>int</code></td>
+                  <td><code>30</code></td>
+                  <td>Layer 1 캐시 항목의 TTL (분 단위)</td>
+                </tr>
+                <tr>
+                  <td><code>.timeout.totalMs</code></td>
+                  <td><code>long</code></td>
+                  <td><code>15000</code></td>
+                  <td>Layer 1 분석 파이프라인의 전체 타임아웃 (ms)</td>
+                </tr>
+                <tr>
+                  <td><code>.timeout.llmMs</code></td>
+                  <td><code>long</code></td>
+                  <td><code>10000</code></td>
+                  <td>Layer 1 내 LLM 호출 타임아웃 (ms)</td>
+                </tr>
+                <tr>
+                  <td><code>.vectorSearchLimit</code></td>
+                  <td><code>int</code></td>
+                  <td><code>5</code></td>
+                  <td>Layer 1의 최대 벡터 검색 결과 수</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="tiered-layer1-prompt">Layer 1 프롬프트 설정</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>속성</th>
+                  <th>타입</th>
+                  <th>기본값</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>spring.ai.security.tiered.layer1.prompt</code></td></tr>
+                <tr>
+                  <td><code>.maxSimilarEvents</code></td>
+                  <td><code>int</code></td>
+                  <td><code>3</code></td>
+                  <td>프롬프트 내 최대 유사 과거 이벤트 수</td>
+                </tr>
+                <tr>
+                  <td><code>.maxRagDocuments</code></td>
+                  <td><code>int</code></td>
+                  <td><code>5</code></td>
+                  <td>프롬프트에 포함되는 최대 RAG 문서 수</td>
+                </tr>
+                <tr>
+                  <td><code>.includeEventId</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>false</code></td>
+                  <td>프롬프트에 원시 이벤트 ID 포함 (ID 노출 가능)</td>
+                </tr>
+                <tr>
+                  <td><code>.includeRawTimestamp</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>false</code></td>
+                  <td>프롬프트에 원시 타임스탬프 포함</td>
+                </tr>
+                <tr>
+                  <td><code>.includeRawSessionId</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>false</code></td>
+                  <td>프롬프트에 원시 세션 ID 포함</td>
+                </tr>
+                <tr>
+                  <td><code>.includeFullUserAgent</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>false</code></td>
+                  <td>전체 User-Agent 포함 (false일 때 잘림 처리)</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="tiered-layer2">Layer 2 설정</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>속성</th>
+                  <th>타입</th>
+                  <th>기본값</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>spring.ai.security.tiered.layer2</code></td></tr>
+                <tr>
+                  <td><code>.rag.similarityThreshold</code></td>
+                  <td><code>double</code></td>
+                  <td><code>0.5</code></td>
+                  <td>Layer 2에서 RAG 검색의 최소 유사도</td>
+                </tr>
+                <tr>
+                  <td><code>.timeoutMs</code></td>
+                  <td><code>long</code></td>
+                  <td><code>10000</code></td>
+                  <td>Layer 2 분석의 전체 타임아웃 (ms)</td>
+                </tr>
+                <tr>
+                  <td><code>.enableSoar</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>false</code></td>
+                  <td>Layer 2에서 SOAR 통합 활성화</td>
+                </tr>
+                <tr>
+                  <td><code>.ragTopK</code></td>
+                  <td><code>int</code></td>
+                  <td><code>10</code></td>
+                  <td>Layer 2 분석을 위한 Top-K RAG 결과 수</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="tiered-truncation">잘림 설정</h3>
+            <p>프롬프트 크기와 토큰 사용량을 관리하기 위해 다양한 필드의 최대 문자 길이를 제어합니다.</p>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>속성</th>
+                  <th>타입</th>
+                  <th>기본값</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>spring.ai.security.tiered.truncation.layer1</code></td></tr>
+                <tr>
+                  <td><code>.userAgent</code></td>
+                  <td><code>int</code></td>
+                  <td><code>150</code></td>
+                  <td>Layer 1 프롬프트에서 User-Agent의 최대 문자 수</td>
+                </tr>
+                <tr>
+                  <td><code>.payload</code></td>
+                  <td><code>int</code></td>
+                  <td><code>200</code></td>
+                  <td>Layer 1 프롬프트에서 페이로드의 최대 문자 수</td>
+                </tr>
+                <tr>
+                  <td><code>.ragDocument</code></td>
+                  <td><code>int</code></td>
+                  <td><code>300</code></td>
+                  <td>Layer 1 프롬프트에서 RAG 문서당 최대 문자 수</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="tiered-vector-cache">벡터 캐시 설정</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>속성</th>
+                  <th>타입</th>
+                  <th>기본값</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>spring.ai.security.tiered.vectorCache</code></td></tr>
+                <tr>
+                  <td><code>.maxSize</code></td>
+                  <td><code>int</code></td>
+                  <td><code>10000</code></td>
+                  <td>벡터 임베딩 캐시의 최대 항목 수</td>
+                </tr>
+                <tr>
+                  <td><code>.expireMinutes</code></td>
+                  <td><code>int</code></td>
+                  <td><code>5</code></td>
+                  <td>캐시된 벡터 임베딩의 만료 시간 (분)</td>
+                </tr>
+                <tr>
+                  <td><code>.enabled</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>true</code></td>
+                  <td>벡터 임베딩 캐시 활성화 또는 비활성화</td>
+                </tr>
+                <tr>
+                  <td><code>.recordStats</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>true</code></td>
+                  <td>모니터링을 위한 히트/미스 통계 기록</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="tiered-security">프록시 보안 설정</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>속성</th>
+                  <th>타입</th>
+                  <th>기본값</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>spring.ai.security.tiered.security</code></td></tr>
+                <tr>
+                  <td><code>.trustedProxies</code></td>
+                  <td><code>List&lt;String&gt;</code></td>
+                  <td><code>[]</code></td>
+                  <td>X-Forwarded-For용 신뢰할 수 있는 프록시 IP/CIDR</td>
+                </tr>
+                <tr>
+                  <td><code>.trustedProxyValidationEnabled</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>true</code></td>
+                  <td>신뢰 목록에 대한 프록시 헤더 검증</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">spring:
+  ai:
+    security:
+      tiered:
+        layer1:
+          rag:
+            similarityThreshold: 0.5
+          session:
+            maxRecentActions: 100
+          cache:
+            maxSize: 1000
+            ttlMinutes: 30
+          timeout:
+            totalMs: 15000
+            llmMs: 10000
+          prompt:
+            maxSimilarEvents: 3
+            maxRagDocuments: 5
+            includeEventId: false
+            includeRawTimestamp: false
+            includeRawSessionId: false
+            includeFullUserAgent: false
+          vectorSearchLimit: 5
+        layer2:
+          rag:
+            similarityThreshold: 0.5
+          timeoutMs: 10000
+          enableSoar: false
+          ragTopK: 10
+        truncation:
+          layer1:
+            userAgent: 150
+            payload: 200
+            ragDocument: 300
+        vectorCache:
+          maxSize: 10000
+          expireMinutes: 5
+          enabled: true
+          recordStats: true
+        security:
+          trustedProxies: []
+          trustedProxyValidationEnabled: true</code></pre>
+            </div>
+
+            <p>참고: <a href="../../../docs/reference/core/strategy.html">계층형 전략 참조</a></p>
+          </section>
+
+          <!-- ContexaAdvisorProperties -->
+          <section>
+            <h2 id="advisor">Advisor 속성</h2>
+            <p><code>contexa.advisor</code> 접두사 아래의 속성으로, <code>ContexaAdvisorProperties</code>에 바인딩됩니다. 보안 Advisor 순서 및 인증 요구 사항을 구성합니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>속성</th>
+                  <th>타입</th>
+                  <th>기본값</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.advisor.security</code></td></tr>
+                <tr>
+                  <td><code>.enabled</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>true</code></td>
+                  <td>체인에서 보안 Advisor 활성화</td>
+                </tr>
+                <tr>
+                  <td><code>.order</code></td>
+                  <td><code>int</code></td>
+                  <td><code>50</code></td>
+                  <td>보안 Advisor의 실행 순서 (낮은 값이 먼저 실행)</td>
+                </tr>
+                <tr>
+                  <td><code>.requireAuthentication</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>false</code></td>
+                  <td>AI 분석 진행 전 인증된 주체 필요 여부</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">contexa:
+  advisor:
+    security:
+      enabled: true
+      order: 50
+      requireAuthentication: false</code></pre>
+            </div>
+
+            <p>참고: <a href="../../../docs/reference/core/advisor.html">Advisor 체인 참조</a></p>
+          </section>
+
+          <!-- ContexaRagProperties -->
+          <section>
+            <h2 id="rag">RAG 속성</h2>
+            <p><code>contexa.rag</code> 접두사 아래의 속성으로, <code>ContexaRagProperties</code>에 바인딩됩니다. 기본 검색 매개변수와 AI Lab 배치 처리를 포함한 Retrieval-Augmented Generation 파이프라인을 구성합니다.</p>
+
+            <h3 id="rag-defaults">기본 검색 매개변수</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>속성</th>
+                  <th>타입</th>
+                  <th>기본값</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.rag.defaults</code></td></tr>
+                <tr>
+                  <td><code>.similarityThreshold</code></td>
+                  <td><code>double</code></td>
+                  <td><code>0.7</code></td>
+                  <td>RAG 쿼리의 기본 최소 코사인 유사도 임계값</td>
+                </tr>
+                <tr>
+                  <td><code>.topK</code></td>
+                  <td><code>int</code></td>
+                  <td><code>10</code></td>
+                  <td>RAG 쿼리당 반환되는 기본 Top-K 문서 수</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="rag-lab">AI Lab 설정</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>속성</th>
+                  <th>타입</th>
+                  <th>기본값</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.rag.lab</code></td></tr>
+                <tr>
+                  <td><code>.batchSize</code></td>
+                  <td><code>int</code></td>
+                  <td><code>50</code></td>
+                  <td>AI Lab 문서 처리 작업의 배치 크기</td>
+                </tr>
+                <tr>
+                  <td><code>.validationEnabled</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>true</code></td>
+                  <td>벡터 스토어 수집 전 문서 검증 활성화</td>
+                </tr>
+                <tr>
+                  <td><code>.enrichmentEnabled</code></td>
+                  <td><code>boolean</code></td>
+                  <td><code>true</code></td>
+                  <td>문서 처리 중 메타데이터 보강 활성화</td>
+                </tr>
+                <tr>
+                  <td><code>.topK</code></td>
+                  <td><code>int</code></td>
+                  <td><code>100</code></td>
+                  <td>AI Lab 유사도 검색의 Top-K 제한</td>
+                </tr>
+                <tr>
+                  <td><code>.similarityThreshold</code></td>
+                  <td><code>double</code></td>
+                  <td><code>0.75</code></td>
+                  <td>AI Lab 문서 매칭의 유사도 임계값</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">contexa:
+  rag:
+    defaults:
+      similarityThreshold: 0.7
+      topK: 10
+    lab:
+      batchSize: 50
+      validationEnabled: true
+      enrichmentEnabled: true
+      topK: 100
+      similarityThreshold: 0.75</code></pre>
+            </div>
+
+            <p>참고: <a href="../../../docs/reference/core/rag.html">RAG 파이프라인 참조</a></p>
+          </section>
+
+          <!-- StreamingProperties -->
+          <section>
+            <h2 id="streaming">스트리밍 속성</h2>
+            <p><code>contexa.streaming</code> 접두사 아래의 속성으로, <code>StreamingProperties</code>에 바인딩됩니다. 프로토콜 마커와 버퍼 설정을 포함한 실시간 LLM 응답 전달에 사용되는 SSE (Server-Sent Events) 스트리밍 파이프라인을 구성합니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>속성</th>
+                  <th>타입</th>
+                  <th>기본값</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.streaming</code></td></tr>
+                <tr>
+                  <td><code>.finalResponseMarker</code></td>
+                  <td><code>String</code></td>
+                  <td><em>StreamingProtocol 상수</em></td>
+                  <td>SSE 스트림에서 마지막 응답 청크를 나타내는 마커 문자열</td>
+                </tr>
+                <tr>
+                  <td><code>.markerBufferSize</code></td>
+                  <td><code>int</code></td>
+                  <td><code>100</code></td>
+                  <td>스트림 파서의 마커 감지를 위한 내부 버퍼 크기</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">contexa:
+  streaming:
+    markerBufferSize: 100</code></pre>
+            </div>
+
+            <p>참고: <a href="../../../docs/reference/core/streaming.html">스트리밍 파이프라인 참조</a></p>
+          </section>
+
+          <!-- PgVectorStoreProperties -->
+          <section>
+            <h2 id="pgvector">PgVector 스토어 속성</h2>
+            <p><code>spring.ai.vectorstore.pgvector</code> 접두사 아래의 속성으로, Spring AI의 PGVector 자동 구성에서 제공됩니다. 계층형 전략과 RAG 파이프라인 모두에서 사용되는 PostgreSQL 기반 벡터 스토어를 구성합니다.</p>
+            <p>주요 설정에는 테이블명, 임베딩 차원, 인덱스 타입(HNSW 또는 IVFFlat), 거리 함수, 스키마 초기화 동작이 포함됩니다. 전체 속성 참조는 전용 페이지를 확인하세요.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">spring:
+  ai:
+    vectorstore:
+      pgvector:
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        dimensions: 384
+        initialize-schema: true</code></pre>
+            </div>
+
+            <p>참고: <a href="../../../docs/install/configuration.html#pgvector">PgVector 구성 참조</a></p>
+          </section>
+
+          <div class="docs-nav-footer">
+            <a href="../../../docs/install/configuration/security.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">보안 구성</span>
+            </a>
+            <a href="../../../docs/install/configuration/identity.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">Identity 구성</span>
+            </a>
+          </div>

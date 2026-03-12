@@ -1,0 +1,310 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">RAG 및 벡터</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+            </div>
+            <h1>RAG 및 벡터 연산</h1>
+            <p class="lead">Contexa는 RAG (Retrieval-Augmented Generation) 워크플로우를 위한 계층형 벡터 스토리지 아키텍처를 제공합니다. <code>VectorOperations</code> 인터페이스가 계약을 정의하고, <code>UnifiedVectorService</code>가 캐싱을 갖춘 범용 스토리지를 제공하며, <code>AbstractVectorLabService</code>가 지표, 보강, 검증이 포함된 도메인별 벡터 서비스를 지원합니다.</p>
+          </div>
+
+          <!-- Overview -->
+          <section class="docs-section">
+            <h2 id="overview">개요</h2>
+            <p>벡터 연산은 AI Pipeline의 CONTEXT_RETRIEVAL 단계를 구동합니다. 문서는 메타데이터와 함께 저장되고, Spring AI의 임베딩 모델을 통해 임베딩되며, PgVector에 저장됩니다. 유사도 검색은 LLM 실행 전 관련 컨텍스트를 검색합니다.</p>
+            <p>아키텍처는 두 개의 레이어로 구성됩니다:</p>
+            <ul>
+              <li><strong>UnifiedVectorService</strong> — 캐시 통합이 포함된 범용 벡터 연산. 표준 문서 저장 및 검색에 사용됩니다.</li>
+              <li><strong>AbstractVectorLabService</strong> — 도메인별 벡터 서비스의 기본 클래스. Lab별 메타데이터 보강, 검증, 지표 추적, 필터 표현식을 추가합니다. <code>BehaviorVectorService</code>가 행동 분석 데이터의 주요 구현체입니다.</li>
+            </ul>
+          </section>
+
+          <!-- VectorOperations -->
+          <section class="docs-section">
+            <h2 id="vector-operations">VectorOperations</h2>
+            <p>모든 벡터 스토어 상호작용을 위한 핵심 인터페이스입니다.</p>
+
+            <div class="api-signature">
+              <code>public interface VectorOperations</code>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">storeDocument(Document document)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">메타데이터와 텍스트 콘텐츠를 포함한 단일 문서를 벡터 스토어에 저장합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">storeDocuments(List&lt;Document&gt; documents)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">여러 문서를 일괄 저장합니다. 대량 문서 세트에 대해 설정 가능한 배치 크기를 사용합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">searchSimilar(String query)</span>
+                <span class="api-method-return">List&lt;Document&gt;</span>
+              </div>
+              <div class="api-method-desc">기본 topK 및 유사도 임계값 설정을 사용하여 쿼리 텍스트와 유사한 문서를 검색합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">searchSimilar(String query, Map&lt;String, Object&gt; filters)</span>
+                <span class="api-method-return">List&lt;Document&gt;</span>
+              </div>
+              <div class="api-method-desc">메타데이터 필터로 검색합니다. 필터 키는 동등 연산자로 매칭되고, 리스트는 IN을 사용하며, "gte"/"lte" 키를 가진 맵은 범위 필터로 처리됩니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">searchSimilar(SearchRequest searchRequest)</span>
+                <span class="api-method-return">List&lt;Document&gt;</span>
+              </div>
+              <div class="api-method-desc">Spring AI의 <code>SearchRequest</code>를 통해 topK, 유사도 임계값, 필터 표현식을 완전히 제어하는 고급 검색.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">deleteDocuments(List&lt;String&gt; documentIds)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">벡터 스토어에서 ID별로 문서를 삭제합니다.</div>
+            </div>
+          </section>
+
+          <!-- UnifiedVectorService -->
+          <section class="docs-section">
+            <h2 id="unified-vector-service">UnifiedVectorService</h2>
+            <p><code>VectorStoreCacheLayer</code>를 통한 캐시 통합이 포함된 범용 구현체입니다.</p>
+
+            <div class="api-signature">
+              <code>public class UnifiedVectorService implements VectorOperations</code>
+            </div>
+
+            <h3>주요 동작</h3>
+            <ul>
+              <li>자동 생성된 <code>id</code>, <code>timestamp</code>, <code>documentType</code>, <code>version</code> 메타데이터로 문서를 보강합니다.</li>
+              <li>검색 결과 캐싱에 <code>VectorStoreCacheLayer</code>를 사용합니다. 쓰기 작업 시 캐시가 무효화됩니다.</li>
+              <li>배치 삽입은 <code>PgVectorStoreProperties</code>에서 설정된 <code>batchSize</code>를 사용합니다.</li>
+              <li>모든 쓰기 작업은 <code>@Transactional</code>입니다.</li>
+            </ul>
+          </section>
+
+          <!-- AbstractVectorLabService -->
+          <section class="docs-section">
+            <h2 id="abstract-vector-lab-service">AbstractVectorLabService</h2>
+            <p>Lab 인식 처리, 지표, 보강, 검증을 추가하는 도메인별 벡터 서비스의 기본 클래스입니다.</p>
+
+            <div class="api-signature">
+              <code>public abstract class AbstractVectorLabService implements VectorOperations</code>
+            </div>
+
+            <h3>추상 메서드 (구현 필수)</h3>
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getLabName()</span>
+                <span class="api-method-return">String</span>
+              </div>
+              <div class="api-method-desc">지표, 로깅, 메타데이터 태깅에 사용되는 Lab 이름을 반환합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getDocumentType()</span>
+                <span class="api-method-return">String</span>
+              </div>
+              <div class="api-method-desc">메타데이터에 저장되는 문서 타입 식별자를 반환합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">enrichLabSpecificMetadata(Document document)</span>
+                <span class="api-method-return">Document</span>
+              </div>
+              <div class="api-method-desc">도메인별 메타데이터로 문서를 보강합니다. 보강이 활성화되었을 때 전처리 중 호출됩니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">validateLabSpecificDocument(Document document)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">도메인별 규칙에 대해 문서를 검증합니다. 검증이 활성화되었을 때 전처리 중 호출됩니다.</div>
+            </div>
+
+            <h3>지표 통합</h3>
+            <p><code>VectorStoreMetrics</code> 빈이 사용 가능하면 모든 연산 (STORE, SEARCH, DELETE)이 Lab별 연산 횟수, 소요 시간, 오류율과 함께 자동으로 추적됩니다.</p>
+          </section>
+
+          <!-- BehaviorVectorService -->
+          <section class="docs-section">
+            <h2 id="behavior-vector-service">BehaviorVectorService</h2>
+            <p>사용자 행동 분석 데이터를 저장하고 조회하기 위한 특화된 벡터 서비스입니다. 이상 탐지를 위한 HCAD 시스템에서 사용됩니다.</p>
+
+            <div class="api-signature">
+              <code>public class BehaviorVectorService extends AbstractVectorLabService</code>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">storeBehavior(BehavioralAnalysisContext context)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">사용자 ID, IP 주소, 세션 데이터, 유저 에이전트, 활동 상세를 포함한 사용자 행동 패턴을 저장합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">storeThreatPattern(BehavioralAnalysisContext context, BehavioralAnalysisResponse response)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">향후 유사도 매칭을 위해 감지된 위협 패턴을 저장합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">storeAnalysisResult(BehavioralAnalysisContext context, BehavioralAnalysisResponse response)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">이력 참조를 위해 행동 분석 결과를 저장합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">findSimilarBehaviors(String userId, String ip, String path, int topK)</span>
+                <span class="api-method-return">List&lt;Document&gt;</span>
+              </div>
+              <div class="api-method-desc">주어진 파라미터와 유사한 행동 패턴을 찾습니다. userId와 Lab 이름으로 필터링합니다.</div>
+            </div>
+
+            <h3>메타데이터 보강</h3>
+            <p>저장되는 각 문서에 시간 메타데이터 (<code>hour</code>, <code>dayOfWeek</code>, <code>isWeekend</code>)와 네트워크 메타데이터 (IP 주소에서 추출한 <code>networkSegment</code>)를 자동으로 추가합니다.</p>
+          </section>
+
+          <!-- Configuration -->
+          <section class="docs-section">
+            <h2 id="configuration">설정</h2>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">spring:
+  ai:
+    vectorstore:
+      pgvector:
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        dimensions: 384
+
+contexa:
+  rag:
+    lab:
+      batch-size: 100
+      top-k: 10
+      similarity-threshold: 0.7
+      validation-enabled: true
+      enrichment-enabled: true</code></pre>
+            </div>
+          </section>
+
+          <!-- Code Examples -->
+          <section class="docs-section">
+            <h2 id="examples">코드 예제</h2>
+
+            <h3>문서 저장 및 검색</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// Store a security policy document
+Document policyDoc = new Document(
+        "Users must use MFA for admin operations",
+        Map.of("documentType", "POLICY", "category", "auth"));
+
+unifiedVectorService.storeDocument(policyDoc);
+
+// Search for relevant context
+List&lt;Document&gt; context = unifiedVectorService.searchSimilar(
+        "multi-factor authentication requirements",
+        Map.of("category", "auth"));</code></pre>
+            </div>
+
+            <h3>행동 패턴 저장</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">BehavioralAnalysisContext context = BehavioralAnalysisContext.builder()
+        .userId("user-456")
+        .remoteIp("10.0.1.55")
+        .currentActivity("ADMIN_ACCESS")
+        .userAgent("Mozilla/5.0")
+        .build();
+
+behaviorVectorService.storeBehavior(context);
+
+// Find similar historical behaviors
+List&lt;Document&gt; similar = behaviorVectorService
+        .findSimilarBehaviors("user-456", "10.0.1.55", "/admin", 5);</code></pre>
+            </div>
+          </section>
+
+          <!-- Related -->
+          <section class="docs-section">
+            <h2 id="related">관련 문서</h2>
+            <div class="related-links">
+              <div class="related-links-grid">
+                <a href="../../../docs/reference/core/pipeline.html" class="related-link-card">
+                  <h3>AI Pipeline</h3>
+                  <p>CONTEXT_RETRIEVAL 단계에서 벡터 연산을 사용합니다.</p>
+                </a>
+                <a href="../../../docs/reference/security/hcad.html" class="related-link-card">
+                  <h3>HCAD</h3>
+                  <p>행동 이상 탐지에 BehaviorVectorService를 사용합니다.</p>
+                </a>
+              </div>
+            </div>
+          </section>
+
+          <!-- Configuration Reference -->
+          <section>
+            <div class="callout callout-info">
+              <strong>설정 레퍼런스</strong><br>
+              RAG 및 벡터 스토어 <code>application.yml</code> 속성은 <a href="../../../docs/install/configuration/ai.html">AI 설정</a>을 참조하세요 — <code>ContexaRagProperties</code> (청크 크기, 유사도 임계값)와 <code>PgVectorStoreProperties</code> (연결, 차원, 인덱싱)를 다룹니다.
+            </div>
+          </section>
+
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/core/model-provider.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">Model Provider</span>
+            </a>
+            <a href="../../../docs/reference/core/streaming.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">Streaming</span>
+            </a>
+          </div>

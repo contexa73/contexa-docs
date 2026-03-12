@@ -1,0 +1,300 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Model Provider</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+            </div>
+            <h1>Model Provider</h1>
+            <p class="lead">모델 프로바이더 시스템은 여러 백엔드에 걸쳐 LLM 모델을 관리합니다. <code>DynamicModelRegistry</code>는 Spring AI <code>ChatModel</code> 빈과 커스텀 <code>ModelProvider</code> 구현체를 자동 탐색하며, <code>DynamicModelSelectionStrategy</code>는 티어, 가용성, 우선순위를 기반으로 각 요청에 최적의 모델을 선택합니다.</p>
+          </div>
+
+          <!-- Overview -->
+          <section class="docs-section">
+            <h2 id="overview">개요</h2>
+            <p>Contexa는 여러 LLM 프로바이더를 동시에 지원합니다. 시작 시 <code>DynamicModelRegistry</code>는 세 가지 메커니즘을 통해 사용 가능한 모든 모델을 탐색합니다:</p>
+            <ol>
+              <li><strong>ModelProvider 빈</strong> — Spring 컨텍스트에 등록된 커스텀 프로바이더 구현체.</li>
+              <li><strong>Spring AI ChatModel 빈</strong> — <code>spring.ai.ollama.*</code>, <code>spring.ai.anthropic.*</code>, 또는 <code>spring.ai.openai.*</code> 설정에서 자동 감지.</li>
+              <li><strong>TieredLLMProperties</strong> — 3티어 설정 계층의 모델 이름.</li>
+            </ol>
+            <p>레지스트리는 모델 클래스 이름에서 프로바이더를 자동 추론하고 (Ollama, Anthropic, OpenAI, Gemini, Mistral, Azure, Bedrock, HuggingFace) 초기화 시 헬스 체크를 수행합니다.</p>
+          </section>
+
+          <!-- ModelProvider -->
+          <section class="docs-section">
+            <h2 id="model-provider">ModelProvider</h2>
+            <p>커스텀 모델 프로바이더 구현을 위한 인터페이스입니다. Spring AI 자동 설정으로 다루지 않는 프로바이더를 지원하려면 이를 구현하세요.</p>
+
+            <div class="api-signature">
+              <code>public interface ModelProvider</code>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getProviderName()</span>
+                <span class="api-method-return">String</span>
+              </div>
+              <div class="api-method-desc">고유 프로바이더 식별자를 반환합니다 (예: "ollama", "anthropic", "openai").</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getAvailableModels()</span>
+                <span class="api-method-return">List&lt;ModelDescriptor&gt;</span>
+              </div>
+              <div class="api-method-desc">이 프로바이더에서 사용 가능한 모든 모델을 반환합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">createModel(ModelDescriptor descriptor, Map&lt;String, Object&gt; config)</span>
+                <span class="api-method-return">ChatModel</span>
+              </div>
+              <div class="api-method-desc">주어진 디스크립터에 대한 <code>ChatModel</code> 인스턴스를 생성합니다. config 맵은 런타임 오버라이드를 제공합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">supportsModel(String modelId)</span>
+                <span class="api-method-return">boolean</span>
+              </div>
+              <div class="api-method-desc">이 프로바이더가 주어진 모델 ID를 서비스할 수 있는지 여부를 반환합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">checkHealth(String modelId)</span>
+                <span class="api-method-return">HealthStatus</span>
+              </div>
+              <div class="api-method-desc">지정된 모델에 대한 헬스 체크를 수행하고 응답 시간 지표와 함께 결과를 반환합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">initialize(Map&lt;String, Object&gt; config)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">주어진 설정으로 프로바이더를 초기화합니다. 레지스트리 시작 시 한 번 호출됩니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getPriority()</span>
+                <span class="api-method-return">int</span>
+              </div>
+              <div class="api-method-desc">프로바이더 우선순위를 반환합니다. 여러 프로바이더가 동일한 모델을 지원할 때 낮은 값이 우선됩니다. 기본값: 100.</div>
+            </div>
+          </section>
+
+          <!-- ModelDescriptor -->
+          <section class="docs-section">
+            <h2 id="model-descriptor">ModelDescriptor</h2>
+            <p>모델의 ID, 기능, 기본 옵션, 현재 상태를 설명합니다.</p>
+
+            <div class="api-signature">
+              <code>@Data @Builder<br>public class ModelDescriptor</code>
+            </div>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>속성</th><th>타입</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>modelId</code></td><td><code>String</code></td><td>고유 모델 식별자 (예: "llama3.1:8b", "claude-3-opus").</td></tr>
+                <tr><td><code>displayName</code></td><td><code>String</code></td><td>사람이 읽을 수 있는 모델 이름.</td></tr>
+                <tr><td><code>provider</code></td><td><code>String</code></td><td>프로바이더 이름 (ollama, anthropic, openai).</td></tr>
+                <tr><td><code>tier</code></td><td><code>Integer</code></td><td>이 모델이 할당된 티어 (1, 2, 또는 3). 미할당 시 null.</td></tr>
+                <tr><td><code>version</code></td><td><code>String</code></td><td>모델 버전 문자열.</td></tr>
+                <tr><td><code>capabilities</code></td><td><code>ModelCapabilities</code></td><td>모델이 지원하는 기능 (Streaming, Tool 호출, 멀티모달, 컨텍스트 윈도우).</td></tr>
+                <tr><td><code>options</code></td><td><code>ModelOptions</code></td><td>기본 샘플링 옵션 (temperature, topP, topK, repetitionPenalty).</td></tr>
+                <tr><td><code>status</code></td><td><code>ModelStatus</code></td><td><code>AVAILABLE</code> 또는 <code>UNAVAILABLE</code>.</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3>ModelCapabilities</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>필드</th><th>타입</th><th>기본값</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>streaming</code></td><td><code>boolean</code></td><td>true</td></tr>
+                <tr><td><code>toolCalling</code></td><td><code>boolean</code></td><td>false</td></tr>
+                <tr><td><code>functionCalling</code></td><td><code>boolean</code></td><td>false</td></tr>
+                <tr><td><code>multiModal</code></td><td><code>boolean</code></td><td>false</td></tr>
+                <tr><td><code>maxTokens</code></td><td><code>int</code></td><td>4096</td></tr>
+                <tr><td><code>contextWindow</code></td><td><code>int</code></td><td>4096</td></tr>
+              </tbody>
+            </table></div>
+          </section>
+
+          <!-- DynamicModelRegistry -->
+          <section class="docs-section">
+            <h2 id="dynamic-model-registry">DynamicModelRegistry</h2>
+            <p>모든 LLM 모델을 탐색, 관리, 접근하는 중앙 레지스트리입니다. 애플리케이션 시작 시 자동 초기화됩니다.</p>
+
+            <div class="api-signature">
+              <code>public class DynamicModelRegistry</code>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getModel(String modelId)</span>
+                <span class="api-method-return">ChatModel</span>
+              </div>
+              <div class="api-method-desc">주어진 ID의 <code>ChatModel</code>을 반환합니다. 아직 로드되지 않은 경우 인스턴스를 생성하고 캐시합니다. 찾지 못하면 <code>ModelSelectionException</code>을 던집니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getAllModels()</span>
+                <span class="api-method-return">Collection&lt;ModelDescriptor&gt;</span>
+              </div>
+              <div class="api-method-desc">등록된 모든 모델 디스크립터를 반환합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getModelsByProvider(String provider)</span>
+                <span class="api-method-return">List&lt;ModelDescriptor&gt;</span>
+              </div>
+              <div class="api-method-desc">프로바이더 이름으로 필터링된 사용 가능한 모델을 반환합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">registerModel(ModelDescriptor descriptor)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">모델 디스크립터를 등록하거나 병합합니다. 설정에서 정의된 티어가 프로바이더에서 정의된 티어보다 우선합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">refreshModels()</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">모든 프로바이더에 모델 목록 새로고침을 요청하고 새로 발견된 모델을 등록합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">updateModelStatus(String modelId, ModelStatus status)</span>
+                <span class="api-method-return">void</span>
+              </div>
+              <div class="api-method-desc">등록된 모델의 가용성 상태를 업데이트합니다.</div>
+            </div>
+          </section>
+
+          <!-- ModelSelectionStrategy -->
+          <section class="docs-section">
+            <h2 id="model-selection-strategy">ModelSelectionStrategy</h2>
+            <p>모델 선택 로직을 위한 인터페이스입니다. <code>DynamicModelSelectionStrategy</code>가 기본 구현체입니다.</p>
+
+            <div class="api-signature">
+              <code>public interface ModelSelectionStrategy</code>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">selectModel(ExecutionContext context)</span>
+                <span class="api-method-return">ChatModel</span>
+              </div>
+              <div class="api-method-desc">주어진 실행 컨텍스트에 가장 적합한 모델을 선택합니다. 사용 가능한 모델이 없으면 null을 반환합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">getSupportedModels()</span>
+                <span class="api-method-return">Set&lt;String&gt;</span>
+              </div>
+              <div class="api-method-desc">선택 가능한 모든 모델 ID의 집합을 반환합니다.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
+                <span class="api-method-name">isModelAvailable(String modelName)</span>
+                <span class="api-method-return">boolean</span>
+              </div>
+              <div class="api-method-desc">특정 모델이 현재 사용 가능한지 확인합니다.</div>
+            </div>
+          </section>
+
+          <!-- DynamicModelSelectionStrategy -->
+          <section class="docs-section">
+            <h2 id="dynamic-selection">DynamicModelSelectionStrategy</h2>
+            <p>우선순위 기반 폴백 체인을 사용하는 기본 선택 전략입니다:</p>
+
+            <div class="api-signature">
+              <code>public class DynamicModelSelectionStrategy implements ModelSelectionStrategy</code>
+            </div>
+
+            <ol>
+              <li><strong>티어 기반</strong> — <code>ExecutionContext.tier</code>가 설정되면 <code>TieredLLMProperties</code>에서 모델을 해석합니다. 주 모델이 사용 불가능하면 해당 티어의 백업 모델로 폴백합니다.</li>
+              <li><strong>선호 모델</strong> — <code>ExecutionContext.preferredModel</code>이 설정되면 직접 사용을 시도합니다.</li>
+              <li><strong>기본 ChatModel</strong> — Spring AI에서 자동 설정된 기본 <code>ChatModel</code> 빈으로 폴백합니다.</li>
+            </ol>
+          </section>
+
+          <!-- Configuration -->
+          <section class="docs-section">
+            <h2 id="configuration">설정</h2>
+
+            <h3>계층형 모델 구조</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">contexa:
+  llm:
+    layer1:
+      model: tinyllama:latest
+      backup:
+        model: qwen2.5:0.5b
+    layer2:
+      model: llama3.1:8b
+      backup:
+        model: exaone3.5:7.8b</code></pre>
+            </div>
+
+            <div class="callout callout-info">
+              <p><strong>티어 선택 우선순위:</strong> 모델 선택은 다음 순서를 따릅니다: <code>ExecutionContext.tier</code> → <code>SecurityTaskType.getDefaultTier()</code> → <code>AnalysisLevel.getDefaultTier()</code> → <code>preferredModel</code> → 기본 ChatModel 폴백.</p>
+            </div>
+          </section>
+
+          <!-- Related -->
+          <section class="docs-section">
+            <h2 id="related">관련 문서</h2>
+            <div class="related-links">
+              <div class="related-links-grid">
+                <a href="../../../docs/reference/core/llm-orchestrator.html" class="related-link-card">
+                  <h3>LLM Orchestrator</h3>
+                  <p>각 요청에 대해 ModelSelectionStrategy를 사용하여 모델을 선택합니다.</p>
+                </a>
+                <a href="../../../docs/reference/core/pipeline.html" class="related-link-card">
+                  <h3>AI Pipeline</h3>
+                  <p>Pipeline 실행기는 오케스트레이터를 통해 모델 시스템을 사용합니다.</p>
+                </a>
+              </div>
+            </div>
+          </section>
+
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/core/pipeline.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">AI Pipeline</span>
+            </a>
+            <a href="../../../docs/reference/core/rag.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">RAG 및 벡터</span>
+            </a>
+          </div>
