@@ -117,8 +117,10 @@
         // Restore opacity
         if (content) content.style.opacity = '';
 
-        // Re-run code highlighting if Prism is available
-        if (window.Prism) {
+        // Re-run code block enhancement and highlighting
+        if (window.contexaEnhanceCodeBlocks) {
+          window.contexaEnhanceCodeBlocks(currentContentInner);
+        } else if (window.Prism) {
           Prism.highlightAllUnder(currentContentInner);
         }
 

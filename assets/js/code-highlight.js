@@ -48,11 +48,13 @@
   }
 
   /**
-   * Wraps all pre>code blocks with the code-block container
-   * and adds language label + copy button
+   * Wraps pre>code blocks with the code-block container
+   * and adds language label + copy button.
+   * @param {Element} [container] - optional scope; defaults to document
    */
-  function enhanceCodeBlocks() {
-    var codeBlocks = document.querySelectorAll('pre > code[class*="language-"]');
+  function enhanceCodeBlocks(container) {
+    var root = container || document;
+    var codeBlocks = root.querySelectorAll('pre > code[class*="language-"]');
 
     codeBlocks.forEach(function (codeEl) {
       var pre = codeEl.parentElement;
@@ -100,7 +102,7 @@
     });
 
     // Also handle pre-built code-block containers
-    var existingBlocks = document.querySelectorAll('.code-block');
+    var existingBlocks = root.querySelectorAll('.code-block');
     existingBlocks.forEach(function (block) {
       var copyBtn = block.querySelector('.code-copy-btn');
       var codeEl = block.querySelector('code');
@@ -114,9 +116,20 @@
 
     // Run Prism highlighting if available
     if (typeof Prism !== 'undefined') {
-      Prism.highlightAll();
+      if (container) {
+        Prism.highlightAllUnder(container);
+      } else {
+        Prism.highlightAll();
+      }
     }
   }
+
+  /**
+   * Public API for SPA navigation re-enhancement
+   */
+  window.contexaEnhanceCodeBlocks = function (container) {
+    enhanceCodeBlocks(container);
+  };
 
   /**
    * Copies text to clipboard and updates button state
