@@ -102,6 +102,20 @@
         // Replace content
         currentContentInner.innerHTML = newContentInner.innerHTML;
 
+        // Swap page-specific inline styles from <head>
+        // Remove previously injected SPA styles
+        document.querySelectorAll('style[data-spa-injected]').forEach(function (s) {
+          s.remove();
+        });
+        // Inject inline <style> tags from the fetched page's <head>
+        var newStyles = doc.querySelectorAll('head > style');
+        newStyles.forEach(function (style) {
+          var clone = document.createElement('style');
+          clone.textContent = style.textContent;
+          clone.setAttribute('data-spa-injected', 'true');
+          document.head.appendChild(clone);
+        });
+
         // Update page title
         var newTitle = doc.querySelector('title');
         if (newTitle) document.title = newTitle.textContent;
