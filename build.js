@@ -1,183 +1,283 @@
 /**
- * Contexa Website Build Script
- * Inlines shared includes (header, footer, sidebar) into all HTML pages
- * and converts internal links to relative paths.
- * Supports both fresh builds (data-include placeholders) and rebuilds
- * (replaces previously inlined content with latest version).
+ * Contexa Website i18n Build Script
+ *
+ * Builds multi-language static site from templates.
+ * Input:  src/ (templates), includes/ (shared components), locale/ (translations), content/ (body text)
+ * Output: dist/en/, dist/ko/ (complete HTML), dist/assets/ (shared static resources)
  *
  * Usage: node build.js
  */
 const fs = require('fs');
 const path = require('path');
+const cheerio = require('cheerio');
 
-const SITE_DIR = __dirname;
-const INCLUDES_DIR = path.join(SITE_DIR, 'includes');
+const ROOT = __dirname;
+const SRC_DIR = path.join(ROOT, 'src');
+const INCLUDES_DIR = path.join(ROOT, 'includes');
+const LOCALE_DIR = path.join(ROOT, 'locale');
+const CONTENT_DIR = path.join(ROOT, 'content');
+const ASSETS_DIR = path.join(ROOT, 'assets');
+const DIST_DIR = path.join(ROOT, 'dist');
+
+const LANGUAGES = ['en', 'ko'];
 const CACHE_BUST = '?v=' + Date.now();
 
-// Load include templates
-const header = fs.readFileSync(path.join(INCLUDES_DIR, 'header.html'), 'utf-8');
-const footer = fs.readFileSync(path.join(INCLUDES_DIR, 'footer.html'), 'utf-8');
-const sidebar = fs.readFileSync(path.join(INCLUDES_DIR, 'docs-sidebar.html'), 'utf-8');
+// ── Utilities ──────────────────────────────────────────────
 
-/**
- * Recursively find all HTML files excluding includes/
- */
 function findHtmlFiles(dir) {
   let results = [];
-  const items = fs.readdirSync(dir);
-  for (const item of items) {
-    const fullPath = path.join(dir, item);
-    const stat = fs.statSync(fullPath);
-    if (stat.isDirectory()) {
-      if (item !== 'includes' && item !== 'node_modules' && item !== '.git') {
-        results = results.concat(findHtmlFiles(fullPath));
-      }
+  for (const item of fs.readdirSync(dir)) {
+    const full = path.join(dir, item);
+    if (fs.statSync(full).isDirectory()) {
+      results = results.concat(findHtmlFiles(full));
     } else if (item.endsWith('.html')) {
-      results.push(fullPath);
+      results.push(full);
     }
   }
   return results;
 }
 
-/**
- * Calculate relative path from a file to the site root
- */
-function getRelativeRoot(filePath) {
-  const relFromRoot = path.relative(SITE_DIR, path.dirname(filePath));
-  if (!relFromRoot) return './';
-  const depth = relFromRoot.split(path.sep).length;
-  return '../'.repeat(depth);
+function copyDirSync(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const item of fs.readdirSync(src)) {
+    const srcPath = path.join(src, item);
+    const destPath = path.join(dest, item);
+    if (fs.statSync(srcPath).isDirectory()) {
+      copyDirSync(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
 }
 
-/**
- * Convert absolute internal links (/path) to relative (relRoot + path)
- */
-function adjustLinks(html, relRoot) {
-  return html.replace(/(href|src|action)="\/([^"]*?)"/g, function(match, attr, p) {
-    return attr + '="' + relRoot + p + '"';
+function cleanDir(dir) {
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true });
+  }
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function getRelativeRoot(filePath, langDir) {
+  const rel = path.relative(path.dirname(filePath), langDir);
+  if (!rel) return './';
+  return rel.replace(/\\/g, '/') + '/';
+}
+
+// ── i18n Marker Resolution ─────────────────────────────────
+
+function flattenObject(obj, prefix) {
+  let result = {};
+  for (const [key, value] of Object.entries(obj)) {
+    const fullKey = prefix ? prefix + '.' + key : key;
+    if (typeof value === 'object' && value !== null) {
+      Object.assign(result, flattenObject(value, fullKey));
+    } else {
+      result[fullKey] = value;
+    }
+  }
+  return result;
+}
+
+function resolveI18nMarkers(html, locale, lang, currentRelPath) {
+  const flat = flattenObject(locale, '');
+
+  // Replace {{i18n.key}} markers
+  html = html.replace(/\{\{i18n\.([a-zA-Z0-9_.]+)\}\}/g, (match, key) => {
+    return flat[key] !== undefined ? flat[key] : match;
+  });
+
+  // Replace language switcher markers
+  const otherLang = lang === 'en' ? 'ko' : 'en';
+  const currentPage = '/' + currentRelPath.replace(/\\/g, '/');
+  const otherHref = '/' + otherLang + currentPage;
+  const selfHref = '/' + lang + currentPage;
+
+  html = html.replace('{{i18n.langSwitch.enHref}}', lang === 'en' ? selfHref : '/en' + currentPage);
+  html = html.replace('{{i18n.langSwitch.koHref}}', lang === 'ko' ? selfHref : '/ko' + currentPage);
+  html = html.replace('{{i18n.langSwitch.enActive}}', lang === 'en' ? ' active' : '');
+  html = html.replace('{{i18n.langSwitch.koActive}}', lang === 'ko' ? ' active' : '');
+
+  return html;
+}
+
+// ── Link Adjustment ────────────────────────────────────────
+
+function adjustLinksToRelative(html, relRoot) {
+  // Convert absolute internal links (/path) to relative (relRoot + path)
+  return html.replace(/(href|src|action)="\/([^"]*?)"/g, (match, attr, p) => {
+    // Skip external protocols and anchors
+    if (p.startsWith('http') || p.startsWith('//')) return match;
+    return `${attr}="${relRoot}${p}"`;
   });
 }
 
-/**
- * Process a single HTML file
- */
-function processFile(filePath) {
-  let content = fs.readFileSync(filePath, 'utf-8');
-  const relRoot = getRelativeRoot(filePath);
+// ── Main Build Pipeline ────────────────────────────────────
 
-  // Adjust links in include templates for this file's depth
-  const adjustedHeader = adjustLinks(header, relRoot);
-  const adjustedFooter = adjustLinks(footer, relRoot);
-  const adjustedSidebar = adjustLinks(sidebar, relRoot);
+function build() {
+  console.log('Contexa i18n Build');
+  console.log('==================\n');
 
-  // 1. Replace data-include placeholders (fresh build)
-  content = content.replace(
-    /<div\s+data-include="\/includes\/header\.html"\s*><\/div>/,
-    adjustedHeader
-  );
-  content = content.replace(
-    /<div\s+data-include="\/includes\/footer\.html"\s*><\/div>/,
-    adjustedFooter
-  );
-  content = content.replace(
-    /<div\s+data-include="\/includes\/docs-sidebar\.html"\s*><\/div>/,
-    adjustedSidebar
-  );
+  // Clean dist
+  cleanDir(DIST_DIR);
 
-  // 2. Remove leftover <style> blocks from previous sidebar builds
-  content = content.replace(
-    /<style>\s*\.sidebar-links[\s\S]*?<\/style>\s*/g,
-    ''
-  );
+  // Copy assets to dist/assets/
+  console.log('Copying assets...');
+  copyDirSync(ASSETS_DIR, path.join(DIST_DIR, 'assets'));
 
-  // 3. Replace previously inlined sidebar (rebuild)
-  content = content.replace(
-    /<nav class="docs-sidebar"[^>]*>[\s\S]*?<\/nav>\s*(?:<!--\s*Mobile sidebar overlay\s*-->\s*<div class="sidebar-overlay"><\/div>\s*)?(?:<!--\s*Mobile sidebar toggle button\s*-->\s*<button class="sidebar-toggle"[\s\S]*?<\/button>)?/,
-    adjustedSidebar
-  );
+  // Load includes
+  const header = fs.readFileSync(path.join(INCLUDES_DIR, 'header.html'), 'utf-8');
+  const footer = fs.readFileSync(path.join(INCLUDES_DIR, 'footer.html'), 'utf-8');
+  const sidebar = fs.readFileSync(path.join(INCLUDES_DIR, 'docs-sidebar.html'), 'utf-8');
 
-  // 3. Replace previously inlined header (rebuild)
-  //    Matches <header>...</header> followed by any number of mobile-nav blocks
-  content = content.replace(
-    /<header class="site-header"[^>]*>[\s\S]*?<\/header>(?:\s*<!--\s*Mobile Navigation\s*-->\s*<div class="mobile-nav"[\s\S]*?<\/div>\s*<\/div>)*/,
-    adjustedHeader
-  );
+  // Find all source templates
+  const srcFiles = findHtmlFiles(SRC_DIR);
+  console.log(`Found ${srcFiles.length} source templates\n`);
 
-  // 4. Replace previously inlined footer (rebuild)
-  content = content.replace(
-    /<footer class="site-footer"[^>]*>[\s\S]*?<\/footer>/,
-    adjustedFooter
-  );
+  // Build each language
+  for (const lang of LANGUAGES) {
+    console.log(`Building ${lang.toUpperCase()}...`);
 
-  // Remove include.js script tag (no longer needed after inlining)
-  content = content.replace(
-    /\s*<script\s+src="[^"]*include\.js[^"]*"[^>]*><\/script>/g,
-    ''
-  );
+    const locale = JSON.parse(fs.readFileSync(path.join(LOCALE_DIR, `${lang}.json`), 'utf-8'));
+    const langDir = path.join(DIST_DIR, lang);
+    fs.mkdirSync(langDir, { recursive: true });
 
-  // Inject docs-search.js and docs-toc.js for pages that have docs content
-  if (content.includes('docs-content') && !content.includes('docs-search.js')) {
-    content = content.replace(
-      /(<script\s+src="[^"]*code-highlight\.js[^"]*"><\/script>)/,
-      '$1\n  <script src="' + relRoot + 'assets/js/docs-search.js"></script>' +
-      '\n  <script src="' + relRoot + 'assets/js/docs-toc.js"></script>'
-    );
+    let processed = 0;
+    let errors = 0;
+
+    for (const srcFile of srcFiles) {
+      const relPath = path.relative(SRC_DIR, srcFile);
+      const outFile = path.join(langDir, relPath);
+
+      try {
+        let html = fs.readFileSync(srcFile, 'utf-8');
+
+        // 1. Inject includes
+        html = html.replace('{{header}}', header);
+        html = html.replace('{{footer}}', footer);
+        html = html.replace('{{sidebar}}', sidebar);
+
+        // 2. Inject content
+        // For non-EN languages, load from content/{lang}/ if exists, else fallback to content/en/
+        const contentFile = path.join(CONTENT_DIR, lang, relPath);
+        const contentFileFallback = path.join(CONTENT_DIR, 'en', relPath);
+
+        if (html.includes('{{content}}')) {
+          let contentHtml = '';
+          if (fs.existsSync(contentFile)) {
+            contentHtml = fs.readFileSync(contentFile, 'utf-8');
+          } else if (fs.existsSync(contentFileFallback)) {
+            contentHtml = fs.readFileSync(contentFileFallback, 'utf-8');
+          }
+          html = html.replace('{{content}}', contentHtml);
+        }
+
+        // 3. Resolve i18n markers
+        html = resolveI18nMarkers(html, locale, lang, relPath);
+
+        // 4. Set <html lang="...">
+        html = html.replace(/<html\s+lang="[^"]*"/, `<html lang="${lang}"`);
+
+        // 5. Add hreflang alternate links in <head>
+        const pageUrl = '/' + relPath.replace(/\\/g, '/');
+        const hreflangTags = LANGUAGES.map(l =>
+          `<link rel="alternate" hreflang="${l}" href="/${l}${pageUrl}">`
+        ).join('\n  ');
+        html = html.replace('</head>', `  ${hreflangTags}\n</head>`);
+
+        // 6. Adjust internal links: /path → /{lang}/path
+        html = html.replace(/(href|src|action)="\/([^"]*?)"/g, (match, attr, p) => {
+          // Skip external URLs
+          if (p.startsWith('http') || p.startsWith('//')) return match;
+          // Skip assets (shared across languages)
+          if (p.startsWith('assets/')) return match;
+          // Skip fonts and external resources
+          if (p.startsWith('fonts.')) return match;
+          // Skip paths already prefixed with a language code
+          if (/^(en|ko)\//.test(p)) return match;
+          return `${attr}="/${lang}/${p}"`;
+        });
+
+        // 7. Convert absolute paths to relative for static file serving
+        const outDir = path.dirname(outFile);
+        const relRoot = getRelativeRoot(outFile, DIST_DIR);
+        html = html.replace(/(href|src|action)="\/([^"]*?)"/g, (match, attr, p) => {
+          if (p.startsWith('http') || p.startsWith('//')) return match;
+          return `${attr}="${relRoot}${p}"`;
+        });
+
+        // 8. Inject lang.js after nav.js
+        html = html.replace(
+          /(<script\s+[^>]*nav\.js[^>]*><\/script>)/,
+          '$1\n  <script src="/assets/js/lang.js"></script>'
+        );
+
+        // 9. Cache busting
+        html = html.replace(/(href="[^"]*\.css)(\?v=[^"]*)?(")/g, `$1${CACHE_BUST}$3`);
+        html = html.replace(/(src="[^"]*\.js)(\?v=[^"]*)?(")/g, `$1${CACHE_BUST}$3`);
+
+        // 9. Wrap api-tables with scroll container
+        html = html.replace(/<div class="table-scroll">(<table[\s\S]*?<\/table>)<\/div>/g, '$1');
+        html = html.replace(/<table class="api-table">([\s\S]*?)<\/table>/g,
+          '<div class="table-scroll"><table class="api-table">$1</table></div>');
+
+        // 10. Clean up empty comments left by template extraction
+        html = html.replace(/\n\s*<!-- Mobile sidebar overlay -->\s*\n/g, '\n');
+        html = html.replace(/\n\s*<!-- Mobile sidebar toggle button -->\s*\n/g, '\n');
+
+        // Write output
+        fs.mkdirSync(path.dirname(outFile), { recursive: true });
+        fs.writeFileSync(outFile, html, 'utf-8');
+        processed++;
+      } catch (err) {
+        console.error(`  ERROR: ${relPath}: ${err.message}`);
+        errors++;
+      }
+    }
+
+    console.log(`  ${processed} files, ${errors} errors\n`);
   }
 
-  // Convert remaining absolute internal links to relative paths
-  // (covers <head> CSS/JS and any body links not in header/footer/sidebar)
-  content = adjustLinks(content, relRoot);
+  // Create root index.html with language detection redirect
+  const rootIndex = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contexa</title>
+  <script>
+    var lang = (navigator.language || '').startsWith('ko') ? 'ko' : 'en';
+    var stored = localStorage.getItem('contexa-lang');
+    if (stored) lang = stored;
+    window.location.replace('/' + lang + '/index.html');
+  </script>
+</head>
+<body>
+  <p>Redirecting...</p>
+</body>
+</html>`;
+  fs.writeFileSync(path.join(DIST_DIR, 'index.html'), rootIndex, 'utf-8');
 
-  // Wrap api-tables with scroll container for horizontal scrolling
-  // First remove existing wrappers (for rebuild idempotency)
-  content = content.replace(/<div class="table-scroll">(<table[\s\S]*?<\/table>)<\/div>/g, '$1');
-  // Then wrap each api-table
-  content = content.replace(/<table class="api-table">([\s\S]*?)<\/table>/g,
-    '<div class="table-scroll"><table class="api-table">$1</table></div>');
-
-  // Cache busting: update or add version query to local CSS/JS references
-  content = content.replace(
-    /(href="[^"]*\.css)(\?v=[^"]*)?(")/g,
-    '$1' + CACHE_BUST + '$3'
-  );
-  content = content.replace(
-    /(src="[^"]*\.js)(\?v=[^"]*)?(")/g,
-    '$1' + CACHE_BUST + '$3'
-  );
-
-  fs.writeFileSync(filePath, content, 'utf-8');
-}
-
-// Main execution
-const files = findHtmlFiles(SITE_DIR);
-let processed = 0;
-let errors = 0;
-
-for (const file of files) {
-  try {
-    processFile(file);
-    processed++;
-  } catch (err) {
-    console.error('ERROR processing ' + path.relative(SITE_DIR, file) + ': ' + err.message);
-    errors++;
+  // Verification: check for unresolved markers
+  console.log('Verification...');
+  let unresolvedCount = 0;
+  const distFiles = findHtmlFiles(DIST_DIR);
+  for (const file of distFiles) {
+    const content = fs.readFileSync(file, 'utf-8');
+    const markers = content.match(/\{\{[^}]+\}\}/g);
+    if (markers) {
+      const relPath = path.relative(DIST_DIR, file);
+      console.warn(`  WARNING: ${relPath} has ${markers.length} unresolved markers: ${markers.slice(0, 3).join(', ')}`);
+      unresolvedCount += markers.length;
+    }
   }
-}
 
-console.log('Build complete: ' + processed + ' files processed, ' + errors + ' errors');
-
-// Verify: check for any remaining data-include references
-let remaining = 0;
-for (const file of files) {
-  const content = fs.readFileSync(file, 'utf-8');
-  const matches = content.match(/data-include="/g);
-  if (matches) {
-    console.warn('WARNING: ' + path.relative(SITE_DIR, file) + ' still has ' + matches.length + ' unresolved includes');
-    remaining += matches.length;
+  if (unresolvedCount === 0) {
+    console.log('  All markers resolved!\n');
+  } else {
+    console.warn(`  ${unresolvedCount} unresolved markers remain\n`);
   }
+
+  console.log(`Build complete: ${LANGUAGES.length} languages, ${distFiles.length} output files`);
 }
 
-if (remaining === 0) {
-  console.log('Verification passed: all includes resolved');
-} else {
-  console.warn('Verification: ' + remaining + ' unresolved includes remain');
-}
+build();

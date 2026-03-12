@@ -1,0 +1,254 @@
+<!-- Breadcrumb -->
+          <nav class="breadcrumb">
+            <a href="../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../docs/install/index.html">Install</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Shadow Mode</span>
+          </nav>
+
+          <!-- Page Header -->
+          <div class="docs-page-header">
+            <h1>Shadow Mode Migration</h1>
+            <p class="lead">Shadow Mode provides a safe, progressive adoption path for AI-driven security. Transition from observation-only to full enforcement through two well-defined stages controlled by <code>security.zerotrust.mode</code>.</p>
+          </div>
+
+          <!-- Overview -->
+          <section>
+            <h2 id="overview">How Shadow Mode Works</h2>
+            <p>When Contexa is first deployed into an existing application, immediately enforcing AI-driven security decisions would be risky. Shadow Mode solves this by running the full AI evaluation pipeline in parallel with your existing security, allowing you to observe and validate AI decisions before enabling enforcement.</p>
+            <p>The mode is controlled by a single property: <code>security.zerotrust.mode</code>. In <code>SHADOW</code> mode, the AI analysis pipeline runs fully (HCAD, LLM analysis, risk scoring) but the <code>SecurityDecisionEnforcementHandler</code> skips writing actions to Redis. In <code>ENFORCE</code> mode (default), actions are saved and enforced by <code>ZeroTrustAccessControlFilter</code>.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>Stage</th>
+                  <th><code>security.zerotrust.mode</code></th>
+                  <th>AI Behavior</th>
+                  <th>Enforcement</th>
+                  <th>Use Case</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="badge badge-primary">Shadow</span></td>
+                  <td><code>SHADOW</code></td>
+                  <td>Observe, analyze, and log only</td>
+                  <td>None — AI decisions are logged but never enforced</td>
+                  <td>Initial deployment, baseline learning, false positive evaluation</td>
+                </tr>
+                <tr>
+                  <td><span class="badge badge-success">Enforce</span></td>
+                  <td><code>ENFORCE</code> (default)</td>
+                  <td>Full enforcement</td>
+                  <td>AI makes all security decisions through the Zero Trust engine</td>
+                  <td>Production operation, full AI-native security</td>
+                </tr>
+              </tbody>
+            </table></div>
+          </section>
+
+          <!-- Stage 1: Shadow -->
+          <section>
+            <h2 id="stage-shadow">Stage 1: Shadow</h2>
+            <p>In Shadow mode, the full Contexa AI pipeline runs alongside your existing security infrastructure without affecting any authorization decisions. Every request is analyzed through HCAD and the Zero Trust engine, and the AI produces <code>ZeroTrustAction</code> decisions — but <code>SecurityDecisionEnforcementHandler</code> skips enforcement entirely. Decisions are only recorded in audit logs.</p>
+            <p>This stage is essential for building behavioral baselines. The HCAD engine needs to observe normal user patterns before it can reliably detect anomalies.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">contexa:
+  enabled: true
+  autonomous:
+    enabled: true
+
+security:
+  zerotrust:
+    enabled: true
+    mode: SHADOW
+
+hcad:
+  enabled: true
+  baseline:
+    learning:
+      enabled: true</code></pre>
+            </div>
+
+            <div class="callout callout-info">
+              <p><strong>Baseline Learning</strong> — Allow Shadow mode to run for at least 2 weeks to establish reliable behavioral baselines. The HCAD learning phase needs sufficient request samples per user before confidence scores stabilize.</p>
+            </div>
+
+            <h3>How Shadow Mode Works Internally</h3>
+            <p>The <code>SecurityEventProcessor</code> handler chain executes in order:</p>
+            <ol>
+              <li><strong>ProcessingExecutionHandler</strong> (order=50) — AI analysis runs normally, producing risk scores and action recommendations</li>
+              <li><strong>SecurityDecisionEnforcementHandler</strong> (order=55) — <code>canHandle()</code> returns <code>false</code> in SHADOW mode, so the handler is skipped. No action is saved to Redis.</li>
+              <li><strong>AuditingHandler</strong> (order=60) — Records the AI decision to audit logs, including what action <em>would have been</em> enforced</li>
+            </ol>
+            <p>Since no action is written to Redis, <code>ZeroTrustAccessControlFilter</code> has nothing to enforce on the next request — all requests pass through normally.</p>
+
+            <h3>What to Monitor</h3>
+            <ul>
+              <li>HCAD baseline confidence scores stabilizing across active users</li>
+              <li><code>ZeroTrustAction</code> distribution in audit logs (ALLOW vs. BLOCK vs. CHALLENGE vs. ESCALATE)</li>
+              <li>False positive rate: how often the AI would have blocked a legitimate request</li>
+              <li>AI analysis latency: ensure the async pipeline does not impact request throughput</li>
+            </ul>
+          </section>
+
+          <!-- Stage 2: Enforce -->
+          <section>
+            <h2 id="stage-enforce">Stage 2: Enforce</h2>
+            <p>In Enforce mode, the Contexa AI engine has full authority over security decisions. The <code>SecurityDecisionEnforcementHandler</code> saves AI-determined <code>ZeroTrustAction</code> decisions to Redis, and the <code>ZeroTrustAccessControlFilter</code> enforces them on subsequent requests. This is the default mode.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">contexa:
+  enabled: true
+  autonomous:
+    enabled: true
+
+security:
+  zerotrust:
+    enabled: true
+    mode: ENFORCE
+    threat:
+      initial: 0.3
+  session:
+    bearer:
+      enabled: true
+
+hcad:
+  enabled: true
+  baseline:
+    learning:
+      enabled: true</code></pre>
+            </div>
+
+            <h3>Enforcement Rules</h3>
+            <ul>
+              <li><strong>ALLOW</strong> — Request passes through normally</li>
+              <li><strong>BLOCK</strong> — Request is denied (HTTP 403). User is recorded in the blocked user registry.</li>
+              <li><strong>CHALLENGE</strong> — Additional verification steps are triggered</li>
+              <li><strong>ESCALATE</strong> — Request is held (HTTP 423) until further review is complete</li>
+              <li><strong>PENDING_ANALYSIS</strong> — Response is wrapped in <code>BlockableResponseWrapper</code> and may be aborted if the async AI pipeline determines a block is necessary</li>
+            </ul>
+
+            <div class="callout callout-danger">
+              <p><strong>Production Readiness Checklist</strong> — Before switching to Enforce mode in production:</p>
+              <ul>
+                <li>HCAD baselines must be established with sufficient learning data for all active users</li>
+                <li>False positive rate during Shadow phase should be below 1%</li>
+                <li>Redis must be available for action storage and retrieval</li>
+                <li>Monitoring and alerting must be in place for <code>ZeroTrustAction.BLOCK</code> and <code>ESCALATE</code> events</li>
+              </ul>
+            </div>
+          </section>
+
+          <!-- Migration Strategy -->
+          <section>
+            <h2 id="migration-strategy">Migration Strategy</h2>
+            <p>Follow this recommended timeline for a safe migration:</p>
+
+            <div class="steps">
+              <div class="step">
+                <div class="step-number">1</div>
+                <div>
+                  <h3 class="step-title">Shadow (Weeks 1-4)</h3>
+                  <p class="step-desc">Deploy Contexa with <code>security.zerotrust.mode: SHADOW</code>. The full AI analysis pipeline runs — HCAD behavioral analysis, LLM-based threat evaluation, and risk scoring — but no enforcement actions are applied. Monitor audit logs to evaluate false positive rates and verify that HCAD baselines are building correctly across all active users.</p>
+                </div>
+              </div>
+              <div class="step">
+                <div class="step-number">2</div>
+                <div>
+                  <h3 class="step-title">Enforce (Week 5+)</h3>
+                  <p class="step-desc">Switch to <code>security.zerotrust.mode: ENFORCE</code> to activate full AI enforcement. The <code>SecurityDecisionEnforcementHandler</code> now saves actions to Redis, and <code>ZeroTrustAccessControlFilter</code> enforces them on subsequent requests. Monitor the <code>ZeroTrustAction.BLOCK</code> and <code>ESCALATE</code> event rates closely during the first week.</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Rollback -->
+          <section>
+            <h2 id="rollback">Rollback Strategy</h2>
+            <p>You can safely roll back at any time by changing the <code>security.zerotrust.mode</code> property. HCAD baselines and learned patterns are preserved across mode changes.</p>
+
+            <div class="callout callout-warning">
+              <p><strong>Immediate Rollback</strong> — To immediately disable all AI enforcement, set <code>security.zerotrust.mode: SHADOW</code>. The AI pipeline continues to run and log decisions, but no enforcement actions are applied. A full application restart is required for this change to take effect.</p>
+            </div>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>Rollback Target</th>
+                  <th>Configuration Change</th>
+                  <th>Impact</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Shadow</td>
+                  <td><code>security.zerotrust.mode: SHADOW</code></td>
+                  <td>AI analyzes and logs only; no enforcement</td>
+                </tr>
+                <tr>
+                  <td>Pipeline Disabled</td>
+                  <td><code>security.zerotrust.enabled: false</code></td>
+                  <td>Zero Trust event pipeline disabled; HCAD still collects data</td>
+                </tr>
+                <tr>
+                  <td>Fully Disabled</td>
+                  <td><code>contexa.enabled: false</code></td>
+                  <td>Entire Contexa platform disabled; Spring Security defaults apply</td>
+                </tr>
+              </tbody>
+            </table></div>
+          </section>
+
+          <!-- Related Links -->
+          <section>
+            <h2 id="related">Related Documentation</h2>
+            <div class="related-links">
+              <div class="related-links-grid">
+                <a href="../../docs/reference/security/zero-trust.html" class="related-link-card">
+                  <h3>Zero Trust Reference</h3>
+                  <p>Deep dive into the Zero Trust evaluation engine and action lifecycle.</p>
+                </a>
+                <a href="../../docs/reference/security/hcad.html" class="related-link-card">
+                  <h3>HCAD Reference</h3>
+                  <p>Detailed documentation on Hierarchical Context-Aware Detection.</p>
+                </a>
+                <a href="../../docs/reference/security/event-system.html" class="related-link-card">
+                  <h3>Event System</h3>
+                  <p>How Contexa publishes and consumes security events.</p>
+                </a>
+                <a href="../../docs/install/configuration.html" class="related-link-card">
+                  <h3>Configuration Reference</h3>
+                  <p>Complete property reference for all Contexa modules.</p>
+                </a>
+              </div>
+            </div>
+          </section>
+
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="configuration.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Configuration</span>
+            </a>
+            <a href="../../docs/reference/core/ai-lab.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Reference Overview</span>
+            </a>
+          </div>

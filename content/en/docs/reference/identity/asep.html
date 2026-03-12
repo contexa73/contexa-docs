@@ -1,0 +1,341 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">ASEP Annotations</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-info">contexa-identity</span>
+            </div>
+            <h1>ASEP Annotations</h1>
+            <p class="lead">An annotation system for declaratively accessing the security context from controllers. Injects the current user, authentication object, and request headers/body/attributes directly into method parameters, and handles security exceptions at the filter chain level.</p>
+          </div>
+
+          <!-- Overview -->
+          <section class="docs-section">
+            <h2 id="overview">Overview</h2>
+            <p>ASEP annotations operate within the Security Filter Chain, before Spring MVC's <code>DispatcherServlet</code>. This allows authentication and authorization failures to be handled at the filter level, intercepting them before Spring MVC exception handling.</p>
+
+<pre class="arch-diagram"><code>
+  ASEP Processing Flow
+  =====================
+
+  [HTTP Request]
+       |
+       v
+  [Security Filter Chain]
+       |
+       v
+  [ASEPFilter] --- on security exception ---&gt;  [@SecurityExceptionHandler]
+       |                                              |
+       v                                              v
+  [DispatcherServlet]                       [Custom Error Response]
+       |
+       v
+  [@SecurityPrincipal]  - Injects current user
+  [@AuthenticationObject] - Injects authentication object
+  [@SecurityRequestHeader] - Injects request header
+</code></pre>
+
+            <h3>Enabling ASEP in DSL</h3>
+            <p>Call <code>asep()</code> for each authentication method to configure the ASEP attributes.</p>
+<pre><code class="language-java">registry
+    .form(form -&gt; form
+        .loginPage("/login")
+        .asep(asep -&gt; asep
+            .enableExceptionHandling(true)
+            .addArgumentResolver(customResolver)))
+    .session(Customizer.withDefaults())
+    .build();</code></pre>
+
+            <p>ASEP attribute classes: <code>FormAsepAttributes</code>, <code>RestAsepAttributes</code>, <code>OttAsepAttributes</code>, <code>PasskeyAsepAttributes</code>, <code>MfaAsepAttributes</code></p>
+          </section>
+
+          <!-- Argument Injection Annotations -->
+          <section class="docs-section">
+            <h2 id="argument-injection">Argument Injection Annotations</h2>
+            <p>These annotations enable direct injection of security context data into handler method parameters. Each has a corresponding <code>SecurityHandlerMethodArgumentResolver</code> implementation.</p>
+
+            <h3 id="security-principal">@SecurityPrincipal</h3>
+            <p>Injects the current security principal into a method parameter. Resolves from <code>SecurityContextHolder</code>.</p>
+
+            <div class="api-signature">
+              <code>@Target(ElementType.PARAMETER) @Retention(RetentionPolicy.RUNTIME)</code>
+            </div>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@SecurityExceptionHandler(AuthenticationException.class)
+public ResponseEntity&lt;ErrorResponse&gt; handleAuthError(
+        @SecurityPrincipal Object principal,
+        AuthenticationException ex) {
+    // principal is resolved from SecurityContextHolder
+    return ResponseEntity.status(401).body(
+        new ErrorResponse("AUTH_FAILED", ex.getMessage()));
+}</code></pre>
+            </div>
+
+            <h3 id="authentication-object">@AuthenticationObject</h3>
+            <p>Injects the full <code>Authentication</code> object from the security context, providing access to credentials, authorities, and authentication details.</p>
+
+            <div class="api-signature">
+              <code>@Target(ElementType.PARAMETER) @Retention(RetentionPolicy.RUNTIME)</code>
+            </div>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@SecurityExceptionHandler(AccessDeniedException.class)
+public ResponseEntity&lt;ErrorResponse&gt; handleAccessDenied(
+        @AuthenticationObject Authentication auth,
+        AccessDeniedException ex) {
+    String username = auth != null ? auth.getName() : "anonymous";
+    return ResponseEntity.status(403).body(
+        new ErrorResponse("ACCESS_DENIED", "User " + username + " lacks permission"));
+}</code></pre>
+            </div>
+
+            <h3 id="security-cookie-value">@SecurityCookieValue</h3>
+            <p>Injects a cookie value from the HTTP request within a security exception handler context.</p>
+
+            <div class="api-signature">
+              <code>@Target(ElementType.PARAMETER) @Retention(RetentionPolicy.RUNTIME)</code>
+            </div>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>value</code> / <code>name</code></td><td><code>String</code></td><td><code>""</code></td><td>Cookie name.</td></tr>
+                <tr><td><code>required</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether the cookie must be present.</td></tr>
+                <tr><td><code>defaultValue</code></td><td><code>String</code></td><td>none</td><td>Default value when cookie is absent and not required.</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="security-request-body">@SecurityRequestBody</h3>
+            <p>Deserializes the HTTP request body within a security exception handler context using the configured <code>HttpMessageConverter</code> instances.</p>
+
+            <div class="api-signature">
+              <code>@Target(ElementType.PARAMETER) @Retention(RetentionPolicy.RUNTIME)</code>
+            </div>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>required</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether the request body must be present.</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="security-request-attribute">@SecurityRequestAttribute</h3>
+            <p>Injects a servlet request attribute value.</p>
+
+            <div class="api-signature">
+              <code>@Target(ElementType.PARAMETER) @Retention(RetentionPolicy.RUNTIME)</code>
+            </div>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>value</code> / <code>name</code></td><td><code>String</code></td><td><code>""</code></td><td>Request attribute name.</td></tr>
+                <tr><td><code>required</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether the attribute must be present.</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="security-request-header">@SecurityRequestHeader</h3>
+            <p>Injects an HTTP request header value.</p>
+
+            <div class="api-signature">
+              <code>@Target(ElementType.PARAMETER) @Retention(RetentionPolicy.RUNTIME)</code>
+            </div>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>value</code> / <code>name</code></td><td><code>String</code></td><td><code>""</code></td><td>Header name.</td></tr>
+                <tr><td><code>required</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether the header must be present.</td></tr>
+                <tr><td><code>defaultValue</code></td><td><code>String</code></td><td>none</td><td>Default value when header is absent and not required.</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="security-session-attribute">@SecuritySessionAttribute</h3>
+            <p>Injects an HTTP session attribute value.</p>
+
+            <div class="api-signature">
+              <code>@Target(ElementType.PARAMETER) @Retention(RetentionPolicy.RUNTIME)</code>
+            </div>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>value</code> / <code>name</code></td><td><code>String</code></td><td><code>""</code></td><td>Session attribute name.</td></tr>
+                <tr><td><code>required</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether the attribute must be present.</td></tr>
+              </tbody>
+            </table></div>
+          </section>
+
+          <!-- Exception Handling Annotations -->
+          <section class="docs-section">
+            <h2 id="exception-handling">Exception Handling Annotations</h2>
+
+            <h3 id="security-exception-handler">@SecurityExceptionHandler</h3>
+            <p>Marks a method as a security exception handler. Methods annotated with this are invoked by the <code>SecurityExceptionHandlerInvoker</code> when a matching exception occurs within the security filter chain. This is the security-layer equivalent of Spring MVC's <code>@ExceptionHandler</code>.</p>
+
+            <div class="api-signature">
+              <code>@Target(ElementType.METHOD) @Retention(RetentionPolicy.RUNTIME)</code>
+            </div>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>value</code></td><td><code>Class&lt;? extends Throwable&gt;[]</code></td><td><code>{}</code></td><td>Exception types this handler catches. If empty, the handler method's exception parameter type is used.</td></tr>
+                <tr><td><code>priority</code></td><td><code>int</code></td><td><code>LOWEST_PRECEDENCE</code></td><td>Handler priority. Lower values have higher priority.</td></tr>
+                <tr><td><code>produces</code></td><td><code>String[]</code></td><td><code>{}</code></td><td>Producible media types (e.g., <code>"application/json"</code>).</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="security-controller-advice">@SecurityControllerAdvice</h3>
+            <p>Marks a class as a security controller advice bean, analogous to Spring MVC's <code>@ControllerAdvice</code>. Classes annotated with this are scanned by the <code>SecurityExceptionHandlerMethodRegistry</code> to discover <code>@SecurityExceptionHandler</code> methods.</p>
+
+            <div class="api-signature">
+              <code>@Target(ElementType.TYPE) @Retention(RetentionPolicy.RUNTIME)</code>
+            </div>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>value</code> / <code>basePackages</code></td><td><code>String[]</code></td><td><code>{}</code></td><td>Base packages to scan for applicability.</td></tr>
+                <tr><td><code>basePackageClasses</code></td><td><code>Class&lt;?&gt;[]</code></td><td><code>{}</code></td><td>Classes whose packages are used as base packages.</td></tr>
+                <tr><td><code>assignableTypes</code></td><td><code>Class&lt;?&gt;[]</code></td><td><code>{}</code></td><td>Specific types this advice applies to.</td></tr>
+              </tbody>
+            </table></div>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@SecurityControllerAdvice
+public class GlobalSecurityExceptionAdvice {
+
+    @SecurityExceptionHandler(AuthenticationException.class)
+    @SecurityResponseBody
+    public ResponseEntity&lt;Map&lt;String, Object&gt;&gt; handleAuthFailure(
+            @AuthenticationObject Authentication auth,
+            @SecurityRequestHeader(value = "X-Request-ID", required = false) String requestId,
+            AuthenticationException ex) {
+
+        Map&lt;String, Object&gt; body = Map.of(
+            "error", "AUTHENTICATION_FAILED",
+            "message", ex.getMessage(),
+            "requestId", requestId != null ? requestId : "unknown"
+        );
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(body);
+    }
+
+    @SecurityExceptionHandler(AccessDeniedException.class)
+    @SecurityResponseBody
+    public ResponseEntity&lt;Map&lt;String, Object&gt;&gt; handleAccessDenied(
+            @SecurityPrincipal Object principal,
+            AccessDeniedException ex) {
+
+        Map&lt;String, Object&gt; body = Map.of(
+            "error", "ACCESS_DENIED",
+            "message", ex.getMessage()
+        );
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body);
+    }
+}</code></pre>
+            </div>
+          </section>
+
+          <!-- Response Annotations -->
+          <section class="docs-section">
+            <h2 id="response-annotations">Response Annotations</h2>
+
+            <h3 id="security-response-body">@SecurityResponseBody</h3>
+            <p>Indicates that the return value of a <code>@SecurityExceptionHandler</code> method should be serialized to the HTTP response body using the configured <code>HttpMessageConverter</code> instances. Internally meta-annotated with Spring's <code>@ResponseBody</code>.</p>
+
+            <div class="api-signature">
+              <code>@Target({ElementType.TYPE, ElementType.METHOD}) @Retention(RetentionPolicy.RUNTIME)</code>
+            </div>
+          </section>
+
+          <!-- Complete Example -->
+          <section class="docs-section">
+            <h2 id="complete-example">Complete Example</h2>
+            <p>A complete example of a security controller and global exception handling using ASEP annotations.</p>
+
+<pre><code class="language-java">@RestController
+@RequestMapping("/api/user")
+public class UserController {
+
+    @GetMapping("/profile")
+    public UserProfile getProfile(
+            @SecurityPrincipal UserDetails user,
+            @AuthenticationObject Authentication auth,
+            @SecurityRequestHeader("X-Device-Id") String deviceId) {
+        return userService.getProfile(user.getUsername());
+    }
+}
+
+@SecurityControllerAdvice
+public class GlobalSecurityExceptionHandler {
+
+    @SecurityExceptionHandler(AuthenticationException.class)
+    @SecurityResponseBody
+    public ErrorResponse handleAuthError(
+            AuthenticationException ex,
+            @SecurityPrincipal UserDetails user) {
+        return new ErrorResponse("AUTH_FAILED", ex.getMessage());
+    }
+
+    @SecurityExceptionHandler(AccessDeniedException.class)
+    @SecurityResponseBody
+    public ErrorResponse handleAccessDenied(
+            AccessDeniedException ex,
+            @SecurityRequestAttribute("requestURI") String uri) {
+        return new ErrorResponse("ACCESS_DENIED", "Forbidden: " + uri);
+    }
+}</code></pre>
+          </section>
+
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/identity/mfa.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Adaptive MFA</span>
+            </a>
+            <a href="../../../docs/reference/identity/state-management.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">State Management</span>
+            </a>
+          </div>
