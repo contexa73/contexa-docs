@@ -177,14 +177,46 @@ function build() {
         // 4. Set <html lang="...">
         html = html.replace(/<html\s+lang="[^"]*"/, `<html lang="${lang}"`);
 
-        // 5. Add hreflang alternate links in <head>
+        // 5. Add main-content id for skip link
+        html = html.replace('<main class="site-main">', '<main class="site-main" id="main-content">');
+
+        // 6. Add hreflang, favicon, and OG meta tags in <head>
         const pageUrl = '/' + relPath.replace(/\\/g, '/');
         const hreflangTags = LANGUAGES.map(l =>
           `<link rel="alternate" hreflang="${l}" href="/${l}${pageUrl}">`
         ).join('\n  ');
-        html = html.replace('</head>', `  ${hreflangTags}\n</head>`);
 
-        // 6. Adjust internal links: /path → /{lang}/path
+        const titleMatch = html.match(/<title>([^<]*)<\/title>/);
+        const pageTitle = titleMatch ? titleMatch[1] : 'Contexa';
+        const descMatch = html.match(/<meta\s+name="description"\s+content="([^"]*)"/);
+        const pageDesc = descMatch ? descMatch[1] : 'AI-Native Security Platform for Spring';
+
+        const headTags = [
+          `<!-- Favicon -->`,
+          `<link rel="icon" type="image/png" sizes="32x32" href="/assets/img/logo.png">`,
+          `<link rel="apple-touch-icon" href="/assets/img/logo.png">`,
+          `<!-- Open Graph -->`,
+          `<meta property="og:type" content="website">`,
+          `<meta property="og:title" content="${pageTitle}">`,
+          `<meta property="og:description" content="${pageDesc}">`,
+          `<meta property="og:image" content="https://ctxa.ai/assets/img/logo.png">`,
+          `<meta property="og:url" content="https://ctxa.ai/${lang}${pageUrl}">`,
+          `<meta property="og:site_name" content="Contexa">`,
+          `<!-- Twitter Card -->`,
+          `<meta name="twitter:card" content="summary">`,
+          `<meta name="twitter:title" content="${pageTitle}">`,
+          `<meta name="twitter:description" content="${pageDesc}">`,
+          `<meta name="twitter:image" content="https://ctxa.ai/assets/img/logo.png">`,
+          `<!-- Hreflang -->`,
+          ...hreflangTags.split('\n  ')
+        ].join('\n  ');
+
+        // Early theme initialization to prevent FOUC
+        const themeInit = `<script>(function(){var t=localStorage.getItem('contexa-theme');if(t){document.documentElement.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches){document.documentElement.setAttribute('data-theme','dark')}})()</script>`;
+
+        html = html.replace('</head>', `  ${themeInit}\n  ${headTags}\n</head>`);
+
+        // 7. Adjust internal links: /path → /{lang}/path
         html = html.replace(/(href|src|action)="\/([^"]*?)"/g, (match, attr, p) => {
           // Skip external URLs
           if (p.startsWith('http') || p.startsWith('//')) return match;
@@ -197,7 +229,7 @@ function build() {
           return `${attr}="/${lang}/${p}"`;
         });
 
-        // 7. Convert absolute paths to relative for static file serving
+        // 8. Convert absolute paths to relative for static file serving
         const outDir = path.dirname(outFile);
         const relRoot = getRelativeRoot(outFile, DIST_DIR);
         html = html.replace(/(href|src|action)="\/([^"]*?)"/g, (match, attr, p) => {
@@ -205,22 +237,22 @@ function build() {
           return `${attr}="${relRoot}${p}"`;
         });
 
-        // 8. Inject lang.js after nav.js
+        // 9. Inject theme.js, lang.js, and header-search.js after nav.js
         html = html.replace(
           /(<script\s+[^>]*nav\.js[^>]*><\/script>)/,
-          '$1\n  <script src="/assets/js/lang.js"></script>'
+          '$1\n  <script src="/assets/js/theme.js"></script>\n  <script src="/assets/js/lang.js"></script>\n  <script src="/assets/js/header-search.js"></script>'
         );
 
-        // 9. Cache busting
+        // 10. Cache busting
         html = html.replace(/(href="[^"]*\.css)(\?v=[^"]*)?(")/g, `$1${CACHE_BUST}$3`);
         html = html.replace(/(src="[^"]*\.js)(\?v=[^"]*)?(")/g, `$1${CACHE_BUST}$3`);
 
-        // 9. Wrap api-tables with scroll container
+        // 11. Wrap api-tables with scroll container
         html = html.replace(/<div class="table-scroll">(<table[\s\S]*?<\/table>)<\/div>/g, '$1');
         html = html.replace(/<table class="api-table">([\s\S]*?)<\/table>/g,
           '<div class="table-scroll"><table class="api-table">$1</table></div>');
 
-        // 10. Clean up empty comments left by template extraction
+        // 12. Clean up empty comments left by template extraction
         html = html.replace(/\n\s*<!-- Mobile sidebar overlay -->\s*\n/g, '\n');
         html = html.replace(/\n\s*<!-- Mobile sidebar toggle button -->\s*\n/g, '\n');
 
