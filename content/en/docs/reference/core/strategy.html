@@ -3,305 +3,218 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">AI Strategy</span>
+            <span class="breadcrumb-current">Building Custom AI</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
             </div>
-            <h1>AI Strategy</h1>
-            <p class="lead">The AI Strategy system routes AI requests to the appropriate processing lab based on <code>DiagnosisType</code>. The <code>AIStrategyRegistry</code> discovers all strategy implementations, and the <code>AINativeProcessor</code> provides a high-level <code>AICoreOperations</code> interface with distributed locking and audit logging.</p>
+            <h1>Building Custom AI</h1>
+            <p class="lead">Build your own AI-powered features using the Contexa AI Diagnosis Process. This guide walks you through creating a complete custom AI feature &mdash; from defining domain types to exposing REST endpoints &mdash; using the Strategy, Lab, and Pipeline architecture.</p>
           </div>
 
-          <!-- Overview -->
+          <!-- What You'll Build -->
           <section class="docs-section">
-            <h2 id="overview">Overview</h2>
-            <p>The strategy layer sits between the API/streaming layer and the AI Labs. Each <code>AIStrategy</code> implementation handles one <code>DiagnosisType</code> and delegates processing to its associated lab. The complete execution flow is:</p>
+            <h2 id="what-youll-build">What You'll Build</h2>
+            <p>By following this guide, you will create a fully working AI feature that:</p>
+            <ul>
+              <li>Accepts domain-specific input via REST API</li>
+              <li>Routes the request through the AI Diagnosis Process</li>
+              <li>Generates structured LLM responses with JSON parsing</li>
+              <li>Supports both standard (synchronous) and streaming (SSE) modes</li>
+              <li>Optionally retrieves RAG context from a vector store</li>
+            </ul>
 
+            <h3>End-to-End Flow</h3>
+            <p>Every AI request in Contexa follows this execution path:</p>
             <div class="arch-flow">
-              <div class="arch-flow-step">AICoreOperations</div>
+              <div class="arch-flow-step">Controller</div>
               <div class="arch-flow-arrow"></div>
               <div class="arch-flow-step">AINativeProcessor</div>
               <div class="arch-flow-arrow"></div>
-              <div class="arch-flow-step">DistributedStrategyExecutor</div>
-              <div class="arch-flow-arrow"></div>
               <div class="arch-flow-step">AIStrategyRegistry</div>
               <div class="arch-flow-arrow"></div>
-              <div class="arch-flow-step highlight">AIStrategy → AILab</div>
+              <div class="arch-flow-step highlight">Strategy</div>
+              <div class="arch-flow-arrow"></div>
+              <div class="arch-flow-step highlight">Lab</div>
+              <div class="arch-flow-arrow"></div>
+              <div class="arch-flow-step">Pipeline (6 Steps)</div>
+            </div>
+
+            <p>The <strong>highlighted</strong> components are what you implement. The framework handles everything else &mdash; request routing, distributed locking, audit logging, LLM execution, and response parsing.</p>
+
+            <div class="callout callout-info">
+              <strong>Example Domain</strong><br>
+              This guide uses a <em>Product Recommendation</em> feature as the running example. The same pattern applies to any domain: sentiment analysis, code review, document summarization, or any custom AI task.
             </div>
           </section>
 
-          <!-- AIStrategy -->
+          <!-- Architecture -->
           <section class="docs-section">
-            <h2 id="ai-strategy">AIStrategy&lt;T, R&gt;</h2>
-            <p>The core interface for domain-specific AI processing strategies. Each implementation handles one <code>DiagnosisType</code>.</p>
-
-            <div class="api-signature">
-              <code>public interface AIStrategy&lt;T extends DomainContext, R extends AIResponse&gt;</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getSupportedType()</span>
-                <span class="api-method-return">DiagnosisType</span>
-              </div>
-              <div class="api-method-desc">Returns the <code>DiagnosisType</code> this strategy handles. Used by the registry for routing.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getPriority()</span>
-                <span class="api-method-return">int</span>
-              </div>
-              <div class="api-method-desc">Returns the priority of this strategy. When multiple strategies handle the same type, the lowest priority wins.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">execute(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">R</span>
-              </div>
-              <div class="api-method-desc">Synchronous execution. Throws <code>DiagnosisException</code> on failure.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeAsync(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc">Asynchronous execution returning a reactive <code>Mono</code>.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeStream(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Flux&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">Streaming execution. Only available when <code>supportsStreaming()</code> returns <code>true</code>.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">supportsStreaming()</span>
-                <span class="api-method-return">boolean</span>
-              </div>
-              <div class="api-method-desc">Returns whether this strategy supports streaming. Default: <code>false</code>.</div>
-            </div>
-          </section>
-
-          <!-- AbstractAIStrategy -->
-          <section class="docs-section">
-            <h2 id="abstract-ai-strategy">AbstractAIStrategy&lt;T, R&gt;</h2>
-            <p>Base class that implements the strategy-to-lab delegation pattern. Uses <code>AILabFactory</code> to resolve the lab at runtime.</p>
-
-            <div class="api-signature">
-              <code>public abstract class AbstractAIStrategy&lt;T extends DomainContext, R extends AIResponse&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;implements AIStrategy&lt;T, R&gt;</code>
-            </div>
-
-            <h3>Template Method Flow</h3>
-            <ol>
-              <li><code>validateRequest(request)</code> — Validate the incoming request.</li>
-              <li><code>getRequiredLab()</code> — Resolve the lab via <code>AILabFactory</code> using <code>getLabType()</code>.</li>
-              <li><code>convertLabRequest(request)</code> — Convert the <code>AIRequest</code> to the lab's request format.</li>
-              <li><code>processLabExecution(lab, labRequest, request)</code> — Execute the lab and return the response.</li>
-            </ol>
-
-            <h3>Abstract Methods (Must Implement)</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getLabType()</span>
-                <span class="api-method-return">Class&lt;?&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns the <code>AILab</code> class type that this strategy delegates to.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">validateRequest(AIRequest&lt;T&gt; request)</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">Validates the request. Throw <code>DiagnosisException</code> for invalid requests.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">convertLabRequest(AIRequest&lt;T&gt; request)</span>
-                <span class="api-method-return">Object</span>
-              </div>
-              <div class="api-method-desc">Converts the generic <code>AIRequest</code> into the lab's specific request type.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">processLabExecution(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
-                <span class="api-method-return">R</span>
-              </div>
-              <div class="api-method-desc">Executes the lab with the converted request and returns the typed response.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">processLabExecutionAsync(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc">Async lab execution. Override for reactive lab implementations.</div>
-            </div>
-          </section>
-
-          <!-- AIStrategyRegistry -->
-          <section class="docs-section">
-            <h2 id="ai-strategy-registry">AIStrategyRegistry</h2>
-            <p>Auto-discovers all <code>AIStrategy</code> beans and routes requests by <code>DiagnosisType</code>. When multiple strategies handle the same type, the one with the lowest priority wins.</p>
-
-            <div class="api-signature">
-              <code>public class AIStrategyRegistry</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getStrategy(DiagnosisType diagnosisType)</span>
-                <span class="api-method-return">AIStrategy&lt;T, R&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns the strategy for the given diagnosis type. Throws <code>DiagnosisException</code> if no strategy is registered.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeStrategyAsync(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc">Looks up the strategy by <code>request.getDiagnosisType()</code> and executes it asynchronously.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeStrategyStream(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Flux&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">Looks up the strategy and executes it in streaming mode.</div>
-            </div>
-          </section>
-
-          <!-- AICoreOperations -->
-          <section class="docs-section">
-            <h2 id="ai-core-operations">AICoreOperations&lt;T&gt;</h2>
-            <p>The high-level interface for AI processing. Used by <code>StandardStreamingService</code> and controllers.</p>
-
-            <div class="api-signature">
-              <code>public interface AICoreOperations&lt;T extends DomainContext&gt;</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">process(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc">Processes a request and returns the typed response.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">processStream(AIRequest&lt;T&gt; request)</span>
-                <span class="api-method-return">Flux&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">Processes a request in streaming mode.</div>
-            </div>
-          </section>
-
-          <!-- AINativeProcessor -->
-          <section class="docs-section">
-            <h2 id="ai-native-processor">AINativeProcessor&lt;T&gt;</h2>
-            <p>The primary <code>AICoreOperations</code> implementation. Adds distributed locking and audit logging around strategy execution.</p>
-
-            <div class="api-signature">
-              <code>public final class AINativeProcessor&lt;T extends DomainContext&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;implements AICoreOperations&lt;T&gt;</code>
-            </div>
-
-            <h3>Key Behaviors</h3>
-            <ul>
-              <li><strong>Distributed Locking</strong> — Acquires a distributed lock (via Redis) before strategy execution. Prevents concurrent execution of the same strategic operation across cluster nodes. Lock timeout: 30 minutes.</li>
-              <li><strong>Audit Logging</strong> — Creates an audit trail entry before execution and completes it with the result or error after.</li>
-              <li><strong>Node Identification</strong> — Each node generates a unique ID for lock ownership.</li>
-            </ul>
-          </section>
-
-          <!-- DistributedStrategyExecutor -->
-          <section class="docs-section">
-            <h2 id="distributed-strategy-executor">DistributedStrategyExecutor&lt;T&gt;</h2>
-            <p>Bridges <code>AINativeProcessor</code> and the <code>AIStrategyRegistry</code>. Handles error wrapping and result validation.</p>
-
-            <div class="api-signature">
-              <code>public class DistributedStrategyExecutor&lt;T extends DomainContext&gt;</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeDistributedStrategyAsync(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc">Delegates to <code>AIStrategyRegistry.executeStrategyAsync()</code> with result validation.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeDistributedStrategyStream(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType, String auditId)</span>
-                <span class="api-method-return">Flux&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">Delegates to <code>AIStrategyRegistry.executeStrategyStream()</code> with error handling.</div>
-            </div>
-          </section>
-
-          <!-- LabExecutionStrategy -->
-          <section class="docs-section">
-            <h2 id="lab-execution-strategy">LabExecutionStrategy</h2>
-            <p>A configuration object that defines how a lab should be executed, including multi-step workflows, fallback behavior, and quality gates.</p>
-
-            <div class="api-signature">
-              <code>public class LabExecutionStrategy</code>
-            </div>
+            <h2 id="architecture">Architecture</h2>
+            <p>The AI Diagnosis Process uses a three-layer architecture. Each layer has a clear responsibility:</p>
 
             <div class="table-scroll"><table class="api-table">
               <thead>
-                <tr><th>Property</th><th>Type</th><th>Description</th></tr>
+                <tr><th>Layer</th><th>Class</th><th>Responsibility</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>strategyId</code></td><td><code>String</code></td><td>Unique strategy identifier.</td></tr>
-                <tr><td><code>operationType</code></td><td><code>String</code></td><td>The type of operation being executed.</td></tr>
-                <tr><td><code>executionSteps</code></td><td><code>List&lt;LabExecutionStep&gt;</code></td><td>Ordered list of lab execution steps with dependencies and timeouts.</td></tr>
-                <tr><td><code>fallbackStrategy</code></td><td><code>FallbackStrategy</code></td><td>Defines fallback behavior (IMMEDIATE, GRADUAL, FULL_RECOVERY, EMERGENCY).</td></tr>
-                <tr><td><code>qualityGate</code></td><td><code>QualityGate</code></td><td>Quality thresholds for accuracy, response time, and confidence.</td></tr>
+                <tr>
+                  <td><strong>Strategy</strong></td>
+                  <td><code>AbstractAIStrategy</code></td>
+                  <td>Routes requests by <code>DiagnosisType</code>, validates input, delegates to the correct Lab.</td>
+                </tr>
+                <tr>
+                  <td><strong>Lab</strong></td>
+                  <td><code>AbstractAILab</code></td>
+                  <td>Collects and enriches domain data, then delegates to the Pipeline for LLM processing.</td>
+                </tr>
+                <tr>
+                  <td><strong>Pipeline</strong></td>
+                  <td><code>PipelineOrchestrator</code></td>
+                  <td>Executes 6 processing steps: context retrieval, preprocessing, prompt generation, LLM execution, response parsing, postprocessing.</td>
+                </tr>
               </tbody>
             </table></div>
 
-            <h3>QualityGate</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">passesQualityGate(double accuracy, double responseTime, double confidence)</span>
-                <span class="api-method-return">boolean</span>
-              </div>
-              <div class="api-method-desc">Returns <code>true</code> if all three metrics meet their respective thresholds.</div>
-            </div>
-
-            <h3>FallbackStrategy.FallbackType Enum</h3>
-            <table class="enum-table">
+            <h3>What You Implement vs. What the Framework Provides</h3>
+            <div class="table-scroll"><table class="api-table">
               <thead>
-                <tr><th>Value</th><th>Description</th></tr>
+                <tr><th>Component</th><th>You Implement</th><th>Purpose</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>IMMEDIATE</code></td><td>Immediately switch to fallback lab.</td></tr>
-                <tr><td><code>GRADUAL</code></td><td>Gradually degrade to simpler processing.</td></tr>
-                <tr><td><code>FULL_RECOVERY</code></td><td>Attempt full recovery before fallback.</td></tr>
-                <tr><td><code>EMERGENCY</code></td><td>Emergency fallback with minimal processing.</td></tr>
+                <tr><td><code>DomainContext</code></td><td>Required</td><td>Your domain input data model</td></tr>
+                <tr><td><code>AIResponse</code></td><td>Required</td><td>Your domain output data model</td></tr>
+                <tr><td><code>PromptTemplate</code></td><td>Required</td><td>System/user prompts and JSON schema for LLM</td></tr>
+                <tr><td><code>Lab</code></td><td>Required</td><td>Data enrichment and pipeline orchestration</td></tr>
+                <tr><td><code>Strategy</code></td><td>Required</td><td>Request validation and lab delegation</td></tr>
+                <tr><td><code>ContextRetriever</code></td><td>Optional</td><td>RAG context from vector store</td></tr>
+                <tr><td><code>DomainResponseProcessor</code></td><td>Optional</td><td>Custom response post-processing</td></tr>
+                <tr><td><code>Controller</code></td><td>Required</td><td>REST endpoints for standard and streaming</td></tr>
               </tbody>
-            </table>
+            </table></div>
           </section>
 
-          <!-- Code Examples -->
+          <!-- Step 1: Define Domain Types -->
           <section class="docs-section">
-            <h2 id="examples">Code Examples</h2>
+            <h2 id="step-1">Step 1: Define Domain Types</h2>
+            <p>Start by defining your input context and output response. These are the data models your AI feature works with.</p>
 
-            <h3>Implementing a Custom Strategy</h3>
+            <h3>DomainContext &mdash; Your Input</h3>
+            <p>Extend <code>DomainContext</code> to carry your domain-specific input data. The only required method is <code>getDomainType()</code>, which returns a string identifier for your domain.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Getter
+public class ProductContext extends DomainContext {
+
+    private final String productId;
+    private final String category;
+    private final List&lt;String&gt; userPreferences;
+
+    public ProductContext(String productId, String category,
+                          List&lt;String&gt; userPreferences) {
+        this.productId = productId;
+        this.category = category;
+        this.userPreferences = userPreferences;
+    }
+
+    @Override
+    public String getDomainType() {
+        return "PRODUCT_RECOMMENDATION";
+    }
+}</code></pre>
+            </div>
+
+            <p><code>DomainContext</code> provides built-in fields: <code>contextId</code> (auto-generated UUID), <code>userId</code>, <code>sessionId</code>, <code>organizationId</code>, and a <code>metadata</code> map. Use <code>addMetadata(key, value)</code> to attach additional key-value pairs.</p>
+
+            <h3>AIResponse &mdash; Your Output</h3>
+            <p>Extend <code>AIResponse</code> to define the structured output the LLM will produce. This class is used by the JSON parser to deserialize the LLM response.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Getter @Setter
+@NoArgsConstructor
+public class ProductRecommendationResponse extends AIResponse {
+
+    private List&lt;Recommendation&gt; recommendations;
+    private double confidence;
+    private String reasoning;
+
+    @Getter @Setter
+    @NoArgsConstructor
+    public static class Recommendation {
+        private String productName;
+        private String reason;
+        private double score;
+    }
+}</code></pre>
+            </div>
+
+            <div class="callout callout-warning">
+              <strong>Important</strong><br>
+              Your <code>AIResponse</code> subclass must have a no-argument constructor and setter methods (or use <code>@NoArgsConstructor</code> and <code>@Setter</code>). The JSON parser uses these to deserialize the LLM output.
+            </div>
+
+            <h3>Lab Request DTO</h3>
+            <p>Define a simple DTO for the Lab's input. This is the object your Strategy converts the <code>AIRequest</code> into.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Getter @AllArgsConstructor
+public class ProductRecommendationRequest {
+    private final String productId;
+    private final String category;
+    private final List&lt;String&gt; userPreferences;
+}</code></pre>
+            </div>
+
+            <h3>Type Identifiers</h3>
+            <p><code>TemplateType</code> identifies which prompt template to use. <code>DiagnosisType</code> identifies which strategy handles the request. Both are simple wrapper classes.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// Used in AIRequest to select the prompt template
+new TemplateType("PRODUCT_RECOMMENDATION")
+
+// Used in AIRequest to route to the correct strategy
+new DiagnosisType("PRODUCT_RECOMMENDATION")</code></pre>
+            </div>
+          </section>
+
+          <!-- Step 2: Create the Prompt Template -->
+          <section class="docs-section">
+            <h2 id="step-2">Step 2: Create the Prompt Template</h2>
+            <p>The prompt template defines what the LLM sees: the system prompt (role, rules, output format) and the user prompt (the actual query with data). You need two templates &mdash; one for standard mode and one for streaming.</p>
+
+            <h3>Standard Prompt Template</h3>
+            <p>Extend <code>AbstractStandardPromptTemplate&lt;T&gt;</code> where <code>T</code> is your response type. The framework uses <code>BeanOutputConverter</code> to automatically generate JSON schema instructions from your response class.</p>
+
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">Java</span>
@@ -311,57 +224,441 @@
                 </button>
               </div>
               <pre><code class="language-java">@Component
-public class ThreatEvaluationStrategy
-        extends AbstractAIStrategy&lt;SecurityContext,
-                                    ThreatResponse&gt; {
+public class ProductPromptTemplate
+        extends AbstractStandardPromptTemplate&lt;ProductRecommendationResponse&gt; {
 
-    public ThreatEvaluationStrategy(AILabFactory labFactory) {
+    public ProductPromptTemplate() {
+        super(ProductRecommendationResponse.class);
+    }
+
+    @Override
+    public TemplateType getSupportedType() {
+        return new TemplateType("PRODUCT_RECOMMENDATION");
+    }
+
+    @Override
+    protected String generateDomainSystemPrompt(
+            AIRequest&lt;? extends DomainContext&gt; request,
+            String systemMetadata) {
+        return """
+            You are a product recommendation AI assistant.
+            Analyze the user's preferences and product category
+            to generate personalized recommendations.
+
+            Rules:
+            - Provide 3-5 recommendations ranked by relevance
+            - Each recommendation must include a reason and score (0.0-1.0)
+            - Set overall confidence based on preference match quality
+            - Be specific about why each product fits the user's needs
+            """;
+    }
+
+    @Override
+    public String generateUserPrompt(
+            AIRequest&lt;? extends DomainContext&gt; request,
+            String contextInfo) {
+        ProductContext ctx = (ProductContext) request.getContext();
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("[Query]\n");
+        prompt.append("Product ID: ").append(ctx.getProductId()).append("\n");
+        prompt.append("Category: ").append(ctx.getCategory()).append("\n");
+        prompt.append("User Preferences: ")
+              .append(String.join(", ", ctx.getUserPreferences()))
+              .append("\n");
+
+        if (contextInfo != null &amp;&amp; !contextInfo.isEmpty()) {
+            prompt.append("\n[Context]\n").append(contextInfo);
+        }
+        return prompt.toString();
+    }
+}</code></pre>
+            </div>
+
+            <h3>Streaming Prompt Template</h3>
+            <p>For streaming mode, extend <code>AbstractStreamingPromptTemplate</code>. The key difference is <code>getJsonSchemaExample()</code> &mdash; you provide a concrete JSON example that the LLM uses as a template for its structured output, wrapped in streaming protocol markers.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Component
+public class ProductStreamingPromptTemplate
+        extends AbstractStreamingPromptTemplate {
+
+    @Override
+    public TemplateType getSupportedType() {
+        return new TemplateType("PRODUCT_RECOMMENDATION_STREAMING");
+    }
+
+    @Override
+    protected String generateDomainSystemPrompt(
+            AIRequest&lt;? extends DomainContext&gt; request,
+            String systemMetadata) {
+        return """
+            You are a product recommendation AI assistant.
+            First, provide a natural language analysis of the user's
+            preferences, then generate structured recommendations.
+            """;
+    }
+
+    @Override
+    protected String getJsonSchemaExample() {
+        return """
+            {
+              "recommendations": [
+                {
+                  "productName": "Example Product",
+                  "reason": "Matches preference for...",
+                  "score": 0.95
+                }
+              ],
+              "confidence": 0.88,
+              "reasoning": "Based on the user's preferences..."
+            }
+            """;
+    }
+
+    @Override
+    public String generateUserPrompt(
+            AIRequest&lt;? extends DomainContext&gt; request,
+            String contextInfo) {
+        ProductContext ctx = (ProductContext) request.getContext();
+        return String.format(
+            "Recommend products for category '%s' based on " +
+            "preferences: %s",
+            ctx.getCategory(),
+            String.join(", ", ctx.getUserPreferences()));
+    }
+}</code></pre>
+            </div>
+
+            <div class="callout callout-info">
+              <strong>How Streaming Protocol Works</strong><br>
+              In streaming mode, the LLM first outputs natural language text (prefixed with <code>###STREAMING###</code>), then outputs structured JSON between <code>===JSON_START===</code> and <code>===JSON_END===</code> markers. The framework handles all marker detection and JSON extraction automatically. See <a href="../../../docs/reference/core/streaming.html">Streaming</a> for details.
+            </div>
+          </section>
+
+          <!-- Step 3: Implement the Lab -->
+          <section class="docs-section">
+            <h2 id="step-3">Step 3: Implement the Lab</h2>
+            <p>The Lab is where domain-specific data collection and enrichment happens before the request reaches the Pipeline. Extend <code>AbstractAILab&lt;Req, Res&gt;</code> and override the processing methods.</p>
+
+            <h3>Lab Execution Pattern</h3>
+            <p>The Lab follows a template method pattern with three execution modes:</p>
+            <ul>
+              <li><code>doProcess(request)</code> &mdash; Synchronous execution, returns the response directly</li>
+              <li><code>doProcessAsync(request)</code> &mdash; Asynchronous execution, returns <code>Mono&lt;Res&gt;</code></li>
+              <li><code>doProcessStream(request)</code> &mdash; Streaming execution, returns <code>Flux&lt;String&gt;</code></li>
+            </ul>
+
+            <p>The typical pattern: build an <code>AIRequest</code>, configure the Pipeline, and delegate.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Component
+public class ProductRecommendationLab
+        extends AbstractAILab&lt;ProductRecommendationRequest,
+                               ProductRecommendationResponse&gt; {
+
+    private final PipelineOrchestrator orchestrator;
+
+    public ProductRecommendationLab(PipelineOrchestrator orchestrator) {
+        super("ProductRecommendation");
+        this.orchestrator = orchestrator;
+    }
+
+    @Override
+    protected ProductRecommendationResponse doProcess(
+            ProductRecommendationRequest request) throws Exception {
+        return doProcessAsync(request).block();
+    }
+
+    @Override
+    protected Mono&lt;ProductRecommendationResponse&gt; doProcessAsync(
+            ProductRecommendationRequest request) {
+        AIRequest&lt;ProductContext&gt; aiRequest =
+            buildAIRequest(request, "PRODUCT_RECOMMENDATION");
+
+        PipelineConfiguration config = PipelineConfiguration.builder()
+            .addStep(PipelineConfiguration.PipelineStep.CONTEXT_RETRIEVAL)
+            .addStep(PipelineConfiguration.PipelineStep.PREPROCESSING)
+            .addStep(PipelineConfiguration.PipelineStep.PROMPT_GENERATION)
+            .addStep(PipelineConfiguration.PipelineStep.LLM_EXECUTION)
+            .addStep(PipelineConfiguration.PipelineStep.RESPONSE_PARSING)
+            .addStep(PipelineConfiguration.PipelineStep.POSTPROCESSING)
+            .timeoutSeconds(120)
+            .build();
+
+        return orchestrator.execute(
+            aiRequest, config, ProductRecommendationResponse.class);
+    }
+
+    @Override
+    protected Flux&lt;String&gt; doProcessStream(
+            ProductRecommendationRequest request) {
+        AIRequest&lt;ProductContext&gt; aiRequest =
+            buildAIRequest(request,
+                           "PRODUCT_RECOMMENDATION_STREAMING");
+
+        PipelineConfiguration config = PipelineConfiguration.builder()
+            .addStep(PipelineConfiguration.PipelineStep.CONTEXT_RETRIEVAL)
+            .addStep(PipelineConfiguration.PipelineStep.PREPROCESSING)
+            .addStep(PipelineConfiguration.PipelineStep.PROMPT_GENERATION)
+            .addStep(PipelineConfiguration.PipelineStep.LLM_EXECUTION)
+            .enableStreaming(true)
+            .timeoutSeconds(120)
+            .build();
+
+        return orchestrator.executeStream(aiRequest, config);
+    }
+
+    private AIRequest&lt;ProductContext&gt; buildAIRequest(
+            ProductRecommendationRequest request,
+            String templateName) {
+        ProductContext context = new ProductContext(
+            request.getProductId(),
+            request.getCategory(),
+            request.getUserPreferences());
+
+        return new AIRequest&lt;&gt;(
+            context,
+            new TemplateType(templateName),
+            new DiagnosisType("PRODUCT_RECOMMENDATION"));
+    }
+}</code></pre>
+            </div>
+
+            <h3>Data Enrichment Pattern</h3>
+            <p>For more complex features, you can enrich the request with additional data before sending it to the Pipeline. This pattern collects domain data (from databases, external APIs, etc.) and adds it as parameters to the <code>AIRequest</code>.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// Inside your Lab, before calling orchestrator:
+private AIRequest&lt;ProductContext&gt; enrichRequest(
+        AIRequest&lt;ProductContext&gt; request) {
+    // Collect domain data from your services
+    String productData = productService
+        .getProductDetails(request.getContext().getProductId());
+    String userHistory = userService
+        .getPurchaseHistory(request.getContext().getUserId());
+
+    // Add as parameters - these become available in the prompt
+    request.withParameter("productData", productData);
+    request.withParameter("userHistory", userHistory);
+    request.withParameter("systemMetadata",
+        "Product catalog size: " + productService.getCatalogSize());
+
+    return request;
+}</code></pre>
+            </div>
+
+            <div class="callout callout-info">
+              <strong>Standard vs Streaming Pipeline Config</strong><br>
+              For standard mode, include all 6 steps (CONTEXT_RETRIEVAL through POSTPROCESSING). For streaming mode, use only the first 4 steps (through LLM_EXECUTION) and set <code>enableStreaming(true)</code>. The streaming executor handles response delivery directly as a <code>Flux&lt;String&gt;</code>.
+            </div>
+          </section>
+
+          <!-- Step 4: Implement the Strategy -->
+          <section class="docs-section">
+            <h2 id="step-4">Step 4: Implement the Strategy</h2>
+            <p>The Strategy routes AI requests to the correct Lab based on <code>DiagnosisType</code>. It validates the input, resolves the Lab, converts the request format, and delegates execution.</p>
+
+            <p>Extend <code>AbstractAIStrategy&lt;T, R&gt;</code> and implement the four abstract methods:</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Component
+public class ProductRecommendationStrategy
+        extends AbstractAIStrategy&lt;ProductContext,
+                                    ProductRecommendationResponse&gt; {
+
+    public ProductRecommendationStrategy(AILabFactory labFactory) {
         super(labFactory);
     }
 
     @Override
     public DiagnosisType getSupportedType() {
-        return DiagnosisType.THREAT_EVALUATION;
+        return new DiagnosisType("PRODUCT_RECOMMENDATION");
     }
 
     @Override
     public int getPriority() {
-        return 10;
+        return 100;
     }
 
     @Override
     protected Class&lt;?&gt; getLabType() {
-        return ThreatAnalysisLab.class;
+        return ProductRecommendationLab.class;
     }
 
     @Override
     protected void validateRequest(
-            AIRequest&lt;SecurityContext&gt; request) {
-        if (request.getDomainContext() == null) {
+            AIRequest&lt;ProductContext&gt; request)
+            throws DiagnosisException {
+        if (request.getContext() == null) {
             throw new DiagnosisException(
-                    getSupportedType().name(),
-                    "INVALID_REQUEST",
-                    "SecurityContext is required");
+                getSupportedType().name(),
+                "INVALID_REQUEST",
+                "ProductContext is required");
+        }
+        if (request.getContext().getCategory() == null) {
+            throw new DiagnosisException(
+                getSupportedType().name(),
+                "INVALID_REQUEST",
+                "Product category is required");
         }
     }
 
     @Override
     protected Object convertLabRequest(
-            AIRequest&lt;SecurityContext&gt; request) {
-        return ThreatRequest.from(request.getDomainContext());
+            AIRequest&lt;ProductContext&gt; request)
+            throws DiagnosisException {
+        ProductContext ctx = request.getContext();
+        return new ProductRecommendationRequest(
+            ctx.getProductId(),
+            ctx.getCategory(),
+            ctx.getUserPreferences());
     }
 
     @Override
-    protected ThreatResponse processLabExecution(
+    protected ProductRecommendationResponse processLabExecution(
             Object lab, Object labRequest,
-            AIRequest&lt;SecurityContext&gt; request) throws Exception {
-        ThreatAnalysisLab threatLab = (ThreatAnalysisLab) lab;
-        return threatLab.process((ThreatRequest) labRequest);
+            AIRequest&lt;ProductContext&gt; request) throws Exception {
+        ProductRecommendationLab productLab =
+            (ProductRecommendationLab) lab;
+        return productLab.process(
+            (ProductRecommendationRequest) labRequest);
+    }
+
+    @Override
+    protected Mono&lt;ProductRecommendationResponse&gt;
+            processLabExecutionAsync(
+                Object lab, Object labRequest,
+                AIRequest&lt;ProductContext&gt; request) {
+        ProductRecommendationLab productLab =
+            (ProductRecommendationLab) lab;
+        return productLab.processAsync(
+            (ProductRecommendationRequest) labRequest);
+    }
+
+    @Override
+    protected Flux&lt;String&gt; processLabExecutionStream(
+            Object lab, Object labRequest,
+            AIRequest&lt;ProductContext&gt; request) {
+        ProductRecommendationLab productLab =
+            (ProductRecommendationLab) lab;
+        return productLab.processStream(
+            (ProductRecommendationRequest) labRequest);
+    }
+
+    @Override
+    public boolean supportsStreaming() {
+        return true;
     }
 }</code></pre>
             </div>
 
-            <h3>Using AICoreOperations</h3>
+            <h3>Template Method Execution Order</h3>
+            <p><code>AbstractAIStrategy</code> uses a template method pattern. When <code>execute()</code>, <code>executeAsync()</code>, or <code>executeStream()</code> is called, the framework runs these steps in order:</p>
+            <ol>
+              <li><code>validateRequest(request)</code> &mdash; Validate the incoming <code>AIRequest</code></li>
+              <li><code>getRequiredLab()</code> &mdash; Resolve the Lab via <code>AILabFactory</code> using <code>getLabType()</code></li>
+              <li><code>convertLabRequest(request)</code> &mdash; Convert the <code>AIRequest</code> to the Lab's request format</li>
+              <li><code>processLabExecution(lab, labRequest, request)</code> &mdash; Execute the Lab and return the response</li>
+            </ol>
+          </section>
+
+          <!-- Step 5: Add RAG Context (Optional) -->
+          <section class="docs-section">
+            <h2 id="step-5">Step 5: Add RAG Context (Optional)</h2>
+            <p>If your feature needs to augment LLM prompts with relevant context from a vector store, extend the <code>ContextRetriever</code> class. The Pipeline's CONTEXT_RETRIEVAL step calls registered retrievers automatically.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Component
+public class ProductContextRetriever extends ContextRetriever {
+
+    public ProductContextRetriever(
+            VectorStore vectorStore,
+            ContexaRagProperties ragProperties) {
+        super(vectorStore, ragProperties);
+    }
+
+    @Override
+    public ContextRetrievalResult retrieveContext(
+            AIRequest&lt;? extends DomainContext&gt; request) {
+        if (!(request.getContext() instanceof ProductContext ctx)) {
+            return new ContextRetrievalResult("", List.of(), Map.of());
+        }
+
+        String query = ctx.getCategory() + " " +
+            String.join(" ", ctx.getUserPreferences());
+
+        List&lt;Document&gt; docs = vectorStore
+            .similaritySearch(query);
+
+        String contextInfo = docs.stream()
+            .map(Document::getText)
+            .collect(Collectors.joining("\n\n"));
+
+        return new ContextRetrievalResult(
+            contextInfo,
+            docs,
+            Map.of("retrieverType", "product",
+                    "timestamp", Instant.now().toString()));
+    }
+}</code></pre>
+            </div>
+
+            <p>The retrieved <code>contextInfo</code> is automatically passed as the <code>contextInfo</code> parameter to your prompt template's <code>generateUserPrompt()</code> method during the PROMPT_GENERATION step.</p>
+
+            <div class="callout callout-info">
+              <strong>Vector Store Setup</strong><br>
+              To use RAG, you need a vector store configured. Contexa supports pgvector out of the box. See <a href="../../../docs/install/configuration/ai.html">AI Configuration</a> for RAG properties including <code>contexa.ai.rag.top-k</code> and <code>contexa.ai.rag.similarity-threshold</code>.
+            </div>
+          </section>
+
+          <!-- Step 6: Wire It Together -->
+          <section class="docs-section">
+            <h2 id="step-6">Step 6: Wire It Together</h2>
+            <p>Create a REST controller that builds <code>AIRequest</code> objects and delegates to the streaming service. This is the entry point for your AI feature.</p>
+
+            <h3>Two Execution Paths</h3>
+            <p>You can invoke your AI feature through two paths:</p>
+            <ul>
+              <li><strong>Strategy/Lab Path</strong> &mdash; Uses <code>AINativeProcessor</code> (or <code>StandardStreamingService</code>) which routes through <code>AIStrategyRegistry</code> to your Strategy, then Lab, then Pipeline. Provides distributed locking and audit logging.</li>
+              <li><strong>Direct Lab Path</strong> &mdash; Injects your Lab directly and calls <code>processAsync()</code> or <code>processStream()</code>. Simpler but bypasses strategy routing and audit.</li>
+            </ul>
+
+            <h3>Controller with Strategy/Lab Path (Recommended)</h3>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">Java</span>
@@ -371,25 +668,412 @@ public class ThreatEvaluationStrategy
                 </button>
               </div>
               <pre><code class="language-java">@RestController
-public class SecurityController {
+@RequestMapping("/api/recommend")
+public class ProductRecommendationController {
 
-    private final AICoreOperations&lt;SecurityContext&gt; aiProcessor;
+    private final StandardStreamingService streamingService;
+    private final AINativeProcessor&lt;ProductContext&gt; aiProcessor;
 
-    @PostMapping("/api/threat/evaluate")
-    public Mono&lt;ThreatResponse&gt; evaluate(
-            @RequestBody ThreatEvalRequest body) {
+    public ProductRecommendationController(
+            StandardStreamingService streamingService,
+            AINativeProcessor&lt;ProductContext&gt; aiProcessor) {
+        this.streamingService = streamingService;
+        this.aiProcessor = aiProcessor;
+    }
 
-        AIRequest&lt;SecurityContext&gt; request = AIRequest.builder()
-                .requestId(UUID.randomUUID().toString())
-                .domainContext(body.toSecurityContext())
-                .diagnosisType(DiagnosisType.THREAT_EVALUATION)
-                .build();
+    @PostMapping
+    public Mono&lt;ResponseEntity&lt;ProductRecommendationResponse&gt;&gt;
+            recommend(@RequestBody RecommendRequest body) {
+        AIRequest&lt;ProductContext&gt; request = buildRequest(body,
+            "PRODUCT_RECOMMENDATION");
+        return streamingService.process(
+                request, aiProcessor,
+                ProductRecommendationResponse.class)
+            .map(ResponseEntity::ok);
+    }
 
-        return aiProcessor.process(
-                request, ThreatResponse.class);
+    @PostMapping(value = "/stream",
+        produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux&lt;ServerSentEvent&lt;String&gt;&gt; recommendStream(
+            @RequestBody RecommendRequest body) {
+        AIRequest&lt;ProductContext&gt; request = buildRequest(body,
+            "PRODUCT_RECOMMENDATION_STREAMING");
+        return streamingService.stream(request, aiProcessor);
+    }
+
+    private AIRequest&lt;ProductContext&gt; buildRequest(
+            RecommendRequest body, String templateName) {
+        ProductContext context = new ProductContext(
+            body.getProductId(),
+            body.getCategory(),
+            body.getPreferences());
+        return new AIRequest&lt;&gt;(
+            context,
+            new TemplateType(templateName),
+            new DiagnosisType("PRODUCT_RECOMMENDATION"));
     }
 }</code></pre>
             </div>
+
+            <h3>Application Setup</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@SpringBootApplication
+@EnableAISecurity  // from io.contexa.contexacommon.annotation
+public class MyAiApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(MyAiApplication.class, args);
+    }
+}</code></pre>
+            </div>
+
+            <h3>Minimal Configuration</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">spring:
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        model: qwen2.5:7b
+
+contexa:
+  ai:
+    tiered-strategy:
+      tiers:
+        1:
+          model-name: qwen2.5:7b
+          temperature: 0.3
+        2:
+          model-name: qwen2.5:7b
+          temperature: 0.7
+    pipeline:
+      default-timeout-seconds: 300
+    streaming:
+      enabled: true</code></pre>
+            </div>
+
+            <p>See <a href="../../../docs/install/configuration/ai.html">AI Configuration</a> for the complete property reference including RAG, advisor, and model tier settings.</p>
+          </section>
+
+          <!-- Configuration -->
+          <section class="docs-section">
+            <h2 id="configuration">Configuration</h2>
+            <p>Key properties that affect your custom AI feature:</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Property</th><th>Description</th><th>Default</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>contexa.ai.tiered-strategy.tiers.{n}.model-name</code></td><td>Model assigned to tier N</td><td>&mdash;</td></tr>
+                <tr><td><code>contexa.ai.tiered-strategy.tiers.{n}.temperature</code></td><td>Sampling temperature for tier N</td><td>0.7</td></tr>
+                <tr><td><code>contexa.ai.pipeline.default-timeout-seconds</code></td><td>Pipeline execution timeout</td><td>300</td></tr>
+                <tr><td><code>contexa.ai.streaming.enabled</code></td><td>Enable/disable streaming support</td><td>true</td></tr>
+                <tr><td><code>contexa.ai.rag.top-k</code></td><td>Number of similar documents to retrieve</td><td>5</td></tr>
+              </tbody>
+            </table></div>
+
+            <div class="callout callout-info">
+              <strong>Full Configuration Reference</strong><br>
+              For the complete list of AI properties, see <a href="../../../docs/install/configuration/ai.html">AI Configuration</a>.
+            </div>
+          </section>
+
+          <!-- API Reference (collapsible) -->
+          <section class="docs-section">
+            <h2 id="api-reference">API Reference</h2>
+
+            <details>
+              <summary><strong>AIStrategy&lt;T, R&gt; Interface</strong></summary>
+              <div class="api-signature">
+                <code>public interface AIStrategy&lt;T extends DomainContext, R extends AIResponse&gt;</code>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getSupportedType()</span>
+                  <span class="api-method-return">DiagnosisType</span>
+                </div>
+                <div class="api-method-desc">Returns the <code>DiagnosisType</code> this strategy handles.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getPriority()</span>
+                  <span class="api-method-return">int</span>
+                </div>
+                <div class="api-method-desc">Priority for same-type strategies. Lowest wins.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">execute(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">R</span>
+                </div>
+                <div class="api-method-desc">Synchronous execution.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeAsync(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Mono&lt;R&gt;</span>
+                </div>
+                <div class="api-method-desc">Asynchronous execution.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeStream(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">Streaming execution.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">supportsStreaming()</span>
+                  <span class="api-method-return">boolean</span>
+                </div>
+                <div class="api-method-desc">Whether this strategy supports streaming. Default: <code>false</code>.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>AbstractAIStrategy&lt;T, R&gt; Abstract Methods</strong></summary>
+              <div class="api-signature">
+                <code>public abstract class AbstractAIStrategy&lt;T extends DomainContext, R extends AIResponse&gt; implements AIStrategy&lt;T, R&gt;</code>
+              </div>
+              <p>Constructor: <code>protected AbstractAIStrategy(AILabFactory labFactory)</code></p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getLabType()</span>
+                  <span class="api-method-return">Class&lt;?&gt;</span>
+                </div>
+                <div class="api-method-desc">Returns the Lab class this strategy delegates to.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">validateRequest(AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">void</span>
+                </div>
+                <div class="api-method-desc">Validates the request. Throw <code>DiagnosisException</code> for invalid input.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">convertLabRequest(AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">Object</span>
+                </div>
+                <div class="api-method-desc">Converts <code>AIRequest</code> to the Lab's request type.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">processLabExecution(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">R</span>
+                </div>
+                <div class="api-method-desc">Synchronous lab execution.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">processLabExecutionAsync(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">Mono&lt;R&gt;</span>
+                </div>
+                <div class="api-method-desc">Asynchronous lab execution.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">processLabExecutionStream(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">Streaming lab execution. Override to enable streaming.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>AbstractAILab&lt;Req, Res&gt;</strong></summary>
+              <div class="api-signature">
+                <code>public abstract class AbstractAILab&lt;Req, Res&gt; implements AILab&lt;Req, Res&gt;</code>
+              </div>
+              <p>Constructor: <code>protected AbstractAILab(String labName)</code></p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">doProcess(Req request)</span>
+                  <span class="api-method-return">Res</span>
+                </div>
+                <div class="api-method-desc">Override for synchronous processing logic.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">doProcessAsync(Req request)</span>
+                  <span class="api-method-return">Mono&lt;Res&gt;</span>
+                </div>
+                <div class="api-method-desc">Override for asynchronous processing. Default wraps <code>doProcess()</code> in Mono.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">doProcessStream(Req request)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">Override for streaming processing.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">validateRequest(Req request)</span>
+                  <span class="api-method-return">void</span>
+                </div>
+                <div class="api-method-desc">Called before processing. Override to add lab-level validation.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">preProcess(Req request)</span>
+                  <span class="api-method-return">void</span>
+                </div>
+                <div class="api-method-desc">Called before <code>doProcess()</code>. Override for pre-processing hooks.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">postProcess(Req request, Res result)</span>
+                  <span class="api-method-return">void</span>
+                </div>
+                <div class="api-method-desc">Called after <code>doProcess()</code>. Override for post-processing hooks.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>AIRequest&lt;T&gt;</strong></summary>
+              <div class="api-signature">
+                <code>public class AIRequest&lt;T extends DomainContext&gt;</code>
+              </div>
+              <p>Constructor: <code>public AIRequest(T context, TemplateType templateType, DiagnosisType diagnosisType)</code></p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">withParameter(String key, Object value)</span>
+                  <span class="api-method-return">AIRequest&lt;T&gt;</span>
+                </div>
+                <div class="api-method-desc">Adds a parameter to the request. Returns <code>this</code> for chaining.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getParameter(String key, Class&lt;P&gt; type)</span>
+                  <span class="api-method-return">P</span>
+                </div>
+                <div class="api-method-desc">Retrieves a typed parameter by key.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getContext()</span>
+                  <span class="api-method-return">T</span>
+                </div>
+                <div class="api-method-desc">Returns the domain context.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getPromptTemplate()</span>
+                  <span class="api-method-return">TemplateType</span>
+                </div>
+                <div class="api-method-desc">Returns the template type for prompt selection.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">setNaturalLanguageQuery(String query)</span>
+                  <span class="api-method-return">void</span>
+                </div>
+                <div class="api-method-desc">Sets a natural language query string. Used by <code>ContextRetriever</code> for similarity search.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>AIStrategyRegistry</strong></summary>
+              <div class="api-signature">
+                <code>public class AIStrategyRegistry</code>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getStrategy(DiagnosisType diagnosisType)</span>
+                  <span class="api-method-return">AIStrategy&lt;T, R&gt;</span>
+                </div>
+                <div class="api-method-desc">Returns the strategy for the given type. Throws <code>DiagnosisException</code> if not found.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeStrategyAsync(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Mono&lt;R&gt;</span>
+                </div>
+                <div class="api-method-desc">Looks up and executes the strategy asynchronously.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeStrategyStream(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">Looks up and executes the strategy in streaming mode.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>AINativeProcessor&lt;T&gt;</strong></summary>
+              <div class="api-signature">
+                <code>public final class AINativeProcessor&lt;T extends DomainContext&gt; implements AICoreOperations&lt;T&gt;</code>
+              </div>
+              <p>The primary entry point for AI processing. Wraps strategy execution with distributed locking and audit logging.</p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">process(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Mono&lt;R&gt;</span>
+                </div>
+                <div class="api-method-desc">Processes the request through the strategy layer with distributed lock and audit trail.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">processStream(AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">Streaming processing through the strategy layer.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>PromptTemplate Interfaces</strong></summary>
+              <h4>AbstractStandardPromptTemplate&lt;T&gt;</h4>
+              <p>Constructor: <code>protected AbstractStandardPromptTemplate(Class&lt;T&gt; responseType)</code></p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getSupportedType()</span>
+                  <span class="api-method-return">TemplateType</span>
+                </div>
+                <div class="api-method-desc">Returns the template type this template handles.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">generateDomainSystemPrompt(AIRequest&lt;?&gt; request, String systemMetadata)</span>
+                  <span class="api-method-return">String</span>
+                </div>
+                <div class="api-method-desc">Returns the domain-specific system prompt. The framework appends JSON format instructions automatically.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">generateUserPrompt(AIRequest&lt;?&gt; request, String contextInfo)</span>
+                  <span class="api-method-return">String</span>
+                </div>
+                <div class="api-method-desc">Returns the user prompt. <code>contextInfo</code> contains RAG-retrieved context if available.</div>
+              </div>
+
+              <h4>AbstractStreamingPromptTemplate</h4>
+              <p>Same methods as above, plus:</p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getJsonSchemaExample()</span>
+                  <span class="api-method-return">String</span>
+                </div>
+                <div class="api-method-desc">Returns a JSON example used as a template for the LLM's structured output in streaming mode.</div>
+              </div>
+            </details>
           </section>
 
           <!-- Related -->
@@ -397,27 +1081,23 @@ public class SecurityController {
             <h2 id="related">Related</h2>
             <div class="related-links">
               <div class="related-links-grid">
-                <a href="../../../docs/reference/core/ai-lab.html" class="related-link-card">
-                  <h3>AI Lab</h3>
-                  <p>Labs that strategies delegate to for actual AI processing.</p>
+                <a href="../../../docs/reference/core/pipeline.html" class="related-link-card">
+                  <h3>Pipeline &amp; RAG</h3>
+                  <p>The 6-step pipeline that Labs delegate to for LLM execution, context retrieval, and response parsing.</p>
                 </a>
                 <a href="../../../docs/reference/core/streaming.html" class="related-link-card">
                   <h3>Streaming</h3>
-                  <p>StandardStreamingService uses AICoreOperations for the Strategy/Lab streaming path.</p>
+                  <p>SSE streaming protocol, client-side integration, and the StandardStreamingService that wraps your AI endpoints.</p>
                 </a>
-                <a href="../../../docs/reference/core/pipeline.html" class="related-link-card">
-                  <h3>AI Pipeline</h3>
-                  <p>Alternative execution path that bypasses the strategy layer.</p>
+                <a href="../../../docs/reference/core/llm-orchestrator.html" class="related-link-card">
+                  <h3>LLM &amp; Models</h3>
+                  <p>The UnifiedLLMOrchestrator used by the pipeline for LLM calls, model tier selection, and advisor integration.</p>
+                </a>
+                <a href="../../../docs/install/configuration/ai.html" class="related-link-card">
+                  <h3>AI Configuration</h3>
+                  <p>Complete reference for AI properties: model tiers, pipeline settings, RAG, streaming, and advisors.</p>
                 </a>
               </div>
-            </div>
-          </section>
-
-          <!-- Configuration Reference -->
-          <section>
-            <div class="callout callout-info">
-              <strong>Configuration Reference</strong><br>
-              For AI strategy <code>application.yml</code> properties (tier definitions, model assignments, fallback chains, timeout/retry), see <a href="../../../docs/install/configuration/ai.html">AI Configuration</a> — covers <code>TieredStrategyProperties</code> with 30+ configurable fields.
             </div>
           </section>
 
@@ -426,8 +1106,8 @@ public class SecurityController {
               <span class="docs-nav-label">Previous</span>
               <span class="docs-nav-title">Advisor System</span>
             </a>
-            <a href="../../../docs/reference/security/zero-trust.html" class="docs-nav-link next">
+            <a href="../../../docs/reference/core/pipeline.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Zero Trust</span>
+              <span class="docs-nav-title">Pipeline &amp; RAG</span>
             </a>
           </div>

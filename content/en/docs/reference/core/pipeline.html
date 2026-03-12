@@ -3,23 +3,22 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">AI Pipeline</span>
+            <span class="breadcrumb-current">Pipeline &amp; RAG</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
             </div>
-            <h1>AI Pipeline</h1>
-            <p class="lead">The AI Pipeline provides a configurable, multi-step execution flow for AI requests. The <code>PipelineOrchestrator</code> selects the appropriate <code>PipelineExecutor</code> based on the configuration and delegates the request through a series of processing steps from context retrieval to response parsing.</p>
+            <h1>Pipeline &amp; RAG</h1>
+            <p class="lead">The AI Pipeline processes every AI request through a configurable sequence of steps &mdash; from retrieving relevant context via RAG to parsing the structured LLM response. The <code>PipelineOrchestrator</code> selects the appropriate executor and manages the full lifecycle.</p>
           </div>
 
           <!-- Overview -->
           <section class="docs-section">
-            <h2 id="overview">Overview</h2>
-            <p>The pipeline is designed for use cases where you need a full processing flow (RAG context retrieval, prompt generation, LLM execution, response parsing) rather than direct LLM calls. The orchestrator automatically selects between standard and streaming executors.</p>
+            <h2 id="overview">Overview: 6-Step Pipeline</h2>
+            <p>When your Lab calls <code>orchestrator.execute()</code> or <code>orchestrator.executeStream()</code>, the request flows through up to 6 processing steps in order:</p>
 
-            <h3>Pipeline Flow</h3>
             <div class="arch-flow">
               <div class="arch-flow-step">CONTEXT_RETRIEVAL</div>
               <div class="arch-flow-arrow"></div>
@@ -33,233 +32,587 @@
               <div class="arch-flow-arrow"></div>
               <div class="arch-flow-step">POSTPROCESSING</div>
             </div>
+
+            <p>Each step is implemented as a <code>PipelineStep</code> bean. The orchestrator selects a <code>PipelineExecutor</code> (standard or streaming) and runs the configured steps in sequence.</p>
           </section>
 
-          <!-- PipelineOrchestrator -->
+          <!-- Step-by-Step Deep Dive -->
           <section class="docs-section">
-            <h2 id="pipeline-orchestrator">PipelineOrchestrator</h2>
-            <p>The central coordinator that selects and delegates to the appropriate <code>PipelineExecutor</code> based on the given configuration.</p>
+            <h2 id="step-deep-dive">Step-by-Step Deep Dive</h2>
 
-            <div class="api-signature">
-              <code>public class PipelineOrchestrator</code>
-            </div>
+            <h3 id="step-context-retrieval">1. CONTEXT_RETRIEVAL</h3>
+            <p>Retrieves relevant context from a vector store to augment the LLM prompt with domain-specific knowledge.</p>
+            <ul>
+              <li><strong>Component</strong>: <code>ContextRetriever</code> (or your custom subclass)</li>
+              <li><strong>Input</strong>: The <code>AIRequest</code> with domain context and optional natural language query</li>
+              <li><strong>Output</strong>: <code>ContextRetrievalResult</code> containing the retrieved context string, matching documents, and metadata</li>
+              <li><strong>What happens</strong>: The retriever extracts a search query from the request, performs a similarity search against the vector store, and formats the matching documents into a context string. This string is passed to the prompt template as <code>contextInfo</code>.</li>
+            </ul>
+            <p>If no <code>ContextRetriever</code> is registered for the request's context type, this step is skipped and an empty context is used.</p>
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">execute(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc">Executes the pipeline with the default configuration (<code>createPipelineConfig()</code>). Selects an executor, runs the pipeline, and returns the typed response.</div>
-            </div>
+            <h3 id="step-preprocessing">2. PREPROCESSING</h3>
+            <p>Validates and normalizes the request before prompt generation.</p>
+            <ul>
+              <li><strong>What happens</strong>: Adds system metadata (request ID, timestamp, domain type) to the pipeline execution context. Custom preprocessing steps can normalize input data, add computed fields, or perform additional validation.</li>
+              <li><strong>Customizable</strong>: Implement the <code>PipelineStep</code> interface to add your own preprocessing logic (see <a href="#custom-step">Custom Pipeline Steps</a> below).</li>
+            </ul>
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">execute(AIRequest&lt;T&gt; request, PipelineConfiguration config, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc">Executes the pipeline with a custom configuration. Includes automatic fallback response generation on failure.</div>
-            </div>
+            <h3 id="step-prompt-generation">3. PROMPT_GENERATION</h3>
+            <p>Constructs the final prompt from the domain system prompt, user prompt, and retrieved context.</p>
+            <ul>
+              <li><strong>Component</strong>: Your <code>PromptTemplate</code> implementation (matched by <code>TemplateType</code>)</li>
+              <li><strong>What happens</strong>: The framework calls <code>generateSystemPrompt()</code> and <code>generateUserPrompt()</code> on the matching template. For standard templates, JSON format instructions are automatically appended to the system prompt. For streaming templates, the streaming protocol instructions and JSON schema example are injected.</li>
+              <li><strong>Result</strong>: A Spring AI <code>Prompt</code> object with system and user messages, ready for LLM execution.</li>
+            </ul>
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeStream(AIRequest&lt;T&gt; request)</span>
-                <span class="api-method-return">Flux&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">Executes the pipeline in streaming mode with the default streaming configuration.</div>
-            </div>
+            <h3 id="step-llm-execution">4. LLM_EXECUTION</h3>
+            <p>Sends the constructed prompt to the LLM via <code>UnifiedLLMOrchestrator</code>.</p>
+            <ul>
+              <li><strong>Component</strong>: <code>UnifiedLLMOrchestrator</code></li>
+              <li><strong>What happens</strong>: The orchestrator selects the model based on the request's tier or analysis level, applies registered Advisors, and sends the prompt to the LLM. In standard mode, it returns the full text response. In streaming mode, it returns a <code>Flux&lt;String&gt;</code> of chunks.</li>
+              <li><strong>Configuration</strong>: Model tier, temperature, and retry settings are configured via <code>contexa.ai.tiered-strategy</code> properties. See <a href="../../../docs/reference/core/llm-orchestrator.html">LLM &amp; Models</a>.</li>
+            </ul>
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeStream(AIRequest&lt;T&gt; request, PipelineConfiguration config)</span>
-                <span class="api-method-return">Flux&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">Executes the pipeline in streaming mode with a custom configuration. Selects a streaming-capable executor.</div>
-            </div>
+            <h3 id="step-response-parsing">5. RESPONSE_PARSING</h3>
+            <p>Parses the raw LLM text output into your typed response object.</p>
+            <ul>
+              <li><strong>What happens</strong>: The framework extracts JSON from the LLM response (handling markdown code blocks, extra text, etc.), then deserializes it into your <code>AIResponse</code> subclass using <code>BeanOutputConverter</code>. If JSON extraction fails, a fallback parser attempts bracket balancing and repair.</li>
+              <li><strong>Streaming note</strong>: This step is not used in streaming mode. Instead, the <code>JsonStreamingProcessor</code> handles JSON extraction from the stream using protocol markers.</li>
+            </ul>
+
+            <h3 id="step-postprocessing">6. POSTPROCESSING</h3>
+            <p>Final enrichment, validation, and domain-specific processing of the parsed response.</p>
+            <ul>
+              <li><strong>Component</strong>: <code>DomainResponseProcessor</code> (optional, custom)</li>
+              <li><strong>What happens</strong>: If a <code>DomainResponseProcessor</code> is registered that supports the request's template key, its <code>wrapResponse()</code> method is called to transform or enrich the parsed response. Execution metadata (timing, request ID) is also attached.</li>
+              <li><strong>Streaming note</strong>: This step is not used in streaming mode.</li>
+            </ul>
           </section>
 
-          <!-- PipelineConfiguration -->
+          <!-- Standard vs Streaming Pipeline -->
           <section class="docs-section">
-            <h2 id="pipeline-configuration">PipelineConfiguration</h2>
-            <p>Defines the steps, parameters, timeout, and streaming mode for a pipeline execution.</p>
-
-            <div class="api-signature">
-              <code>public class PipelineConfiguration</code>
-            </div>
+            <h2 id="standard-vs-streaming">Standard vs Streaming Pipeline</h2>
+            <p>The pipeline operates in two modes depending on the <code>PipelineConfiguration</code>:</p>
 
             <div class="table-scroll"><table class="api-table">
               <thead>
-                <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
+                <tr><th>Aspect</th><th>Standard Pipeline</th><th>Streaming Pipeline</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>steps</code></td><td><code>List&lt;PipelineStep&gt;</code></td><td>Empty</td><td>Ordered list of pipeline steps to execute.</td></tr>
-                <tr><td><code>parameters</code></td><td><code>Map&lt;String, Object&gt;</code></td><td>Empty</td><td>Arbitrary key-value parameters for step configuration.</td></tr>
-                <tr><td><code>timeoutSeconds</code></td><td><code>int</code></td><td>300</td><td>Maximum execution time in seconds.</td></tr>
-                <tr><td><code>enableStreaming</code></td><td><code>boolean</code></td><td>false</td><td>Whether to use streaming execution mode.</td></tr>
-                <tr><td><code>name</code></td><td><code>String</code></td><td>null</td><td>Optional pipeline name for identification.</td></tr>
-                <tr><td><code>description</code></td><td><code>String</code></td><td>null</td><td>Optional description of the pipeline purpose.</td></tr>
+                <tr><td><strong>Steps</strong></td><td>All 6 steps</td><td>First 4 steps (through LLM_EXECUTION)</td></tr>
+                <tr><td><strong>Executor</strong></td><td><code>UniversalPipelineExecutor</code></td><td><code>StreamingUniversalPipelineExecutor</code></td></tr>
+                <tr><td><strong>Return type</strong></td><td><code>Mono&lt;R&gt;</code> (typed response)</td><td><code>Flux&lt;String&gt;</code> (chunk stream)</td></tr>
+                <tr><td><strong>JSON handling</strong></td><td><code>BeanOutputConverter</code> in RESPONSE_PARSING</td><td><code>JsonStreamingProcessor</code> with protocol markers</td></tr>
+                <tr><td><strong>Config flag</strong></td><td><code>enableStreaming(false)</code> (default)</td><td><code>enableStreaming(true)</code></td></tr>
+                <tr><td><strong>Factory method</strong></td><td><code>PipelineConfiguration.createPipelineConfig()</code></td><td><code>PipelineConfiguration.createStreamPipelineConfig()</code></td></tr>
               </tbody>
             </table></div>
 
-            <h3>PipelineStep Enum</h3>
-            <table class="enum-table">
-              <thead>
-                <tr><th>Step</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>PREPROCESSING</code></td><td>Request validation, normalization, and enrichment.</td></tr>
-                <tr><td><code>CONTEXT_RETRIEVAL</code></td><td>RAG context retrieval from vector stores.</td></tr>
-                <tr><td><code>PROMPT_GENERATION</code></td><td>Constructs the final prompt from request data and retrieved context.</td></tr>
-                <tr><td><code>LLM_EXECUTION</code></td><td>Sends the prompt to the LLM via <code>UnifiedLLMOrchestrator</code>.</td></tr>
-                <tr><td><code>TOOL_EXECUTION</code></td><td>Executes tool calls from the LLM response.</td></tr>
-                <tr><td><code>RESPONSE_PARSING</code></td><td>Parses the raw LLM output into the target response type.</td></tr>
-                <tr><td><code>POSTPROCESSING</code></td><td>Final enrichment, validation, and side-effect execution.</td></tr>
-              </tbody>
-            </table>
-
-            <h3>Factory Methods</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">createPipelineConfig()</span>
-                <span class="api-method-return">PipelineConfiguration</span>
+            <h3>Standard Pipeline Configuration</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
               </div>
-              <div class="api-method-desc">Creates the default pipeline configuration with steps: CONTEXT_RETRIEVAL, PREPROCESSING, PROMPT_GENERATION, LLM_EXECUTION, RESPONSE_PARSING, POSTPROCESSING. Timeout: 300 seconds.</div>
+              <pre><code class="language-java">// All 6 steps, no streaming
+PipelineConfiguration config = PipelineConfiguration.builder()
+    .addStep(PipelineConfiguration.PipelineStep.CONTEXT_RETRIEVAL)
+    .addStep(PipelineConfiguration.PipelineStep.PREPROCESSING)
+    .addStep(PipelineConfiguration.PipelineStep.PROMPT_GENERATION)
+    .addStep(PipelineConfiguration.PipelineStep.LLM_EXECUTION)
+    .addStep(PipelineConfiguration.PipelineStep.RESPONSE_PARSING)
+    .addStep(PipelineConfiguration.PipelineStep.POSTPROCESSING)
+    .timeoutSeconds(300)
+    .build();
+
+Mono&lt;MyResponse&gt; result = orchestrator.execute(
+    aiRequest, config, MyResponse.class);</code></pre>
             </div>
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">createStreamPipelineConfig()</span>
-                <span class="api-method-return">PipelineConfiguration</span>
+            <h3>Streaming Pipeline Configuration</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
               </div>
-              <div class="api-method-desc">Creates a streaming pipeline configuration with steps: CONTEXT_RETRIEVAL, PREPROCESSING, PROMPT_GENERATION, LLM_EXECUTION. Streaming enabled, timeout: 300 seconds.</div>
+              <pre><code class="language-java">// First 4 steps, streaming enabled
+PipelineConfiguration config = PipelineConfiguration.builder()
+    .addStep(PipelineConfiguration.PipelineStep.CONTEXT_RETRIEVAL)
+    .addStep(PipelineConfiguration.PipelineStep.PREPROCESSING)
+    .addStep(PipelineConfiguration.PipelineStep.PROMPT_GENERATION)
+    .addStep(PipelineConfiguration.PipelineStep.LLM_EXECUTION)
+    .enableStreaming(true)
+    .timeoutSeconds(300)
+    .build();
+
+Flux&lt;String&gt; chunks = orchestrator.executeStream(
+    aiRequest, config);</code></pre>
+            </div>
+
+            <p>You can also use the built-in factory methods:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// Equivalent to the manual configurations above
+PipelineConfiguration.createPipelineConfig();       // standard
+PipelineConfiguration.createStreamPipelineConfig();  // streaming</code></pre>
             </div>
           </section>
 
-          <!-- PipelineExecutor -->
+          <!-- RAG Integration Guide -->
           <section class="docs-section">
-            <h2 id="pipeline-executor">PipelineExecutor</h2>
-            <p>The interface that concrete executors implement to process pipeline configurations.</p>
+            <h2 id="rag-integration">RAG Integration Guide</h2>
+            <p>RAG (Retrieval-Augmented Generation) enhances LLM responses by providing relevant context from your data. The CONTEXT_RETRIEVAL step handles this automatically when a <code>ContextRetriever</code> is available.</p>
 
-            <div class="api-signature">
-              <code>public interface PipelineExecutor</code>
-            </div>
+            <h3>How RAG Works in the Pipeline</h3>
+            <ol>
+              <li>The CONTEXT_RETRIEVAL step calls your <code>ContextRetriever.retrieveContext()</code></li>
+              <li>The retriever searches the vector store for documents similar to the request query</li>
+              <li>Matching documents are formatted into a context string</li>
+              <li>The context string is passed to <code>generateUserPrompt(request, contextInfo)</code> in the PROMPT_GENERATION step</li>
+              <li>Your prompt template includes this context in the user prompt sent to the LLM</li>
+            </ol>
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">execute(AIRequest&lt;T&gt; request, PipelineConfiguration config, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
+            <h3>Implementing a ContextRetriever</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
               </div>
-              <div class="api-method-desc">Executes the pipeline steps in order and returns the typed response.</div>
+              <pre><code class="language-java">@Component
+public class MyContextRetriever extends ContextRetriever {
+
+    public MyContextRetriever(
+            VectorStore vectorStore,
+            ContexaRagProperties ragProperties) {
+        super(vectorStore, ragProperties);
+    }
+
+    @Override
+    public ContextRetrievalResult retrieveContext(
+            AIRequest&lt;? extends DomainContext&gt; request) {
+        // Extract search query from your domain context
+        String query = extractQueryFromRequest(request);
+
+        // Search the vector store
+        List&lt;Document&gt; docs = vectorStore
+            .similaritySearch(query);
+
+        // Format results as context string
+        String contextInfo = docs.stream()
+            .map(doc -&gt; doc.getText())
+            .collect(Collectors.joining("\n\n"));
+
+        return new ContextRetrievalResult(
+            contextInfo, docs,
+            Map.of("retrieverType", "custom",
+                    "docCount", docs.size()));
+    }
+}</code></pre>
             </div>
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeStream(AIRequest&lt;T&gt; request, PipelineConfiguration config)</span>
-                <span class="api-method-return">Flux&lt;String&gt;</span>
+            <h3>Storing Documents for RAG</h3>
+            <p>Before retrieval works, you need documents in your vector store. Use Spring AI's <code>VectorStore</code> interface to store documents:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
               </div>
-              <div class="api-method-desc">Executes the pipeline in streaming mode.</div>
+              <pre><code class="language-java">// Store documents with metadata
+Document doc = new Document(
+    "Product A is a lightweight laptop ideal for travel",
+    Map.of("category", "electronics",
+           "productId", "PROD-001"));
+
+vectorStore.add(List.of(doc));</code></pre>
             </div>
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">supportsConfiguration(PipelineConfiguration config)</span>
-                <span class="api-method-return">boolean</span>
+            <div class="callout callout-info">
+              <strong>Vector Store Setup</strong><br>
+              Contexa uses pgvector by default. Configure the connection in <code>application.yml</code>:
+              <pre><code>contexa:
+  ai:
+    rag:
+      top-k: 5
+      similarity-threshold: 0.7</code></pre>
+              See <a href="../../../docs/install/configuration/ai.html">AI Configuration</a> for all RAG properties.
+            </div>
+          </section>
+
+          <!-- Custom Pipeline Steps -->
+          <section class="docs-section">
+            <h2 id="custom-step">Custom Pipeline Steps</h2>
+            <p>You can add custom processing at any stage by implementing the <code>PipelineStep</code> interface. Custom steps are auto-discovered as Spring beans and inserted into the pipeline based on their <code>getConfigStep()</code> and <code>getOrder()</code>.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
               </div>
-              <div class="api-method-desc">Returns whether this executor can handle the given configuration.</div>
+              <pre><code class="language-java">@Component
+public class InputNormalizationStep implements PipelineStep {
+
+    @Override
+    public &lt;T extends DomainContext&gt; Mono&lt;Object&gt; execute(
+            AIRequest&lt;T&gt; request,
+            PipelineExecutionContext context) {
+        // Normalize whitespace, trim input, add metadata
+        String normalized = request.getContext()
+            .getDomainType().trim().toUpperCase();
+        context.addMetadata("normalizedType", normalized);
+        context.addMetadata("processedAt",
+            Instant.now().toString());
+        return Mono.just(request);
+    }
+
+    @Override
+    public PipelineConfiguration.PipelineStep getConfigStep() {
+        // Runs during the PREPROCESSING phase
+        return PipelineConfiguration.PipelineStep.PREPROCESSING;
+    }
+
+    @Override
+    public int getOrder() {
+        // Lower order = runs first within the phase
+        // Default steps run at order 100
+        return 50;
+    }
+}</code></pre>
             </div>
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">supportsStreaming()</span>
-                <span class="api-method-return">boolean</span>
+            <p>Multiple custom steps can target the same pipeline phase. They execute in <code>getOrder()</code> order, with lower values running first.</p>
+          </section>
+
+          <!-- Custom Response Processor -->
+          <section class="docs-section">
+            <h2 id="response-processor">Custom Response Processor</h2>
+            <p>Implement <code>DomainResponseProcessor</code> to transform or enrich the parsed response during the POSTPROCESSING step:</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
               </div>
-              <div class="api-method-desc">Returns whether this executor supports streaming. Used by the orchestrator for executor selection.</div>
-            </div>
+              <pre><code class="language-java">@Component
+public class ProductResponseProcessor
+        implements DomainResponseProcessor {
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getPriority()</span>
-                <span class="api-method-return">int</span>
-              </div>
-              <div class="api-method-desc">Returns the executor priority. Lower values are preferred. Default: 100.</div>
-            </div>
+    @Override
+    public boolean supports(String templateKey) {
+        return "PRODUCT_RECOMMENDATION".equals(templateKey);
+    }
 
-            <h3>Built-in Implementations</h3>
+    @Override
+    public boolean supportsType(Class&lt;?&gt; responseType) {
+        return ProductRecommendationResponse.class
+            .isAssignableFrom(responseType);
+    }
+
+    @Override
+    public Object wrapResponse(
+            Object parsedData,
+            PipelineExecutionContext context) {
+        // Enrich the parsed response with execution metadata
+        if (parsedData instanceof ProductRecommendationResponse resp) {
+            resp.withMetadata("pipelineExecutionTime",
+                context.getElapsedTimeMs());
+            resp.withMetadata("modelUsed",
+                context.getMetadata("modelName"));
+        }
+        return parsedData;
+    }
+}</code></pre>
+            </div>
+          </section>
+
+          <!-- Configuration -->
+          <section class="docs-section">
+            <h2 id="configuration">Configuration</h2>
+            <p>Key pipeline and RAG properties:</p>
+
             <div class="table-scroll"><table class="api-table">
               <thead>
-                <tr><th>Class</th><th>Streaming</th><th>Description</th></tr>
+                <tr><th>Property</th><th>Description</th><th>Default</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>UniversalPipelineExecutor</code></td><td>No</td><td>Standard synchronous/async pipeline executor. Processes all steps sequentially and returns the final response.</td></tr>
-                <tr><td><code>StreamingUniversalPipelineExecutor</code></td><td>Yes</td><td>Streaming-capable executor that delivers LLM output as a reactive <code>Flux&lt;String&gt;</code>.</td></tr>
+                <tr><td><code>contexa.ai.pipeline.default-timeout-seconds</code></td><td>Default pipeline execution timeout</td><td>300</td></tr>
+                <tr><td><code>contexa.ai.streaming.enabled</code></td><td>Enable streaming pipeline support</td><td>true</td></tr>
+                <tr><td><code>contexa.ai.rag.top-k</code></td><td>Number of similar documents to retrieve</td><td>5</td></tr>
+                <tr><td><code>contexa.ai.rag.similarity-threshold</code></td><td>Minimum similarity score for retrieval</td><td>0.7</td></tr>
               </tbody>
             </table></div>
+
+            <div class="callout callout-info">
+              <strong>Full Configuration Reference</strong><br>
+              See <a href="../../../docs/install/configuration/ai.html">AI Configuration</a> for all pipeline, RAG, and streaming properties.
+            </div>
           </section>
 
-          <!-- Code Examples -->
+          <!-- API Reference (collapsible) -->
           <section class="docs-section">
-            <h2 id="examples">Code Examples</h2>
+            <h2 id="api-reference">API Reference</h2>
 
-            <h3>Standard Pipeline Execution</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
+            <details>
+              <summary><strong>PipelineOrchestrator</strong></summary>
+              <div class="api-signature">
+                <code>public class PipelineOrchestrator</code>
               </div>
-              <pre><code class="language-java">AIRequest&lt;SecurityContext&gt; request = AIRequest.builder()
-        .requestId(UUID.randomUUID().toString())
-        .domainContext(securityContext)
-        .diagnosisType(DiagnosisType.THREAT_EVALUATION)
-        .build();
-
-ThreatResponse response = pipelineOrchestrator
-        .execute(request, ThreatResponse.class)
-        .block();</code></pre>
-            </div>
-
-            <h3>Custom Pipeline Configuration</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
+              <p>Constructor: <code>public PipelineOrchestrator(List&lt;PipelineExecutor&gt; executors)</code></p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">execute(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Mono&lt;R&gt;</span>
+                </div>
+                <div class="api-method-desc">Executes the pipeline with the default configuration.</div>
               </div>
-              <pre><code class="language-java">PipelineConfiguration config = PipelineConfiguration.builder()
-        .addStep(PipelineStep.PREPROCESSING)
-        .addStep(PipelineStep.PROMPT_GENERATION)
-        .addStep(PipelineStep.LLM_EXECUTION)
-        .addStep(PipelineStep.TOOL_EXECUTION)
-        .addStep(PipelineStep.RESPONSE_PARSING)
-        .timeoutSeconds(120)
-        .build();
-
-SecurityResponse response = pipelineOrchestrator
-        .execute(request, config, SecurityResponse.class)
-        .block();</code></pre>
-            </div>
-
-            <h3>Streaming Pipeline</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">execute(AIRequest&lt;T&gt; request, PipelineConfiguration config, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Mono&lt;R&gt;</span>
+                </div>
+                <div class="api-method-desc">Executes with a custom configuration. Includes automatic fallback response on failure.</div>
               </div>
-              <pre><code class="language-java">Flux&lt;String&gt; chunks = pipelineOrchestrator
-        .executeStream(request);
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeStream(AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">Streaming execution with default streaming configuration.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeStream(AIRequest&lt;T&gt; request, PipelineConfiguration config)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">Streaming execution with custom configuration.</div>
+              </div>
+            </details>
 
-chunks.subscribe(
-        chunk -&gt; sendSseEvent(chunk),
-        error -&gt; handleError(error),
-        () -&gt; completeStream()
-);</code></pre>
-            </div>
+            <details>
+              <summary><strong>PipelineConfiguration</strong></summary>
+              <div class="api-signature">
+                <code>public class PipelineConfiguration</code>
+              </div>
+              <h4>Fields</h4>
+              <div class="table-scroll"><table class="api-table">
+                <thead>
+                  <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>steps</code></td><td><code>List&lt;PipelineStep&gt;</code></td><td>Empty</td><td>Ordered list of pipeline steps.</td></tr>
+                  <tr><td><code>parameters</code></td><td><code>Map&lt;String, Object&gt;</code></td><td>Empty</td><td>Key-value parameters for step configuration.</td></tr>
+                  <tr><td><code>timeoutSeconds</code></td><td><code>int</code></td><td>300</td><td>Maximum execution time.</td></tr>
+                  <tr><td><code>enableStreaming</code></td><td><code>boolean</code></td><td>false</td><td>Whether to use streaming executor.</td></tr>
+                  <tr><td><code>name</code></td><td><code>String</code></td><td>null</td><td>Optional pipeline name.</td></tr>
+                  <tr><td><code>description</code></td><td><code>String</code></td><td>null</td><td>Optional description.</td></tr>
+                </tbody>
+              </table></div>
+
+              <h4>Builder Methods</h4>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">builder().addStep(PipelineStep step)</span>
+                  <span class="api-method-return">Builder</span>
+                </div>
+                <div class="api-method-desc">Adds a step to the configuration.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">builder().addParameter(String key, Object value)</span>
+                  <span class="api-method-return">Builder</span>
+                </div>
+                <div class="api-method-desc">Adds a parameter.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">builder().timeoutSeconds(int timeout)</span>
+                  <span class="api-method-return">Builder</span>
+                </div>
+                <div class="api-method-desc">Sets the timeout.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">builder().enableStreaming(boolean enable)</span>
+                  <span class="api-method-return">Builder</span>
+                </div>
+                <div class="api-method-desc">Enables or disables streaming mode.</div>
+              </div>
+
+              <h4>PipelineStep Enum</h4>
+              <table class="enum-table">
+                <thead>
+                  <tr><th>Value</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>CONTEXT_RETRIEVAL</code></td><td>RAG context retrieval from vector stores.</td></tr>
+                  <tr><td><code>PREPROCESSING</code></td><td>Request validation, normalization, and enrichment.</td></tr>
+                  <tr><td><code>PROMPT_GENERATION</code></td><td>Constructs the final prompt from templates and context.</td></tr>
+                  <tr><td><code>LLM_EXECUTION</code></td><td>Sends the prompt to the LLM via <code>UnifiedLLMOrchestrator</code>.</td></tr>
+                  <tr><td><code>RESPONSE_PARSING</code></td><td>Parses the LLM output into the typed response.</td></tr>
+                  <tr><td><code>POSTPROCESSING</code></td><td>Final enrichment, validation, and domain processing.</td></tr>
+                </tbody>
+              </table>
+
+              <h4>Factory Methods</h4>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">createPipelineConfig()</span>
+                  <span class="api-method-return">PipelineConfiguration</span>
+                </div>
+                <div class="api-method-desc">Default config with all 6 steps. Timeout: 300s.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">createStreamPipelineConfig()</span>
+                  <span class="api-method-return">PipelineConfiguration</span>
+                </div>
+                <div class="api-method-desc">Streaming config with first 4 steps. Streaming enabled, timeout: 300s.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>PipelineStep Interface (custom steps)</strong></summary>
+              <div class="api-signature">
+                <code>public interface PipelineStep</code>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">execute(AIRequest&lt;T&gt; request, PipelineExecutionContext context)</span>
+                  <span class="api-method-return">Mono&lt;Object&gt;</span>
+                </div>
+                <div class="api-method-desc">Executes this step's logic.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getConfigStep()</span>
+                  <span class="api-method-return">PipelineConfiguration.PipelineStep</span>
+                </div>
+                <div class="api-method-desc">Returns which pipeline phase this step belongs to.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getOrder()</span>
+                  <span class="api-method-return">int</span>
+                </div>
+                <div class="api-method-desc">Execution order within the phase. Default: 100. Lower values run first.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">canExecute(AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">boolean</span>
+                </div>
+                <div class="api-method-desc">Whether this step should execute for the given request. Default: <code>true</code>.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>PipelineExecutor Interface</strong></summary>
+              <div class="api-signature">
+                <code>public interface PipelineExecutor</code>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">execute(AIRequest&lt;T&gt; request, PipelineConfiguration config, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Mono&lt;R&gt;</span>
+                </div>
+                <div class="api-method-desc">Executes pipeline steps and returns the typed response.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeStream(AIRequest&lt;T&gt; request, PipelineConfiguration config)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">Streaming execution.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">supportsStreaming()</span>
+                  <span class="api-method-return">boolean</span>
+                </div>
+                <div class="api-method-desc">Whether this executor supports streaming.</div>
+              </div>
+              <p>Built-in: <code>UniversalPipelineExecutor</code> (standard) and <code>StreamingUniversalPipelineExecutor</code> (streaming).</p>
+            </details>
+
+            <details>
+              <summary><strong>ContextRetriever</strong></summary>
+              <div class="api-signature">
+                <code>public class ContextRetriever</code>
+              </div>
+              <p>Constructor: <code>public ContextRetriever(VectorStore vectorStore, ContexaRagProperties ragProperties)</code></p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">retrieveContext(AIRequest&lt;? extends DomainContext&gt; request)</span>
+                  <span class="api-method-return">ContextRetrievalResult</span>
+                </div>
+                <div class="api-method-desc">Retrieves context from the vector store based on the request.</div>
+              </div>
+              <h4>ContextRetrievalResult</h4>
+              <p>Constructor: <code>ContextRetrievalResult(String contextInfo, List&lt;Document&gt; documents, Map&lt;String, Object&gt; metadata)</code></p>
+              <ul>
+                <li><code>getContextInfo()</code> &mdash; The formatted context string passed to the prompt template</li>
+                <li><code>getDocuments()</code> &mdash; The raw matching documents</li>
+                <li><code>getMetadata()</code> &mdash; Retrieval metadata (retriever type, timestamps, etc.)</li>
+              </ul>
+            </details>
+
+            <details>
+              <summary><strong>DomainResponseProcessor Interface</strong></summary>
+              <div class="api-signature">
+                <code>public interface DomainResponseProcessor</code>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">supports(String templateKey)</span>
+                  <span class="api-method-return">boolean</span>
+                </div>
+                <div class="api-method-desc">Whether this processor handles the given template key.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">supportsType(Class&lt;?&gt; responseType)</span>
+                  <span class="api-method-return">boolean</span>
+                </div>
+                <div class="api-method-desc">Whether this processor handles the given response type.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">wrapResponse(Object parsedData, PipelineExecutionContext context)</span>
+                  <span class="api-method-return">Object</span>
+                </div>
+                <div class="api-method-desc">Transforms or enriches the parsed response.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getOrder()</span>
+                  <span class="api-method-return">int</span>
+                </div>
+                <div class="api-method-desc">Processing order. Default provided by the interface.</div>
+              </div>
+            </details>
           </section>
 
           <!-- Related -->
@@ -267,34 +620,26 @@ chunks.subscribe(
             <h2 id="related">Related</h2>
             <div class="related-links">
               <div class="related-links-grid">
-                <a href="../../../docs/reference/core/llm-orchestrator.html" class="related-link-card">
-                  <h3>LLM Orchestrator</h3>
-                  <p>The LLM client used by pipeline executors during the LLM_EXECUTION step.</p>
+                <a href="../../../docs/reference/core/strategy.html" class="related-link-card">
+                  <h3>Building Custom AI</h3>
+                  <p>End-to-end guide for creating custom AI features using Strategy, Lab, and Pipeline.</p>
                 </a>
-                <a href="../../../docs/reference/core/rag.html" class="related-link-card">
-                  <h3>RAG &amp; Vectors</h3>
-                  <p>Vector operations used during the CONTEXT_RETRIEVAL step.</p>
+                <a href="../../../docs/reference/core/llm-orchestrator.html" class="related-link-card">
+                  <h3>LLM &amp; Models</h3>
+                  <p>The UnifiedLLMOrchestrator used during the LLM_EXECUTION step.</p>
                 </a>
                 <a href="../../../docs/reference/core/streaming.html" class="related-link-card">
                   <h3>Streaming</h3>
-                  <p>SSE streaming service that wraps pipeline streaming output.</p>
+                  <p>SSE streaming protocol and client-side integration for streaming pipeline output.</p>
                 </a>
               </div>
-            </div>
-          </section>
-
-          <!-- Configuration Reference -->
-          <section>
-            <div class="callout callout-info">
-              <strong>Configuration Reference</strong><br>
-              For pipeline <code>application.yml</code> properties, see <a href="../../../docs/install/configuration/security.html">Security Configuration</a> — covers <code>SecurityPipelineProperties</code> and <code>SecurityColdPathProperties</code>.
             </div>
           </section>
 
           <div class="docs-nav-footer">
             <a href="../../../docs/reference/core/llm-orchestrator.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">LLM Orchestrator</span>
+              <span class="docs-nav-title">LLM &amp; Models</span>
             </a>
             <a href="../../../docs/reference/core/model-provider.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
