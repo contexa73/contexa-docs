@@ -141,6 +141,9 @@
         // Update sidebar active state for new URL
         updateSidebarActive();
 
+        // Update language switcher links for new URL
+        updateLangSwitcher();
+
         // Re-init scroll tracking for new headings
         initScrollTracking();
 
@@ -232,6 +235,31 @@
         section.classList.add('collapsed');
       }
     });
+  }
+
+  // ─── Language Switcher Update ───
+
+  /**
+   * Updates lang-switcher hrefs after SPA navigation so they point
+   * to the same page in the other language instead of the old page.
+   */
+  function updateLangSwitcher() {
+    var path = window.location.pathname;
+    // Extract current lang and page path: /en/docs/foo.html → en, /docs/foo.html
+    var match = path.match(/^\/(en|ko)(\/.*)/);
+    if (!match) return;
+
+    var currentLang = match[1];
+    var pagePath = match[2];
+
+    var switcher = document.querySelector('.lang-switcher');
+    if (!switcher) return;
+
+    var enLink = switcher.querySelector('[data-lang="en"]');
+    var koLink = switcher.querySelector('[data-lang="ko"]');
+
+    if (enLink) enLink.setAttribute('href', '/en' + pagePath);
+    if (koLink) koLink.setAttribute('href', '/ko' + pagePath);
   }
 
   // ─── Active State ───

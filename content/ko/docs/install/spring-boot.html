@@ -4,19 +4,202 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../docs/install/index.html">설치</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Spring Boot 통합</span>
+            <span class="breadcrumb-current">Contexa가 Spring Boot에서 작동하는 방식</span>
           </nav>
 
           <!-- Page Header -->
           <div class="docs-page-header">
-            <h1>Spring Boot 통합</h1>
-            <p class="lead">Contexa는 Identity DSL을 통해 Spring Security와 통합됩니다. Identity DSL은 인증, 인가, 세션 관리를 통합된 <code>PlatformConfig</code>로 구성하는 플루언트 API입니다. 이 페이지에서는 핵심 통합 포인트를 다룹니다. 각 컴포넌트의 상세 구성은 링크된 참조 페이지를 확인하세요.</p>
+            <h1>Contexa가 Spring Boot에서 작동하는 방식</h1>
+            <p class="lead"><code>@EnableAISecurity</code>는 Spring Security 위에 AI 기반 보안 파이프라인 전체를 활성화합니다. 이 페이지는 내부에서 무슨 일이 일어나는지, 그리고 기본 설정이 부족할 때 어떻게 커스터마이징하는지 설명합니다.</p>
           </div>
 
-          <!-- PlatformSecurityConfig -->
-          <section>
-            <h2 id="platform-security-config">PlatformSecurityConfig</h2>
-            <p>중앙 보안 구성 빈은 <code>IdentityDslRegistry</code>를 사용하여 <code>PlatformConfig</code>를 빌드합니다. 이 구성은 Spring Security 필터 체인의 구성 방식과 Contexa의 Zero Trust 레이어가 요청을 인터셉트하는 방식을 결정합니다.</p>
+          <!-- Section 1: @EnableAISecurity가 활성화하는 것 -->
+          <section class="section-sm">
+            <h2 id="what-enable-ai-security-activates">@EnableAISecurity가 활성화하는 것</h2>
+            <p>애플리케이션에 <code>@EnableAISecurity</code>를 추가하면 시작 시 다음 체인이 실행됩니다:</p>
+
+            <ol>
+              <li><code>@EnableAISecurity</code>가 <code>AiSecurityImportSelector</code>를 임포트하고, auto-configure 모듈에서 <code>AiSecurityConfiguration</code>을 로드합니다.</li>
+              <li><code>AiSecurityConfiguration</code>이 기존 <code>PlatformConfig</code> 빈을 확인합니다. 없으면(<code>@ConditionalOnMissingBean</code>) <code>IdentityDslRegistry</code>를 사용하여 기본 설정을 자동 생성합니다.</li>
+              <li><code>PlatformConfig</code>의 존재가 <code>IdentitySecurityCoreAutoConfiguration</code>을 트리거하여 전체 Zero Trust 필터 체인 — HCAD 필터, 접근 제어 필터, 챌린지 필터, 이벤트 퍼블리셔 — 을 등록합니다.</li>
+            </ol>
+
+            <p>기본 <code>PlatformConfig</code>가 제공하는 것:</p>
+            <ul>
+              <li><strong>Form Login + OTT</strong>를 MFA 인증 흐름으로</li>
+              <li><strong>세션 관리</strong> 기본값</li>
+              <li><strong><code>AISessionSecurityContextRepository</code></strong> — 보안 컨텍스트에 AI 신뢰 점수를 주입</li>
+            </ul>
+
+            <div class="callout callout-info">
+              <p><strong>커스터마이징이 필요하지 않을 수 있습니다.</strong> 기본 설정은 프로덕션 수준입니다. 아래 섹션은 인증 흐름, 인가 규칙 또는 세션 동작을 변경해야 할 때만 필요합니다.</p>
+            </div>
+          </section>
+
+          <!-- Section 2: 요청 라이프사이클 -->
+          <section class="section-sm">
+            <h2 id="request-lifecycle">요청 라이프사이클(Request Lifecycle)</h2>
+            <p>모든 HTTP 요청은 다음 레이어를 순서대로 통과합니다. 전통적인 Spring Security는 인증에서 끝나지만, Contexa는 매 요청마다 AI 기반 행동 분석을 계속합니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th style="width:30%">필터 / 컴포넌트</th>
+                  <th>역할</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>HCADFilter</strong></td>
+                  <td>행동 신호 추출 — 세션 상태, 디바이스 핑거프린트, IP, API 접근 패턴, 요청 속도</td>
+                </tr>
+                <tr>
+                  <td><strong>ZeroTrustAccessControlFilter</strong></td>
+                  <td>저장소에서 이전 AI 결정을 읽고 적용 (ALLOW, BLOCK, CHALLENGE, ESCALATE)</td>
+                </tr>
+                <tr>
+                  <td><strong>ZeroTrustChallengeFilter</strong></td>
+                  <td>결정이 CHALLENGE면 진행 전 MFA 재인증으로 리다이렉트</td>
+                </tr>
+                <tr>
+                  <td><strong>CustomDynamicAuthorizationManager</strong></td>
+                  <td>XACML 정책 엔진을 통한 URL 레벨 접근 평가. <a href="../reference/iam/dynamic-authorization.html">동적 인가 →</a></td>
+                </tr>
+                <tr>
+                  <td><strong>@Protectable Interceptor</strong></td>
+                  <td>메서드 실행 전 메서드 레벨 AI 인가 평가. <a href="../reference/iam/protectable.html">@Protectable 참조 →</a></td>
+                </tr>
+                <tr>
+                  <td><strong>메서드 실행</strong></td>
+                  <td>비즈니스 로직이 정상적으로 실행됩니다</td>
+                </tr>
+                <tr>
+                  <td><strong>ZeroTrustEventPublisher</strong></td>
+                  <td>비동기 이벤트 발행 → AI가 백그라운드에서 요청 분석 → 결정이 저장되어 <strong>다음</strong> 요청에 적용</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <div class="callout callout-info">
+              <p><strong>지연 시간 영향 없음.</strong> AI 분석은 요청 완료 후 비동기로 실행됩니다. 현재 요청은 AI에 의해 차단되지 않으며, 결정은 사용자의 다음 요청에 적용됩니다. <a href="../reference/architecture/zero-trust-flow.html">전체 Zero Trust 흐름 →</a></p>
+            </div>
+          </section>
+
+          <!-- Section 3: 인증 커스터마이징 -->
+          <section class="section-sm">
+            <h2 id="customizing-authentication">인증 커스터마이징</h2>
+            <p>기본 인증 흐름을 변경하려면 <code>PlatformConfig</code> 빈을 직접 정의하세요. 각 <code>IdentityDslRegistry</code> 메서드는 독립적인 <code>SecurityFilterChain</code>을 생성합니다:</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>메서드</th>
+                  <th>생성 대상</th>
+                  <th>용도</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td><code>global()</code></td><td>공통 HTTP 설정</td><td>CSRF, 인가 규칙, 세션 컨텍스트</td></tr>
+                <tr><td><code>form()</code></td><td>Form Login 체인</td><td>웹 UI 인증</td></tr>
+                <tr><td><code>rest()</code></td><td>Stateless API 체인</td><td>REST API 인증</td></tr>
+                <tr><td><code>mfa()</code></td><td>Multi-factor 체인</td><td>Form + OTT / Passkey 조합</td></tr>
+                <tr><td><code>ott()</code></td><td>One-Time Token 체인</td><td>매직 링크 인증</td></tr>
+                <tr><td><code>passkey()</code></td><td>WebAuthn 체인</td><td>패스키(Passkey) 인증</td></tr>
+                <tr><td><code>session()</code></td><td>세션 관리</td><td>세션 상태 및 라이프사이클</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="rest-api-only">REST API 전용</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">return registry
+    .global(globalHttpCustomizer)
+    .rest(rest -&gt; rest.order(10))
+    .session(Customizer.withDefaults())
+    .build();</code></pre>
+            </div>
+
+            <h3 id="form-mfa-passkey">Form + MFA + Passkey</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">return registry
+    .global(globalHttpCustomizer)
+    .mfa(mfa -&gt; mfa
+        .primaryAuthentication(auth -&gt; auth
+            .formLogin(form -&gt; form.defaultSuccessUrl("/dashboard")))
+        .passkey(Customizer.withDefaults())
+    )
+    .session(Customizer.withDefaults())
+    .build();</code></pre>
+            </div>
+
+            <p>
+              <a href="../reference/identity/dsl.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Identity DSL 참조 →</a> &nbsp;|&nbsp;
+              <a href="../reference/identity/authentication.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">인증 흐름 →</a> &nbsp;|&nbsp;
+              <a href="../reference/identity/mfa.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">적응형 MFA →</a>
+            </p>
+          </section>
+
+          <!-- Section 4: 인가 커스터마이징 -->
+          <section class="section-sm">
+            <h2 id="customizing-authorization">인가 커스터마이징</h2>
+            <p><code>global()</code> 커스터마이저를 사용하여 URL 레벨 인가 규칙을 정의하세요. 불필요한 LLM 호출을 방지하기 위해 정적 리소스와 공개 API는 AI 평가에서 제외해야 합니다:</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">SafeHttpCustomizer&lt;HttpSecurity&gt; globalHttpCustomizer = http -&gt; {
+    http
+        .csrf(AbstractHttpConfigurer::disable)
+        .authorizeHttpRequests(authReq -&gt; authReq
+            .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
+            .requestMatchers("/api/public/**").permitAll()
+            .anyRequest().access(customDynamicAuthorizationManager)
+        )
+        .securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository));
+};</code></pre>
+            </div>
+
+            <p>메서드 레벨 보호가 필요하면 개별 메서드에 <code>@Protectable</code>을 추가하세요. AI가 메서드 실행 전 인가를 평가합니다.</p>
+
+            <p>
+              <a href="../reference/iam/dynamic-authorization.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">동적 인가 →</a> &nbsp;|&nbsp;
+              <a href="../reference/iam/xacml.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">XACML 엔진 →</a> &nbsp;|&nbsp;
+              <a href="../reference/iam/protectable.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">@Protectable 참조 →</a>
+            </p>
+          </section>
+
+          <!-- Section 5: AI 세션 컨텍스트 -->
+          <section class="section-sm">
+            <h2 id="ai-session-context">AI 세션 컨텍스트</h2>
+            <p><code>AISessionSecurityContextRepository</code>는 Spring Security의 기본 컨텍스트 저장소를 대체합니다. 모든 세션에 AI가 계산한 신뢰 점수, 행동 기준선, 위협 평가를 추가하여 요청 간 지속적인 Zero Trust 평가를 가능하게 합니다.</p>
+
+            <div class="callout callout-warning">
+              <p><strong>Zero Trust 필수 요소.</strong> 커스텀 <code>PlatformConfig</code>를 정의할 경우, <code>global()</code> 커스터마이저에서 <code>.securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository))</code>를 반드시 등록해야 합니다. 이것이 없으면 Zero Trust가 작동하지 않습니다. <a href="../reference/identity/state-management.html">상태 관리 →</a></p>
+            </div>
+          </section>
+
+          <!-- Section 6: 전체 예제 -->
+          <section class="section-sm">
+            <h2 id="complete-example">전체 예제</h2>
+            <p>REST API, Form Login with MFA and Passkey, 정적 리소스 제외, AI 세션 컨텍스트를 결합한 프로덕션 수준 설정:</p>
 
             <div class="code-block">
               <div class="code-block-header">
@@ -36,142 +219,23 @@ public class PlatformSecurityConfig {
 
     @Bean
     public PlatformConfig platformDslConfig(IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
-
-        SafeHttpCustomizer&lt;HttpSecurity&gt; globalHttpCustomizer = http -&gt; {
-            http
+        return registry
+            .global(http -&gt; http
                 .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(authReq -&gt; authReq
                     .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
-                    .anyRequest().access(customDynamicAuthorizationManager)
-                )
-                .securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository));
-        };
-
-        return registry
-            .global(globalHttpCustomizer)
+                    .requestMatchers("/api/public/**").permitAll()
+                    .anyRequest().access(customDynamicAuthorizationManager))
+                .securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository)))
+            .rest(rest -&gt; rest.order(10))
             .mfa(mfa -&gt; mfa
-                .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
-                .passkey(Customizer.withDefaults())
-            )
+                .primaryAuthentication(auth -&gt; auth
+                    .formLogin(form -&gt; form.defaultSuccessUrl("/dashboard")))
+                .passkey(Customizer.withDefaults()))
             .session(Customizer.withDefaults())
             .build();
     }
 }</code></pre>
-            </div>
-
-            <div class="callout callout-note">
-              <p><strong>기본 동작</strong> — 애플리케이션에 <code>@EnableAISecurity</code>를 추가하고 <code>PlatformConfig</code> 빈을 정의하지 않으면 기본 구성이 자동으로 생성됩니다. 인증 흐름이나 인가 규칙을 커스터마이즈해야 할 때만 직접 빈을 정의하세요.</p>
-            </div>
-          </section>
-
-          <!-- Three Pillars -->
-          <section>
-            <h2 id="three-pillars">세 가지 통합 핵심 요소</h2>
-            <p>위의 예제는 Contexa가 Spring Security 위에 제공하는 세 가지 핵심 통합 포인트를 보여줍니다:</p>
-
-            <!-- Identity DSL -->
-            <div style="margin-bottom:var(--space-8);">
-              <h3 id="identity-dsl">1. Identity DSL - 인증 흐름</h3>
-              <p><code>IdentityDslRegistry</code>는 인증 흐름을 구성하기 위한 플루언트 API입니다. 각 DSL 메서드 - <code>form()</code>, <code>rest()</code>, <code>mfa()</code>, <code>ott()</code>, <code>passkey()</code> - 는 구성 가능한 순서를 가진 별도의 <code>SecurityFilterChain</code>을 생성합니다. 이를 조합하여 단일 애플리케이션에서 여러 인증 전략을 지원할 수 있습니다.</p>
-
-              <div class="code-block">
-                <div class="code-block-header">
-                  <span class="code-block-lang">Java</span>
-                  <button class="code-copy-btn" type="button" aria-label="Copy code">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                    <span>Copy</span>
-                  </button>
-                </div>
-                <pre><code class="language-java">// Example: REST API + Form Login with MFA
-return registry
-    .global(globalHttpCustomizer)
-    .rest(rest -&gt; rest.order(10))
-    .mfa(mfa -&gt; mfa
-        .primaryAuthentication(auth -&gt; auth.formLogin(form -&gt;
-            form.defaultSuccessUrl("/dashboard")))
-        .passkey(Customizer.withDefaults())
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
-              </div>
-
-              <p>
-                <a href="../reference/identity/dsl.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Identity DSL 참조 →</a> &nbsp;|&nbsp;
-                <a href="../reference/identity/authentication.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">인증 흐름 →</a> &nbsp;|&nbsp;
-                <a href="../reference/identity/mfa.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">적응형 MFA →</a>
-              </p>
-            </div>
-
-            <!-- Dynamic Authorization -->
-            <div style="margin-bottom:var(--space-8);">
-              <h3 id="dynamic-authorization">2. 동적 인가 - AI 기반 접근 제어</h3>
-              <p><code>CustomDynamicAuthorizationManager</code>는 정적 Spring Security 규칙을 AI 기반 결정으로 대체합니다. <code>.anyRequest().access(customDynamicAuthorizationManager)</code>를 통해 등록되며, 애플리케이션 코드에 도달하기 전에 XACML 정책 엔진, Zero Trust 평가, HCAD 이상 탐지를 통해 모든 요청을 평가합니다.</p>
-              <p>컨트롤러 메서드에 <code>@Protectable</code> 어노테이션을 사용하여 엔드포인트별 세분화된 보안 정책을 정의하세요.</p>
-
-              <p>
-                <a href="../reference/iam/dynamic-authorization.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">동적 인가 →</a> &nbsp;|&nbsp;
-                <a href="../reference/iam/xacml.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">XACML 엔진 →</a> &nbsp;|&nbsp;
-                <a href="../reference/iam/protectable.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">@Protectable 참조 →</a>
-              </p>
-            </div>
-
-            <!-- AI Session Context -->
-            <div style="margin-bottom:var(--space-8);">
-              <h3 id="ai-session-context">3. AI 세션 컨텍스트 - 지속적 신뢰 평가</h3>
-              <p><code>AISessionSecurityContextRepository</code>는 기본 Spring Security 컨텍스트 저장소를 대체합니다. 세션 기반 컨텍스트에 AI가 계산한 신뢰 점수, 행동 기준선, 위협 평가를 추가하여 요청 간 지속적인 인증 인식을 가능하게 합니다.</p>
-              <p>글로벌 HTTP 커스터마이저에서 <code>.securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository))</code>를 통해 등록됩니다.</p>
-
-              <p>
-                <a href="../reference/identity/state-management.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">상태 관리 →</a> &nbsp;|&nbsp;
-                <a href="../reference/identity/zero-trust-filters.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Zero Trust 필터 →</a>
-              </p>
-            </div>
-          </section>
-
-          <!-- Static Resource Configuration -->
-          <section>
-            <h2 id="static-resources">정적 리소스 구성</h2>
-            <p>정적 리소스는 불필요한 LLM 호출을 방지하기 위해 AI 보안 평가에서 제외해야 합니다. 글로벌 커스터마이저를 사용하여 자산 경로에 대한 접근을 허용하세요:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">.authorizeHttpRequests(authReq -&gt; authReq
-    .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
-    .requestMatchers("/api/public/**").permitAll()
-    .anyRequest().access(customDynamicAuthorizationManager)
-)</code></pre>
-            </div>
-          </section>
-
-          <!-- Required Imports -->
-          <section>
-            <h2 id="imports">필수 임포트</h2>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">import io.contexa.contexacore.security.AISessionSecurityContextRepository;
-import io.contexa.contexaiam.security.xacml.pep.CustomDynamicAuthorizationManager;
-import io.contexa.contexaidentity.security.core.config.PlatformConfig;
-import io.contexa.contexaidentity.security.core.dsl.IdentityDslRegistry;
-import io.contexa.contexaidentity.security.core.dsl.common.SafeHttpCustomizer;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.security.config.Customizer;
-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;</code></pre>
             </div>
           </section>
 

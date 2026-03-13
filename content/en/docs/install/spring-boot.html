@@ -4,19 +4,202 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../docs/install/index.html">Install</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Spring Boot Integration</span>
+            <span class="breadcrumb-current">How Contexa Works in Spring Boot</span>
           </nav>
 
           <!-- Page Header -->
           <div class="docs-page-header">
-            <h1>Spring Boot Integration</h1>
-            <p class="lead">Contexa integrates with Spring Security through the Identity DSL — a fluent API that composes authentication, authorization, and session management into a unified <code>PlatformConfig</code>. This page covers the core integration points. For detailed configuration of each component, see the linked reference pages.</p>
+            <h1>How Contexa Works in Spring Boot</h1>
+            <p class="lead"><code>@EnableAISecurity</code> activates a full AI-driven security pipeline on top of Spring Security. This page explains what happens under the hood — and how to customize it when the defaults aren't enough.</p>
           </div>
 
-          <!-- PlatformSecurityConfig -->
-          <section>
-            <h2 id="platform-security-config">PlatformSecurityConfig</h2>
-            <p>The central security configuration bean uses <code>IdentityDslRegistry</code> to build a <code>PlatformConfig</code>. This config drives how Spring Security filter chains are constructed and how Contexa's Zero Trust layer intercepts requests.</p>
+          <!-- Section 1: What @EnableAISecurity Activates -->
+          <section class="section-sm">
+            <h2 id="what-enable-ai-security-activates">What @EnableAISecurity Activates</h2>
+            <p>When you annotate your application with <code>@EnableAISecurity</code>, the following chain fires at startup:</p>
+
+            <ol>
+              <li><code>@EnableAISecurity</code> imports <code>AiSecurityImportSelector</code>, which loads <code>AiSecurityConfiguration</code> from the auto-configure module.</li>
+              <li><code>AiSecurityConfiguration</code> checks for an existing <code>PlatformConfig</code> bean. If none exists (<code>@ConditionalOnMissingBean</code>), it creates a default one using <code>IdentityDslRegistry</code>.</li>
+              <li>The presence of <code>PlatformConfig</code> triggers <code>IdentitySecurityCoreAutoConfiguration</code>, which registers the full Zero Trust filter chain — HCAD filters, access control filters, challenge filters, and event publishers.</li>
+            </ol>
+
+            <p>The default <code>PlatformConfig</code> provides:</p>
+            <ul>
+              <li><strong>Form Login + OTT</strong> as the MFA authentication flow</li>
+              <li><strong>Session management</strong> with defaults</li>
+              <li><strong><code>AISessionSecurityContextRepository</code></strong> — injects AI trust scores into the security context</li>
+            </ul>
+
+            <div class="callout callout-info">
+              <p><strong>You may not need to customize anything.</strong> The default configuration is production-ready. The sections below are only relevant when you need to change authentication flows, authorization rules, or session behavior.</p>
+            </div>
+          </section>
+
+          <!-- Section 2: Request Lifecycle -->
+          <section class="section-sm">
+            <h2 id="request-lifecycle">Request Lifecycle</h2>
+            <p>Every HTTP request passes through these layers in order. Traditional Spring Security stops at authentication — Contexa continues with AI-driven behavioral analysis on every request.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th style="width:30%">Filter / Component</th>
+                  <th>What It Does</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>HCADFilter</strong></td>
+                  <td>Extracts behavioral signals — session state, device fingerprint, IP, API access patterns, request velocity</td>
+                </tr>
+                <tr>
+                  <td><strong>ZeroTrustAccessControlFilter</strong></td>
+                  <td>Reads the previous AI decision from the store and enforces it (ALLOW, BLOCK, CHALLENGE, ESCALATE)</td>
+                </tr>
+                <tr>
+                  <td><strong>ZeroTrustChallengeFilter</strong></td>
+                  <td>If the decision is CHALLENGE, redirects to MFA re-authentication before proceeding</td>
+                </tr>
+                <tr>
+                  <td><strong>CustomDynamicAuthorizationManager</strong></td>
+                  <td>Evaluates URL-level access through the XACML policy engine. <a href="../reference/iam/dynamic-authorization.html">Dynamic Authorization →</a></td>
+                </tr>
+                <tr>
+                  <td><strong>@Protectable Interceptor</strong></td>
+                  <td>Evaluates method-level AI authorization before the method executes. <a href="../reference/iam/protectable.html">@Protectable Reference →</a></td>
+                </tr>
+                <tr>
+                  <td><strong>Your Method Executes</strong></td>
+                  <td>Business logic runs normally</td>
+                </tr>
+                <tr>
+                  <td><strong>ZeroTrustEventPublisher</strong></td>
+                  <td>Publishes an async event → AI analyzes the request in the background → decision is stored and enforced on the <strong>next</strong> request</td>
+                </tr>
+              </tbody>
+            </table></div>
+
+            <div class="callout callout-info">
+              <p><strong>Zero latency impact.</strong> AI analysis runs asynchronously after the request completes. The current request is never blocked by the AI — the decision is enforced on the user's next request. <a href="../reference/architecture/zero-trust-flow.html">Full Zero Trust Flow →</a></p>
+            </div>
+          </section>
+
+          <!-- Section 3: Customizing Authentication -->
+          <section class="section-sm">
+            <h2 id="customizing-authentication">Customizing Authentication</h2>
+            <p>Define your own <code>PlatformConfig</code> bean to replace the default authentication flows. Each <code>IdentityDslRegistry</code> method creates an independent <code>SecurityFilterChain</code>:</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr>
+                  <th>Method</th>
+                  <th>Creates</th>
+                  <th>Use Case</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td><code>global()</code></td><td>Shared HTTP configuration</td><td>CSRF, authorization rules, session context</td></tr>
+                <tr><td><code>form()</code></td><td>Form Login chain</td><td>Web UI authentication</td></tr>
+                <tr><td><code>rest()</code></td><td>Stateless API chain</td><td>REST API authentication</td></tr>
+                <tr><td><code>mfa()</code></td><td>Multi-factor chain</td><td>Form + OTT / Passkey combination</td></tr>
+                <tr><td><code>ott()</code></td><td>One-Time Token chain</td><td>Magic link authentication</td></tr>
+                <tr><td><code>passkey()</code></td><td>WebAuthn chain</td><td>Passkey authentication</td></tr>
+                <tr><td><code>session()</code></td><td>Session management</td><td>Session state and lifecycle</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="rest-api-only">REST API Only</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">return registry
+    .global(globalHttpCustomizer)
+    .rest(rest -&gt; rest.order(10))
+    .session(Customizer.withDefaults())
+    .build();</code></pre>
+            </div>
+
+            <h3 id="form-mfa-passkey">Form + MFA + Passkey</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">return registry
+    .global(globalHttpCustomizer)
+    .mfa(mfa -&gt; mfa
+        .primaryAuthentication(auth -&gt; auth
+            .formLogin(form -&gt; form.defaultSuccessUrl("/dashboard")))
+        .passkey(Customizer.withDefaults())
+    )
+    .session(Customizer.withDefaults())
+    .build();</code></pre>
+            </div>
+
+            <p>
+              <a href="../reference/identity/dsl.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Identity DSL Reference →</a> &nbsp;|&nbsp;
+              <a href="../reference/identity/authentication.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Authentication Flows →</a> &nbsp;|&nbsp;
+              <a href="../reference/identity/mfa.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Adaptive MFA →</a>
+            </p>
+          </section>
+
+          <!-- Section 4: Customizing Authorization -->
+          <section class="section-sm">
+            <h2 id="customizing-authorization">Customizing Authorization</h2>
+            <p>Use the <code>global()</code> customizer to define URL-level authorization rules. Static resources and public APIs should be excluded from AI evaluation to avoid unnecessary LLM calls:</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">SafeHttpCustomizer&lt;HttpSecurity&gt; globalHttpCustomizer = http -&gt; {
+    http
+        .csrf(AbstractHttpConfigurer::disable)
+        .authorizeHttpRequests(authReq -&gt; authReq
+            .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
+            .requestMatchers("/api/public/**").permitAll()
+            .anyRequest().access(customDynamicAuthorizationManager)
+        )
+        .securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository));
+};</code></pre>
+            </div>
+
+            <p>For method-level protection, annotate individual methods with <code>@Protectable</code>. The AI evaluates authorization before the method executes.</p>
+
+            <p>
+              <a href="../reference/iam/dynamic-authorization.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Dynamic Authorization →</a> &nbsp;|&nbsp;
+              <a href="../reference/iam/xacml.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">XACML Engine →</a> &nbsp;|&nbsp;
+              <a href="../reference/iam/protectable.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">@Protectable Reference →</a>
+            </p>
+          </section>
+
+          <!-- Section 5: AI Session Context -->
+          <section class="section-sm">
+            <h2 id="ai-session-context">AI Session Context</h2>
+            <p><code>AISessionSecurityContextRepository</code> replaces Spring Security's default context repository. It augments every session with AI-computed trust scores, behavioral baselines, and threat assessments — this is what enables continuous Zero Trust evaluation across requests.</p>
+
+            <div class="callout callout-warning">
+              <p><strong>Required for Zero Trust.</strong> If you define a custom <code>PlatformConfig</code>, you must register <code>AISessionSecurityContextRepository</code> in the <code>global()</code> customizer via <code>.securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository))</code>. Without it, Zero Trust will not function. <a href="../reference/identity/state-management.html">State Management →</a></p>
+            </div>
+          </section>
+
+          <!-- Section 6: Complete Example -->
+          <section class="section-sm">
+            <h2 id="complete-example">Complete Example</h2>
+            <p>A production-ready configuration combining REST API, Form Login with MFA and Passkey, static resource exclusion, and AI session context:</p>
 
             <div class="code-block">
               <div class="code-block-header">
@@ -36,142 +219,23 @@ public class PlatformSecurityConfig {
 
     @Bean
     public PlatformConfig platformDslConfig(IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
-
-        SafeHttpCustomizer&lt;HttpSecurity&gt; globalHttpCustomizer = http -&gt; {
-            http
+        return registry
+            .global(http -&gt; http
                 .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(authReq -&gt; authReq
                     .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
-                    .anyRequest().access(customDynamicAuthorizationManager)
-                )
-                .securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository));
-        };
-
-        return registry
-            .global(globalHttpCustomizer)
+                    .requestMatchers("/api/public/**").permitAll()
+                    .anyRequest().access(customDynamicAuthorizationManager))
+                .securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository)))
+            .rest(rest -&gt; rest.order(10))
             .mfa(mfa -&gt; mfa
-                .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
-                .passkey(Customizer.withDefaults())
-            )
+                .primaryAuthentication(auth -&gt; auth
+                    .formLogin(form -&gt; form.defaultSuccessUrl("/dashboard")))
+                .passkey(Customizer.withDefaults()))
             .session(Customizer.withDefaults())
             .build();
     }
 }</code></pre>
-            </div>
-
-            <div class="callout callout-warning">
-              <p><strong>You may not need this class</strong> — If you annotate your application with <code>@EnableAISecurity</code> and do not define a <code>PlatformConfig</code> bean, a default configuration is created automatically via <code>IdentityDslRegistry</code>. The example above is only needed when you want to customize authentication flows, authorization rules, or session management.</p>
-            </div>
-          </section>
-
-          <!-- Three Pillars -->
-          <section>
-            <h2 id="three-pillars">Three Integration Pillars</h2>
-            <p>The example above demonstrates the three core integration points that Contexa provides on top of Spring Security:</p>
-
-            <!-- Identity DSL -->
-            <div style="margin-bottom:var(--space-8);">
-              <h3 id="identity-dsl">1. Identity DSL — Authentication Flows</h3>
-              <p><code>IdentityDslRegistry</code> is a fluent API for composing authentication flows. Each DSL method — <code>form()</code>, <code>rest()</code>, <code>mfa()</code>, <code>ott()</code>, <code>passkey()</code> — creates a separate <code>SecurityFilterChain</code> with configurable ordering. Combine them to support multiple authentication strategies in a single application.</p>
-
-              <div class="code-block">
-                <div class="code-block-header">
-                  <span class="code-block-lang">Java</span>
-                  <button class="code-copy-btn" type="button" aria-label="Copy code">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                    <span>Copy</span>
-                  </button>
-                </div>
-                <pre><code class="language-java">// Example: REST API + Form Login with MFA
-return registry
-    .global(globalHttpCustomizer)
-    .rest(rest -&gt; rest.order(10))
-    .mfa(mfa -&gt; mfa
-        .primaryAuthentication(auth -&gt; auth.formLogin(form -&gt;
-            form.defaultSuccessUrl("/dashboard")))
-        .passkey(Customizer.withDefaults())
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
-              </div>
-
-              <p>
-                <a href="../reference/identity/dsl.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Identity DSL Reference →</a> &nbsp;|&nbsp;
-                <a href="../reference/identity/authentication.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Authentication Flows →</a> &nbsp;|&nbsp;
-                <a href="../reference/identity/mfa.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Adaptive MFA →</a>
-              </p>
-            </div>
-
-            <!-- Dynamic Authorization -->
-            <div style="margin-bottom:var(--space-8);">
-              <h3 id="dynamic-authorization">2. Dynamic Authorization — AI-Driven Access Control</h3>
-              <p><code>CustomDynamicAuthorizationManager</code> replaces static Spring Security rules with AI-driven decisions. Registered via <code>.anyRequest().access(customDynamicAuthorizationManager)</code>, it evaluates every request through the XACML policy engine, Zero Trust evaluation, and HCAD anomaly detection before reaching your application code.</p>
-              <p>Use the <code>@Protectable</code> annotation on controller methods to define fine-grained security policies per endpoint.</p>
-
-              <p>
-                <a href="../reference/iam/dynamic-authorization.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Dynamic Authorization →</a> &nbsp;|&nbsp;
-                <a href="../reference/iam/xacml.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">XACML Engine →</a> &nbsp;|&nbsp;
-                <a href="../reference/iam/protectable.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">@Protectable Reference →</a>
-              </p>
-            </div>
-
-            <!-- AI Session Context -->
-            <div style="margin-bottom:var(--space-8);">
-              <h3 id="ai-session-context">3. AI Session Context — Continuous Trust Assessment</h3>
-              <p><code>AISessionSecurityContextRepository</code> replaces the default Spring Security context repository. It augments session-based context with AI-computed trust scores, behavioral baselines, and threat assessments — enabling continuous authentication awareness across requests.</p>
-              <p>Registered via <code>.securityContext(sc -&gt; sc.securityContextRepository(aiSessionSecurityContextRepository))</code> in the global HTTP customizer.</p>
-
-              <p>
-                <a href="../reference/identity/state-management.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">State Management →</a> &nbsp;|&nbsp;
-                <a href="../reference/identity/zero-trust-filters.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Zero Trust Filters →</a>
-              </p>
-            </div>
-          </section>
-
-          <!-- Static Resource Configuration -->
-          <section>
-            <h2 id="static-resources">Static Resource Configuration</h2>
-            <p>Static resources should be excluded from AI security evaluation to prevent unnecessary LLM calls. Use the global customizer to permit access to asset paths:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">.authorizeHttpRequests(authReq -&gt; authReq
-    .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
-    .requestMatchers("/api/public/**").permitAll()
-    .anyRequest().access(customDynamicAuthorizationManager)
-)</code></pre>
-            </div>
-          </section>
-
-          <!-- Required Imports -->
-          <section>
-            <h2 id="imports">Required Imports</h2>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">import io.contexa.contexacore.security.AISessionSecurityContextRepository;
-import io.contexa.contexaiam.security.xacml.pep.CustomDynamicAuthorizationManager;
-import io.contexa.contexaidentity.security.core.config.PlatformConfig;
-import io.contexa.contexaidentity.security.core.dsl.IdentityDslRegistry;
-import io.contexa.contexaidentity.security.core.dsl.common.SafeHttpCustomizer;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.security.config.Customizer;
-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;</code></pre>
             </div>
           </section>
 
