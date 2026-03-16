@@ -256,6 +256,21 @@ function build() {
         html = html.replace(/\n\s*<!-- Mobile sidebar overlay -->\s*\n/g, '\n');
         html = html.replace(/\n\s*<!-- Mobile sidebar toggle button -->\s*\n/g, '\n');
 
+        // 13. Inject right-side TOC sidebar container for docs pages
+        if (relPath.startsWith('docs' + path.sep) || relPath.startsWith('docs/')) {
+          html = html.replace(
+            '</div><!-- docs-content-inner -->\n      </div><!-- docs-content -->',
+            '</div>\n      </div>\n      <aside class="docs-toc-sidebar" id="docs-toc-sidebar"></aside>'
+          );
+          // Fallback: try without comments
+          if (html.indexOf('docs-toc-sidebar') === -1) {
+            html = html.replace(
+              /(<\/div>\s*<\/div>\s*)<\/div>\s*<\/main>/,
+              '$1<aside class="docs-toc-sidebar" id="docs-toc-sidebar"></aside>\n    </div>\n  </main>'
+            );
+          }
+        }
+
         // Write output
         fs.mkdirSync(path.dirname(outFile), { recursive: true });
         fs.writeFileSync(outFile, html, 'utf-8');
@@ -288,6 +303,47 @@ function build() {
 </body>
 </html>`;
   fs.writeFileSync(path.join(DIST_DIR, 'index.html'), rootIndex, 'utf-8');
+
+  // Generate search index per language
+  console.log('Generating search index...');
+  for (const lang of LANGUAGES) {
+    const langDir = path.join(DIST_DIR, lang);
+    const langFiles = findHtmlFiles(langDir);
+    const searchIndex = [];
+
+    for (const file of langFiles) {
+      const relPath = '/' + lang + '/' + path.relative(langDir, file).replace(/\\/g, '/');
+      if (relPath.includes('404')) continue;
+
+      const html = fs.readFileSync(file, 'utf-8');
+      const $ = cheerio.load(html);
+
+      const title = $('title').text().replace(/\s*[|–-]\s*Contexa.*$/i, '').trim() || $('h1').first().text().trim();
+      if (!title) continue;
+
+      // Extract headings
+      const headings = [];
+      $('h2, h3').each(function() { headings.push($(this).text().trim()); });
+
+      // Extract body text (remove scripts, styles, nav, header, footer)
+      $('script, style, nav, header, footer, .sidebar, .toc').remove();
+      const bodyText = $('main, .content, .doc-content, article, body').text()
+        .replace(/\s+/g, ' ').trim().substring(0, 3000);
+
+      if (bodyText.length < 10) continue;
+
+      searchIndex.push({
+        t: title,
+        p: relPath,
+        h: headings.join(' '),
+        c: bodyText
+      });
+    }
+
+    const indexPath = path.join(DIST_DIR, 'assets', `search-index-${lang}.json`);
+    fs.writeFileSync(indexPath, JSON.stringify(searchIndex), 'utf-8');
+    console.log(`  ${lang}: ${searchIndex.length} pages indexed (${(JSON.stringify(searchIndex).length / 1024).toFixed(1)} KB)`);
+  }
 
   // Verification: check for unresolved markers
   console.log('Verification...');

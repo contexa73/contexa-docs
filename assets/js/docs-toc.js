@@ -1,21 +1,31 @@
 /**
  * Contexa Documentation Table of Contents
- * Auto-generates an "On This Page" navigation from h2/h3 headings
- * in the docs content area.
+ * Renders TOC in right sidebar (#docs-toc-sidebar) with sticky positioning and scroll-spy.
+ * Supports SPA re-initialization when sidebar navigation loads new content.
  */
 (function () {
   'use strict';
 
-  var initialized = false;
+  var scrollHandler = null;
 
   function init() {
-    if (initialized) return;
-    initialized = true;
     var content = document.querySelector('.docs-content-inner');
+    var tocSidebar = document.getElementById('docs-toc-sidebar');
     if (!content) return;
 
+    // Clean up previous TOC
+    if (tocSidebar) tocSidebar.innerHTML = '';
+    // Also remove any old inline TOC
+    var oldToc = content.querySelector('.docs-toc');
+    if (oldToc) oldToc.remove();
+    // Remove previous scroll handler
+    if (scrollHandler) {
+      window.removeEventListener('scroll', scrollHandler);
+      scrollHandler = null;
+    }
+
     var headings = content.querySelectorAll('h2[id], h3[id]');
-    if (headings.length < 3) return; // Only show TOC for pages with 3+ sections
+    if (headings.length < 2) return;
 
     // Build TOC
     var toc = document.createElement('nav');
@@ -24,19 +34,10 @@
 
     var title = document.createElement('div');
     title.className = 'docs-toc-title';
-    title.textContent = 'On This Page';
 
-    var toggle = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    toggle.setAttribute('class', 'docs-toc-toggle');
-    toggle.setAttribute('viewBox', '0 0 12 12');
-    toggle.setAttribute('fill', 'none');
-    toggle.setAttribute('stroke', 'currentColor');
-    toggle.setAttribute('stroke-width', '2');
-    toggle.setAttribute('stroke-linecap', 'round');
-    var togglePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    togglePath.setAttribute('d', 'M3 5L6 8L9 5');
-    toggle.appendChild(togglePath);
-    title.appendChild(toggle);
+    // Detect language
+    var lang = document.documentElement.lang;
+    title.textContent = lang === 'ko' ? '이 페이지' : 'On This Page';
 
     var list = document.createElement('ul');
     list.className = 'docs-toc-list';
@@ -63,25 +64,19 @@
     toc.appendChild(title);
     toc.appendChild(list);
 
-    // Insert after page header
-    var pageHeader = content.querySelector('.docs-page-header');
-    if (pageHeader && pageHeader.nextSibling) {
-      pageHeader.parentNode.insertBefore(toc, pageHeader.nextSibling);
+    // Insert into right sidebar if available, else inline
+    if (tocSidebar) {
+      tocSidebar.appendChild(toc);
     } else {
-      content.insertBefore(toc, content.firstChild);
+      var pageHeader = content.querySelector('.docs-page-header');
+      if (pageHeader && pageHeader.nextSibling) {
+        pageHeader.parentNode.insertBefore(toc, pageHeader.nextSibling);
+      } else {
+        content.insertBefore(toc, content.firstChild);
+      }
     }
 
-    // Mobile toggle
-    title.addEventListener('click', function () {
-      toc.classList.toggle('collapsed');
-    });
-
-    // Start collapsed on mobile
-    if (window.innerWidth <= 768) {
-      toc.classList.add('collapsed');
-    }
-
-    // Scroll spy: highlight current section
+    // Scroll spy
     initScrollSpy(headings, list);
   }
 
@@ -101,15 +96,11 @@
       }
 
       links.forEach(function (link, i) {
-        if (i === currentIndex) {
-          link.classList.add('active');
-        } else {
-          link.classList.remove('active');
-        }
+        link.classList.toggle('active', i === currentIndex);
       });
     }
 
-    window.addEventListener('scroll', function () {
+    scrollHandler = function () {
       if (!ticking) {
         requestAnimationFrame(function () {
           update();
@@ -117,17 +108,22 @@
         });
         ticking = true;
       }
-    }, { passive: true });
+    };
 
-    // Initial highlight
+    window.addEventListener('scroll', scrollHandler, { passive: true });
     update();
   }
 
-  // Initialize after content is ready
+  // Expose for SPA re-initialization
+  window.contexaInitTOC = init;
+
+  // Initialize on page load
   document.addEventListener('contexa:includes-loaded', init);
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
       setTimeout(init, 250);
     });
+  } else {
+    setTimeout(init, 250);
   }
 })();

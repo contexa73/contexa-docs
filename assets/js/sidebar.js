@@ -147,6 +147,11 @@
         // Re-init scroll tracking for new headings
         initScrollTracking();
 
+        // Re-init TOC for new content
+        if (window.contexaInitTOC) {
+          window.contexaInitTOC();
+        }
+
         isNavigating = false;
       })
       .catch(function () {
