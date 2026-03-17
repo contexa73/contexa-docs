@@ -382,6 +382,162 @@ public void onMfaError(MfaStateMachineEvents.ErrorEvent event) {
 }</code></pre>
           </section>
 
+          <!-- Multi MFA -->
+          <section class="docs-section">
+            <h2 id="multi-mfa">Multi MFA</h2>
+            <p>여러 개의 독립적인 MFA Flow를 동시에 운영할 수 있습니다. 각 Flow는 <strong>자체 SecurityFilterChain</strong>, <strong>자체 2차 인증 요소</strong>, <strong>자체 URL 네임스페이스</strong>를 가집니다.</p>
+
+<pre class="arch-diagram"><code>
+  Multi MFA Architecture
+  =======================
+
+  Request
+    |
+    +--- /admin/** ----&gt; SecurityFilterChain (order=60)
+    |                    typeName: "mfa"
+    |                    Factors: [Passkey]
+    |                    URLs: /admin/mfa/login, /admin/mfa/select-factor, ...
+    |
+    +--- /user/** -----&gt; SecurityFilterChain (order=70)
+                         typeName: "mfa_2"
+                         Factors: [OTT]
+                         URLs: /user/mfa/login, /user/mfa/select-factor, ...
+</code></pre>
+
+            <div class="callout callout-info">
+              <strong>핵심 원리</strong><br>
+              각 MFA Flow는 독립적인 SecurityFilterChain으로 구성됩니다. <code>urlPrefix()</code>를 설정하면 모든 MFA URL에 접두사가 자동 적용되고, <code>securityMatcher</code>도 자동으로 설정되어 Flow 간 완전한 격리가 보장됩니다.
+            </div>
+
+            <h3 id="multi-mfa-basic">기본 설정</h3>
+            <p>여러 <code>.mfa()</code>를 등록하면 자동으로 고유한 typeName이 부여됩니다.</p>
+
+<pre><code class="language-java">registry
+    .mfa(mfa -&gt; mfa
+        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+        .passkey(Customizer.withDefaults())
+        .order(60)
+    ).session(Customizer.withDefaults())   // typeName = "mfa" (자동)
+
+    .mfa(mfa -&gt; mfa
+        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+        .ott(Customizer.withDefaults())
+        .order(70)
+    ).session(Customizer.withDefaults())   // typeName = "mfa_2" (자동)
+
+    .build();</code></pre>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>등록 순서</th><th>자동 typeName</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>첫 번째 <code>.mfa()</code></td><td><code>mfa</code></td><td>기존 단일 MFA와 동일 (하위 호환)</td></tr>
+                <tr><td>두 번째 <code>.mfa()</code></td><td><code>mfa_2</code></td><td>자동 번호 부여</td></tr>
+                <tr><td>세 번째 <code>.mfa()</code></td><td><code>mfa_3</code></td><td>자동 번호 부여</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="multi-mfa-name">name() - 명시적 Flow 이름 지정</h3>
+            <p><code>name()</code>으로 의미 있는 Flow 이름을 지정할 수 있습니다. 자동 번호 대신 사용됩니다.</p>
+
+<pre><code class="language-java">.mfa(mfa -&gt; mfa
+    .name("admin")     // typeName = "mfa_admin"
+    .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+    .passkey(Customizer.withDefaults())
+    .order(60)
+).session(Customizer.withDefaults())
+
+.mfa(mfa -&gt; mfa
+    .name("user")      // typeName = "mfa_user"
+    .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+    .ott(Customizer.withDefaults())
+    .order(70)
+).session(Customizer.withDefaults())</code></pre>
+
+            <h3 id="multi-mfa-urlprefix">urlPrefix() - URL 격리</h3>
+            <p><code>urlPrefix()</code>는 해당 Flow의 <strong>모든 MFA URL에 접두사를 자동 적용</strong>하고, <code>securityMatcher</code>도 자동으로 설정합니다. Multi MFA에서 각 Flow가 서로 다른 URL 네임스페이스를 갖도록 보장합니다.</p>
+
+<pre><code class="language-java">registry
+    // Admin: Passkey MFA
+    .mfa(mfa -&gt; mfa
+        .urlPrefix("/admin")
+        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+        .passkey(Customizer.withDefaults())
+        .order(60)
+    ).session(Customizer.withDefaults())
+
+    // User: OTT MFA
+    .mfa(mfa -&gt; mfa
+        .urlPrefix("/user")
+        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+        .ott(Customizer.withDefaults())
+        .order(70)
+    ).session(Customizer.withDefaults())
+
+    .build();</code></pre>
+
+            <p><code>urlPrefix("/admin")</code> 설정 시 URL 변환:</p>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>기본 URL</th><th>urlPrefix 적용 후</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>/mfa/login</code></td><td><code>/admin/mfa/login</code></td></tr>
+                <tr><td><code>/mfa/select-factor</code></td><td><code>/admin/mfa/select-factor</code></td></tr>
+                <tr><td><code>/login/mfa-ott</code></td><td><code>/admin/login/mfa-ott</code></td></tr>
+                <tr><td><code>/login/mfa-webauthn</code></td><td><code>/admin/login/mfa-webauthn</code></td></tr>
+                <tr><td><code>/mfa/cancel</code></td><td><code>/admin/mfa/cancel</code></td></tr>
+                <tr><td><code>/api/mfa/config</code></td><td><code>/admin/api/mfa/config</code></td></tr>
+              </tbody>
+            </table></div>
+
+            <div class="callout callout-info">
+              <strong>securityMatcher 자동 설정</strong><br>
+              <code>urlPrefix("/admin")</code>을 설정하면 <code>http.securityMatcher("/admin/**")</code>가 자동으로 적용됩니다. 별도로 <code>rawHttp()</code>를 사용할 필요가 없습니다.
+            </div>
+
+            <h3 id="multi-mfa-defaultloginurl">defaultLoginUrl() - 개별 URL 변경</h3>
+            <p><code>urlPrefix()</code> 대신 개별 URL만 변경하고 싶을 때 사용합니다. <strong>자동 생성 로그인 폼의 URL</strong>을 변경하되, Spring Security 표준의 커스텀 페이지 동작은 유지합니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>API</th><th>동작</th><th>자동 폼 생성</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.loginPage("/custom")</code></td><td>커스텀 페이지로 리다이렉트 (Spring Security 표준)</td><td>X (사용자가 직접 만든 페이지)</td></tr>
+                <tr><td><code>.defaultLoginUrl("/admin/mfa/login")</code></td><td>자동 생성 폼의 URL 변경</td><td>O (Contexa 자동 폼 생성)</td></tr>
+              </tbody>
+            </table></div>
+
+<pre><code class="language-java">.mfa(mfa -&gt; mfa
+    .primaryAuthentication(auth -&gt; auth.formLogin(form -&gt; form
+        .defaultLoginUrl("/admin/mfa/login")
+        .defaultSuccessUrl("/admin/dashboard")))
+    .passkey(Customizer.withDefaults())
+    .order(60)
+).session(Customizer.withDefaults())</code></pre>
+
+            <h3 id="multi-mfa-api">Multi MFA DSL API 요약</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>메서드</th><th>위치</th><th>설명</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.name(String)</code></td><td><code>.mfa()</code></td><td>Flow 이름 지정. typeName = <code>mfa_{name}</code></td></tr>
+                <tr><td><code>.urlPrefix(String)</code></td><td><code>.mfa()</code></td><td>모든 MFA URL에 접두사 적용 + securityMatcher 자동 설정</td></tr>
+                <tr><td><code>.defaultLoginUrl(String)</code></td><td><code>.formLogin()</code></td><td>자동 생성 폼의 URL 변경 (loginProcessingUrl 자동 동기화)</td></tr>
+                <tr><td><code>.order(int)</code></td><td><code>.mfa()</code></td><td>SecurityFilterChain 우선순위 (낮을수록 우선)</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="multi-mfa-caution">주의사항</h3>
+            <div class="callout callout-warning">
+              <strong>securityMatcher 필수</strong><br>
+              Multi MFA에서 각 Flow가 서로 다른 2차 인증 요소를 사용하는 경우 (예: Flow 1은 Passkey, Flow 2는 OTT), <code>urlPrefix()</code> 또는 <code>rawHttp(http -&gt; http.securityMatcher(...))</code>로 <strong>반드시</strong> URL 범위를 분리해야 합니다. 분리하지 않으면 한 Flow의 2차 인증 요청이 다른 Flow의 SecurityFilterChain에서 처리되어 실패합니다.
+            </div>
+          </section>
+
           <!-- MFA + Single Auth -->
           <section class="docs-section">
             <h2 id="mfa-with-single">MFA + 단일 인증 동시 설정</h2>

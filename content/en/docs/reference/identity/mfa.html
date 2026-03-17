@@ -382,6 +382,162 @@ public void onMfaError(MfaStateMachineEvents.ErrorEvent event) {
 }</code></pre>
           </section>
 
+          <!-- Multi MFA -->
+          <section class="docs-section">
+            <h2 id="multi-mfa">Multi MFA</h2>
+            <p>Run multiple independent MFA flows simultaneously. Each flow has its own <strong>SecurityFilterChain</strong>, <strong>secondary authentication factors</strong>, and <strong>URL namespace</strong>.</p>
+
+<pre class="arch-diagram"><code>
+  Multi MFA Architecture
+  =======================
+
+  Request
+    |
+    +--- /admin/** ----&gt; SecurityFilterChain (order=60)
+    |                    typeName: "mfa"
+    |                    Factors: [Passkey]
+    |                    URLs: /admin/mfa/login, /admin/mfa/select-factor, ...
+    |
+    +--- /user/** -----&gt; SecurityFilterChain (order=70)
+                         typeName: "mfa_2"
+                         Factors: [OTT]
+                         URLs: /user/mfa/login, /user/mfa/select-factor, ...
+</code></pre>
+
+            <div class="callout callout-info">
+              <strong>Core Principle</strong><br>
+              Each MFA flow is configured as an independent SecurityFilterChain. Setting <code>urlPrefix()</code> automatically applies a prefix to all MFA URLs and configures <code>securityMatcher</code>, ensuring complete isolation between flows.
+            </div>
+
+            <h3 id="multi-mfa-basic">Basic Configuration</h3>
+            <p>Registering multiple <code>.mfa()</code> calls automatically assigns unique typeNames.</p>
+
+<pre><code class="language-java">registry
+    .mfa(mfa -&gt; mfa
+        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+        .passkey(Customizer.withDefaults())
+        .order(60)
+    ).session(Customizer.withDefaults())   // typeName = "mfa" (auto)
+
+    .mfa(mfa -&gt; mfa
+        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+        .ott(Customizer.withDefaults())
+        .order(70)
+    ).session(Customizer.withDefaults())   // typeName = "mfa_2" (auto)
+
+    .build();</code></pre>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Registration Order</th><th>Auto typeName</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>First <code>.mfa()</code></td><td><code>mfa</code></td><td>Same as single MFA (backward compatible)</td></tr>
+                <tr><td>Second <code>.mfa()</code></td><td><code>mfa_2</code></td><td>Auto-numbered</td></tr>
+                <tr><td>Third <code>.mfa()</code></td><td><code>mfa_3</code></td><td>Auto-numbered</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="multi-mfa-name">name() - Explicit Flow Naming</h3>
+            <p>Use <code>name()</code> to assign a meaningful flow name instead of auto-numbering.</p>
+
+<pre><code class="language-java">.mfa(mfa -&gt; mfa
+    .name("admin")     // typeName = "mfa_admin"
+    .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+    .passkey(Customizer.withDefaults())
+    .order(60)
+).session(Customizer.withDefaults())
+
+.mfa(mfa -&gt; mfa
+    .name("user")      // typeName = "mfa_user"
+    .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+    .ott(Customizer.withDefaults())
+    .order(70)
+).session(Customizer.withDefaults())</code></pre>
+
+            <h3 id="multi-mfa-urlprefix">urlPrefix() - URL Isolation</h3>
+            <p><code>urlPrefix()</code> <strong>automatically applies a prefix to all MFA URLs</strong> for the flow and auto-configures <code>securityMatcher</code>. This ensures each Multi MFA flow operates in its own URL namespace.</p>
+
+<pre><code class="language-java">registry
+    // Admin: Passkey MFA
+    .mfa(mfa -&gt; mfa
+        .urlPrefix("/admin")
+        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+        .passkey(Customizer.withDefaults())
+        .order(60)
+    ).session(Customizer.withDefaults())
+
+    // User: OTT MFA
+    .mfa(mfa -&gt; mfa
+        .urlPrefix("/user")
+        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
+        .ott(Customizer.withDefaults())
+        .order(70)
+    ).session(Customizer.withDefaults())
+
+    .build();</code></pre>
+
+            <p>URL transformation when <code>urlPrefix("/admin")</code> is set:</p>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Default URL</th><th>After urlPrefix</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>/mfa/login</code></td><td><code>/admin/mfa/login</code></td></tr>
+                <tr><td><code>/mfa/select-factor</code></td><td><code>/admin/mfa/select-factor</code></td></tr>
+                <tr><td><code>/login/mfa-ott</code></td><td><code>/admin/login/mfa-ott</code></td></tr>
+                <tr><td><code>/login/mfa-webauthn</code></td><td><code>/admin/login/mfa-webauthn</code></td></tr>
+                <tr><td><code>/mfa/cancel</code></td><td><code>/admin/mfa/cancel</code></td></tr>
+                <tr><td><code>/api/mfa/config</code></td><td><code>/admin/api/mfa/config</code></td></tr>
+              </tbody>
+            </table></div>
+
+            <div class="callout callout-info">
+              <strong>Automatic securityMatcher</strong><br>
+              Setting <code>urlPrefix("/admin")</code> automatically applies <code>http.securityMatcher("/admin/**")</code>. No need to use <code>rawHttp()</code> separately.
+            </div>
+
+            <h3 id="multi-mfa-defaultloginurl">defaultLoginUrl() - Individual URL Override</h3>
+            <p>Use this when you want to change individual URLs instead of applying <code>urlPrefix()</code>. Changes the <strong>auto-generated login form URL</strong> while maintaining Spring Security standard custom page behavior.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>API</th><th>Behavior</th><th>Auto Form Generation</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.loginPage("/custom")</code></td><td>Redirects to custom page (Spring Security standard)</td><td>No (user-provided page)</td></tr>
+                <tr><td><code>.defaultLoginUrl("/admin/mfa/login")</code></td><td>Changes auto-generated form URL</td><td>Yes (Contexa auto-generated)</td></tr>
+              </tbody>
+            </table></div>
+
+<pre><code class="language-java">.mfa(mfa -&gt; mfa
+    .primaryAuthentication(auth -&gt; auth.formLogin(form -&gt; form
+        .defaultLoginUrl("/admin/mfa/login")
+        .defaultSuccessUrl("/admin/dashboard")))
+    .passkey(Customizer.withDefaults())
+    .order(60)
+).session(Customizer.withDefaults())</code></pre>
+
+            <h3 id="multi-mfa-api">Multi MFA DSL API Summary</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Method</th><th>Location</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.name(String)</code></td><td><code>.mfa()</code></td><td>Set flow name. typeName = <code>mfa_{name}</code></td></tr>
+                <tr><td><code>.urlPrefix(String)</code></td><td><code>.mfa()</code></td><td>Apply prefix to all MFA URLs + auto securityMatcher</td></tr>
+                <tr><td><code>.defaultLoginUrl(String)</code></td><td><code>.formLogin()</code></td><td>Change auto-generated form URL (loginProcessingUrl auto-synced)</td></tr>
+                <tr><td><code>.order(int)</code></td><td><code>.mfa()</code></td><td>SecurityFilterChain priority (lower = higher priority)</td></tr>
+              </tbody>
+            </table></div>
+
+            <h3 id="multi-mfa-caution">Important Notes</h3>
+            <div class="callout callout-warning">
+              <strong>securityMatcher Required</strong><br>
+              When Multi MFA flows use different secondary factors (e.g., Flow 1 uses Passkey, Flow 2 uses OTT), you <strong>must</strong> separate URL scopes using <code>urlPrefix()</code> or <code>rawHttp(http -&gt; http.securityMatcher(...))</code>. Without separation, secondary authentication requests from one flow may be processed by another flow's SecurityFilterChain, resulting in failure.
+            </div>
+          </section>
+
           <!-- MFA + Single Auth -->
           <section class="docs-section">
             <h2 id="mfa-with-single">MFA + Single Authentication Co-configuration</h2>
