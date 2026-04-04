@@ -258,15 +258,10 @@ function build() {
 
         // 13. Inject right-side TOC sidebar container for docs pages
         if (relPath.startsWith('docs' + path.sep) || relPath.startsWith('docs/')) {
-          html = html.replace(
-            '</div><!-- docs-content-inner -->\n      </div><!-- docs-content -->',
-            '</div>\n      </div>\n      <aside class="docs-toc-sidebar" id="docs-toc-sidebar"></aside>'
-          );
-          // Fallback: try without comments
           if (html.indexOf('docs-toc-sidebar') === -1) {
             html = html.replace(
-              /(<\/div>\s*<\/div>\s*)<\/div>\s*<\/main>/,
-              '$1<aside class="docs-toc-sidebar" id="docs-toc-sidebar"></aside>\n    </div>\n  </main>'
+              /(\s*)<\/main>/,
+              '\n      <aside class="docs-toc-sidebar" id="docs-toc-sidebar"></aside>$1</main>'
             );
           }
         }
