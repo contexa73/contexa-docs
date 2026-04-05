@@ -257,11 +257,13 @@ function build() {
         html = html.replace(/\n\s*<!-- Mobile sidebar toggle button -->\s*\n/g, '\n');
 
         // 13. Inject right-side TOC sidebar container for docs pages
+        //     Must be inside .docs-layout (flex sibling of .docs-content)
         if (relPath.startsWith('docs' + path.sep) || relPath.startsWith('docs/')) {
           if (html.indexOf('docs-toc-sidebar') === -1) {
+            // Insert before the closing </div> of .docs-layout, which is followed by </main>
             html = html.replace(
-              /(\s*)<\/main>/,
-              '\n      <aside class="docs-toc-sidebar" id="docs-toc-sidebar"></aside>$1</main>'
+              /(    <\/div>\n  <\/main>)/,
+              '      <aside class="docs-toc-sidebar" id="docs-toc-sidebar"></aside>\n$1'
             );
           }
         }
