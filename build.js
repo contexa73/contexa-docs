@@ -22,7 +22,7 @@ const DIST_DIR = path.join(ROOT, 'dist');
 const LANGUAGES = ['en', 'ko'];
 const CACHE_BUST = '?v=' + Date.now();
 
-// ── Utilities ──────────────────────────────────────────────
+// ?? Utilities ??????????????????????????????????????????????
 
 function findHtmlFiles(dir) {
   let results = [];
@@ -52,9 +52,13 @@ function copyDirSync(src, dest) {
 
 function cleanDir(dir) {
   if (fs.existsSync(dir)) {
-    fs.rmSync(dir, { recursive: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
   fs.mkdirSync(dir, { recursive: true });
+}
+
+function readUtf8(filePath) {
+  return fs.readFileSync(filePath, 'utf-8').replace(/^\uFEFF/, '');
 }
 
 function getRelativeRoot(filePath, langDir) {
@@ -63,7 +67,48 @@ function getRelativeRoot(filePath, langDir) {
   return rel.replace(/\\/g, '/') + '/';
 }
 
-// ── i18n Marker Resolution ─────────────────────────────────
+function absolutizeInternalPath(rawPath, relPath, lang) {
+  if (!rawPath) return rawPath;
+  const normalized = rawPath.replace(/\\/g, '/');
+  if (
+    normalized.startsWith('#') ||
+    normalized.startsWith('http://') ||
+    normalized.startsWith('https://') ||
+    normalized.startsWith('//') ||
+    normalized.startsWith('mailto:') ||
+    normalized.startsWith('tel:') ||
+    normalized.startsWith('javascript:') ||
+    normalized.startsWith('data:')
+  ) {
+    return rawPath;
+  }
+
+  const suffixIndex = normalized.search(/[?#]/);
+  const pathPart = suffixIndex >= 0 ? normalized.slice(0, suffixIndex) : normalized;
+  const suffix = suffixIndex >= 0 ? normalized.slice(suffixIndex) : '';
+
+  if (!pathPart) return rawPath;
+
+  if (pathPart.startsWith('/')) {
+    const internal = pathPart.slice(1);
+    if (internal.startsWith('assets/')) return '/' + internal + suffix;
+    if (/^(en|ko)\//.test(internal)) return '/' + internal + suffix;
+    return '/' + lang + '/' + internal + suffix;
+  }
+
+  const currentPage = '/' + lang + '/' + relPath.replace(/\\/g, '/');
+  const baseDir = path.posix.dirname(currentPage);
+  const resolved = path.posix.normalize(path.posix.join(baseDir, pathPart));
+  return resolved + suffix;
+}
+
+function rewriteInternalAttributesToAbsolute(html, relPath, lang) {
+  return html.replace(/(href|src|action)="([^"]*?)"/g, (match, attr, value) => {
+    const rewritten = absolutizeInternalPath(value, relPath, lang);
+    return attr + '="' + rewritten + '"';
+  });
+}
+// ?? i18n Marker Resolution ?????????????????????????????????
 
 function flattenObject(obj, prefix) {
   let result = {};
@@ -100,7 +145,7 @@ function resolveI18nMarkers(html, locale, lang, currentRelPath) {
   return html;
 }
 
-// ── Link Adjustment ────────────────────────────────────────
+// ?? Link Adjustment ????????????????????????????????????????
 
 function adjustLinksToRelative(html, relRoot) {
   // Convert absolute internal links (/path) to relative (relRoot + path)
@@ -111,7 +156,7 @@ function adjustLinksToRelative(html, relRoot) {
   });
 }
 
-// ── Main Build Pipeline ────────────────────────────────────
+// ?? Main Build Pipeline ????????????????????????????????????
 
 function build() {
   console.log('Contexa i18n Build');
@@ -125,9 +170,9 @@ function build() {
   copyDirSync(ASSETS_DIR, path.join(DIST_DIR, 'assets'));
 
   // Load includes
-  const header = fs.readFileSync(path.join(INCLUDES_DIR, 'header.html'), 'utf-8');
-  const footer = fs.readFileSync(path.join(INCLUDES_DIR, 'footer.html'), 'utf-8');
-  const sidebar = fs.readFileSync(path.join(INCLUDES_DIR, 'docs-sidebar.html'), 'utf-8');
+  const header = readUtf8(path.join(INCLUDES_DIR, 'header.html'));
+  const footer = readUtf8(path.join(INCLUDES_DIR, 'footer.html'));
+  const sidebar = readUtf8(path.join(INCLUDES_DIR, 'docs-sidebar.html'));
 
   // Find all source templates
   const srcFiles = findHtmlFiles(SRC_DIR);
@@ -137,7 +182,7 @@ function build() {
   for (const lang of LANGUAGES) {
     console.log(`Building ${lang.toUpperCase()}...`);
 
-    const locale = JSON.parse(fs.readFileSync(path.join(LOCALE_DIR, `${lang}.json`), 'utf-8'));
+    const locale = JSON.parse(readUtf8(path.join(LOCALE_DIR, `${lang}.json`)));
     const langDir = path.join(DIST_DIR, lang);
     fs.mkdirSync(langDir, { recursive: true });
 
@@ -149,7 +194,7 @@ function build() {
       const outFile = path.join(langDir, relPath);
 
       try {
-        let html = fs.readFileSync(srcFile, 'utf-8');
+        let html = readUtf8(srcFile);
 
         // 1. Inject includes
         html = html.replace('{{header}}', header);
@@ -164,9 +209,9 @@ function build() {
         if (html.includes('{{content}}')) {
           let contentHtml = '';
           if (fs.existsSync(contentFile)) {
-            contentHtml = fs.readFileSync(contentFile, 'utf-8');
+            contentHtml = readUtf8(contentFile);
           } else if (fs.existsSync(contentFileFallback)) {
-            contentHtml = fs.readFileSync(contentFileFallback, 'utf-8');
+            contentHtml = readUtf8(contentFileFallback);
           }
           html = html.replace('{{content}}', contentHtml);
         }
@@ -216,28 +261,10 @@ function build() {
 
         html = html.replace('</head>', `  ${themeInit}\n  ${headTags}\n</head>`);
 
-        // 7. Adjust internal links: /path → /{lang}/path
-        html = html.replace(/(href|src|action)="\/([^"]*?)"/g, (match, attr, p) => {
-          // Skip external URLs
-          if (p.startsWith('http') || p.startsWith('//')) return match;
-          // Skip assets (shared across languages)
-          if (p.startsWith('assets/')) return match;
-          // Skip fonts and external resources
-          if (p.startsWith('fonts.')) return match;
-          // Skip paths already prefixed with a language code
-          if (/^(en|ko)\//.test(p)) return match;
-          return `${attr}="/${lang}/${p}"`;
-        });
+        // 7. Rewrite all internal links to root-absolute language-aware paths
+        html = rewriteInternalAttributesToAbsolute(html, relPath, lang);
 
-        // 8. Convert absolute paths to relative for static file serving
-        const outDir = path.dirname(outFile);
-        const relRoot = getRelativeRoot(outFile, DIST_DIR);
-        html = html.replace(/(href|src|action)="\/([^"]*?)"/g, (match, attr, p) => {
-          if (p.startsWith('http') || p.startsWith('//')) return match;
-          return `${attr}="${relRoot}${p}"`;
-        });
-
-        // 9. Inject theme.js, lang.js, and header-search.js after nav.js
+        // 8. Inject theme.js, lang.js, and header-search.js after nav.js
         html = html.replace(
           /(<script\s+[^>]*nav\.js[^>]*><\/script>)/,
           '$1\n  <script src="/assets/js/theme.js"></script>\n  <script src="/assets/js/lang.js"></script>\n  <script src="/assets/js/header-search.js"></script>'
@@ -315,7 +342,7 @@ function build() {
       const html = fs.readFileSync(file, 'utf-8');
       const $ = cheerio.load(html);
 
-      const title = $('title').text().replace(/\s*[|–-]\s*Contexa.*$/i, '').trim() || $('h1').first().text().trim();
+      const title = $('title').text().replace(/\s*[|??]\s*Contexa.*$/i, '').trim() || $('h1').first().text().trim();
       if (!title) continue;
 
       // Extract headings
