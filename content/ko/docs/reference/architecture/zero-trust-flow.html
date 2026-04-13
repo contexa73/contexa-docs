@@ -27,6 +27,10 @@
             <p>기존 보안은 입구에서 멈춥니다. 방화벽, WAF, 로그인 폼은 신원을 확인합니다 — 하지만 세션이 수립되면 내부는 대부분 방어되지 않습니다. 탈취된 자격 증명, 침해된 세션, 밀리초 내에 인증을 통과하는 AI 에이전트 모두가 이 <strong>인증 후 사각지대</strong>를 악용합니다.</p>
             <p>Contexa는 <strong>Spring Security</strong>와 <strong>Spring AI</strong>를 결합하여 인증 <em>이후</em>의 액션을 모니터링하고 제어하는 통합 제로 트러스트 레이어를 구축합니다 — 로그인 자체만이 아닌.</p>
 
+            <div class="callout-info">
+              <strong>핵심 제어 경로.</strong> 요청 시점 경로는 <code>AISessionSecurityContextRepository.loadDeferredContext(...)</code>, <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code>, <code>ZeroTrustAccessControlFilter.doFilterInternal(...)</code>, <code>ZeroTrustChallengeFilter.doFilterInternal(...)</code>로 이어집니다. 비동기 경로는 <code>ZeroTrustEventPublisher.publishMethodAuthorization(...)</code>, <code>ZeroTrustEventListener.handleZeroTrustEvent(...)</code>, <code>SecurityPlaneAgent</code>, <code>SecurityEventProcessor.process(...)</code>, <code>SecurityDecisionEnforcementHandler.handle(...)</code>로 이어집니다.
+            </div>
+
             <div class="blind-spot-compare">
               <div class="blind-spot-side blind-spot-side--before">
                 <div class="blind-spot-title" style="color:var(--zt-block)">기존 보안</div>
@@ -43,7 +47,7 @@
                 <div class="blind-spot-zone blind-spot-zone--protected">
                   <div class="blind-spot-layer">HCAD 컨텍스트 수집 &mdash; 매 요청</div>
                   <div class="blind-spot-layer">AI 행동 분석 &mdash; 지속적</div>
-                  <div class="blind-spot-layer">동적 권한 제어 &mdash; 실시간</div>
+                  <div class="blind-spot-layer">동적 권한 제어 &mdash; 요청 시점</div>
                   <div class="blind-spot-layer">자동화된 적용 &mdash; 즉각적</div>
                 </div>
               </div>
@@ -98,7 +102,11 @@
           <!-- ============================================ -->
           <section>
             <h2 id="two-flows">두 개의 흐름, 하나의 방어</h2>
-            <p>Contexa는 <strong>두 가지 상호 보완적 흐름</strong>으로 연속적인 제로 트러스트 방어막을 형성합니다. Flow A는 백그라운드에서 실행되어 AI로 이벤트를 분석합니다. Flow B는 HTTP 요청 시점에 실행되어 Spring Security의 권한 시스템을 통해 저장된 AI 결정을 적용합니다. <strong>Redis가 둘을 연결</strong>하며, 애플리케이션 인스턴스 간에 결정 상태를 공유합니다.</p>
+            <p>Contexa는 <strong>두 가지 상호 보완적 흐름</strong>으로 연속적인 제로 트러스트 방어막을 형성합니다. Flow A는 백그라운드에서 실행되어 AI로 이벤트를 분석합니다. Flow B는 HTTP 요청 시점에 실행되어 Spring Security의 권한 시스템을 통해 저장된 결정을 적용합니다. <strong>액션 저장소가 둘을 연결</strong>하며, distributed 모드에서는 Redis 기반 저장소와 Redisson 전파가 인스턴스 간 공유 상태를 담당합니다.</p>
+
+            <div class="callout-info">
+              <strong>Flow A와 Flow B의 코드 연결.</strong> Flow A는 <code>ZeroTrustEventPublisher.publishMethodAuthorization(...)</code>가 <code>ZeroTrustSpringEvent</code>를 발행하면서 시작되고, <code>ZeroTrustEventListener.handleZeroTrustEvent(...)</code>가 이를 비동기 처리 경로로 넘깁니다. Flow B는 <code>AISessionSecurityContextRepository.loadDeferredContext(...)</code>가 요청 보안 컨텍스트를 읽을 때 시작되며, <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code>가 저장된 액션을 Spring Security 권한으로 반영합니다.
+            </div>
 
 
             <div class="dual-flow">
@@ -151,7 +159,7 @@
                   <div class="dual-flow-step-icon dual-flow-step-icon--a">5</div>
                   <div class="dual-flow-step-body">
                     <div class="dual-flow-step-name">결정 &amp; 저장</div>
-                    <div class="dual-flow-step-desc">LLM이 <code>ZeroTrustAction</code>을 직접 출력. Redis에 저장. BLOCK은 크로스 인스턴스 신호를 트리거. ALLOW는 베이스라인 학습을 트리거.</div>
+                    <div class="dual-flow-step-desc">계층형 분석은 <code>SecurityDecision</code>를 만들고, 그 최종 적용 액션이 <code>ZeroTrustActionRepository</code>에 기록됩니다. BLOCK은 크로스 인스턴스 전파를 트리거할 수 있고, ALLOW는 베이스라인 학습으로 이어집니다.</div>
                     <div class="dual-flow-step-impl">SecurityDecisionEnforcementHandler</div>
                   </div>
                 </div>
@@ -161,7 +169,7 @@
               <div class="dual-flow-bridge">
                 <div style="font-size:11px; font-weight:700; color:#7c3aed; text-align:center; letter-spacing:0.05em;">저장 &#10132;</div>
                 <div class="dual-flow-bridge-line"></div>
-                <div class="dual-flow-bridge-badge">Redis</div>
+                <div class="dual-flow-bridge-badge">액션 저장소</div>
                 <div class="dual-flow-bridge-sub">ZeroTrust<br>Action<br>Repository</div>
                 <div class="dual-flow-bridge-line"></div>
                 <div style="font-size:11px; font-weight:700; color:#0891b2; text-align:center; letter-spacing:0.05em;">&#10132; 조회</div>
@@ -187,7 +195,7 @@
                   <div class="dual-flow-step-icon dual-flow-step-icon--b">2</div>
                   <div class="dual-flow-step-body">
                     <div class="dual-flow-step-name">AI 보안 컨텍스트 로딩</div>
-                    <div class="dual-flow-step-desc">Spring Security의 기본 <code>SecurityContextRepository</code>를 대체. Redis에서 현재 <code>ZeroTrustAction</code>을 조회.</div>
+                    <div class="dual-flow-step-desc">Spring Security의 기본 <code>SecurityContextRepository</code>를 대체합니다. <code>ZeroTrustActionRepository</code>를 통해 현재 <code>ZeroTrustAction</code>을 조회하며, distributed 모드에서는 이 공유 상태가 Redis 기반으로 유지됩니다.</div>
                     <div class="dual-flow-step-impl">AISessionSecurityContextRepository</div>
                   </div>
                 </div>
@@ -224,13 +232,13 @@
             <!-- 통합 결론 -->
             <div style="text-align:center; margin:24px 0 16px;">
               <div style="display:inline-block; padding:14px 32px; background:linear-gradient(135deg, rgba(99,102,241,0.08), rgba(6,182,212,0.08)); border:2px solid rgba(99,102,241,0.25); border-radius:12px;">
-                <div style="font-size:18px; font-weight:800; color:#4f46e5; margin-bottom:4px;">AI가 판단 &rarr; Redis가 연결 &rarr; Spring이 집행</div>
+                <div style="font-size:18px; font-weight:800; color:#4f46e5; margin-bottom:4px;">AI가 분석 &rarr; 공유 액션 상태가 연결 &rarr; Spring이 집행</div>
                 <div style="font-size:14px; color:var(--text-secondary);">이것이 Contexa가 요청 시점 제어와 비동기 분석을 결합해 연속적인 제로트러스트를 실현하는 방법입니다.</div>
               </div>
             </div>
 
             <div class="callout-info">
-              <strong>Flow A가 결정합니다. Flow B가 적용합니다.</strong> Redis가 둘을 연결합니다 — 시간을 넘어 (비동기 분석이 완료되면 다음 요청이 이를 반영) 그리고 공간을 넘어 (모든 애플리케이션 인스턴스가 Redisson RTopic을 통해 동일한 액션 상태를 공유).
+              <strong>Flow A가 분석합니다. Flow B가 적용합니다.</strong> 액션 저장소가 둘을 연결합니다 — 시간을 넘어 (비동기 분석이 완료되면 다음 요청이 이를 반영) 그리고 distributed 모드에서는 공간을 넘어 (모든 애플리케이션 인스턴스가 Redis 기반 저장소와 Redisson 신호를 공유).
             </div>
           </section>
 
@@ -325,6 +333,10 @@
             <h2 id="bridge">브리지 &mdash; AISecurityContextRepository</h2>
             <p>이것이 AI와 Spring Security가 만나는 단일 통합 지점입니다. Spring Security의 기본 <code>HttpSessionSecurityContextRepository</code>를 <code>AISessionSecurityContextRepository</code>로 교체함으로써, Contexa는 모든 인증 객체에 후속 요청에 적용될 AI 결정을 주입합니다 &mdash; 애플리케이션 코드 한 줄의 변경 없이.</p>
 
+            <div class="callout-info">
+              <strong>정확한 메서드 체인.</strong> Spring Security는 <code>loadDeferredContext(...)</code>를 호출하고, 저장소는 요청 컨텍스트를 지연 로드한 뒤 <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code>를 통해 현재 액션을 불러옵니다. 이어서 <code>adjustAuthoritiesByAction(...)</code>가 이를 권한으로 변환하고, 필요할 때 <code>saveContext(...)</code>가 갱신된 보안 컨텍스트를 저장합니다. Standalone에서는 같은 계약을 인메모리 구현이 담당하고, distributed에서는 Redis 기반 저장소와 broadcaster가 이를 담당합니다.
+            </div>
+
             <div class="bridge-highlight">
               <h3>동작 원리</h3>
               <div class="arch-flow">
@@ -334,13 +346,13 @@
                 <div class="arch-flow-connector"></div>
                 <div class="arch-flow-node arch-flow-node--secondary">ZeroTrustDeferredSecurityContext<span class="arch-flow-detail">첫 SecurityContext 접근 시 지연 로딩(Lazy-load)</span></div>
                 <div class="arch-flow-connector"></div>
-                <div class="arch-flow-node arch-flow-node--primary">applyZeroTrust()<span class="arch-flow-detail">Redis 조회 &rarr; adjustAuthoritiesByAction()</span></div>
+                <div class="arch-flow-node arch-flow-node--primary">applyZeroTrustToContext()<span class="arch-flow-detail">액션 저장소 조회 &rarr; adjustAuthoritiesByAction()</span></div>
                 <div class="arch-flow-connector"></div>
                 <div class="arch-flow-node arch-flow-node--agent">ZeroTrustAuthenticationToken<span class="arch-flow-detail">trustScore + threatScore + ZeroTrustAction</span></div>
               </div>
 
               <h3 style="margin-top:var(--space-6)">권한 변환</h3>
-              <p style="font-size:var(--text-sm);color:var(--text-secondary)">매 요청마다, <code>adjustAuthoritiesByAction()</code>은 Redis에 저장된 AI 결정에 따라 사용자의 Spring Security 권한을 동적으로 교체합니다:</p>
+              <p style="font-size:var(--text-sm);color:var(--text-secondary)">매 요청마다, <code>adjustAuthoritiesByAction()</code>은 <code>ZeroTrustActionRepository</code>에서 읽은 현재 액션에 따라 사용자의 Spring Security 권한을 동적으로 교체합니다:</p>
 
               <div class="table-scroll">
               <table class="authority-transform-table">
@@ -407,7 +419,7 @@
             <h2 id="zero-trust-actions">ZeroTrustAction &mdash; 5가지 결정</h2>
 
             <div class="callout-danger">
-              <strong>LLM이 액션을 직접 결정합니다.</strong> 계층형 AI 분석 파이프라인은 <code>ZeroTrustAction</code>을 포함하는 <code>SecurityDecision</code>을 출력합니다 &mdash; 리스크 점수가 액션으로 매핑되는 것이 아닙니다. <code>riskScore</code>와 <code>confidence</code> 같은 필드는 <code>SecurityDecision</code>에 감사 로깅 및 학습 목적으로만 존재합니다.
+              <strong>LLM 파이프라인은 제안 액션과 최종 적용 액션을 함께 남깁니다.</strong> 계층형 AI 분석 파이프라인은 <code>SecurityDecision</code>을 출력하며, 그 안에는 제안 액션과 실제 집행에 사용되는 액션이 함께 담깁니다. <code>riskScore</code>와 <code>confidence</code> 같은 필드는 <code>SecurityDecision</code>에 감사 로깅 및 학습 목적으로 유지됩니다.
             </div>
 
             <div class="table-scroll">
@@ -486,7 +498,7 @@
                 <div class="filter-chain-order">55</div>
                 <div class="filter-chain-body">
                   <div class="filter-chain-name"><span class="handler-order">ORDER 55</span> SecurityDecisionEnforcementHandler</div>
-                  <div class="filter-chain-desc">결과에서 <code>ZeroTrustAction</code>을 추출합니다. Redis에 저장합니다. BLOCK: <code>blockedFlag</code> 설정 + <code>BlockingSignalBroadcaster</code>를 통해 브로드캐스트. ALLOW: <code>SecurityLearningService.learnFromResult()</code> 트리거.</div>
+                  <div class="filter-chain-desc">결과에서 최종 적용 액션을 추출하고 <code>ZeroTrustActionRepository</code>에 기록합니다. BLOCK: <code>blockedFlag</code> 설정 + <code>BlockingSignalBroadcaster</code>를 통한 브로드캐스트. ALLOW: 베이스라인 학습이 예약되며 최종적으로 <code>SecurityLearningService.learnBaselineOnly(...)</code>로 이어집니다.</div>
                 </div>
               </div>
               <div class="filter-chain-connector">|</div>
@@ -536,7 +548,7 @@
                 <div class="filter-chain-order">4</div>
                 <div class="filter-chain-body">
                   <div class="filter-chain-name">LLM 평가 (Tier 1)</div>
-                  <div class="filter-chain-desc"><code>SecurityPromptTemplate</code>으로 프롬프트를 구성하고 <code>UnifiedLLMOrchestrator</code>로 전송합니다. 타임아웃: LLM 10초 / 전체 15초. <code>SecurityDecision</code>을 출력합니다.</div>
+                  <div class="filter-chain-desc"><code>SecurityPromptTemplate</code>으로 프롬프트를 구성하고 <code>UnifiedLLMOrchestrator</code>로 전송합니다. 결과는 제안 액션과 최종 적용 액션을 담은 <code>SecurityDecision</code>입니다.</div>
                 </div>
               </div>
             </div>
@@ -564,7 +576,7 @@
                 <div class="filter-chain-order">3</div>
                 <div class="filter-chain-body">
                   <div class="filter-chain-name">전문가 LLM 평가 (Tier 2)</div>
-                  <div class="filter-chain-desc">완전한 포렌식 분석. 타임아웃: 10초. <strong>Fail-closed: 타임아웃 시 BLOCK이 기본값</strong> (ESCALATE가 아님).</div>
+                  <div class="filter-chain-desc">심층 포렌식 분석을 수행합니다. 최종 적용 액션은 Tier 2 분석 결과와 후속 enforcement 단계, autonomy 제약에 따라 확정됩니다.</div>
                 </div>
               </div>
               <div class="filter-chain-connector">|</div>
@@ -584,7 +596,7 @@
           <!-- ============================================ -->
           <section>
             <h2 id="flow-b">Flow B &mdash; 동적 권한 적용</h2>
-            <p>매 HTTP 요청마다, Spring Security의 필터 체인이 Redis에 저장된 AI 결정을 적용합니다. 핵심 메커니즘은 <strong>권한 교체</strong>입니다 &mdash; 사용자의 <code>GrantedAuthority</code> 집합이 현재 <code>ZeroTrustAction</code>에 따라 동적으로 재작성됩니다.</p>
+            <p>매 HTTP 요청마다, Spring Security의 필터 체인이 <code>ZeroTrustActionRepository</code>를 통해 현재 액션을 읽어 적용합니다. 핵심 메커니즘은 <strong>권한 교체</strong>입니다 &mdash; 사용자의 <code>GrantedAuthority</code> 집합이 현재 <code>ZeroTrustAction</code>에 따라 동적으로 재작성됩니다.</p>
 
             <h3>필터 체인 순서</h3>
             <div class="filter-chain">
@@ -600,7 +612,7 @@
                 <div class="filter-chain-order" style="background:rgba(99,102,241,0.1);color:#4f46e5">40</div>
                 <div class="filter-chain-body">
                   <div class="filter-chain-name">AISessionSecurityContextRepository</div>
-                  <div class="filter-chain-desc">Spring Security의 기본값을 대체합니다. <code>loadDeferredContext()</code> 시 <code>ZeroTrustDeferredSecurityContext</code>로 래핑합니다. 첫 접근 시: Redis 조회 &rarr; <code>adjustAuthoritiesByAction()</code> &rarr; <code>ZeroTrustAuthenticationToken</code> 생성.</div>
+                  <div class="filter-chain-desc">Spring Security의 기본값을 대체합니다. <code>loadDeferredContext()</code> 시 <code>ZeroTrustDeferredSecurityContext</code>로 래핑합니다. 첫 접근 시: <code>ZeroTrustActionRepository</code>에서 현재 액션을 조회하고 <code>adjustAuthoritiesByAction()</code>를 거쳐 <code>ZeroTrustAuthenticationToken</code>을 생성합니다.</div>
                 </div>
               </div>
               <div class="filter-chain-connector">|</div>
@@ -652,7 +664,7 @@
                     <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">1</div>
                     <div class="filter-chain-body">
                       <div class="filter-chain-name">SecurityDecisionEnforcementHandler</div>
-                      <div class="filter-chain-desc"><code>ZeroTrustActionRepository</code>를 통해 Redis에 BLOCK을 저장합니다. <code>blockedFlag</code>를 설정합니다.</div>
+                      <div class="filter-chain-desc"><code>ZeroTrustActionRepository</code>를 통해 BLOCK을 기록하고 <code>blockedFlag</code>를 설정합니다. distributed 모드에서는 이 상태가 Redis 기반으로 유지됩니다.</div>
                     </div>
                   </div>
                   <div class="filter-chain-connector">|</div>

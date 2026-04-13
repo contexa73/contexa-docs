@@ -24,7 +24,7 @@
           <!-- ============================================ -->
           <section>
             <h2 id="blind-spot">The Post-Authentication Blind Spot</h2>
-            <p>Traditional security stops at the gate. Firewalls, WAFs, and login forms verify identity &mdash; but once a session is established, the interior is often under-monitored. Stolen credentials, compromised sessions, and AI agents that pass authentication in milliseconds all exploit this <strong>post-authentication blind spot</strong>.</p>
+            <p>Traditional security stops at the gate. Firewalls, WAFs, and login forms verify identity &mdash; but once a session is established, the interior is often under-monitored. Stolen credentials, compromised sessions, and AI agents that pass authentication quickly all exploit this <strong>post-authentication blind spot</strong>.</p>
             <p>Contexa combines <strong>Spring Security</strong> with <strong>Spring AI</strong> to build a unified zero-trust layer that continues operating <em>after</em> authentication, not just at login.</p>
 
             <div class="blind-spot-compare">
@@ -41,10 +41,10 @@
                 <div class="blind-spot-title" style="color:var(--brand-primary)">Contexa AI Zero Trust</div>
                 <div class="blind-spot-gate blind-spot-gate--pass">Authentication Gate &nbsp;PASS</div>
                 <div class="blind-spot-zone blind-spot-zone--protected">
-                  <div class="blind-spot-layer">HCAD Context Collection &mdash; every request</div>
+                  <div class="blind-spot-layer">HCAD Context Collection &mdash; request-time</div>
                   <div class="blind-spot-layer">AI Behavioral Analysis &mdash; continuous</div>
-                  <div class="blind-spot-layer">Dynamic Authority Control &mdash; real-time</div>
-                  <div class="blind-spot-layer">Automated Enforcement &mdash; instant</div>
+                  <div class="blind-spot-layer">Dynamic Authority Control &mdash; request-time authority switching</div>
+                  <div class="blind-spot-layer">Automated Enforcement &mdash; active and next request paths</div>
                 </div>
               </div>
             </div>
@@ -98,7 +98,11 @@
           <!-- ============================================ -->
           <section>
             <h2 id="two-flows">Two Flows, One Defense</h2>
-            <p>Contexa operates <strong>two complementary flows</strong> that together form a continuous zero-trust shield. Flow A runs in the background &mdash; analyzing events asynchronously. Flow B runs on every HTTP request &mdash; enforcing decisions through Spring Security's authority system. <strong>Redis bridges the two</strong>, sharing decisions across all application instances in real time.</p>
+            <p>Contexa operates <strong>two complementary flows</strong> that together form a continuous zero-trust shield. Flow A runs in the background &mdash; analyzing events asynchronously. Flow B runs on every HTTP request &mdash; enforcing decisions through Spring Security's authority system. <strong>The action repository bridges the two</strong>; in distributed mode Redis and Redisson back the shared action state and cross-instance propagation.</p>
+
+            <div class="callout-info">
+              <strong>Code anchors.</strong> Flow A begins when <code>ZeroTrustEventPublisher.publishMethodAuthorization(...)</code> emits a <code>ZeroTrustSpringEvent</code>, and <code>ZeroTrustEventListener.handleZeroTrustEvent(...)</code> forwards it into the background processor. Flow B begins when <code>AISessionSecurityContextRepository.loadDeferredContext(...)</code> loads the request security context and <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code> maps the stored action into Spring Security authorities.
+            </div>
 
 
             <div class="dual-flow">
@@ -151,7 +155,7 @@
                   <div class="dual-flow-step-icon dual-flow-step-icon--a">5</div>
                   <div class="dual-flow-step-body">
                     <div class="dual-flow-step-name">Decision &amp; Store</div>
-                    <div class="dual-flow-step-desc">LLM directly outputs <code>ZeroTrustAction</code>. Saves to Redis. BLOCK triggers cross-instance signal. ALLOW triggers baseline learning.</div>
+                    <div class="dual-flow-step-desc">Tiered analysis yields a <code>SecurityDecision</code> whose enforced action is persisted to the action repository. BLOCK can trigger cross-instance propagation, while ALLOW feeds baseline learning.</div>
                     <div class="dual-flow-step-impl">SecurityDecisionEnforcementHandler</div>
                   </div>
                 </div>
@@ -161,7 +165,7 @@
               <div class="dual-flow-bridge">
                 <div style="font-size:11px; font-weight:700; color:#7c3aed; text-align:center; letter-spacing:0.05em;">WRITE &#10132;</div>
                 <div class="dual-flow-bridge-line"></div>
-                <div class="dual-flow-bridge-badge">Redis</div>
+                <div class="dual-flow-bridge-badge">Action Repository</div>
                 <div class="dual-flow-bridge-sub">ZeroTrust<br>Action<br>Repository</div>
                 <div class="dual-flow-bridge-line"></div>
                 <div style="font-size:11px; font-weight:700; color:#0891b2; text-align:center; letter-spacing:0.05em;">&#10132; READ</div>
@@ -187,7 +191,7 @@
                   <div class="dual-flow-step-icon dual-flow-step-icon--b">2</div>
                   <div class="dual-flow-step-body">
                     <div class="dual-flow-step-name">AI Security Context Loaded</div>
-                    <div class="dual-flow-step-desc">Replaces Spring Security's default <code>SecurityContextRepository</code>. Queries Redis for current <code>ZeroTrustAction</code>.</div>
+                    <div class="dual-flow-step-desc">Replaces Spring Security's default <code>SecurityContextRepository</code>. Resolves the current <code>ZeroTrustAction</code> through <code>ZeroTrustActionRepository</code>; in distributed mode this shared state is Redis-backed.</div>
                     <div class="dual-flow-step-impl">AISessionSecurityContextRepository</div>
                   </div>
                 </div>
@@ -205,7 +209,7 @@
                   <div class="dual-flow-step-icon dual-flow-step-icon--b">4</div>
                   <div class="dual-flow-step-body">
                     <div class="dual-flow-step-name">Access Control Filter</div>
-                    <div class="dual-flow-step-desc">Routes based on action: BLOCK&rarr;403/Block-MFA, ESCALATE&rarr;423 locked, PENDING&rarr;response wrapped for real-time interrupt</div>
+                    <div class="dual-flow-step-desc">Routes based on action: BLOCK&rarr;403/Block-MFA, ESCALATE&rarr;423 locked, PENDING&rarr;response wrapped for in-flight interruption on the active request path</div>
                     <div class="dual-flow-step-impl">ZeroTrustAccessControlFilter (Order: 45)</div>
                   </div>
                 </div>
@@ -224,13 +228,13 @@
             <!-- Unified conclusion -->
             <div style="text-align:center; margin:24px 0 16px;">
               <div style="display:inline-block; padding:14px 32px; background:linear-gradient(135deg, rgba(99,102,241,0.08), rgba(6,182,212,0.08)); border:2px solid rgba(99,102,241,0.25); border-radius:12px;">
-                <div style="font-size:18px; font-weight:800; color:#4f46e5; margin-bottom:4px;">AI Decides &rarr; Redis Bridges &rarr; Spring Enforces</div>
+                <div style="font-size:18px; font-weight:800; color:#4f46e5; margin-bottom:4px;">AI Analyzes &rarr; Shared Action State Bridges &rarr; Spring Enforces</div>
                 <div style="font-size:14px; color:var(--text-secondary);">This is how Contexa realizes continuous Zero Trust across request-time enforcement and asynchronous analysis.</div>
               </div>
             </div>
 
             <div class="callout-info">
-              <strong>Flow A decides. Flow B enforces.</strong> Redis bridges them &mdash;across time (async analysis completes, next request picks it up) and across space (all application instances share the same action state via Redisson RTopic).
+              <strong>Flow A analyzes. Flow B enforces.</strong> The shared action state bridges them &mdash;across time (async analysis completes, the next request picks it up) and, in distributed mode, across application instances via Redis-backed storage and Redisson-based signaling.
             </div>
           </section>
 
@@ -323,7 +327,11 @@
           <!-- ============================================ -->
           <section>
             <h2 id="bridge">The Bridge &mdash; AISecurityContextRepository</h2>
-            <p>This is the single integration point where AI meets Spring Security. By replacing Spring Security's default <code>HttpSessionSecurityContextRepository</code> with <code>AISessionSecurityContextRepository</code>, Contexa applies stored AI decisions to the authentication context on subsequent requests &mdash; without changing application code.</p>
+            <p>This is the integration point where stored AI decisions meet Spring Security request processing. By replacing Spring Security's default <code>HttpSessionSecurityContextRepository</code> with <code>AISessionSecurityContextRepository</code>, Contexa applies previously stored zero-trust actions to the authentication context on subsequent requests &mdash; without changing application code.</p>
+
+            <div class="callout-info">
+              <strong>Exact method chain.</strong> Spring Security calls <code>loadDeferredContext(...)</code>, the repository resolves the request context lazily, <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code> loads the current action, <code>adjustAuthoritiesByAction(...)</code> maps that action into authorities, and <code>saveContext(...)</code> persists the updated security context when needed. In standalone mode the same contract is backed by in-memory implementations; in distributed mode Redis-backed repositories and broadcasters are used.
+            </div>
 
             <div class="bridge-highlight">
               <h3>How It Works</h3>
@@ -334,13 +342,13 @@
                 <div class="arch-flow-connector"></div>
                 <div class="arch-flow-node arch-flow-node--secondary">ZeroTrustDeferredSecurityContext<span class="arch-flow-detail">lazy-loads on first SecurityContext access</span></div>
                 <div class="arch-flow-connector"></div>
-                <div class="arch-flow-node arch-flow-node--primary">applyZeroTrust()<span class="arch-flow-detail">queries Redis &rarr; adjustAuthoritiesByAction()</span></div>
+                <div class="arch-flow-node arch-flow-node--primary">applyZeroTrustToContext()<span class="arch-flow-detail">queries the action repository &rarr; adjustAuthoritiesByAction()</span></div>
                 <div class="arch-flow-connector"></div>
                 <div class="arch-flow-node arch-flow-node--agent">ZeroTrustAuthenticationToken<span class="arch-flow-detail">trustScore + threatScore + ZeroTrustAction</span></div>
               </div>
 
               <h3 style="margin-top:var(--space-6)">Authority Transformation</h3>
-              <p style="font-size:var(--text-sm);color:var(--text-secondary)">On every request, <code>adjustAuthoritiesByAction()</code> dynamically replaces the user's Spring Security authorities based on the AI decision stored in Redis:</p>
+              <p style="font-size:var(--text-sm);color:var(--text-secondary)">When Spring Security loads the request <code>SecurityContext</code>, <code>adjustAuthoritiesByAction()</code> dynamically replaces the user's authorities based on the currently stored zero-trust action:</p>
 
               <div class="table-scroll">
               <table class="authority-transform-table">
@@ -387,7 +395,7 @@
                     <td class="auth-arrow">&rarr;</td>
                     <td>Original + <code>ROLE_PENDING_ANALYSIS</code></td>
                     <td class="auth-arrow">&rarr;</td>
-                    <td>Response wrapped, real-time interrupt</td>
+                    <td>Response wrapped, in-flight interruption if the user becomes blocked while the response is still being written</td>
                   </tr>
                 </tbody>
               </table>
@@ -455,7 +463,7 @@
                   <td>503</td>
                   <td>0s</td>
                   <td><code>ROLE_PENDING_ANALYSIS</code></td>
-                  <td>AI analysis in progress. Response wrapped with <code>BlockableResponseWrapper</code> for real-time mid-stream interrupt.</td>
+                  <td>AI analysis in progress. Response is wrapped with <code>BlockableResponseWrapper</code> so the stream can be interrupted if the user becomes blocked while data is still being written.</td>
                 </tr>
               </tbody>
             </table>
@@ -486,7 +494,7 @@
                 <div class="filter-chain-order">55</div>
                 <div class="filter-chain-body">
                   <div class="filter-chain-name"><span class="handler-order">ORDER 55</span> SecurityDecisionEnforcementHandler</div>
-                  <div class="filter-chain-desc">Extracts <code>ZeroTrustAction</code> from result. Saves to Redis. BLOCK: sets <code>blockedFlag</code> + broadcasts via <code>BlockingSignalBroadcaster</code>. ALLOW: triggers <code>SecurityLearningService.learnFromResult()</code>.</div>
+                  <div class="filter-chain-desc">Extracts the enforced action from the result. Persists it through <code>ZeroTrustActionRepository</code>. BLOCK: sets <code>blockedFlag</code> + broadcasts via <code>BlockingSignalBroadcaster</code>. ALLOW: schedules baseline learning, which flows into <code>SecurityLearningService.learnBaselineOnly(...)</code>.</div>
                 </div>
               </div>
               <div class="filter-chain-connector">|</div>
@@ -500,10 +508,10 @@
             </div>
 
             <h3>AI Analysis &mdash; Layer 1 &amp; Layer 2</h3>
-            <p><code>ColdPathEventProcessor</code> orchestrates a tiered AI strategy. Layer 1 handles ~98% of requests with a fast Tier 1 LLM. When confidence is insufficient, Layer 2 escalates to deep forensic analysis. Both layers use <code>SecurityPromptTemplate</code> for structured prompt engineering.</p>
+            <p><code>ColdPathEventProcessor</code> orchestrates a tiered AI strategy. Layer 1 performs fast contextual analysis, and when confidence is insufficient Layer 2 escalates to deeper forensic analysis. Both layers use <code>SecurityPromptTemplate</code> for structured prompt engineering.</p>
 
             <div class="callout-info">
-              <strong>LLM output is <code>SecurityDecision</code></strong>, which directly contains a <code>ZeroTrustAction</code> (ALLOW, BLOCK, CHALLENGE, ESCALATE). The <code>riskScore</code> and <code>confidence</code> fields are recorded for audit and baseline learning &mdash; they do not drive the action decision.
+              <strong>LLM output is <code>SecurityDecision</code></strong>, which contains the proposed <code>action</code>, the effective <code>autonomousAction</code>, and supporting fields such as <code>riskScore</code> and <code>confidence</code>. Those supporting fields are preserved for audit, calibration, and learning, while the resolved autonomous action is what the enforcement path consumes.
             </div>
 
             <h4>Layer 1 &mdash; Contextual Analysis</h4>
@@ -536,7 +544,7 @@
                 <div class="filter-chain-order">4</div>
                 <div class="filter-chain-body">
                   <div class="filter-chain-name">LLM Evaluation (Tier 1)</div>
-                  <div class="filter-chain-desc">Constructs prompt via <code>SecurityPromptTemplate</code>, sends to <code>UnifiedLLMOrchestrator</code>. Timeout: 10s LLM / 15s total. Outputs <code>SecurityDecision</code>.</div>
+                  <div class="filter-chain-desc">Constructs a prompt via <code>SecurityPromptTemplate</code>, sends it to <code>UnifiedLLMOrchestrator</code>, and produces a <code>SecurityDecision</code> that carries the proposed and effective zero-trust action.</div>
                 </div>
               </div>
             </div>
@@ -564,7 +572,7 @@
                 <div class="filter-chain-order">3</div>
                 <div class="filter-chain-body">
                   <div class="filter-chain-name">Expert LLM Evaluation (Tier 2)</div>
-                  <div class="filter-chain-desc">Full forensic analysis. Timeout: 10s. <strong>Fail-closed: defaults to BLOCK on timeout</strong> (not ESCALATE).</div>
+                  <div class="filter-chain-desc">Full forensic analysis with broader context, deeper embeddings, and the same enforcement contract used by the rest of the runtime pipeline.</div>
                 </div>
               </div>
               <div class="filter-chain-connector">|</div>
@@ -584,7 +592,7 @@
           <!-- ============================================ -->
           <section>
             <h2 id="flow-b">Flow B &mdash; Dynamic Authority Enforcement</h2>
-            <p>On every HTTP request, Spring Security's filter chain enforces the AI decision stored in Redis. The key mechanism is <strong>authority replacement</strong> &mdash; the user's <code>GrantedAuthority</code> set is dynamically rewritten based on the current <code>ZeroTrustAction</code>.</p>
+            <p>On every HTTP request, Spring Security's filter chain enforces the current action resolved through <code>ZeroTrustActionRepository</code>. The key mechanism is <strong>authority replacement</strong> &mdash; the user's <code>GrantedAuthority</code> set is dynamically rewritten based on the current <code>ZeroTrustAction</code>.</p>
 
             <h3>Filter Chain Order</h3>
             <div class="filter-chain">
@@ -600,7 +608,7 @@
                 <div class="filter-chain-order" style="background:rgba(99,102,241,0.1);color:#4f46e5">40</div>
                 <div class="filter-chain-body">
                   <div class="filter-chain-name">AISessionSecurityContextRepository</div>
-                  <div class="filter-chain-desc">Replaces Spring Security's default. On <code>loadDeferredContext()</code>, wraps with <code>ZeroTrustDeferredSecurityContext</code>. On first access: queries Redis &rarr; <code>adjustAuthoritiesByAction()</code> &rarr; creates <code>ZeroTrustAuthenticationToken</code>.</div>
+                  <div class="filter-chain-desc">Replaces Spring Security's default. On <code>loadDeferredContext()</code>, wraps with <code>ZeroTrustDeferredSecurityContext</code>. On first access: resolves the current action through <code>ZeroTrustActionRepository</code>, calls <code>adjustAuthoritiesByAction()</code>, and creates <code>ZeroTrustAuthenticationToken</code>.</div>
                 </div>
               </div>
               <div class="filter-chain-connector">|</div>
@@ -611,7 +619,7 @@
                   <div class="filter-chain-desc">
                     <strong>BLOCK</strong>: Redirect to <code>/zero-trust/blocked</code> or initiate Block-MFA (max 2 attempts via <code>ChallengeMfaInitializer</code>).<br>
                     <strong>ESCALATE</strong>: Return 423 to <code>/zero-trust/analysis-pending</code>. TTL 5 min; auto-promotes to BLOCK.<br>
-                    <strong>PENDING_ANALYSIS</strong>: Wrap response with <code>BlockableResponseWrapper</code> for real-time mid-stream interrupt.
+                    <strong>PENDING_ANALYSIS</strong>: Wrap the response with <code>BlockableResponseWrapper</code> so an in-flight stream can be interrupted if the action changes while data is still being written.
                   </div>
                 </div>
               </div>
@@ -640,7 +648,7 @@
           <!-- ============================================ -->
           <section>
             <h2 id="enforcement">Enforcement Infrastructure</h2>
-            <p>AI makes the decision. Spring Security's filter chain and distributed infrastructure enforce it &mdash; in milliseconds, across every instance, even mid-response.</p>
+            <p>AI makes the decision. Spring Security's filter chain and, in distributed mode, the shared runtime infrastructure enforce it on the active request path, across instances, and even while a response is still being written.</p>
 
             <div class="enforcement-grid">
               <!-- BLOCK -->
@@ -652,7 +660,7 @@
                     <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">1</div>
                     <div class="filter-chain-body">
                       <div class="filter-chain-name">SecurityDecisionEnforcementHandler</div>
-                      <div class="filter-chain-desc">Saves BLOCK to Redis via <code>ZeroTrustActionRepository</code>. Sets <code>blockedFlag</code>.</div>
+                      <div class="filter-chain-desc">Persists BLOCK through <code>ZeroTrustActionRepository</code> and sets <code>blockedFlag</code>. In distributed mode the stored action is Redis-backed.</div>
                     </div>
                   </div>
                   <div class="filter-chain-connector">|</div>

@@ -20,6 +20,10 @@
             <p>Contexa is an <strong>AI Native Zero Trust</strong> security platform for Spring Boot. Rather than relying solely on perimeter-based security, Contexa provides <strong>continuous verification after authentication</strong> through AI-driven security decisions. Contexa applies continuous verification after authentication through request-time enforcement and asynchronous analysis that use session context, behavioral patterns, and threat signals.</p>
             <p>The platform is composed of four core modules, each handling a distinct security concern, plus auto-configuration and starter support for seamless Spring Boot integration.</p>
 
+            <div class="callout-info">
+              <strong>Code-backed bootstrap chain.</strong> The OSS entry point is <code>@EnableAISecurity</code> in <code>contexa-common</code>. That annotation imports <code>AiSecurityImportSelector</code>, which loads <code>AiSecurityConfiguration</code>. From there, <code>IdentitySecurityCoreAutoConfiguration</code> and the module-specific auto-configurations wire the request-time runtime control path, the asynchronous analysis path, and the IAM integration points.
+            </div>
+
             <div class="module-grid">
               <!-- contexa-core -->
               <div class="module-card">
@@ -95,7 +99,11 @@
           <!-- Section 2: Request Processing Flow -->
           <section>
             <h2 id="request-flow">AI Native Zero Trust Flow</h2>
-            <p>Contexa processes every HTTP request through two distinct pipelines: a <strong>synchronous filter chain</strong> that runs on every request, and an <strong>asynchronous AI pipeline</strong> that analyzes events in the background. AI decisions are stored in Redis and enforced on the <em>next</em> request &mdash; this non-blocking design keeps analysis off the direct request path.</p>
+            <p>Contexa processes every HTTP request through two distinct pipelines: a <strong>synchronous filter chain</strong> that runs on every request, and an <strong>asynchronous AI pipeline</strong> that analyzes events in the background. The enforced action is persisted through <code>ZeroTrustActionRepository</code> and applied on the <em>next</em> request; in distributed mode that shared state is backed by Redis and Redisson. This non-blocking design keeps analysis off the direct request path.</p>
+
+            <div class="callout-info">
+              <strong>Primary code anchors.</strong> Request-time enforcement flows through <code>AISessionSecurityContextRepository.loadDeferredContext(...)</code>, <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code>, <code>ZeroTrustAccessControlFilter.doFilterInternal(...)</code>, and <code>ZeroTrustChallengeFilter.doFilterInternal(...)</code>. Asynchronous analysis flows through <code>ZeroTrustEventPublisher.publishMethodAuthorization(...)</code>, <code>ZeroTrustEventListener.handleZeroTrustEvent(...)</code>, <code>SecurityEventProcessor.process(...)</code>, and <code>SecurityDecisionEnforcementHandler.handle(...)</code>.
+            </div>
 
             <h3>Synchronous Filter Chain</h3>
             <p>The Spring Security filter chain processes every HTTP request in order. Filters inspect, gate, or enrich the request but never call the LLM directly.</p>
@@ -114,7 +122,7 @@
 
               <div class="arch-flow-node arch-flow-node--filter">
                 ZeroTrustAccessControlFilter
-                <span class="arch-flow-detail">Reads ZeroTrustAction from Redis for this user &mdash; enforces decisions made by the asynchronous pipeline on a <em>previous</em> request.</span>
+                <span class="arch-flow-detail">Reads the current action from <code>ZeroTrustActionRepository</code> for this user &mdash; in distributed mode the shared state is Redis-backed, and the filter enforces decisions made by the asynchronous pipeline on a <em>previous</em> request.</span>
               </div>
               <div class="arch-flow-connector"></div>
 
@@ -169,7 +177,7 @@
             </div>
 
             <h3>Asynchronous AI Pipeline</h3>
-            <p><code>ZeroTrustEventListener</code> receives the <code>ZeroTrustSpringEvent</code> synchronously via <code>@EventListener</code>, acting as the bridge into the asynchronous processing pipeline. The AI evaluates threats in the background and stores its decision in Redis, which is enforced by <code>ZeroTrustAccessControlFilter</code> on the user's <em>next</em> request.</p>
+            <p><code>ZeroTrustEventListener</code> receives the <code>ZeroTrustSpringEvent</code> synchronously via <code>@EventListener</code>, acting as the bridge into the asynchronous processing pipeline. The AI evaluates threats in the background and persists the enforced action through <code>ZeroTrustActionRepository</code>; in distributed mode Redis-backed storage and Redisson propagation make that state visible to the user's <em>next</em> request.</p>
 
             <div class="arch-flow">
               <div class="arch-flow-node arch-flow-node--filter" style="border:2px dashed var(--brand-primary);background:var(--bg-secondary)">
@@ -224,7 +232,7 @@
 
               <div class="arch-flow-node arch-flow-node--decision">
                 SecurityDecisionEnforcementHandler <span style="opacity:0.7">(order=55)</span>
-                <span class="arch-flow-detail">Saves ZeroTrustAction to Redis. On BLOCK: broadcasts via Redisson RTopic. Skipped in SHADOW mode.</span>
+                <span class="arch-flow-detail">Persists the enforced action through <code>ZeroTrustActionRepository</code>. On BLOCK: sets blocked state and can broadcast via Redisson RTopic in distributed mode.</span>
               </div>
               <div style="margin-top:var(--space-3);padding:var(--space-2) var(--space-4);background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:var(--radius-md);text-align:center;font-size:var(--text-xs);color:var(--text-secondary);font-weight:500">
                 Stored in <code style="font-size:var(--text-xs)">ZeroTrustActionRepository</code> (Redis or in-memory) &mdash;<strong>enforced on next request</strong>
@@ -263,7 +271,7 @@
               <!-- 3. ZeroTrustSecurityService -->
               <div class="arch-flow-node arch-flow-node--agent">
                 ZeroTrustSecurityService
-                <span class="arch-flow-detail">Reads <code>ZeroTrustAction</code> from Redis &mdash;replaces <code>Authentication</code> with <code>ZeroTrustAuthenticationToken</code></span>
+                <span class="arch-flow-detail">Reads the current action from <code>ZeroTrustActionRepository</code> &mdash; in distributed mode this state is Redis-backed &mdash; and replaces <code>Authentication</code> with <code>ZeroTrustAuthenticationToken</code></span>
                 <span class="arch-flow-badge" style="margin-top:16px">AI Decision &mdash;Spring Security Authority</span>
               </div>
               <div class="arch-flow-connector"></div>
@@ -376,6 +384,10 @@
             <h2 id="infrastructure-modes">Infrastructure Modes</h2>
             <p>Contexa supports two infrastructure modes, allowing you to start with a zero-dependency setup for development and scale to a distributed architecture for production.</p>
 
+            <div class="callout-info">
+              <strong>Code anchor.</strong> Infrastructure mode is bound through <code>ContexaProperties.InfrastructureMode</code> under <code>contexa.infrastructure.mode</code>. Distributed-specific beans are activated by conditional auto-configuration, while standalone mode remains the default path with in-memory implementations.
+            </div>
+
             <div class="mode-cards">
               <div class="mode-card">
                 <h3 style="color:var(--color-info)">STANDALONE</h3>
@@ -412,17 +424,21 @@
             <h2 id="shadow-mode">Shadow Mode</h2>
             <p>Contexa supports a <strong>Shadow Mode</strong> for safe, progressive adoption. Controlled by a single property, <code>security.zerotrust.mode</code>, it determines whether AI decisions are enforced or only logged.</p>
 
+            <div class="callout-info">
+              <strong>Code anchor.</strong> Shadow and enforce behavior is controlled by <code>SecurityZeroTrustProperties.SecurityMode</code>. In SHADOW mode the analysis path still runs, but enforcement handlers do not persist or apply runtime actions; in ENFORCE mode the same analysis output is written to the action repository and consumed by the runtime filters.
+            </div>
+
             <div class="mode-cards">
               <div class="mode-card">
                 <h3 style="color:var(--zt-challenge)">SHADOW</h3>
-                <p>The full AI pipeline runs &mdash; HCAD analysis, tiered LLM evaluation, and risk scoring &mdash; but <code>SecurityDecisionEnforcementHandler</code> skips enforcement via <code>canHandle()</code>. No actions are saved to Redis. All AI decisions are recorded in audit logs only.</p>
+                <p>The full AI pipeline still runs &mdash; HCAD analysis, tiered LLM evaluation, and risk scoring &mdash; but the runtime remains in observation mode. The analysis path continues to record decisions and evidence, while request-time blocking and escalation are not activated as live user enforcement in this mode.</p>
                 <div style="display:flex;flex-direction:column;gap:var(--space-1)">
                   <code>security.zerotrust.mode: SHADOW</code>
                 </div>
               </div>
               <div class="mode-card">
                 <h3 style="color:var(--zt-allow)">ENFORCE</h3>
-                <p>Default mode. AI decisions are saved to Redis by <code>SecurityDecisionEnforcementHandler</code> and enforced by <code>ZeroTrustAccessControlFilter</code> on subsequent requests. Full enforcement with BLOCK, CHALLENGE, ESCALATE actions active.</p>
+                <p>Default mode. The enforced action is persisted through <code>ZeroTrustActionRepository</code> and applied by <code>ZeroTrustAccessControlFilter</code> and companion zero-trust filters on subsequent requests. BLOCK, CHALLENGE, and ESCALATE are active in the live request path.</p>
                 <div style="display:flex;flex-direction:column;gap:var(--space-1)">
                   <code>security.zerotrust.mode: ENFORCE</code>
                 </div>
@@ -438,12 +454,16 @@
             <h2 id="ai-integration">AI Integration Points</h2>
             <p>AI and LLM capabilities are deeply integrated throughout the platform. The following are the primary points where AI-driven decisions are made.</p>
 
+            <div class="callout-info">
+              <strong>Code anchors for this section.</strong> The items below are backed by runtime components such as <code>SecurityPlaneAgent</code>, <code>Layer1ContextualStrategy</code>, <code>Layer2ExpertStrategy</code>, <code>UnifiedLLMOrchestrator</code>, <code>AIAdaptiveMfaPolicyProvider</code>, <code>ApprovalService.requestApproval(...)</code>, <code>AuditingHandler</code>, and <code>CentralAuditFacade</code>.
+            </div>
+
             <ol class="ai-list">
               <li>
                 <div class="ai-list-num">1</div>
                 <div class="ai-list-content">
                   <strong>Zero-Trust Threat Evaluation</strong>
-                  <span>SecurityPlaneAgent uses a tiered LLM strategy &mdash;Layer 1 for fast contextual analysis, Layer 2 for deep expert investigation &mdash;to evaluate every suspicious request and produce a ZeroTrustAction.</span>
+                  <span>SecurityPlaneAgent uses a tiered LLM strategy &mdash;Layer 1 for fast contextual analysis, Layer 2 for deep expert investigation &mdash;to evaluate suspicious requests and produce a <code>SecurityDecision</code> whose proposed action and effective autonomous action feed the zero-trust enforcement path.</span>
                 </div>
               </li>
               <li>
@@ -470,8 +490,8 @@
               <li>
                 <div class="ai-list-num">5</div>
                 <div class="ai-list-content">
-                  <strong>AI-Generated XACML Policies</strong>
-                  <span>The platform can generate and suggest XACML access control policies using AI, reducing the manual effort of policy authoring while maintaining fine-grained control.</span>
+                  <strong>AI-Assisted XACML Policy Context</strong>
+                  <span>The platform combines XACML evaluation with AI-derived runtime context and method-level security signals, helping operators refine policy intent without presenting automatic policy generation as the primary enforcement model.</span>
                 </div>
               </li>
               <li>
