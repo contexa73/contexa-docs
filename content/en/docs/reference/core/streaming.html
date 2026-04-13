@@ -46,26 +46,31 @@
             <p>The data flow from LLM to client browser:</p>
 
             <div class="arch-flow">
-              <div class="arch-flow-step">LLM Chunks</div>
+              <div class="arch-flow-step">LLM / Pipeline Chunks</div>
               <div class="arch-flow-arrow"></div>
-              <div class="arch-flow-step">JsonStreamingProcessor</div>
+              <div class="arch-flow-step">StreamingContext</div>
               <div class="arch-flow-arrow"></div>
-              <div class="arch-flow-step">Marker Detection</div>
+              <div class="arch-flow-step">SentenceBuffer + Marker State</div>
               <div class="arch-flow-arrow"></div>
               <div class="arch-flow-step highlight">SSE Events</div>
               <div class="arch-flow-arrow"></div>
               <div class="arch-flow-step">Client Browser</div>
             </div>
 
-            <p>The <code>DefaultStandardStreamingService</code> orchestrates this flow:</p>
+            <p>The <code>DefaultStandardStreamingService</code> orchestrates the SSE path:</p>
             <ol>
-              <li>Calls <code>AICoreOperations.processStream()</code> or <code>PipelineOrchestrator.executeStream()</code> to get a <code>Flux&lt;String&gt;</code> of raw chunks</li>
-              <li>The <code>JsonStreamingProcessor</code> detects protocol markers in the chunk stream</li>
-              <li>Text chunks are emitted with <code>###STREAMING###</code> prefix for progressive display</li>
-              <li>When <code>===JSON_START===</code> is detected, a <code>###GENERATING_RESULT###</code> marker is sent to notify the client</li>
-              <li>JSON content between markers is accumulated and emitted as <code>###FINAL_RESPONSE###</code></li>
-              <li>Each processed chunk is wrapped in a <code>ServerSentEvent</code> for SSE delivery</li>
+              <li>Calls <code>AICoreOperations.processStream()</code> or <code>PipelineOrchestrator.executeStream()</code> to get a <code>Flux&lt;String&gt;</code> of raw chunks and protocol markers</li>
+              <li>Appends chunks into <code>StreamingContext</code>, which keeps track of final-response markers and sentence buffering state</li>
+              <li>Narrative text is emitted progressively through <code>SentenceBuffer</code></li>
+              <li>If upstream emits <code>###GENERATING_RESULT###</code>, the service forwards it immediately to the SSE client</li>
+              <li>When accumulated data contains <code>###FINAL_RESPONSE###</code>, the service extracts that structured tail and emits it as the final SSE payload</li>
+              <li>Each outbound item is wrapped in a <code>ServerSentEvent</code> for delivery</li>
             </ol>
+
+            <div class="callout callout-info">
+              <strong>Processor split</strong><br>
+              <code>JsonStreamingProcessor</code> still exists in the OSS core and is used by <code>DefaultStreamingHandler</code> when <code>UnifiedLLMOrchestrator.stream()</code> is called directly. The SSE service path documented on this page uses <code>StreamingContext</code> and <code>SentenceBuffer</code> to package the already-streaming chunk flow into browser-friendly events.
+            </div>
           </section>
 
           <!-- Streaming Protocol & Markers -->
@@ -333,8 +338,8 @@ streamRequest('/api/analyze/stream', { query: 'Analyze this...' }, {
             </div>
 
             <div class="callout callout-info">
-              <strong>Contexa Streaming Library</strong><br>
-              Contexa provides a bundled JavaScript streaming client (<code>contexa-streaming.js</code>) that handles all protocol details including CSRF tokens, retry logic, and abort support. See the example modules for usage.
+              <strong>OSS Client Scope</strong><br>
+              The OSS core documents the streaming protocol and server-side contracts, but it does not ship a bundled browser client such as <code>contexa-streaming.js</code>. Implement the SSE client in your own frontend or reuse the protocol markers shown above.
             </div>
           </section>
 
@@ -347,8 +352,16 @@ streamRequest('/api/analyze/stream', { query: 'Analyze this...' }, {
                 <tr><th>Property</th><th>Description</th><th>Default</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>contexa.ai.streaming.enabled</code></td><td>Enable/disable streaming support globally</td><td>true</td></tr>
-                <tr><td><code>contexa.ai.pipeline.default-timeout-seconds</code></td><td>Maximum streaming duration</td><td>300</td></tr>
+                <tr><td><code>contexa.streaming.final-response-marker</code></td><td>Marker used to locate the final structured payload in the aggregated stream</td><td><code>###FINAL_RESPONSE###</code></td></tr>
+                <tr><td><code>contexa.streaming.streaming-marker</code></td><td>Prefix used for progressive narrative text chunks</td><td><code>###STREAMING###</code></td></tr>
+                <tr><td><code>contexa.streaming.json-start-marker</code></td><td>Marker used by JSON chunk processors when raw model output starts a structured payload</td><td><code>===JSON_START===</code></td></tr>
+                <tr><td><code>contexa.streaming.json-end-marker</code></td><td>Marker used by JSON chunk processors when raw model output ends a structured payload</td><td><code>===JSON_END===</code></td></tr>
+                <tr><td><code>contexa.streaming.timeout</code></td><td>Maximum duration for a streaming session before timeout handling applies</td><td><code>PT5M</code></td></tr>
+                <tr><td><code>contexa.streaming.max-retries</code></td><td>Maximum retry count exposed on <code>StreamingProperties</code></td><td>3</td></tr>
+                <tr><td><code>contexa.streaming.retry-delay</code></td><td>Initial retry delay exposed on <code>StreamingProperties</code></td><td><code>PT1S</code></td></tr>
+                <tr><td><code>contexa.streaming.retry-multiplier</code></td><td>Retry backoff multiplier exposed on <code>StreamingProperties</code></td><td>1.5</td></tr>
+                <tr><td><code>contexa.streaming.marker-buffer-size</code></td><td>Additional tail buffer retained while scanning for final-response markers</td><td>100</td></tr>
+                <tr><td><code>contexa.streaming.sentence-buffering-enabled</code></td><td>Controls sentence-level buffering before partial chunks are emitted</td><td>true</td></tr>
               </tbody>
             </table></div>
 
@@ -372,7 +385,7 @@ streamRequest('/api/analyze/stream', { query: 'Analyze this...' }, {
                   <span class="api-method-name">stream(AIRequest&lt;C&gt; request, AICoreOperations&lt;C&gt; aiProcessor)</span>
                   <span class="api-method-return">Flux&lt;ServerSentEvent&lt;String&gt;&gt;</span>
                 </div>
-                <div class="api-method-desc">Strategy/Lab streaming path with <code>DiagnosisType</code>-based routing.</div>
+                <div class="api-method-desc">Strategy/Lab streaming path via <code>AICoreOperations.processStream()</code>.</div>
               </div>
               <div class="api-method">
                 <div class="api-method-header">

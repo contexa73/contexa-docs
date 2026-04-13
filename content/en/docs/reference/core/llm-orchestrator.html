@@ -53,7 +53,7 @@
           <!-- Tiered Model Architecture -->
           <section class="docs-section">
             <h2 id="tiered-model">Tiered Model Architecture</h2>
-            <p>The orchestrator uses a tiered model selection strategy. Each tier maps to a model with specific characteristics:</p>
+            <p>The orchestrator uses tier-aware model selection. In the current OSS runtime, <code>TieredLLMProperties</code> exposes two configured layers (<code>layer1</code> and <code>layer2</code>). Higher semantic tiers from <code>AnalysisLevel</code> or <code>SecurityTaskType</code> are normalized to the configured layer-2 runtime unless an explicit model is requested.</p>
 
             <div class="table-scroll"><table class="api-table">
               <thead>
@@ -63,28 +63,29 @@
                 <tr>
                   <td><strong>Tier 1</strong></td>
                   <td>Fast, low temperature (e.g., 0.3)</td>
-                  <td>Quick detection, threat filtering, real-time decisions</td>
+                  <td>Configured runtime layer 1 for quick detection, threat filtering, and latency-sensitive decisions</td>
                 </tr>
                 <tr>
                   <td><strong>Tier 2</strong></td>
                   <td>Balanced, moderate temperature (e.g., 0.7)</td>
-                  <td>Contextual analysis, behavior analysis, correlation</td>
+                  <td>Configured runtime layer 2 for contextual analysis, behavior analysis, and correlation</td>
                 </tr>
                 <tr>
                   <td><strong>Tier 3</strong></td>
-                  <td>Deep, higher capability model</td>
-                  <td>Expert investigation, forensic analysis, incident response</td>
+                  <td>Semantic "deep" tier used by enums such as <code>DEEP</code> and <code>EXPERT_INVESTIGATION</code></td>
+                  <td>Normalized to the configured layer-2 runtime unless an explicit model override is supplied</td>
                 </tr>
               </tbody>
             </table></div>
 
             <h3>How Tier Selection Works</h3>
-            <p>The tier is determined by (in priority order):</p>
+            <p>The effective model is resolved in this order:</p>
             <ol>
-              <li><code>preferredModel</code> &mdash; Explicit model name bypasses tier selection entirely</li>
-              <li><code>tier</code> &mdash; Explicit tier number (1, 2, or 3)</li>
-              <li><code>analysisLevel</code> &mdash; Maps to a default tier: QUICK&rarr;1, NORMAL&rarr;2, DEEP&rarr;3</li>
-              <li><code>securityTaskType</code> &mdash; Each security task type has a default tier</li>
+              <li><code>preferredModel</code> or execution metadata such as <code>requestedModelId</code>, <code>preferredModel</code>, <code>runtimeModelId</code>, or <code>modelId</code> &mdash; explicit model IDs bypass tier mapping entirely</li>
+              <li><code>analysisLevel</code> &mdash; QUICK&rarr;1, NORMAL&rarr;2, DEEP&rarr;3 (normalized to configured layer 2 at runtime)</li>
+              <li><code>securityTaskType</code> &mdash; security tasks map to default semantic tiers when <code>analysisLevel</code> is absent</li>
+              <li><code>tier</code> &mdash; explicit numeric tier when no higher-priority selector is present; values above 1 are normalized to layer 2</li>
+              <li>The primary <code>ChatModel</code> bean as the final fallback if no configured model can be resolved</li>
             </ol>
 
             <h3>AnalysisLevel Enum</h3>
@@ -135,7 +136,7 @@ Flux&lt;String&gt; chunks = orchestrator.stream(context);</code></pre>
               <tbody>
                 <tr><td><code>prompt</code></td><td><code>Prompt</code></td><td>The Spring AI prompt to send to the LLM.</td></tr>
                 <tr><td><code>analysisLevel</code></td><td><code>AnalysisLevel</code></td><td>Analysis depth: QUICK, NORMAL, or DEEP. Determines the default tier.</td></tr>
-                <tr><td><code>tier</code></td><td><code>Integer</code></td><td>Explicit tier number (1, 2, or 3). Overrides analysisLevel.</td></tr>
+                <tr><td><code>tier</code></td><td><code>Integer</code></td><td>Explicit semantic tier. The current runtime accepts 1 or 2 as configured layers and normalizes higher values to layer 2.</td></tr>
                 <tr><td><code>preferredModel</code></td><td><code>String</code></td><td>Explicit model name. Bypasses all tier-based selection.</td></tr>
                 <tr><td><code>userId</code></td><td><code>String</code></td><td>Authenticated user ID for security context.</td></tr>
                 <tr><td><code>requestId</code></td><td><code>String</code></td><td>Unique request ID for tracing.</td></tr>
@@ -168,6 +169,7 @@ Flux&lt;String&gt; chunks = orchestrator.stream(context);</code></pre>
 
             <details>
               <summary><strong>SecurityTaskType Enum (full list)</strong></summary>
+              <p class="docs-note">Tasks that default to tier 3 still flow through the configured layer-2 model unless <code>preferredModel</code> or metadata explicitly selects another model.</p>
               <table class="enum-table">
                 <thead>
                   <tr><th>Value</th><th>Default Tier</th><th>Description</th></tr>
@@ -233,7 +235,7 @@ Mono&lt;String&gt; result = orchestrator.callToolCallbacks(
           <!-- Advisor System -->
           <section class="docs-section">
             <h2 id="advisor-system">Advisor System</h2>
-            <p>The orchestrator automatically applies all enabled Spring AI Advisors from the <code>AdvisorRegistry</code> to every <code>ChatClient</code> instance. Advisors intercept requests before and after LLM calls.</p>
+            <p>The orchestrator pulls enabled advisors from the <code>AdvisorRegistry</code> and combines them with any request-scoped advisors attached to the <code>ExecutionContext</code>. Those advisors are applied when the orchestrator builds a chat call for the selected model.</p>
 
             <h3>Implementing a Custom Advisor</h3>
             <p>Extend <code>BaseAdvisor</code> to create advisors that intercept LLM requests and responses:</p>
@@ -285,11 +287,11 @@ public class RequestLoggingAdvisor extends BaseAdvisor {
                 <tr><th>Property</th><th>Description</th><th>Default</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>contexa.ai.tiered-strategy.tiers.{n}.model-name</code></td><td>Model assigned to tier N</td><td>&mdash;</td></tr>
-                <tr><td><code>contexa.ai.tiered-strategy.tiers.{n}.temperature</code></td><td>Sampling temperature for tier N</td><td>0.7</td></tr>
-                <tr><td><code>contexa.ai.tiered-strategy.tiers.{n}.max-tokens</code></td><td>Maximum output tokens for tier N</td><td>&mdash;</td></tr>
-                <tr><td><code>spring.ai.ollama.base-url</code></td><td>Ollama server URL</td><td>http://localhost:11434</td></tr>
-                <tr><td><code>spring.ai.ollama.chat.model</code></td><td>Default Ollama model</td><td>&mdash;</td></tr>
+                <tr><td><code>spring.ai.security.layer1.model</code></td><td>Primary model selected for layer 1 requests</td><td>qwen2.5:14b</td></tr>
+                <tr><td><code>spring.ai.security.layer2.model</code></td><td>Primary model selected for layer 2 requests</td><td>exaone3.5:latest</td></tr>
+                <tr><td><code>spring.ai.security.tiered.layer1.timeout-ms</code></td><td>Execution timeout budget for layer 1 model calls</td><td>30000</td></tr>
+                <tr><td><code>contexa.llm.chat.ollama.base-url</code></td><td>Ollama chat runtime base URL when the dedicated Contexa Ollama path is enabled</td><td>empty</td></tr>
+                <tr><td><code>contexa.llm.chat.ollama.model</code></td><td>Default Ollama chat model for the Contexa-managed runtime</td><td>empty</td></tr>
               </tbody>
             </table></div>
 

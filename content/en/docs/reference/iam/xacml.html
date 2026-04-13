@@ -10,14 +10,14 @@
               <span class="badge badge-warning">contexa-iam</span>
             </div>
             <h1>Authorization Architecture</h1>
-            <p class="lead">XACML-based authorization architecture with dynamic policy enforcement at both URL and method levels, AI-powered security expressions, and runtime policy management &mdash;all without code changes or redeployment.</p>
+            <p class="lead">XACML-based authorization architecture for URL and method-level policy evaluation, AI-powered security expressions, and runtime policy management through the current OSS admin flows.</p>
           </div>
 
           <!-- Concept Introduction -->
           <section>
             <h2 id="overview">Overview</h2>
             <p>Traditional Spring Security authorization uses static annotations like <code>@PreAuthorize("hasRole('ADMIN')")</code> that are hardcoded at compile time. When business requirements change &mdash;such as restricting admin access to business hours or requiring MFA for sensitive operations &mdash;you must modify source code and redeploy.</p>
-            <p>Contexa's authorization architecture solves this by <strong>externalizing authorization policies into the database</strong>. Policies are managed through the <a href="../../../docs/reference/iam/admin.html">Admin Dashboard</a> UI and applied at runtime without code changes. The engine follows the XACML standard architecture with five components that separate policy enforcement, decision-making, administration, information gathering, and retrieval into distinct, testable concerns.</p>
+            <p>Contexa's authorization architecture solves this by <strong>externalizing authorization policies into the database</strong>. Policies are managed through the <a href="../../../docs/reference/iam/admin.html">admin console</a>, with <strong>Policy Center</strong> serving as the primary OSS authoring surface, and are applied at runtime without code changes. The engine follows the XACML standard architecture with five components that separate policy enforcement, decision-making, administration, information gathering, and retrieval into distinct, testable concerns.</p>
             <p>For details on how these components are wired into the Spring Security filter chain, see <a href="../../../docs/reference/identity/dsl.html">Identity DSL</a>.</p>
 
             <h3>Static vs Dynamic Authorization</h3>
@@ -31,18 +31,18 @@
                 <tr><td>Enforcement scope</td><td>Per-method or per-URL (compile time)</td><td>URL-level + method-level (runtime)</td></tr>
                 <tr><td>Context awareness</td><td>Authentication + authorities only</td><td>User, resource, environment, behavioral metrics, AI threat scores</td></tr>
                 <tr><td>AI integration</td><td>Not available</td><td><code>#ai.isAllowed()</code>, <code>#ai.needsChallenge()</code> in SpEL</td></tr>
-                <tr><td>Audit trail</td><td>Manual implementation required</td><td>Built-in via <code>CentralAuditFacade</code></td></tr>
+                <tr><td>Audit trail</td><td>Manual implementation required</td><td><code>CentralAuditFacade</code> integration for policy-service events and denied URL authorization results</td></tr>
                 <tr><td>Coexistence</td><td colspan="2">Both can work together: <code>.requestMatchers().permitAll()</code> for static rules, <code>.anyRequest().access(customDynamicAuthorizationManager)</code> for dynamic</td></tr>
               </tbody>
             </table>
 
             <h3>Key Capabilities</h3>
             <ul>
-              <li><strong>Runtime policy changes</strong> &mdash;Add, modify, or revoke access rules without redeployment via the Admin Dashboard or REST API</li>
+              <li><strong>Runtime policy changes</strong> &mdash;Add, modify, or revoke access rules without redeployment via Policy Center or server-side policy APIs</li>
               <li><strong>Two enforcement layers</strong> &mdash;URL-level via <a href="../../../docs/reference/iam/dynamic-authorization.html">Dynamic Authorization</a> and method-level via <a href="../../../docs/reference/iam/protectable.html">@Protectable</a></li>
               <li><strong>Rich context evaluation</strong> &mdash;Policies can reference behavioral metrics, time-of-day, device info, and AI threat scores collected by the PIP</li>
               <li><strong>AI-powered security expressions</strong> &mdash;Use <code>#ai.isAllowed()</code>, <code>#ai.needsChallenge()</code>, and other AI expressions directly in SpEL policy conditions</li>
-              <li><strong>End-to-end resource management</strong> &mdash;<a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> discovers endpoints, <a href="../../../docs/reference/iam/admin.html">Resource Workbench</a> defines permissions, <a href="../../../docs/reference/iam/policy.html">Policy Builder</a> creates policies</li>
+              <li><strong>End-to-end resource management</strong> &mdash;<a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> discovers endpoints, <code>ManagedResourceRepository</code> stores synchronized resources, and <a href="../../../docs/reference/iam/admin.html">Policy Center</a> drives the current OSS permission-definition and policy-authoring flow</li>
               <li><strong>SpEL-native</strong> &mdash;Uses Spring Expression Language instead of XML, keeping the familiar Spring Security programming model</li>
             </ul>
 
@@ -51,7 +51,7 @@
               <ul style="margin:0.5em 0 0 0;padding-left:1.2em">
                 <li><a href="../../../docs/reference/iam/dynamic-authorization.html">Dynamic Authorization</a> &mdash;URL-level enforcement in detail</li>
                 <li><a href="../../../docs/reference/iam/protectable.html">@Protectable</a> &mdash;Method-level enforcement</li>
-                <li><a href="../../../docs/reference/iam/policy.html">Policy Management</a> &mdash;Policy lifecycle and the Policy Builder</li>
+                <li><a href="../../../docs/reference/iam/policy.html">Policy Management</a> &mdash;Policy lifecycle, approval flow, Policy Center authoring, and legacy builder routes</li>
                 <li><a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> &mdash;Automatic resource discovery and the end-to-end workflow</li>
               </ul>
             </div>
@@ -191,7 +191,7 @@
           <!-- PDP -->
           <section>
             <h2 id="pdp">PDP &mdash;Policy Decision Point</h2>
-            <p>The PDP evaluates authorization requests against policies and returns decisions. In Contexa, the PDP operates through SpEL expression evaluation, with the <code>PolicyTranslator</code> providing bidirectional translation between policy entities and human-readable descriptions.</p>
+            <p>The PDP evaluates authorization requests against policies and returns decisions. In Contexa, runtime URL and method evaluation happens through SpEL expression handling; <code>PolicyExpressionConverter</code> prepares runtime URL expressions, while <code>PolicyTranslator</code> serves human-readable translation and entitlement rendering.</p>
 
             <h3>PolicyTranslator</h3>
             <p>Translates <code>Policy</code> entities to human-readable strings and <code>EntitlementDto</code> objects by walking the SpEL AST (Abstract Syntax Tree). It supports pluggable <code>SpelFunctionTranslator</code> instances for custom SpEL method translations.</p>
@@ -257,7 +257,7 @@
                 </tr>
                 <tr>
                   <td><code>PolicyBuilderService</code></td>
-                  <td>Provides a visual policy builder with reusable templates and automatic conflict detection between policies.</td>
+                  <td>Provides template lookup, visual-model conversion, and conflict detection for policy authoring services. The current OSS UI exposes authoring primarily through Policy Center rather than a standalone builder template.</td>
                 </tr>
                 <tr>
                   <td><code>PolicySynchronizationService</code></td>
@@ -419,7 +419,7 @@
 7. PEP enforces the decision
    - If granted: request proceeds to the controller
    - If denied: 403 Forbidden response
-8. Audit log records the authorization attempt via CentralAuditFacade</code></pre>
+8. Denied URL authorization results and policy-service events are recorded through CentralAuditFacade-backed audit flows</code></pre>
             </div>
           </section>
 
@@ -534,7 +534,7 @@ public class SecurityConfig {
             </div>
 
             <h3>2. Create Your First Policy</h3>
-            <p>Open the <a href="../../../docs/reference/iam/admin.html">Admin Dashboard</a> and navigate to <strong>Policies &mdash;Create Policy</strong>. Set a URL target (e.g., <code>/admin/**</code>) with an ALLOW effect and condition <code>hasRole('ADMIN')</code>.</p>
+            <p>Open the <a href="../../../docs/reference/iam/admin.html">Admin Console</a> and navigate to <strong>Policy Center</strong>. Use the Create surface to set a URL target (e.g., <code>/admin/**</code>) with an ALLOW effect and condition <code>hasRole('ADMIN')</code>.</p>
 
             <h3>3. Protect a Method</h3>
             <div class="code-block">
@@ -556,7 +556,7 @@ public class OrderService {
             </div>
 
             <h3>4. Verify</h3>
-            <p>Access the protected URL or method. The authorization decision is logged via <code>CentralAuditFacade</code> and visible in the Admin Dashboard. To change the policy, update it in the Admin Dashboard &mdash;the change takes effect immediately through the hot-reload mechanism.</p>
+            <p>Access the protected URL or method. Policy-service events and denied URL authorization results are visible through the admin audit and monitoring surfaces. To change the policy, update it in Policy Center or related admin policy flows &mdash;the hot-reload path applies the new runtime mappings without rebuilding the application.</p>
 
             <div class="callout callout-info">
               <strong>Next steps:</strong>
@@ -570,17 +570,17 @@ public class OrderService {
 
           <!-- Getting Started with Admin -->
           <section>
-            <h2 id="admin-getting-started">Getting Started with Admin Dashboard</h2>
-            <p>The Contexa Admin Dashboard provides a visual interface for managing the entire authorization lifecycle. Access it at <code>/admin/dashboard</code> after enabling the admin module.</p>
+            <h2 id="admin-getting-started">Getting Started with the Admin Console</h2>
+            <p>The Contexa admin console provides a visual interface for managing the entire authorization lifecycle. Access it at <code>/admin/dashboard</code> after enabling the admin module.</p>
 
             <h3>Core Authorization Workflows</h3>
-            <p>The Admin Dashboard offers three main workflows for building and managing authorization policies:</p>
+            <p>The admin console offers three main workflows for building and managing authorization policies:</p>
             <ol>
-              <li><strong>Resource Workbench</strong> &mdash;Discover and define protected resources. The workbench scans your application endpoints and lets you organize them into resource groups with appropriate protection levels.</li>
-              <li><strong>Policy authoring flows</strong> &mdash;Create authorization policies through Policy Center and related legacy screens. Define targets, conditions, and effects without writing raw XML. Assisted draft generation can propose conditions, but administrators still review the stored SpEL rule.</li>
+              <li><strong>Policy Center resource review</strong> &mdash;Discover and define protected resources through the current integrated OSS workflow. Policy Center works with the managed-resource registry built by the scanners and lets operators review, define, exclude, and connect resources to policies.</li>
+              <li><strong>Policy authoring flows</strong> &mdash;Create authorization policies through Policy Center and related legacy controller routes. Define targets, conditions, and effects without writing raw XML. Assisted draft generation can propose conditions, but administrators still review the stored SpEL rule.</li>
               <li><strong>Security Monitor</strong> &mdash;Monitor policy enforcement in real-time. Review audit logs to verify that authorization decisions match expectations and use the dashboard for security visibility.</li>
             </ol>
-            <p>For the complete Admin Dashboard reference, see the <a href="../../../docs/reference/iam/admin.html">Admin Dashboard</a> documentation. For a step-by-step walkthrough covering resource discovery through policy testing, see the <a href="../../../docs/reference/iam/e2e-workflow.html">End-to-End Workflow</a> guide.</p>
+            <p>For the complete admin console reference, see the <a href="../../../docs/reference/iam/admin.html">Admin Console</a> documentation. For a step-by-step walkthrough covering resource discovery through policy testing, see the <a href="../../../docs/reference/iam/end-to-end-workflow.html">End-to-End Workflow</a> guide.</p>
           </section>
 
           <div class="docs-nav-footer">

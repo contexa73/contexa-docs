@@ -35,7 +35,7 @@
                   <td>Method-level</td>
                   <td>Database (dynamic)</td>
                   <td>Full (<code>sync</code>, <code>#ai.*</code> expressions)</td>
-                  <td>Business-critical operations, owner-verified access, AI-monitored endpoints</td>
+                  <td>Business-critical operations, ownership-aware permission checks, AI-monitored endpoints</td>
                 </tr>
                 <tr>
                   <td><code>@PreAuthorize</code></td>
@@ -94,8 +94,8 @@ public class OrderService {
 
     @Protectable(ownerField = "userId")
     public Order updateOrder(Order order) {
-        // Only the resource owner (order.userId == authenticated user)
-        // or users with ROLE_ADMIN can invoke this method.
+        // Enables owner-aware permission checks when the method policy uses
+        // hasPermission(...) against the protected Order resource.
         return orderRepository.save(order);
     }
 }</code></pre>
@@ -157,7 +157,7 @@ public @interface Protectable {
                   <td><code>ownerField</code></td>
                   <td><code>String</code></td>
                   <td><code>""</code></td>
-                  <td>Field name on the return type used to identify the resource owner for ownership-based authorization checks. When empty, no owner-based filtering is applied.</td>
+                  <td>Field or getter name used by ownership-aware <code>hasPermission(...)</code> evaluation. The value is resolved from the authorization target object (or a resolved entity for ID-based checks). When empty, ownership-aware permission checks are not applied.</td>
                 </tr>
                 <tr>
                   <td><code>sync</code></td>
@@ -299,7 +299,7 @@ public @interface Protectable {
           <!-- Rapid Reentry Guard -->
           <section>
             <h2 id="rapid-reentry">ProtectableRapidReentryGuard</h2>
-            <p>Prevents the same authenticated user from invoking the same protected method within a 5-second window. This guards against accidental duplicate submissions and brute-force retry attacks on protected endpoints.</p>
+            <p>Prevents the same authenticated user from rapidly re-entering the same protected method within the configured guard window. The default window is 5 seconds, but the guard can be constructed with a different <code>Duration</code>. This protects high-risk operations from accidental duplicate submissions and burst retries.</p>
 
             <h3>Guard Logic</h3>
             <div class="code-block">
@@ -314,8 +314,8 @@ public @interface Protectable {
     // 1. Skip if not authenticated
     // 2. Resolve current HttpServletRequest from RequestContextHolder
     // 3. Generate context binding hash via SessionFingerprintUtil
-    // 4. Build resource key: "ClassName.methodName|HTTP_METHOD /uri"
-    // 5. Attempt tryAcquire(userId, contextBindingHash, resourceKey, 5s)
+    // 4. Build resource key: "ClassName.methodName[optional-arg0-hash]|HTTP_METHOD /uri"
+    // 5. Attempt tryAcquire(userId, contextBindingHash, resourceKey, configured window)
     // 6. If not acquired, throw RapidProtectableReentryDeniedException
 }</code></pre>
             </div>
@@ -363,7 +363,7 @@ public @interface Protectable {
           <!-- Connecting Policies to @Protectable Methods -->
           <section>
             <h2 id="connecting-policies">Connecting Policies to @Protectable Methods</h2>
-            <p><code>@Protectable</code> methods are enforced by policies stored in the database. The <a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> automatically discovers all <code>@Protectable</code> methods and registers them in the <a href="../../../docs/reference/iam/admin.html">Resource Workbench</a>, where you can define permissions and create policies.</p>
+            <p><code>@Protectable</code> methods are enforced by policies stored in the database. The <a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> discovers all <code>@Protectable</code> methods and synchronizes them as <code>METHOD</code> resources. In the current OSS UI, those resources are managed primarily through <a href="../../../docs/reference/iam/admin.html">Policy Center</a>. The underlying resource-management endpoints under <code>/admin/workbench/resources/*</code> are still used behind that integrated screen.</p>
 
             <h3>Method Identifier Format</h3>
             <p>Each <code>@Protectable</code> method is identified by its fully qualified signature:</p>
@@ -381,8 +381,8 @@ public @interface Protectable {
             <h3>Creating a Policy for a Method</h3>
             <p>Two approaches to create policies for <code>@Protectable</code> methods:</p>
             <ol>
-              <li><strong>Resource Workbench (recommended)</strong> &mdash;Navigate to the Resource Workbench in Admin Dashboard, find the scanned method, click "Create Policy" to enter the <a href="../../../docs/reference/iam/policy.html">Policy Builder</a> in from-resource mode with compatible conditions pre-filtered.</li>
-              <li><strong>Direct policy creation</strong> &mdash;Create a policy with a <code>METHOD</code> target type matching the method identifier, and set the condition SpEL expression (e.g., <code>hasRole('ADMIN') and #ai.isAllowed()</code>).</li>
+              <li><strong>Policy Center (recommended)</strong> &mdash;Open the Policy Center create surface, locate the scanned <code>METHOD</code> resource in the integrated resources area, define a permission, and continue into the same creation flow. This is the primary OSS screen that combines resource review, permission linkage, quick policy creation, AI-assisted setup, and policy listing.</li>
+              <li><strong>Policy service / direct creation</strong> &mdash;Create a policy with a <code>METHOD</code> target matching the method identifier and a valid SpEL condition (for example <code>hasAuthority('ROLE_ADMIN') and #ai.isAllowed()</code>). This is the underlying model used by Policy Center.</li>
             </ol>
 
             <h3>Behavior Matrix</h3>
@@ -393,8 +393,8 @@ public @interface Protectable {
               <tbody>
                 <tr><td><code>""</code> (default)</td><td><code>false</code></td><td>SpEL policy evaluation only, async AI analysis</td></tr>
                 <tr><td><code>""</code></td><td><code>true</code></td><td>SpEL policy + synchronous AI blocking</td></tr>
-                <tr><td><code>"userId"</code></td><td><code>false</code></td><td>SpEL policy + ownership verification, async AI</td></tr>
-                <tr><td><code>"userId"</code></td><td><code>true</code></td><td>SpEL policy + ownership + synchronous AI blocking</td></tr>
+                <tr><td><code>"userId"</code></td><td><code>false</code></td><td>SpEL policy + ownership-aware <code>hasPermission(...)</code> checks, async AI</td></tr>
+                <tr><td><code>"userId"</code></td><td><code>true</code></td><td>SpEL policy + ownership-aware <code>hasPermission(...)</code> checks + synchronous AI blocking</td></tr>
               </tbody>
             </table>
           </section>
@@ -420,7 +420,7 @@ public void disableUser(@PathVariable Long id) {
             </div>
 
             <h3>Owner-Scoped with Synchronous AI Analysis</h3>
-            <p>Restricts updates to the resource owner and enables real-time AI risk assessment before allowing the operation.</p>
+            <p>Combines ownership-aware permission checks with synchronous Zero Trust analysis before the operation proceeds.</p>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">Java</span>
@@ -444,9 +444,9 @@ public Account updateAccount(@PathVariable Long id,
               </thead>
               <tbody>
                 <tr><td><code>ALLOW</code></td><td>Method proceeds normally and the result is returned to the caller</td></tr>
-                <tr><td><code>BLOCK</code></td><td>Throws <code>ZeroTrustAccessDeniedException</code> with the computed risk score included in the exception detail</td></tr>
+                <tr><td><code>BLOCK</code></td><td>Throws <code>ZeroTrustAccessDeniedException.blocked(resourceId)</code> before the method executes</td></tr>
                 <tr><td><code>CHALLENGE</code></td><td>Throws <code>ZeroTrustAccessDeniedException</code> requesting step-up authentication from the caller</td></tr>
-                <tr><td><code>ESCALATE</code></td><td>Throws <code>ZeroTrustAccessDeniedException</code> indicating the request is pending manual review by an administrator</td></tr>
+                <tr><td><code>ESCALATE</code></td><td>Throws <code>ZeroTrustAccessDeniedException.pendingReview(resourceId)</code> before the method executes</td></tr>
                 <tr><td><code>PENDING_ANALYSIS</code></td><td>Throws <code>ZeroTrustAccessDeniedException</code> if the synchronous AI analysis service is unavailable or timed out</td></tr>
               </tbody>
             </table>
@@ -471,27 +471,27 @@ public Account updateAccount(@PathVariable Long id,
           <!-- ownerField Deep Dive -->
           <section>
             <h2 id="owner-field-deep-dive">ownerField Deep Dive</h2>
-            <p>The <code>ownerField</code> attribute enables ownership-based authorization by comparing a field on the return object with the currently authenticated user's ID. This check runs after the method executes, inspecting the returned value through Java reflection.</p>
+            <p>The <code>ownerField</code> attribute does not trigger an automatic post-return ownership scan. In the current OSS implementation it is injected into the method-security evaluation context and is used when the active method policy calls ownership-aware <code>hasPermission(...)</code> checks.</p>
 
-            <h3>How Reflection Extracts the Field Value</h3>
-            <p>When <code>ownerField</code> is specified, the interceptor uses reflection to read the named field from the method's return object. The process follows these steps:</p>
+            <h3>How ownerField Is Applied</h3>
+            <p>When <code>ownerField</code> is configured, the method-expression handler passes it into <code>CustomMethodSecurityExpressionRoot</code>. Ownership is then enforced during policy expression evaluation, not after the method returns. The flow is:</p>
             <ol>
-              <li>The method executes normally and produces a return value.</li>
-              <li>The interceptor calls <code>getDeclaredField(ownerField)</code> on the return object's class (traversing the class hierarchy if needed).</li>
-              <li>The field is made accessible via <code>setAccessible(true)</code> and its value is extracted.</li>
-              <li>The extracted value is converted to a <code>String</code> and compared against the authenticated user's principal ID.</li>
+              <li><code>CustomMethodSecurityExpressionHandler</code> resolves the <code>@Protectable</code> method and extracts <code>ownerField</code>.</li>
+              <li>The handler injects <code>#protectableRule</code> and <code>#ownerField</code> into the evaluation context.</li>
+              <li>If the policy expression calls <code>hasPermission(target, permission)</code> or <code>hasPermission(targetId, targetType, permission)</code>, the root first delegates to the configured permission evaluator.</li>
+              <li>If the permission evaluator grants access and <code>ownerField</code> is configured, the root resolves a direct field or matching getter from the authorization target object and compares it with <code>Authentication.getName()</code>.</li>
             </ol>
 
             <h3>Comparison with Authenticated User</h3>
-            <p>The extracted owner field value is compared with the current user's ID obtained from <code>Authentication.getName()</code>. If the values match, the user is considered the resource owner and access is granted (assuming the SpEL policy also passes). Users with <code>ROLE_ADMIN</code> bypass the ownership check entirely.</p>
+            <p>The resolved owner value is compared with <code>Authentication.getName()</code>. Users with <code>ROLE_ADMIN</code> bypass the ownership check. For non-admin users, a missing owner value or a mismatch fails closed and <code>hasPermission(...)</code> returns <code>false</code>.</p>
 
             <h3>When ownerField Does Not Exist</h3>
             <div class="callout callout-warning">
-              <strong>Important:</strong> If the specified <code>ownerField</code> does not exist on the return object, the reflection lookup fails silently and access is <strong>denied by default</strong>. No exception is thrown to the caller; instead, the system treats it as a non-owner access attempt. Always verify that the field name matches your domain object exactly.
+              <strong>Important:</strong> The implementation first searches for a direct field and then for a matching getter such as <code>getCreatedBy()</code>. If neither exists, the ownership-aware permission check fails closed and access is denied for non-admin users.
             </div>
 
             <h3>Nested Field Access</h3>
-            <p><code>ownerField</code> resolves a direct field or a matching getter on the returned object. The current OSS implementation does not walk nested dot-notation paths; use a direct field or getter instead.</p>
+            <p>The current OSS implementation does not walk nested dot-notation paths such as <code>creator.id</code>. Use a direct field or getter on the authorization target object instead.</p>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">Java</span>
@@ -502,11 +502,11 @@ public Account updateAccount(@PathVariable Long id,
               </div>
               <pre><code class="language-java">@Protectable(ownerField = "createdBy")
 public Document getDocument(Long documentId) {
-    // The interceptor resolves a direct field or getter such as getCreatedBy().
+    // Ownership-aware checks resolve a direct field or getter such as getCreatedBy().
     return documentRepository.findById(documentId).orElseThrow();
 }</code></pre>
             </div>
-            <p>If the configured field or getter cannot be resolved on the returned object, the access check fails closed and access is denied.</p>
+            <p>If your domain model stores ownership in a nested object, expose a direct getter or dedicated field that returns the comparable owner identifier.</p>
           </section>
 
           <!-- sync Mode Guidelines -->
@@ -549,31 +549,26 @@ public Document getDocument(Long documentId) {
           <!-- Managing @Protectable Methods in Admin -->
           <section>
             <h2 id="admin-protectable">Managing @Protectable Methods via Admin</h2>
-            <p><code>@Protectable</code> methods are automatically discovered by the <a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> and registered in the Admin Dashboard's Resource Workbench as <code>METHOD</code> type resources. This section explains how to find, define, and secure them through the Admin UI.</p>
+            <p><code>@Protectable</code> methods are automatically discovered by the <a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> and synchronized as <code>METHOD</code> resources. In the current OSS UI, the primary administration surface is <strong>Policy Center</strong>. Its integrated resources area works with the same managed-resource data that the legacy <code>/admin/workbench/resources/*</code> endpoints expose.</p>
 
-            <h3>Step 1: Find METHOD Resources in Resource Workbench</h3>
-            <p>Navigate to <strong>Admin &gt; ID &amp; Access Management &gt; Resource Workbench</strong>. Filter by resource type <code>METHOD</code> to see all discovered <code>@Protectable</code> methods. Each entry displays the fully qualified method signature (e.g., <code>com.example.service.OrderService.updateOrder(Order)</code>).</p>
+            <h3>Step 1: Review METHOD Resources in Policy Center</h3>
+            <p>Navigate to <strong>Admin &gt; ID &amp; Access Management &gt; Policy Center</strong> and open the <strong>Resources</strong> tab. Filter by resource type <code>METHOD</code> to review discovered <code>@Protectable</code> methods. Each entry shows the fully qualified method signature (for example <code>com.example.service.OrderService.updateOrder(Order)</code>).</p>
 
-            <h3>Step 2: Define with a Business Name</h3>
-            <p>Click on any METHOD resource to edit its metadata. Assign a human-readable business name (e.g., "Update Customer Order") and an optional description. This business name appears throughout the Admin Dashboard when creating policies and reviewing audit logs, making it easier for non-technical administrators to understand what each method does.</p>
+            <h3>Step 2: Define a Permission for the METHOD Resource</h3>
+            <p>From the integrated resources area, use <strong>Create Permission &amp; Policy</strong> to define a permission for the selected method resource. Policy Center persists the permission-to-resource link by calling the managed-resource endpoints behind the integrated UI.</p>
 
-            <h3>Step 3: Create a Permission</h3>
-            <p>From the resource detail view, click "Create Permission" to define what actions are allowed on this method. Specify a permission name (e.g., <code>ORDER_UPDATE</code>), a description, and the action type (READ, WRITE, DELETE, etc.). The permission is automatically linked to this METHOD resource.</p>
+            <h3>Step 3: Create or Refine the Policy in Policy Center</h3>
+            <p>After the permission is linked, continue in Policy Center to create the actual policy. The current OSS flow supports quick creation, manual creation, AI-assisted setup, list review, simulation, and matrix analysis from the same integrated screen.</p>
 
-            <h3>Step 4: Assign a Policy</h3>
-            <p>With the permission defined, create a policy to control who can exercise that permission. There are two approaches:</p>
+            <h3>Step 4: Match the Policy to METHOD Targets</h3>
+            <p>Method policies must use a <code>METHOD</code> target that matches the discovered method identifier. The underlying policy model remains the same whether the policy is created from quick mode, the AI-assisted create flow, or the manual create tab.</p>
 
-            <h4>Quick Grant via Policy Wizard</h4>
-            <p>The Policy Wizard provides a guided flow for common authorization patterns. Select the permission, choose the target roles or users, and optionally add time-based or attribute-based conditions. The wizard generates the underlying SpEL expression automatically.</p>
-
-            <h4>Advanced via Policy Builder (from-resource mode)</h4>
-            <p>Click "Create Policy" from the Resource Workbench to open the <a href="../../../docs/reference/iam/policy.html">Policy Builder</a> in <strong>from-resource mode</strong>. In this mode:</p>
+            <h3>Current OSS UI Notes</h3>
             <ul>
-              <li>The resource target is <strong>pre-filled</strong> with the selected METHOD resource, so you do not need to manually enter the method signature.</li>
-              <li>The condition editor <strong>filters compatible conditions</strong> &mdash;only SpEL expressions that are valid for method-level policies are shown (e.g., <code>#ai.isAllowed()</code>, <code>hasRole()</code>, <code>hasPermission()</code>, owner-based checks).</li>
-              <li>URL-only expressions (such as path matchers) are hidden since they do not apply to method-level targets.</li>
+              <li><strong>Policy Center</strong> is the primary current UI and combines resource review, permission definition, policy creation, policy list, simulation, and matrix analysis.</li>
+              <li>The backend still exposes <code>/admin/workbench/resources/*</code> endpoints, and Policy Center uses them for resource-definition actions.</li>
+              <li>Standalone <code>Resource Workbench</code> and <code>Policy Builder</code> controller routes still exist in source, but the current OSS template set centers the user workflow on Policy Center.</li>
             </ul>
-            <p>This from-resource mode significantly reduces configuration errors by scoping the available options to what is actually applicable for the selected method.</p>
           </section>
 
           <div class="docs-nav-footer">

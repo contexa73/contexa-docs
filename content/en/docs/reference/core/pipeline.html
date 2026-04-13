@@ -11,13 +11,13 @@
               <span class="badge badge-primary">contexa-core</span>
             </div>
             <h1>Pipeline &amp; RAG</h1>
-            <p class="lead">The AI Pipeline processes every AI request through a configurable sequence of steps &mdash; from retrieving relevant context via RAG to parsing the structured LLM response. The <code>PipelineOrchestrator</code> selects the appropriate executor and manages the full lifecycle.</p>
+            <p class="lead">The AI Pipeline processes pipeline-backed AI requests through a configurable sequence of steps &mdash; from retrieving relevant context via RAG to parsing the structured LLM response. The <code>PipelineOrchestrator</code> selects the appropriate executor and manages the full lifecycle.</p>
           </div>
 
           <!-- Overview -->
           <section class="docs-section">
-            <h2 id="overview">Overview: 6-Step Pipeline</h2>
-            <p>When your Lab calls <code>orchestrator.execute()</code> or <code>orchestrator.executeStream()</code>, the request flows through up to 6 processing steps in order:</p>
+            <h2 id="overview">Overview: Default 6-Step Pipeline</h2>
+            <p>When your Lab calls <code>orchestrator.execute()</code> or <code>orchestrator.executeStream()</code>, the default configuration flows through 6 processing steps. The runtime also defines an optional <code>SOAR_TOOL_EXECUTION</code> phase that can be inserted between <code>LLM_EXECUTION</code> and <code>RESPONSE_PARSING</code> when a pipeline explicitly adds it.</p>
 
             <div class="arch-flow">
               <div class="arch-flow-step">CONTEXT_RETRIEVAL</div>
@@ -33,7 +33,7 @@
               <div class="arch-flow-step">POSTPROCESSING</div>
             </div>
 
-            <p>Each step is implemented as a <code>PipelineStep</code> bean. The orchestrator selects a <code>PipelineExecutor</code> (standard or streaming) and runs the configured steps in sequence.</p>
+            <p>Each step is implemented as a <code>PipelineStep</code> bean. The orchestrator selects a <code>PipelineExecutor</code> (standard or streaming) and runs the configured steps in sequence. <code>createPipelineConfig()</code> does not include the optional SOAR phase by default, but the enum and executor support it.</p>
           </section>
 
           <!-- Step-by-Step Deep Dive -->
@@ -48,12 +48,12 @@
               <li><strong>Output</strong>: <code>ContextRetrievalResult</code> containing the retrieved context string, matching documents, and metadata</li>
               <li><strong>What happens</strong>: The retriever extracts a search query from the request, performs a similarity search against the vector store, and formats the matching documents into a context string. This string is passed to the prompt template as <code>contextInfo</code>.</li>
             </ul>
-            <p>If no <code>ContextRetriever</code> is registered for the request's context type, this step is skipped and an empty context is used.</p>
+            <p>The <code>ContextRetrieverRegistry</code> resolves the retriever for the current context type and falls back to the default retriever when no specific registration exists. If retrieval returns no matches, the downstream prompt still runs with an empty or low-signal context string.</p>
 
             <h3 id="step-preprocessing">2. PREPROCESSING</h3>
-            <p>Validates and normalizes the request before prompt generation.</p>
+            <p>Collects baseline system metadata before prompt generation.</p>
             <ul>
-              <li><strong>What happens</strong>: Adds system metadata (request ID, timestamp, domain type) to the pipeline execution context. Custom preprocessing steps can normalize input data, add computed fields, or perform additional validation.</li>
+              <li><strong>What happens</strong>: The built-in <code>PreprocessingStep</code> stores a formatted metadata string containing request ID, request type, context type, and processing time. Custom steps can still add validation or normalization logic by targeting the same <code>PREPROCESSING</code> phase.</li>
               <li><strong>Customizable</strong>: Implement the <code>PipelineStep</code> interface to add your own preprocessing logic (see <a href="#custom-step">Custom Pipeline Steps</a> below).</li>
             </ul>
 
@@ -70,17 +70,25 @@
             <ul>
               <li><strong>Component</strong>: <code>UnifiedLLMOrchestrator</code></li>
               <li><strong>What happens</strong>: The orchestrator selects the model based on the request's tier or analysis level, applies registered Advisors, and sends the prompt to the LLM. In standard mode, it returns the full text response. In streaming mode, it returns a <code>Flux&lt;String&gt;</code> of chunks.</li>
-              <li><strong>Configuration</strong>: Model tier, temperature, and retry settings are configured via <code>contexa.ai.tiered-strategy</code> properties. See <a href="../../../docs/reference/core/llm-orchestrator.html">LLM &amp; Models</a>.</li>
+              <li><strong>Configuration</strong>: Model selection and tier timeouts are configured through <code>spring.ai.security</code> and <code>spring.ai.security.tiered</code>. Streaming and retrieval behavior are configured separately through <code>contexa.streaming</code> and <code>contexa.rag</code>. See <a href="../../../docs/reference/core/llm-orchestrator.html">LLM &amp; Models</a>.</li>
             </ul>
 
-            <h3 id="step-response-parsing">5. RESPONSE_PARSING</h3>
+            <h3 id="step-soar-tool-execution">5. SOAR_TOOL_EXECUTION (Optional)</h3>
+            <p>Executes tool-driven post-LLM actions before response parsing when the pipeline configuration includes the SOAR phase.</p>
+            <ul>
+              <li><strong>Config step</strong>: <code>PipelineConfiguration.PipelineStep.SOAR_TOOL_EXECUTION</code></li>
+              <li><strong>What happens</strong>: The standard executor can forward the LLM result into a tool-execution phase before parsing. <code>ResponseParsingStep</code> checks this phase first and falls back to the raw <code>LLM_EXECUTION</code> result when no SOAR phase is present.</li>
+              <li><strong>Default behavior</strong>: The built-in default pipeline configuration does not add this step automatically.</li>
+            </ul>
+
+            <h3 id="step-response-parsing">6. RESPONSE_PARSING</h3>
             <p>Parses the raw LLM text output into your typed response object.</p>
             <ul>
               <li><strong>What happens</strong>: The framework extracts JSON from the LLM response (handling markdown code blocks, extra text, etc.), then deserializes it into your <code>AIResponse</code> subclass using <code>BeanOutputConverter</code>. If JSON extraction fails, a fallback parser attempts bracket balancing and repair.</li>
               <li><strong>Streaming note</strong>: This step is not used in streaming mode. Instead, the <code>JsonStreamingProcessor</code> handles JSON extraction from the stream using protocol markers.</li>
             </ul>
 
-            <h3 id="step-postprocessing">6. POSTPROCESSING</h3>
+            <h3 id="step-postprocessing">7. POSTPROCESSING</h3>
             <p>Final enrichment, validation, and domain-specific processing of the parsed response.</p>
             <ul>
               <li><strong>Component</strong>: <code>DomainResponseProcessor</code> (optional, custom)</li>
@@ -99,7 +107,7 @@
                 <tr><th>Aspect</th><th>Standard Pipeline</th><th>Streaming Pipeline</th></tr>
               </thead>
               <tbody>
-                <tr><td><strong>Steps</strong></td><td>All 6 steps</td><td>First 4 steps (through LLM_EXECUTION)</td></tr>
+                <tr><td><strong>Steps</strong></td><td>Default 6 steps, with optional <code>SOAR_TOOL_EXECUTION</code> if explicitly configured</td><td>First 4 steps (through LLM_EXECUTION)</td></tr>
                 <tr><td><strong>Executor</strong></td><td><code>UniversalPipelineExecutor</code></td><td><code>StreamingUniversalPipelineExecutor</code></td></tr>
                 <tr><td><strong>Return type</strong></td><td><code>Mono&lt;R&gt;</code> (typed response)</td><td><code>Flux&lt;String&gt;</code> (chunk stream)</td></tr>
                 <tr><td><strong>JSON handling</strong></td><td><code>BeanOutputConverter</code> in RESPONSE_PARSING</td><td><code>JsonStreamingProcessor</code> with protocol markers</td></tr>
@@ -117,7 +125,7 @@
                   <span>Copy</span>
                 </button>
               </div>
-              <pre><code class="language-java">// All 6 steps, no streaming
+              <pre><code class="language-java">// Default 6-step pipeline, no streaming
 PipelineConfiguration config = PipelineConfiguration.builder()
     .addStep(PipelineConfiguration.PipelineStep.CONTEXT_RETRIEVAL)
     .addStep(PipelineConfiguration.PipelineStep.PREPROCESSING)
@@ -168,6 +176,7 @@ Flux&lt;String&gt; chunks = orchestrator.executeStream(
 PipelineConfiguration.createPipelineConfig();       // standard
 PipelineConfiguration.createStreamPipelineConfig();  // streaming</code></pre>
             </div>
+            <p>If you need the optional SOAR phase, build the configuration manually and add <code>PipelineConfiguration.PipelineStep.SOAR_TOOL_EXECUTION</code> between <code>LLM_EXECUTION</code> and <code>RESPONSE_PARSING</code>.</p>
           </section>
 
           <!-- RAG Integration Guide -->
@@ -246,11 +255,11 @@ vectorStore.add(List.of(doc));</code></pre>
 
             <div class="callout callout-info">
               <strong>Vector Store Setup</strong><br>
-              Contexa uses pgvector by default. Configure the connection in <code>application.yml</code>:
+              The default retriever works with the configured Spring AI <code>VectorStore</code>. When PgVector is wired, use the RAG defaults below and configure the vector store connection separately:
               <pre><code>contexa:
-  ai:
-    rag:
-      top-k: 5
+  rag:
+    defaults:
+      top-k: 10
       similarity-threshold: 0.7</code></pre>
               See <a href="../../../docs/install/configuration/ai.html">AI Configuration</a> for all RAG properties.
             </div>
@@ -351,17 +360,17 @@ public class ProductResponseProcessor
           <!-- Configuration -->
           <section class="docs-section">
             <h2 id="configuration">Configuration</h2>
-            <p>Key pipeline and RAG properties:</p>
+            <p>Key pipeline and RAG knobs:</p>
 
             <div class="table-scroll"><table class="api-table">
               <thead>
                 <tr><th>Property</th><th>Description</th><th>Default</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>contexa.ai.pipeline.default-timeout-seconds</code></td><td>Default pipeline execution timeout</td><td>300</td></tr>
-                <tr><td><code>contexa.ai.streaming.enabled</code></td><td>Enable streaming pipeline support</td><td>true</td></tr>
-                <tr><td><code>contexa.ai.rag.top-k</code></td><td>Number of similar documents to retrieve</td><td>5</td></tr>
-                <tr><td><code>contexa.ai.rag.similarity-threshold</code></td><td>Minimum similarity score for retrieval</td><td>0.7</td></tr>
+                <tr><td><code>PipelineConfiguration.timeoutSeconds(...)</code></td><td>Per-request pipeline timeout configured in code</td><td>300</td></tr>
+                <tr><td><code>contexa.streaming.timeout</code></td><td>Maximum duration allowed for streaming output assembly</td><td>PT5M</td></tr>
+                <tr><td><code>contexa.rag.defaults.top-k</code></td><td>Default number of similar documents to retrieve</td><td>10</td></tr>
+                <tr><td><code>contexa.rag.defaults.similarity-threshold</code></td><td>Default similarity threshold applied to retrieval</td><td>0.7</td></tr>
               </tbody>
             </table></div>
 
@@ -471,6 +480,7 @@ public class ProductResponseProcessor
                   <tr><td><code>PREPROCESSING</code></td><td>Request validation, normalization, and enrichment.</td></tr>
                   <tr><td><code>PROMPT_GENERATION</code></td><td>Constructs the final prompt from templates and context.</td></tr>
                   <tr><td><code>LLM_EXECUTION</code></td><td>Sends the prompt to the LLM via <code>UnifiedLLMOrchestrator</code>.</td></tr>
+                  <tr><td><code>SOAR_TOOL_EXECUTION</code></td><td>Optional tool-execution phase between the raw LLM result and response parsing.</td></tr>
                   <tr><td><code>RESPONSE_PARSING</code></td><td>Parses the LLM output into the typed response.</td></tr>
                   <tr><td><code>POSTPROCESSING</code></td><td>Final enrichment, validation, and domain processing.</td></tr>
                 </tbody>
@@ -482,7 +492,7 @@ public class ProductResponseProcessor
                   <span class="api-method-name">createPipelineConfig()</span>
                   <span class="api-method-return">PipelineConfiguration</span>
                 </div>
-                <div class="api-method-desc">Default config with all 6 steps. Timeout: 300s.</div>
+                <div class="api-method-desc">Default config with 6 steps (without the optional SOAR phase). Timeout: 300s.</div>
               </div>
               <div class="api-method">
                 <div class="api-method-header">

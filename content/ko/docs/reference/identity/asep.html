@@ -11,7 +11,7 @@
               <span class="badge badge-info">contexa-identity</span>
             </div>
             <h1>ASEP 어노테이션</h1>
-            <p class="lead">컨트롤러에서 보안 컨텍스트에 선언적으로 접근하기 위한 어노테이션 시스템입니다. 현재 사용자, 인증 객체, 요청 헤더/바디/속성을 메서드 파라미터에 직접 주입하며, 필터 체인(Filter Chain) 수준에서 보안 예외를 처리합니다.</p>
+            <p class="lead">ASEP 보안 예외 처리 경로를 위한 어노테이션 시스템입니다. <code>@SecurityExceptionHandler</code> 메서드 파라미터에 현재 사용자, 인증 객체, 요청 메타데이터를 주입하고, 일반적인 Spring MVC 예외 처리 이전의 필터 체인 수준에서 보안 실패를 처리합니다.</p>
           </div>
 
           <!-- Overview -->
@@ -57,7 +57,7 @@
           <!-- Argument Injection Annotations -->
           <section class="docs-section">
             <h2 id="argument-injection">인자 주입 어노테이션</h2>
-            <p>이 어노테이션들은 보안 컨텍스트 데이터를 핸들러 메서드 파라미터에 직접 주입할 수 있게 합니다. 각각 대응하는 <code>SecurityHandlerMethodArgumentResolver</code> 구현체가 있습니다.</p>
+            <p>이 어노테이션들은 ASEP 핸들러 메서드 파라미터에 보안 컨텍스트 데이터를 직접 주입할 수 있게 합니다. 각각 대응하는 <code>SecurityHandlerMethodArgumentResolver</code> 구현체를 가지며, 일반적인 Spring MVC 컨트롤러 인자 주입 기능이 아니라 ASEP 런타임 내부에서 해석됩니다.</p>
 
             <h3 id="security-principal">@SecurityPrincipal</h3>
             <p>현재 보안 주체(Principal)를 메서드 파라미터에 주입합니다. <code>SecurityContextHolder</code>에서 리졸브됩니다.</p>
@@ -293,38 +293,28 @@ public class GlobalSecurityExceptionAdvice {
           <!-- Complete Example -->
           <section class="docs-section">
             <h2 id="complete-example">전체 예제</h2>
-            <p>ASEP 어노테이션을 사용한 보안 컨트롤러 및 전역 예외 처리의 전체 예제입니다.</p>
+            <p><code>@SecurityControllerAdvice</code> 와 ASEP 어노테이션을 사용한 보안 예외 처리 전체 예제입니다.</p>
 
-<pre><code class="language-java">@RestController
-@RequestMapping("/api/user")
-public class UserController {
-
-    @GetMapping("/profile")
-    public UserProfile getProfile(
-            @SecurityPrincipal UserDetails user,
-            @AuthenticationObject Authentication auth,
-            @SecurityRequestHeader("X-Device-Id") String deviceId) {
-        return userService.getProfile(user.getUsername());
-    }
-}
-
-@SecurityControllerAdvice
+<pre><code class="language-java">@SecurityControllerAdvice
 public class GlobalSecurityExceptionHandler {
 
     @SecurityExceptionHandler(AuthenticationException.class)
     @SecurityResponseBody
     public ErrorResponse handleAuthError(
             AuthenticationException ex,
-            @SecurityPrincipal UserDetails user) {
-        return new ErrorResponse("AUTH_FAILED", ex.getMessage());
+            @AuthenticationObject Authentication auth,
+            @SecurityRequestHeader("X-Device-Id") String deviceId) {
+        String principalName = auth != null ? auth.getName() : "anonymous";
+        return new ErrorResponse("AUTH_FAILED", principalName + " on device " + deviceId);
     }
 
     @SecurityExceptionHandler(AccessDeniedException.class)
     @SecurityResponseBody
     public ErrorResponse handleAccessDenied(
             AccessDeniedException ex,
-            @SecurityRequestAttribute("requestURI") String uri) {
-        return new ErrorResponse("ACCESS_DENIED", "Forbidden: " + uri);
+            @SecurityPrincipal Object principal,
+            @SecurityCookieValue("ctxa_trace") String traceId) {
+        return new ErrorResponse("ACCESS_DENIED", "principal=" + principal + ", trace=" + traceId);
     }
 }</code></pre>
           </section>

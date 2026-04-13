@@ -25,7 +25,7 @@
 
             <h3>End-to-End Pipeline</h3>
             <p>Resource scanning is the first stage of a four-step resource management pipeline: <strong>Scan &mdash;Define &mdash;Policy &mdash;Dynamic Authorization</strong>. At application startup, <code>ResourceScanner</code> implementations discover all <code>@RequestMapping</code> endpoints and <code>@Protectable</code> methods, storing them as <code>ManagedResource</code> entities in the database. The AI engine then generates human-readable friendly names for discovered resources in batch.</p>
-            <p>Administrators use the <strong>Resource Workbench</strong> in the Admin Dashboard (<code>/admin/workbench/resources</code>) to review discovered resources, define them as permissions, and create authorization policies. Once policies are created, <code>CustomDynamicAuthorizationManager</code> enforces them at runtime through <code>.anyRequest().access(customDynamicAuthorizationManager)</code>. This approach eliminates the need for static <code>.requestMatchers().hasRole()</code> configuration &mdash;all authorization decisions are driven by policies defined through the admin interface.</p>
+            <p>The scanners synchronize discovered resources into <code>ManagedResourceRepository</code>. In the current OSS operator flow, review, permission definition, and policy creation are centered in the integrated Policy Center resources/create experience. The legacy <code>/admin/workbench/resources</code> controller path still exists in server code and continues to expose the underlying define, exclude, restore, and management endpoints.</p>
 
             <div class="diagram-container">
               <div class="diagram-title">Resource Scanning Pipeline</div>
@@ -243,7 +243,7 @@ public class ManagedResource {
                   </div>
                   <div class="diagram-box diagram-muted">
                     <span class="diagram-box-name">EXCLUDED</span>
-                    <span class="diagram-box-desc">Admin marks as excluded (public endpoints, static assets)</span>
+                    <span class="diagram-box-desc">Resource excluded from active management (public endpoints, static assets)</span>
                   </div>
                 </div>
               </div>
@@ -255,9 +255,9 @@ public class ManagedResource {
               </thead>
               <tbody>
                 <tr><td><code>NEEDS_DEFINITION</code></td><td>Resource discovered by scanner, not yet configured</td><td>Initial scan</td></tr>
-                <tr><td><code>PERMISSION_CREATED</code></td><td><code>defineResourceAsPermission()</code> called, <code>Permission</code> entity created</td><td>Admin action in Workbench</td></tr>
+                <tr><td><code>PERMISSION_CREATED</code></td><td><code>defineResourceAsPermission()</code> called, <code>Permission</code> entity created</td><td>Admin action in the Policy Center resources flow or legacy workbench route</td></tr>
                 <tr><td><code>POLICY_CONNECTED</code></td><td>Policy created and linked to this resource</td><td>Policy Center / legacy policy screens</td></tr>
-                <tr><td><code>EXCLUDED</code></td><td>Resource excluded from authorization management</td><td>Admin marks as excluded</td></tr>
+                <tr><td><code>EXCLUDED</code></td><td>Resource excluded from authorization management</td><td>Exclude flow updates the managed resource status</td></tr>
               </tbody>
             </table>
 
@@ -269,9 +269,8 @@ public class ManagedResource {
               <tbody>
                 <tr><td><code>resourceIdentifier</code></td><td><code>String</code></td><td>Unique ID (URL pattern + method, or qualified method signature)</td></tr>
                 <tr><td><code>resourceType</code></td><td><code>ResourceType</code></td><td><code>URL</code> or <code>METHOD</code></td></tr>
-                <tr><td><code>friendlyName</code></td><td><code>String</code></td><td>AI-generated human-readable name</td></tr>
-                <tr><td><code>status</code></td><td><code>ResourceStatus</code></td><td><code>NEEDS_DEFINITION</code>, <code>PERMISSION_CREATED</code>, <code>POLICY_CONNECTED</code>, <code>EXCLUDED</code></td></tr>
-                <tr><td><code>scanSource</code></td><td><code>String</code></td><td>Scanner that discovered this resource</td></tr>
+                <tr><td><code>friendlyName</code></td><td><code>String</code></td><td>AI-suggested human-readable name, or a fallback name when AI suggestions are unavailable</td></tr>
+                <tr><td><code>status</code></td><td><code>ManagedResource.Status</code></td><td><code>NEEDS_DEFINITION</code>, <code>PERMISSION_CREATED</code>, <code>POLICY_CONNECTED</code>, <code>EXCLUDED</code></td></tr>
               </tbody>
             </table>
           </section>
@@ -279,7 +278,7 @@ public class ManagedResource {
           <!-- Resource Workbench -->
           <section>
             <h2 id="workbench">Resource Workbench</h2>
-            <p>The Resource Workbench in the Admin Dashboard (<code>/admin/workbench/resources</code>) provides a visual interface for managing discovered resources.</p>
+            <p>The legacy <code>/admin/workbench/resources</code> route is still implemented in server code. In the current OSS UI bundle, day-to-day review and policy authoring are centered in Policy Center, which uses the same managed-resource registry and related admin endpoints.</p>
 
             <h3>Discovering Resources</h3>
             <ul>
@@ -303,8 +302,8 @@ public class ManagedResource {
                 <tr><th>Path</th><th>Action</th><th>Use Case</th></tr>
               </thead>
               <tbody>
-                <tr><td><strong>Quick Grant</strong></td><td>"Grant via Wizard" &mdash;Policy Wizard (3-step)</td><td>Simple role-to-permission assignment</td></tr>
-                <tr><td><strong>Advanced Policy</strong></td><td>"Create Policy" &mdash;Full policy authoring flow (from-resource-aware)</td><td>Complex conditions, AI expressions, multi-rule policies</td></tr>
+                <tr><td><strong>Quick Grant</strong></td><td>Policy Center quick-create flow with selected roles, permissions, or stored SpEL shortcuts</td><td>Simple role-to-permission assignment</td></tr>
+                <tr><td><strong>Advanced Policy</strong></td><td>Policy Center manual / AI-assisted create flow with resource context</td><td>Complex conditions, AI expressions, multi-rule policies</td></tr>
               </tbody>
             </table>
           </section>
@@ -326,8 +325,8 @@ public class ManagedResource {
                 <div class="diagram-group">
                   <div class="diagram-group-title">Step 2: DEFINE</div>
                   <div class="diagram-box diagram-accent">
-                    <span class="diagram-box-name">Resource Workbench</span>
-                    <span class="diagram-box-desc">/admin/workbench/resources -- Define as Permission (PERMISSION_CREATED)</span>
+                    <span class="diagram-box-name">Policy Center Resources Flow</span>
+                    <span class="diagram-box-desc">Integrated review/define flow backed by managed-resource endpoints (PERMISSION_CREATED)</span>
                   </div>
                 </div>
                 <div class="diagram-arrow diagram-arrow-long"></div>
@@ -350,13 +349,13 @@ public class ManagedResource {
             </div>
 
             <h3>Step 1: Scan</h3>
-            <p>Automatic at application startup via <code>WorkbenchInitializer</code>. <code>MvcResourceScanner</code> scans all <code>@Controller</code> and <code>@RestController</code> classes. <code>MethodResourceScanner</code> scans all <code>@Protectable</code> methods. AI generates friendly names in batch.</p>
+            <p>Automatic at application startup via <code>WorkbenchInitializer</code>. <code>MvcResourceScanner</code> scans all <code>@Controller</code> and <code>@RestController</code> classes. <code>MethodResourceScanner</code> scans all <code>@Protectable</code> methods. Friendly names and descriptions are then filled from AI suggestions when available, with fallback values used if AI suggestions are unavailable.</p>
 
             <h3>Step 2: Review &amp; Define</h3>
-            <p>In the Resource Workbench, review <code>NEEDS_DEFINITION</code> resources. Define relevant resources as permissions. Exclude resources that do not need authorization (static assets, public endpoints).</p>
+            <p>Review <code>NEEDS_DEFINITION</code> resources through the current Policy Center integrated resources area or the legacy workbench-backed endpoints. Define relevant resources as permissions, and exclude resources that do not need authorization (static assets, public endpoints).</p>
 
             <h3>Step 3: Create Policy</h3>
-            <p>From the Workbench, click <strong>"Create Policy"</strong> to enter the current policy authoring flow with the selected resource context. Compatible condition templates are filtered for the chosen resource, and legacy builder screens remain available where applicable.</p>
+            <p>From the current Policy Center resources flow, or the legacy <code>/admin/policy-builder/from-resource</code> route, continue into policy authoring with the selected resource context. Compatible condition templates are filtered for the chosen resource, and the same managed-resource lifecycle stays in sync as the policy is created.</p>
 
             <h3>Step 4: Dynamic Authorization</h3>
             <p>When the policy is saved, <code>reloadAuthorizationSystem()</code> triggers <code>CustomDynamicAuthorizationManager.reload()</code>. The policy takes effect immediately. With <code>.anyRequest().access(customDynamicAuthorizationManager)</code> in your security configuration, no static authorization rules are needed.</p>
@@ -365,10 +364,10 @@ public class ManagedResource {
           <!-- Resource Workbench Operations Guide -->
           <section>
             <h2 id="workbench-operations">Resource Workbench: Operations Guide</h2>
-            <p>The Resource Workbench (<code>/admin/workbench/resources</code>) is the central interface for managing all discovered resources. This section covers detailed operational workflows.</p>
+            <p>The managed-resource lifecycle is still backed by the legacy <code>/admin/workbench/resources</code> controller, but the current OSS UI centers operators in Policy Center. This section describes the shared operational workflows behind both surfaces.</p>
 
             <h3>Filtering Resources</h3>
-            <p>The Workbench provides multiple filtering options to find resources quickly:</p>
+            <p>The current resource review flow provides multiple filtering options to find resources quickly, whether operators use the integrated Policy Center surface or the legacy workbench-backed endpoints:</p>
             <table>
               <thead>
                 <tr><th>Filter</th><th>Options</th><th>Use Case</th></tr>
@@ -397,7 +396,7 @@ public class ManagedResource {
               <div class="diagram-compare">
                 <div class="diagram-compare-side">
                   <h4>Quick Grant (Wizard)</h4>
-                  <p>Click <strong>"Grant via Wizard"</strong> to open the 3-step Policy Wizard.</p>
+                  <p>Use the Policy Center quick-create flow to open a simplified grant path with the selected resource context.</p>
                   <ul>
                     <li>Pre-selects the resource permission</li>
                     <li>Choose target roles and confirm</li>
@@ -406,8 +405,8 @@ public class ManagedResource {
                 </div>
                 <div class="diagram-compare-vs">VS</div>
                 <div class="diagram-compare-side">
-                  <h4>Advanced (Policy Builder)</h4>
-                  <p>Click <strong>"Create Policy"</strong> to open the full policy authoring flow.</p>
+                  <h4>Advanced (Manual / builder-compatible flow)</h4>
+                  <p>Use the Policy Center manual create flow to open the full policy authoring experience with the selected resource context. The legacy builder controller path still exists in server code, but the current OSS template bundle centers this flow in Policy Center.</p>
                   <ul>
                     <li>Target is pre-filled (from-resource mode)</li>
                     <li>Full condition template selection</li>
@@ -444,7 +443,7 @@ public class ManagedResource {
                     <div class="diagram-arrow-down"></div>
                     <div class="diagram-box diagram-success">
                       <span class="diagram-box-name">POLICY_CONNECTED</span>
-                      <span class="diagram-box-desc">Policy created via Wizard or Builder -- Resource fully managed</span>
+                      <span class="diagram-box-desc">Policy created via Policy Center quick or manual flow -- Resource fully managed</span>
                     </div>
                   </div>
                   <div class="diagram-group">
@@ -519,6 +518,6 @@ public class ManagedResource {
             </a>
             <a href="../../../docs/reference/iam/admin.html" class="docs-nav-next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Admin Dashboard</span>
+              <span class="docs-nav-title">Admin Console</span>
             </a>
           </div>

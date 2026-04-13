@@ -12,7 +12,7 @@
               <span class="badge badge-warning">contexa-iam</span>
             </div>
             <h1>Dynamic URL Authorization</h1>
-            <p class="lead">Database-driven URL authorization using CustomDynamicAuthorizationManager. Define access policies through the Admin Dashboard and have them enforced automatically without redeployment.</p>
+            <p class="lead">Database-driven URL authorization using <code>CustomDynamicAuthorizationManager</code>. Define access policies through the current Policy Center and related admin policy flows, then have them enforced without rebuilding the application.</p>
           </div>
 
           <!-- What is Dynamic Authorization -->
@@ -22,7 +22,7 @@
             <p>This architecture enables three key capabilities:</p>
             <ul>
               <li><strong>No-redeploy policy changes</strong> &mdash;Authorization rules can be modified, added, or removed without rebuilding or redeploying the application. After editing, a hot-reload triggers re-initialization.</li>
-              <li><strong>Admin Dashboard management</strong> &mdash;Policies can be created and managed through the Admin Dashboard UI, making authorization accessible to non-developers.</li>
+              <li><strong>Admin policy management</strong> &mdash;Policies can be created and managed through Policy Center, policy detail flows, and related admin endpoints without changing Java security configuration.</li>
               <li><strong>AI-generated policy integration</strong> &mdash;AI-generated and AI-evolved policies can be integrated into the authorization pipeline after human approval.</li>
             </ul>
           </section>
@@ -50,7 +50,7 @@
                         <div class="diagram-box-name">Application Startup</div>
                       </div>
                       <div class="diagram-box">
-                        <div class="diagram-box-name">Admin Dashboard / PAP REST API</div>
+                        <div class="diagram-box-name">Policy Center / Admin Policy Flows</div>
                       </div>
                     </div>
                   </div>
@@ -76,13 +76,13 @@
                     <div class="diagram-group-title">Per-Request Evaluation</div>
                     <div class="diagram-flow-vertical">
                       <div class="diagram-box">
-                        <div class="diagram-box-name">PolicyTranslator</div>
-                        <div class="diagram-box-desc">Converts policy conditions to SpEL ExpressionNode trees</div>
+                        <div class="diagram-box-name">PolicyExpressionConverter</div>
+                        <div class="diagram-box-desc">Converts each active URL policy into the SpEL string used by Spring Security</div>
                       </div>
                       <div class="diagram-arrow-down"></div>
                       <div class="diagram-box">
                         <div class="diagram-box-name">ExpressionAuthorizationManagerResolver</div>
-                        <div class="diagram-box-desc">Matches request URL to applicable policies</div>
+                        <div class="diagram-box-desc">Builds the Spring AuthorizationManager used for each cached request matcher entry</div>
                       </div>
                       <div class="diagram-arrow-down"></div>
                       <div class="diagram-box">
@@ -92,14 +92,14 @@
                       <div class="diagram-arrow-down"></div>
                       <div class="diagram-box">
                         <div class="diagram-box-name">AI Policy Gate</div>
-                        <div class="diagram-box-desc">AI-generated policies are SKIPPED unless approvalStatus = APPROVED</div>
+                        <div class="diagram-box-desc">Policies with <code>PENDING</code> or <code>REJECTED</code> approval are filtered out before request-time evaluation</div>
                       </div>
                     </div>
                   </div>
                   <div class="diagram-arrow-down"></div>
                   <div class="diagram-box">
                     <div class="diagram-box-name">CentralAuditFacade</div>
-                    <div class="diagram-box-desc">Logs all authorization attempts</div>
+                    <div class="diagram-box-desc">Records denied URL authorization results with request URI, action, outcome, and optional AI assessment context</div>
                   </div>
                 </div>
               </div>
@@ -107,13 +107,13 @@
 
             <h3 id="step-by-step">Step-by-Step Evaluation</h3>
             <ol>
-              <li><strong>PolicyRetrievalPoint (PRP)</strong> loads all policies from the database at application startup via a <code>ContextRefreshedEvent</code> listener.</li>
-              <li>For each policy, <code>CustomDynamicAuthorizationManager</code> extracts URL targets and converts the policy into a SpEL expression string.</li>
-              <li><strong>PolicyTranslator</strong> converts policy conditions into SpEL expression trees (<code>ExpressionNode</code>).</li>
-              <li>At request time, <strong>ExpressionAuthorizationManagerResolver</strong> matches the incoming request URL against the cached <code>RequestMatcherEntry</code> list.</li>
-              <li>The matched SpEL expression is evaluated against the current <code>Authentication</code> context.</li>
-              <li>AI-generated policies (source = <code>AI_GENERATED</code> or <code>AI_EVOLVED</code>) are <strong>skipped entirely</strong> unless their <code>approvalStatus</code> is <code>APPROVED</code>.</li>
-              <li>The authorization decision (grant or deny) is enforced, and the attempt is logged to <code>CentralAuditFacade</code>.</li>
+              <li><strong>Context refresh</strong> triggers <code>CustomDynamicAuthorizationManager.initialize()</code>, which calls <code>PolicyRetrievalPoint.findUrlPolicies()</code>.</li>
+              <li>The manager filters out inactive policies and policies whose <code>approvalStatus</code> is <code>PENDING</code> or <code>REJECTED</code>.</li>
+              <li>For each remaining URL policy, <code>PolicyExpressionConverter.toExpression(policy)</code> builds the SpEL expression string and <code>ExpressionAuthorizationManagerResolver.resolve(expression)</code> creates the Spring authorization manager.</li>
+              <li>The resulting <code>RequestMatcherEntry&lt;AuthorizationManager&lt;RequestAuthorizationContext&gt;&gt;</code> list is cached in memory.</li>
+              <li>At request time, <code>check(...)</code> iterates the cached matchers until it finds the first matching request pattern.</li>
+              <li>The matched authorization manager evaluates the current <code>Authentication</code> and request context. If no URL policy matches, the default decision is <code>AuthorizationDecision(true)</code>.</li>
+              <li>Denied URL authorization results are recorded through <code>CentralAuditFacade</code> with request URI, action, outcome, and optional AI assessment context before the decision is returned to Spring Security.</li>
             </ol>
           </section>
 
@@ -235,7 +235,7 @@ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
             </div>
 
             <h3>Pattern 3: Full Dynamic</h3>
-            <p>Enterprise pattern where every request &mdash;including static assets &mdash;is evaluated by the policy engine. All access rules live in the database with no compile-time exceptions.</p>
+            <p>Pattern for routing all unmatched requests through <code>customDynamicAuthorizationManager</code>. In this setup, any route not statically permitted earlier in the chain is evaluated against the runtime policy mappings.</p>
 
             <div class="code-block">
               <div class="code-block-header">
@@ -299,13 +299,14 @@ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         // 1. Match request URL to cached RequestMatcherEntry
         // 2. Resolve the SpEL expression for the matched policy
         // 3. Evaluate the expression against the Authentication
-        // 4. Log result to CentralAuditFacade
+        // 4. Record denied results through CentralAuditFacade
         // 5. Return AuthorizationDecision(granted/denied)
     }
 
     // Hot-reload: clears PRP cache and re-initializes mappings
     public synchronized void reload() {
-        policyRetrievalPoint.clearCache();
+        policyRetrievalPoint.clearUrlPoliciesCache();
+        policyRetrievalPoint.clearMethodPoliciesCache();
         initialize();
     }
 }</code></pre>
@@ -324,17 +325,19 @@ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
                   <span>Copy</span>
                 </button>
               </div>
-              <pre><code class="language-java">public class Policy {
-    String name;               // Human-readable policy name
-    String description;        // Purpose and scope of the policy
-    PolicyEffect effect;       // ALLOW or DENY
-    int priority;              // Higher priority policies evaluated first
-    List&lt;PolicyTarget&gt; targets; // URL patterns + HTTP methods
-    List&lt;PolicyRule&gt; rules;     // Conditions with SpEL expressions
-    PolicySource source;        // MANUAL, AI_GENERATED, AI_EVOLVED, IMPORTED
-    ApprovalStatus approvalStatus; // NOT_REQUIRED, PENDING, APPROVED, REJECTED
-    Double confidenceScore;    // AI confidence (0.0 - 1.0), null for manual
-    String aiModel;            // AI model identifier, null for manual
+              <pre><code class="language-java">public class PolicyDto {
+    Long id;
+    String name;
+    String description;
+    Policy.Effect effect;
+    int priority;
+    List<TargetDto> targets;
+    List<RuleDto> rules;
+    Policy.PolicySource source;
+    Policy.ApprovalStatus approvalStatus;
+    Boolean isActive;
+    Double confidenceScore;
+    String aiModel;
 }</code></pre>
             </div>
 
@@ -347,7 +350,7 @@ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
                 <tr>
                   <td><code>name</code></td>
                   <td>String</td>
-                  <td>A human-readable identifier for the policy, displayed in the Admin Dashboard and audit logs.</td>
+                  <td>A human-readable identifier for the policy, displayed in Policy Center, policy details, and audit output.</td>
                 </tr>
                 <tr>
                   <td><code>description</code></td>
@@ -356,7 +359,7 @@ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
                 </tr>
                 <tr>
                   <td><code>effect</code></td>
-                  <td>PolicyEffect</td>
+                  <td><code>Policy.Effect</code></td>
                   <td>The policy effect. <code>ALLOW</code> grants access when conditions are met; <code>DENY</code> blocks access when conditions are met.</td>
                 </tr>
                 <tr>
@@ -366,7 +369,7 @@ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
                 </tr>
                 <tr>
                   <td><code>targets</code></td>
-                  <td>List&lt;PolicyTarget&gt;</td>
+                  <td>List&lt;TargetDto&gt;</td>
                   <td>The resource targets this policy applies to, defined as Ant-style URL patterns paired with HTTP methods.</td>
                 </tr>
                 <tr>
@@ -398,7 +401,7 @@ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
             </table></div>
 
             <h3 id="policy-target">PolicyTarget</h3>
-            <p>Each target binds a URL pattern to one or more HTTP methods.</p>
+            <p>Each target captures a resource type, target identifier, optional HTTP method, ordering, and source type.</p>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">Java</span>
@@ -407,9 +410,12 @@ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
                   <span>Copy</span>
                 </button>
               </div>
-              <pre><code class="language-java">public class PolicyTarget {
-    String urlPattern;          // Ant-style URL pattern, e.g. "/api/admin/**"
-    List&lt;HttpMethod&gt; methods;   // GET, POST, PUT, DELETE, etc.
+              <pre><code class="language-java">public class TargetDto {
+    String targetType;         // URL or METHOD
+    String targetIdentifier;   // e.g. "/api/admin/**"
+    String httpMethod;         // GET, POST, PUT, DELETE, ...
+    int targetOrder;
+    String sourceType;         // RESOURCE or MANUAL
 }</code></pre>
             </div>
 
@@ -484,7 +490,7 @@ public class PolicyCondition {
                   <td>Returns true if the zero-trust AI action for the current request is <code>ALLOW</code>.</td>
                 </tr>
                 <tr>
-                  <td><code>isBlocked()</code></td>
+                  <td><code>#ai.isBlocked()</code></td>
                   <td>Returns true if the zero-trust AI action for the current request is <code>BLOCK</code>.</td>
                 </tr>
                 <tr>
@@ -492,15 +498,15 @@ public class PolicyCondition {
                   <td>Returns true if the AI evaluation determined that a step-up MFA challenge is required before granting access.</td>
                 </tr>
                 <tr>
-                  <td><code>needsEscalation()</code></td>
+                  <td><code>#ai.needsEscalation()</code></td>
                   <td>Returns true if the AI evaluation determined that human review or security team escalation is needed.</td>
                 </tr>
                 <tr>
-                  <td><code>isPendingAnalysis()</code></td>
+                  <td><code>#ai.isPendingAnalysis()</code></td>
                   <td>Returns true if asynchronous AI analysis is still in progress for the current request.</td>
                 </tr>
                 <tr>
-                  <td><code>hasAction('ALLOW')</code></td>
+                  <td><code>#ai.hasAction('ALLOW')</code></td>
                   <td>Checks whether the zero-trust action matches a specific action by name.</td>
                 </tr>
               </tbody>
@@ -558,7 +564,7 @@ public class PolicyCondition {
                 <tr>
                   <td><strong>PAP</strong></td>
                   <td>Policy Administration Point</td>
-                  <td>Creates, reads, updates, and deletes policies via the REST API or the Admin Dashboard.</td>
+                  <td>Creates, reads, updates, and deletes policies through Policy Center, policy detail flows, and related admin services.</td>
                 </tr>
                 <tr>
                   <td><strong>PDP</strong></td>
@@ -590,40 +596,24 @@ public class PolicyCondition {
             <p>The following example shows the complete lifecycle of creating and enforcing a dynamic authorization policy.</p>
 
             <h3 id="step1-create-policy">Step 1: Create a Policy</h3>
-            <p>Policies can be created through the Admin Dashboard UI or programmatically via the PAP REST API.</p>
+            <p>Policies can be created through Policy Center and related server-side admin flows. This OSS page does not describe a separate public PAP REST surface.</p>
             <div class="code-block">
               <div class="code-block-header">
-                <span class="code-block-lang">HTTP</span>
+                <span class="code-block-lang">Java</span>
                 <button class="code-copy-btn" type="button" aria-label="Copy code">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                   <span>Copy</span>
                 </button>
               </div>
-              <pre><code>POST /api/iam/policies
-Content-Type: application/json
+              <pre><code>GET  /admin/policy-center
+POST /admin/policy-center/create-policy
+POST /admin/policy-center/api/quick-create
+POST /admin/api/policies/build-from-business-rule
 
-{
-  "name": "Admin API Access",
-  "description": "Restrict /api/admin/** endpoints to users with ROLE_ADMIN",
-  "effect": "ALLOW",
-  "priority": 100,
-  "targets": [
-    {
-      "urlPattern": "/api/admin/**",
-      "methods": ["GET", "POST", "PUT", "DELETE"]
-    }
-  ],
-  "rules": [
-    {
-      "name": "Require admin role",
-      "conditions": [
-        {
-          "expression": "hasAuthority('ROLE_ADMIN')"
-        }
-      ]
-    }
-  ]
-}</code></pre>
+// Current OSS authoring paths:
+// - Policy Center form workflow
+// - Quick-create helper inside Policy Center
+// - Business-rule helper API for assisted policy generation</code></pre>
             </div>
 
             <h3 id="step2-database-storage">Step 2: Policy is Stored in Database</h3>
@@ -662,7 +652,7 @@ Approval: NOT_REQUIRED (active immediately)</code></pre>
 4. SpEL expression "hasAuthority('ROLE_ADMIN')" is evaluated
 5a. User has ROLE_ADMIN -&gt; AuthorizationDecision(granted=true)
 5b. User lacks ROLE_ADMIN -&gt; AuthorizationDecision(granted=false) -&gt; 403
-6. CentralAuditFacade logs: policy="Admin API Access", decision=GRANT/DENY</code></pre>
+6. If the result is denied, CustomDynamicAuthorizationManager records an audit event with request URI, action, outcome, and available AI context</code></pre>
             </div>
 
             <h3 id="ai-policy-example">AI-Generated Policy Example</h3>
@@ -682,8 +672,12 @@ Approval: NOT_REQUIRED (active immediately)</code></pre>
   "priority": 90,
   "targets": [
     {
-      "urlPattern": "/api/reports/sensitive/**",
-      "methods": ["GET"]
+      "targetType": "URL",
+      "targetIdentifier": "/api/reports/sensitive/**",
+      "httpMethod": "GET",
+      "targetOrder": 0,
+      "sourceType": "RESOURCE",
+
     }
   ],
   "rules": [
@@ -701,26 +695,26 @@ Approval: NOT_REQUIRED (active immediately)</code></pre>
   "aiModel": "contexa-policy-gen-v2"
 }</code></pre>
             </div>
-            <p>This policy will be <strong>skipped</strong> during authorization evaluation until an administrator sets <code>approvalStatus</code> to <code>APPROVED</code> through the Admin Dashboard or PAP API.</p>
+            <p>This policy will be <strong>skipped</strong> during authorization evaluation until an administrator approves it through the current admin policy review flow.</p>
           </section>
 
           <!-- Configuration -->
           <section>
             <h2 id="configuration">Configuration</h2>
-            <p>Dynamic authorization is enabled automatically when the <code>contexa-iam</code> module is on the classpath. The primary configuration is managed through the <a href="../../../docs/reference/iam/admin.html">Admin Dashboard</a>.</p>
+            <p>Dynamic authorization is enabled automatically when the <code>contexa-iam</code> module is on the classpath. Runtime policy changes are typically made through <a href="../../../docs/reference/iam/admin.html">Policy Center and related admin policy views</a>, while code-level behavior is defined by the IAM and security configuration classes.</p>
 
             <h3 id="hot-reload">Hot-Reload</h3>
-            <p>After modifying policies through the Admin Dashboard or PAP API, trigger a hot-reload to apply changes without restarting the application:</p>
+            <p>After modifying policies through Policy Center or related admin flows, the server calls <code>authorizationManager.reload()</code> to rebuild URL and method policy caches without restarting the application:</p>
             <div class="code-block">
               <div class="code-block-header">
-                <span class="code-block-lang">HTTP</span>
+                <span class="code-block-lang">Java</span>
                 <button class="code-copy-btn" type="button" aria-label="Copy code">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                   <span>Copy</span>
                 </button>
               </div>
-              <pre><code>POST /api/iam/policies/reload
-Authorization: Bearer &lt;admin-token&gt;</code></pre>
+              <pre><code class="language-java">policyService.createPolicy(policyDto);
+customDynamicAuthorizationManager.reload();</code></pre>
             </div>
             <p>This calls <code>CustomDynamicAuthorizationManager.reload()</code>, which clears the PRP cache and re-initializes all <code>RequestMatcherEntry</code> mappings from the database.</p>
 
@@ -732,19 +726,19 @@ Authorization: Bearer &lt;admin-token&gt;</code></pre>
               </thead>
               <tbody>
                 <tr>
-                  <td><code>contexa.iam.enabled</code></td>
-                  <td><code>true</code></td>
-                  <td>Enables or disables the entire IAM module. When disabled, dynamic authorization is not applied.</td>
-                </tr>
-                <tr>
                   <td><code>contexa.iam.admin.rest-docs-path</code></td>
-                  <td><code>true</code></td>
-                  <td>Controls the documentation path exposed by the IAM admin module.</td>
+                  <td><code>/docs/index.html</code></td>
+                  <td>Base documentation path used when MVC-scanned resources generate their API documentation anchors.</td>
                 </tr>
                 <tr>
                   <td><code>contexa.policy.combining-algorithm</code></td>
-                  <td><code>3600</code></td>
-                  <td>Controls the combining algorithm used when multiple URL policies match a request.</td>
+                  <td><code>FIRST_APPLICABLE</code></td>
+                  <td>Combining algorithm used when multiple URL policies match the same request.</td>
+                </tr>
+                <tr>
+                  <td><code>security.zerotrust.mode</code></td>
+                  <td><code>ENFORCE</code></td>
+                  <td>Controls whether zero-trust decisions are enforced live or observed in shadow mode.</td>
                 </tr>
               </tbody>
             </table></div>
@@ -792,7 +786,7 @@ Authorization: Bearer &lt;admin-token&gt;</code></pre>
             </table>
 
             <div class="callout callout-info">
-              <strong>Related:</strong> For IAM admin UI properties such as <code>contexa.iam.admin.*</code>, see the <a href="../../../docs/reference/iam/admin.html">Admin Dashboard</a> reference page.
+              <strong>Related:</strong> For IAM admin UI properties such as <code>contexa.iam.admin.*</code>, see the <a href="../../../docs/reference/iam/admin.html">Admin Console</a> reference page.
             </div>
           </section>
 
@@ -804,7 +798,7 @@ Authorization: Bearer &lt;admin-token&gt;</code></pre>
               <li><a href="../../../docs/reference/iam/policy.html">Policy Management</a> &mdash;Policy lifecycle, Policy Builder, and condition templates</li>
               <li><a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> &mdash;Automatic resource discovery and the end-to-end workflow</li>
               <li><a href="../../../docs/reference/iam/permission-evaluators.html">Permission Evaluators</a> &mdash;Method-level permission evaluation with <code>hasPermission()</code></li>
-              <li><a href="../../../docs/reference/iam/admin.html">Admin Dashboard</a> &mdash;UI for managing policies, roles, and permissions</li>
+              <li><a href="../../../docs/reference/iam/admin.html">Admin Console</a> &mdash;Current Policy Center, access center, and related IAM operator views</li>
             </ul>
           </section>
 
@@ -829,11 +823,11 @@ return new AuthorizationDecision(true);</code></pre>
 
           <!-- Admin UI: Creating URL Policies -->
           <section>
-            <h2 id="admin-url-policies">Creating URL Policies via Admin</h2>
-            <p>The Admin Dashboard provides a visual workflow for creating URL-based authorization policies. Follow these steps to create a policy that protects a URL pattern:</p>
+            <h2 id="admin-url-policies">Creating URL Policies in Policy Center</h2>
+            <p>The current OSS operator flow for URL policies is centered on Policy Center. Follow these steps to create a policy that protects a URL pattern:</p>
             <ol>
-              <li><strong>Navigate to Policies</strong> &mdash;Go to <strong>Admin &gt; Authorization Policies &gt; Policy List</strong> in the Admin Dashboard.</li>
-              <li><strong>Create New Policy</strong> &mdash;Click the <strong>"Create New Policy"</strong> button to open the policy editor.</li>
+              <li><strong>Open Policy Center</strong> &mdash;Go to <strong>/admin/policy-center?tab=create</strong> and open the integrated create surface.</li>
+              <li><strong>Choose a create path</strong> &mdash;Use quick-create for simple role/permission grants, or use the manual form to edit the full <code>PolicyDto</code>.</li>
               <li><strong>Set Policy Metadata</strong> &mdash;Enter a descriptive policy name, select the effect (<code>ALLOW</code> or <code>DENY</code>), and set the priority (lower numbers evaluate first).</li>
               <li><strong>Add URL Target</strong> &mdash;In the Targets section, add a URL target by specifying:
                 <ul>
@@ -853,7 +847,7 @@ return new AuthorizationDecision(true);</code></pre>
                   <pre><code>hasAnyAuthority('ROLE_ADMIN')</code></pre>
                 </div>
               </li>
-              <li><strong>Save and Verify</strong> &mdash;Save the policy. The <code>CustomDynamicAuthorizationManager</code> will hot-reload the new policy automatically. Verify enforcement using the <a href="../../../docs/reference/iam/admin.html">Security Monitor</a> and test with different user roles.</li>
+              <li><strong>Save and Verify</strong> &mdash;Save the policy through Policy Center or a related admin flow. The server rebuilds authorization mappings through <code>authorizationManager.reload()</code>. Verify enforcement with the list, simulator, impact analysis, and detail views.</li>
             </ol>
             <div class="callout callout-info">
               <strong>Tip:</strong> For complex conditions, use Policy Center and the condition catalog to compose stored SpEL rules. <code>#ai.*</code> expressions, role checks, permission checks, time checks, and IP checks can be combined in the same rule.

@@ -11,13 +11,13 @@
               <span class="badge badge-primary">contexa-core</span>
             </div>
             <h1>AI Pipeline</h1>
-            <p class="lead">AI Pipeline은 AI 요청을 위한 설정 가능한 다단계 실행 흐름을 제공합니다. <code>PipelineOrchestrator</code>는 설정에 따라 적절한 <code>PipelineExecutor</code>를 선택하고 컨텍스트 검색부터 응답 파싱까지 일련의 처리 단계를 통해 요청을 위임합니다.</p>
+            <p class="lead">AI Pipeline은 pipeline-backed AI 요청을 위한 설정 가능한 다단계 실행 흐름을 제공합니다. <code>PipelineOrchestrator</code>는 설정에 따라 적절한 <code>PipelineExecutor</code>를 선택하고, 컨텍스트 검색부터 구조화된 응답 파싱까지 전체 수명 주기를 조정합니다.</p>
           </div>
 
           <!-- Overview -->
           <section class="docs-section">
             <h2 id="overview">개요</h2>
-            <p>Pipeline은 직접적인 LLM 호출이 아닌 전체 처리 흐름 (RAG 컨텍스트 검색, 프롬프트 생성, LLM 실행, 응답 파싱)이 필요한 사용 사례를 위해 설계되었습니다. 오케스트레이터는 표준과 Streaming 실행기 사이에서 자동으로 선택합니다.</p>
+            <p>Pipeline은 직접적인 단일 LLM 호출이 아니라 전체 처리 흐름 (RAG 컨텍스트 검색, 프롬프트 생성, LLM 실행, 응답 파싱)이 필요한 사용 사례를 위해 설계되었습니다. 오케스트레이터는 표준 실행기와 Streaming 실행기 사이에서 자동으로 선택하며, 필요하면 <code>SOAR_TOOL_EXECUTION</code> 단계를 명시적으로 추가할 수 있습니다.</p>
 
             <h3>Pipeline 흐름</h3>
             <div class="arch-flow">
@@ -106,13 +106,13 @@
                 <tr><th>단계</th><th>설명</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>PREPROCESSING</code></td><td>요청 검증, 정규화, 보강.</td></tr>
-                <tr><td><code>CONTEXT_RETRIEVAL</code></td><td>벡터 스토어에서 RAG 컨텍스트 검색.</td></tr>
-                <tr><td><code>PROMPT_GENERATION</code></td><td>요청 데이터와 검색된 컨텍스트로 최종 프롬프트 구성.</td></tr>
-                <tr><td><code>LLM_EXECUTION</code></td><td><code>UnifiedLLMOrchestrator</code>를 통해 LLM에 프롬프트 전송.</td></tr>
-                <tr><td><code>TOOL_EXECUTION</code></td><td>LLM 응답에서 Tool 호출 실행.</td></tr>
-                <tr><td><code>RESPONSE_PARSING</code></td><td>원시 LLM 출력을 대상 응답 타입으로 파싱.</td></tr>
-                <tr><td><code>POSTPROCESSING</code></td><td>최종 보강, 검증, 부수 효과 실행.</td></tr>
+                <tr><td><code>PREPROCESSING</code></td><td>기본 요청 메타데이터 문자열을 구성합니다. 검증이나 정규화는 같은 단계에 커스텀 스텝으로 추가할 수 있습니다.</td></tr>
+                <tr><td><code>CONTEXT_RETRIEVAL</code></td><td>벡터 스토어에서 RAG 컨텍스트를 검색합니다. 전용 retriever가 없으면 기본 retriever로 폴백하고, 일치 문서가 없어도 빈/저신호 컨텍스트로 다음 단계가 계속 진행됩니다.</td></tr>
+                <tr><td><code>PROMPT_GENERATION</code></td><td>요청 데이터와 검색된 컨텍스트로 최종 프롬프트를 구성합니다.</td></tr>
+                <tr><td><code>LLM_EXECUTION</code></td><td><code>UnifiedLLMOrchestrator</code>를 통해 프롬프트를 실행합니다.</td></tr>
+                <tr><td><code>SOAR_TOOL_EXECUTION</code></td><td>선택적 도구 실행 단계입니다. 기본 파이프라인에는 포함되지 않으며, 명시적으로 추가할 때만 LLM 결과와 응답 파싱 사이에 실행됩니다.</td></tr>
+                <tr><td><code>RESPONSE_PARSING</code></td><td>원시 LLM 출력을 대상 응답 타입으로 파싱합니다.</td></tr>
+                <tr><td><code>POSTPROCESSING</code></td><td>최종 보강, 검증, 후처리를 수행합니다.</td></tr>
               </tbody>
             </table>
 
@@ -131,6 +131,10 @@
                 <span class="api-method-return">PipelineConfiguration</span>
               </div>
               <div class="api-method-desc">Streaming Pipeline 설정을 생성합니다. 단계: CONTEXT_RETRIEVAL, PREPROCESSING, PROMPT_GENERATION, LLM_EXECUTION. Streaming 활성화, 타임아웃: 300초.</div>
+            </div>
+
+            <div class="callout callout-info">
+              <p><strong>선택적 SOAR 단계:</strong> <code>PipelineConfiguration.PipelineStep.SOAR_TOOL_EXECUTION</code>는 기본 팩토리 메서드에 포함되지 않습니다. 필요할 때만 수동으로 설정에 추가하고, <code>LLM_EXECUTION</code>과 <code>RESPONSE_PARSING</code> 사이에 배치해야 합니다.</p>
             </div>
           </section>
 
@@ -208,11 +212,12 @@
                   <span>Copy</span>
                 </button>
               </div>
-              <pre><code class="language-java">AIRequest&lt;SecurityContext&gt; request = AIRequest.builder()
-        .requestId(UUID.randomUUID().toString())
-        .domainContext(securityContext)
-        .diagnosisType(DiagnosisType.THREAT_EVALUATION)
-        .build();
+              <pre><code class="language-java">AIRequest&lt;SecurityContext&gt; request = new AIRequest&lt;&gt;(
+        securityContext,
+        new TemplateType("SecurityDecisionStandard"),
+        new DiagnosisType("SecurityDecision")
+);
+request.setNaturalLanguageQuery("Evaluate the current request context");
 
 ThreatResponse response = pipelineOrchestrator
         .execute(request, ThreatResponse.class)
@@ -229,11 +234,11 @@ ThreatResponse response = pipelineOrchestrator
                 </button>
               </div>
               <pre><code class="language-java">PipelineConfiguration config = PipelineConfiguration.builder()
-        .addStep(PipelineStep.PREPROCESSING)
-        .addStep(PipelineStep.PROMPT_GENERATION)
-        .addStep(PipelineStep.LLM_EXECUTION)
-        .addStep(PipelineStep.TOOL_EXECUTION)
-        .addStep(PipelineStep.RESPONSE_PARSING)
+        .addStep(PipelineConfiguration.PipelineStep.PREPROCESSING)
+        .addStep(PipelineConfiguration.PipelineStep.PROMPT_GENERATION)
+        .addStep(PipelineConfiguration.PipelineStep.LLM_EXECUTION)
+        .addStep(PipelineConfiguration.PipelineStep.SOAR_TOOL_EXECUTION)
+        .addStep(PipelineConfiguration.PipelineStep.RESPONSE_PARSING)
         .timeoutSeconds(120)
         .build();
 

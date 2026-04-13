@@ -220,7 +220,7 @@
 
             <h3>주요 동작</h3>
             <ul>
-              <li><strong>분산 락</strong> — Strategy 실행 전 (Redis를 통한) 분산 락을 획득합니다. 클러스터 노드 간 동일한 전략적 작업의 동시 실행을 방지합니다. 락 타임아웃: 30분.</li>
+              <li><strong>분산 락</strong> — Strategy 실행 전 <code>DistributedLockService</code>를 통해 락을 획득합니다. 분산 배포에서는 Redis 구현이 사용될 수 있고, 단일 JVM 환경에서는 메모리 기반 구현이 사용됩니다. 기본 락 타임아웃은 30분입니다.</li>
               <li><strong>감사 로깅</strong> — 실행 전 감사 추적 항목을 생성하고 실행 후 결과 또는 오류로 완료합니다.</li>
               <li><strong>노드 식별</strong> — 각 노드는 락 소유권을 위한 고유 ID를 생성합니다.</li>
             </ul>
@@ -311,52 +311,66 @@
                 </button>
               </div>
               <pre><code class="language-java">@Component
-public class ThreatEvaluationStrategy
-        extends AbstractAIStrategy&lt;SecurityContext,
-                                    ThreatResponse&gt; {
+public class ProductRecommendationStrategy
+        extends AbstractAIStrategy&lt;ProductContext,
+                                    ProductRecommendationResponse&gt; {
 
-    public ThreatEvaluationStrategy(AILabFactory labFactory) {
+    public ProductRecommendationStrategy(AILabFactory labFactory) {
         super(labFactory);
     }
 
     @Override
     public DiagnosisType getSupportedType() {
-        return DiagnosisType.THREAT_EVALUATION;
+        return new DiagnosisType("PRODUCT_RECOMMENDATION");
     }
 
     @Override
     public int getPriority() {
-        return 10;
+        return 100;
     }
 
     @Override
     protected Class&lt;?&gt; getLabType() {
-        return ThreatAnalysisLab.class;
+        return ProductRecommendationLab.class;
     }
 
     @Override
     protected void validateRequest(
-            AIRequest&lt;SecurityContext&gt; request) {
-        if (request.getDomainContext() == null) {
+            AIRequest&lt;ProductContext&gt; request)
+            throws DiagnosisException {
+        if (request.getContext() == null) {
             throw new DiagnosisException(
                     getSupportedType().name(),
                     "INVALID_REQUEST",
-                    "SecurityContext is required");
+                    "ProductContext is required");
+        }
+        if (request.getContext().getCategory() == null) {
+            throw new DiagnosisException(
+                    getSupportedType().name(),
+                    "INVALID_REQUEST",
+                    "Product category is required");
         }
     }
 
     @Override
     protected Object convertLabRequest(
-            AIRequest&lt;SecurityContext&gt; request) {
-        return ThreatRequest.from(request.getDomainContext());
+            AIRequest&lt;ProductContext&gt; request)
+            throws DiagnosisException {
+        ProductContext ctx = request.getContext();
+        return new ProductRecommendationRequest(
+                ctx.getProductId(),
+                ctx.getCategory(),
+                ctx.getUserPreferences());
     }
 
     @Override
-    protected ThreatResponse processLabExecution(
+    protected ProductRecommendationResponse processLabExecution(
             Object lab, Object labRequest,
-            AIRequest&lt;SecurityContext&gt; request) throws Exception {
-        ThreatAnalysisLab threatLab = (ThreatAnalysisLab) lab;
-        return threatLab.process((ThreatRequest) labRequest);
+            AIRequest&lt;ProductContext&gt; request) throws Exception {
+        ProductRecommendationLab productLab =
+                (ProductRecommendationLab) lab;
+        return productLab.process(
+                (ProductRecommendationRequest) labRequest);
     }
 }</code></pre>
             </div>
@@ -371,22 +385,24 @@ public class ThreatEvaluationStrategy
                 </button>
               </div>
               <pre><code class="language-java">@RestController
-public class SecurityController {
+public class ProductController {
 
-    private final AICoreOperations&lt;SecurityContext&gt; aiProcessor;
+    private final AICoreOperations&lt;ProductContext&gt; aiProcessor;
 
-    @PostMapping("/api/threat/evaluate")
-    public Mono&lt;ThreatResponse&gt; evaluate(
-            @RequestBody ThreatEvalRequest body) {
+    @PostMapping("/api/products/recommend")
+    public Mono&lt;ProductRecommendationResponse&gt; recommend(
+            @RequestBody ProductRequest body) {
 
-        AIRequest&lt;SecurityContext&gt; request = AIRequest.builder()
-                .requestId(UUID.randomUUID().toString())
-                .domainContext(body.toSecurityContext())
-                .diagnosisType(DiagnosisType.THREAT_EVALUATION)
-                .build();
+        ProductContext context = body.toProductContext();
+        AIRequest&lt;ProductContext&gt; request = new AIRequest&lt;&gt;(
+                context,
+                new TemplateType("PRODUCT_RECOMMENDATION"),
+                new DiagnosisType("PRODUCT_RECOMMENDATION"));
+        request.setNaturalLanguageQuery(
+                "Recommend products for this request");
 
         return aiProcessor.process(
-                request, ThreatResponse.class);
+                request, ProductRecommendationResponse.class);
     }
 }</code></pre>
             </div>
@@ -417,7 +433,7 @@ public class SecurityController {
           <section>
             <div class="callout callout-info">
               <strong>설정 레퍼런스</strong><br>
-              AI Strategy <code>application.yml</code> 속성 (티어 정의, 모델 할당, 폴백 체인, 타임아웃/재시도)은 <a href="../../../docs/install/configuration/ai.html">AI 설정</a>을 참조하세요 — 30개 이상의 설정 가능한 필드를 가진 <code>TieredStrategyProperties</code>를 다룹니다.
+              AI Strategy가 사용하는 모델 계층, 폴백, 스트리밍 관련 속성은 <a href="../../../docs/install/configuration/ai.html">AI 설정</a>을 참조하세요. 현재 OSS 코어에서는 <code>TieredLLMProperties</code>, <code>ContexaProperties</code>, <code>StreamingProperties</code>가 주요 구성 축입니다.
             </div>
           </section>
 

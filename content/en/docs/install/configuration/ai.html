@@ -13,7 +13,7 @@
           <!-- Quick Start -->
           <section class="docs-section">
             <h2 id="quick-start">Quick Start: Minimal Config</h2>
-            <p>The minimum configuration to get the AI engine running with Ollama:</p>
+            <p>The minimum configuration to run the OSS AI path with the built-in Ollama chat runtime and the tiered security models:</p>
 
             <div class="code-block">
               <div class="code-block-header">
@@ -23,43 +23,46 @@
                   <span>Copy</span>
                 </button>
               </div>
-              <pre><code class="language-yaml">spring:
+              <pre><code class="language-yaml">contexa:
+  llm:
+    chat:
+      ollama:
+        base-url: http://localhost:11434
+        model: qwen2.5:14b
+spring:
   ai:
-    ollama:
-      base-url: http://localhost:11434
-      chat:
-        model: qwen2.5:7b
     security:
       layer1:
-        model: qwen2.5:7b
+        model: qwen2.5:14b
       layer2:
-        model: qwen2.5:7b
+        model: exaone3.5:latest
     vectorstore:
       pgvector:
         index-type: HNSW
         distance-type: COSINE_DISTANCE
-        dimensions: 384
-        initialize-schema: true</code></pre>
+        dimensions: 1024</code></pre>
             </div>
 
-            <p>This sets up a single model for both tiers and configures pgvector for RAG. All other settings use sensible defaults.</p>
+            <p>This enables the Ollama chat runtime through <code>contexa.llm.chat.ollama.*</code>, assigns Tier 1 and Tier 2 models, and configures the project-declared pgvector properties. If you want a dedicated embedding runtime, add <code>contexa.llm.embedding.ollama.*</code> as shown below.</p>
           </section>
 
           <!-- Configuration Architecture -->
           <section class="docs-section">
             <h2 id="architecture">Configuration Architecture</h2>
-            <p>AI engine configuration is organized into five property groups, each mapped to specific framework components:</p>
+            <p>The AI runtime is configured through seven property groups. Contexa owns the runtime selection, advisor, RAG, and streaming properties, while Spring AI owns the provider integrations and pgvector base configuration.</p>
 
             <div class="table-scroll"><table class="api-table">
               <thead>
                 <tr><th>Property Prefix</th><th>Bound To</th><th>Configures</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>spring.ai.security.*</code></td><td><code>TieredLLMProperties</code></td><td>Model assignments per tier, timeouts, backup models</td></tr>
-                <tr><td><code>spring.ai.security.tiered.*</code></td><td><code>TieredStrategyProperties</code></td><td>RAG thresholds, caching, prompt settings, truncation per tier</td></tr>
-                <tr><td><code>contexa.advisor.*</code></td><td><code>ContexaAdvisorProperties</code></td><td>Advisor chain ordering, security advisor settings</td></tr>
-                <tr><td><code>contexa.rag.*</code></td><td><code>ContexaRagProperties</code></td><td>RAG default search parameters, AI Lab settings</td></tr>
-                <tr><td><code>contexa.streaming.*</code></td><td><code>StreamingProperties</code></td><td>SSE streaming markers, buffer sizes</td></tr>
+                <tr><td><code>contexa.llm.*</code></td><td><code>ContexaProperties</code></td><td>Chat runtime selection, Ollama endpoints, model priority, dedicated embedding runtime</td></tr>
+                <tr><td><code>spring.ai.security.*</code></td><td><code>TieredLLMProperties</code></td><td>Tier 1 and Tier 2 model selection, backup models, helper timeout accessors</td></tr>
+                <tr><td><code>spring.ai.security.tiered.*</code></td><td><code>TieredStrategyProperties</code></td><td>Prompt budgets, truncation, vector cache, trusted proxy validation, RAG thresholds</td></tr>
+                <tr><td><code>contexa.advisor.*</code></td><td><code>ContexaAdvisorProperties</code></td><td>Advisor chain profile, security advisor order, SOAR approval advisor settings</td></tr>
+                <tr><td><code>contexa.rag.*</code></td><td><code>ContexaRagProperties</code></td><td>Default, behavior, risk, AI Lab, and ETL retrieval settings</td></tr>
+                <tr><td><code>contexa.streaming.*</code></td><td><code>StreamingProperties</code></td><td>Protocol markers, retry policy, parser buffers, streaming timeout</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.*</code></td><td><code>PgVectorStoreProperties</code></td><td>Index type, dimensions, search/store limits, document chunking, HNSW/IVFFLAT tuning</td></tr>
               </tbody>
             </table></div>
           </section>
@@ -67,19 +70,29 @@
           <!-- LLM Model Configuration -->
           <section class="docs-section">
             <h2 id="llm-models">LLM Model Configuration</h2>
-            <p>The tiered model system assigns different models to different analysis depths. Change these when you want to use different models for fast vs. deep analysis.</p>
+            <p>The tiered model system is split between runtime selection in <code>contexa.llm.*</code> and tier assignment in <code>spring.ai.security.*</code>. The OSS core ships with Ollama chat runtime wiring and can also use Spring AI OpenAI or Anthropic providers if those beans are present.</p>
 
             <div class="table-scroll"><table class="api-table">
               <thead>
                 <tr><th>Property</th><th>Default</th><th>Description</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>spring.ai.security.layer1.model</code></td><td><code>qwen2.5:14b</code></td><td>Tier 1 model (fast analysis, low temperature 0.3)</td></tr>
-                <tr><td><code>spring.ai.security.layer1.backup.model</code></td><td>&mdash;</td><td>Fallback when Tier 1 primary is unavailable</td></tr>
-                <tr><td><code>spring.ai.security.layer2.model</code></td><td><code>exaone3.5:latest</code></td><td>Tier 2 model (deep analysis, temperature 0.7)</td></tr>
-                <tr><td><code>spring.ai.security.layer2.backup.model</code></td><td>&mdash;</td><td>Fallback when Tier 2 primary is unavailable</td></tr>
-                <tr><td><code>spring.ai.security.tiered.layer1.timeout-ms</code></td><td><code>30000</code></td><td>Tier 1 inference timeout (ms)</td></tr>
-                <tr><td><code>spring.ai.security.tiered.layer2.timeout-ms</code></td><td><code>60000</code></td><td>Tier 2 inference timeout (ms)</td></tr>
+                <tr><td><code>contexa.llm.enabled</code></td><td><code>true</code></td><td>Master flag for Contexa LLM-dependent features</td></tr>
+                <tr><td><code>contexa.llm.advisor-enabled</code></td><td><code>true</code></td><td>Enables the advisor chain registration path</td></tr>
+                <tr><td><code>contexa.llm.chat-model-priority</code></td><td><code>ollama,anthropic,openai</code></td><td>Provider preference order for the primary chat model</td></tr>
+                <tr><td><code>contexa.llm.embedding-model-priority</code></td><td><code>ollama,openai</code></td><td>Provider preference order for the primary embedding model</td></tr>
+                <tr><td><code>contexa.llm.chat.ollama.base-url</code></td><td><code>""</code></td><td>Required to enable the built-in Ollama chat runtime</td></tr>
+                <tr><td><code>contexa.llm.chat.ollama.model</code></td><td><code>""</code></td><td>Optional explicit Ollama chat model; if omitted the auto-configuration falls back to <code>qwen3:8b</code></td></tr>
+                <tr><td><code>contexa.llm.chat.ollama.keep-alive</code></td><td><code>""</code></td><td>Optional Ollama keep-alive hint passed to chat options</td></tr>
+                <tr><td><code>contexa.llm.embedding.ollama.dedicated-runtime-enabled</code></td><td><code>false</code></td><td>Enables a dedicated Ollama embedding runtime instead of reusing the chat runtime</td></tr>
+                <tr><td><code>contexa.llm.embedding.ollama.base-url</code></td><td><code>""</code></td><td>Required when the dedicated embedding runtime is enabled</td></tr>
+                <tr><td><code>contexa.llm.embedding.ollama.model</code></td><td><code>""</code></td><td>Optional explicit embedding model; if omitted the auto-configuration falls back to <code>mxbai-embed-large</code></td></tr>
+                <tr><td><code>spring.ai.security.layer1.model</code></td><td><code>qwen2.5:14b</code></td><td>Tier 1 model selection</td></tr>
+                <tr><td><code>spring.ai.security.layer1.backup.model</code></td><td>&mdash;</td><td>Tier 1 backup model</td></tr>
+                <tr><td><code>spring.ai.security.layer2.model</code></td><td><code>exaone3.5:latest</code></td><td>Tier 2 model selection</td></tr>
+                <tr><td><code>spring.ai.security.layer2.backup.model</code></td><td>&mdash;</td><td>Tier 2 backup model</td></tr>
+                <tr><td><code>spring.ai.security.tiered.layer1.timeout-ms</code></td><td><code>30000</code></td><td>Tier 1 inference timeout used by <code>TieredLLMProperties</code> when the value is unset or invalid</td></tr>
+                <tr><td><code>spring.ai.security.tiered.layer2.timeout-ms</code></td><td><code>60000</code></td><td>Tier 2 inference timeout used by <code>TieredLLMProperties</code> when the value is unset or invalid</td></tr>
               </tbody>
             </table></div>
 
@@ -91,7 +104,20 @@
                   <span>Copy</span>
                 </button>
               </div>
-              <pre><code class="language-yaml">spring:
+              <pre><code class="language-yaml">contexa:
+  llm:
+    chat-model-priority: ollama,anthropic,openai
+    embedding-model-priority: ollama,openai
+    chat:
+      ollama:
+        base-url: http://localhost:11434
+        model: qwen2.5:14b
+    embedding:
+      ollama:
+        dedicated-runtime-enabled: true
+        base-url: http://localhost:11435
+        model: mxbai-embed-large
+spring:
   ai:
     security:
       layer1:
@@ -109,30 +135,66 @@
           timeout-ms: 60000</code></pre>
             </div>
 
+            <p>OpenAI and Anthropic provider credentials are configured through Spring AI's own provider properties such as <code>spring.ai.openai.*</code> and <code>spring.ai.anthropic.*</code>; Contexa only selects between the available provider beans.</p>
             <p>See also: <a href="../../../docs/reference/core/llm-orchestrator.html">LLM &amp; Models Reference</a></p>
           </section>
 
           <!-- RAG Configuration -->
           <section class="docs-section">
             <h2 id="rag">RAG Configuration</h2>
-            <p>Controls how the CONTEXT_RETRIEVAL pipeline step searches the vector store for relevant documents.</p>
+            <p>These properties drive the retrieval path used by the pipeline and AI Lab. The OSS code binds <code>contexa.rag.*</code> to <code>ContexaRagProperties</code>, and binds pgvector settings to <code>spring.ai.vectorstore.pgvector.*</code>.</p>
 
             <div class="table-scroll"><table class="api-table">
               <thead>
                 <tr><th>Property</th><th>Default</th><th>Description</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>contexa.rag.defaults.similarityThreshold</code></td><td><code>0.7</code></td><td>Minimum cosine similarity for RAG queries</td></tr>
-                <tr><td><code>contexa.rag.defaults.topK</code></td><td><code>10</code></td><td>Number of top documents returned per query</td></tr>
-                <tr><td><code>contexa.rag.lab.batchSize</code></td><td><code>50</code></td><td>Batch size for document processing</td></tr>
-                <tr><td><code>contexa.rag.lab.validationEnabled</code></td><td><code>true</code></td><td>Validate documents before vector store ingestion</td></tr>
-                <tr><td><code>contexa.rag.lab.enrichmentEnabled</code></td><td><code>true</code></td><td>Enable metadata enrichment during processing</td></tr>
-                <tr><td><code>contexa.rag.lab.topK</code></td><td><code>100</code></td><td>Top-K limit for AI Lab similarity searches</td></tr>
-                <tr><td><code>contexa.rag.lab.similarityThreshold</code></td><td><code>0.75</code></td><td>Similarity threshold for Lab document matching</td></tr>
+                <tr><td><code>contexa.rag.defaults.similarity-threshold</code></td><td><code>0.7</code></td><td>Default similarity threshold for general retrieval</td></tr>
+                <tr><td><code>contexa.rag.defaults.top-k</code></td><td><code>10</code></td><td>Default retrieval size for general retrieval</td></tr>
+                <tr><td><code>contexa.rag.behavior.lookback-days</code></td><td><code>30</code></td><td>Behavioral retrieval lookback window</td></tr>
+                <tr><td><code>contexa.rag.risk.similarity-threshold</code></td><td><code>0.8</code></td><td>Risk-focused retrieval threshold</td></tr>
+                <tr><td><code>contexa.rag.risk.top-k</code></td><td><code>50</code></td><td>Risk-focused retrieval result count</td></tr>
+                <tr><td><code>contexa.rag.lab.batch-size</code></td><td><code>50</code></td><td>AI Lab batch size</td></tr>
+                <tr><td><code>contexa.rag.lab.validation-enabled</code></td><td><code>true</code></td><td>Enables validation before ingestion</td></tr>
+                <tr><td><code>contexa.rag.lab.enrichment-enabled</code></td><td><code>true</code></td><td>Enables metadata enrichment during AI Lab processing</td></tr>
+                <tr><td><code>contexa.rag.lab.top-k</code></td><td><code>100</code></td><td>AI Lab retrieval size</td></tr>
+                <tr><td><code>contexa.rag.lab.similarity-threshold</code></td><td><code>0.75</code></td><td>AI Lab similarity threshold</td></tr>
+                <tr><td><code>contexa.rag.etl.batch-size</code></td><td><code>100</code></td><td>ETL ingestion batch size</td></tr>
+                <tr><td><code>contexa.rag.etl.chunk-size</code></td><td><code>500</code></td><td>Chunk size for document splitting</td></tr>
+                <tr><td><code>contexa.rag.etl.chunk-overlap</code></td><td><code>50</code></td><td>Chunk overlap for document splitting</td></tr>
+                <tr><td><code>contexa.rag.etl.vector-table-name</code></td><td><code>vector_store</code></td><td>Logical target table name used by ETL workflows</td></tr>
+                <tr><td><code>contexa.rag.etl.behavior.retention-days</code></td><td><code>90</code></td><td>Behavioral corpus retention period</td></tr>
               </tbody>
             </table></div>
 
             <h3>Vector Store (pgvector)</h3>
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>spring.ai.vectorstore.pgvector.index-type</code></td><td><code>HNSW</code></td><td>Index implementation</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.distance-type</code></td><td><code>COSINE_DISTANCE</code></td><td>Distance metric</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.dimensions</code></td><td><code>1024</code></td><td>Embedding dimension bound expected by the store</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.batch-size</code></td><td><code>100</code></td><td>Store write batch size</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.parallel-threads</code></td><td><code>4</code></td><td>Parallel worker count</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.top-k</code></td><td><code>100</code></td><td>Default search result count</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.similarity-threshold</code></td><td><code>0.5</code></td><td>Default search similarity threshold</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.search-timeout-ms</code></td><td><code>10000</code></td><td>Search timeout</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.store-timeout-ms</code></td><td><code>10000</code></td><td>Store timeout</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.hnsw.m</code></td><td><code>16</code></td><td>HNSW graph connectivity</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.hnsw.ef-construction</code></td><td><code>64</code></td><td>HNSW construction effort</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.hnsw.ef-search</code></td><td><code>100</code></td><td>HNSW search effort</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.ivfflat.lists</code></td><td><code>100</code></td><td>IVFFLAT list count</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.ivfflat.probes</code></td><td><code>10</code></td><td>IVFFLAT probe count</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.document.chunk-size</code></td><td><code>1000</code></td><td>Document chunk size</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.document.chunk-overlap</code></td><td><code>200</code></td><td>Document chunk overlap</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.document.enrich-metadata</code></td><td><code>true</code></td><td>Metadata enrichment toggle</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.document.extract-keywords</code></td><td><code>true</code></td><td>Keyword extraction toggle</td></tr>
+                <tr><td><code>spring.ai.vectorstore.pgvector.document.generate-summary</code></td><td><code>false</code></td><td>Document summary generation toggle</td></tr>
+              </tbody>
+            </table></div>
+
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">YAML</span>
@@ -141,14 +203,28 @@
                   <span>Copy</span>
                 </button>
               </div>
-              <pre><code class="language-yaml">spring:
+              <pre><code class="language-yaml">contexa:
+  rag:
+    defaults:
+      similarity-threshold: 0.7
+      top-k: 10
+    risk:
+      similarity-threshold: 0.8
+      top-k: 50
+    lab:
+      batch-size: 50
+      validation-enabled: true
+      enrichment-enabled: true
+spring:
   ai:
     vectorstore:
       pgvector:
-        index-type: HNSW          # HNSW or IVFFlat
+        dimensions: 1024
+        index-type: HNSW
         distance-type: COSINE_DISTANCE
-        dimensions: 384           # Must match embedding model
-        initialize-schema: true   # Auto-create tables</code></pre>
+        document:
+          chunk-size: 1000
+          chunk-overlap: 200</code></pre>
             </div>
 
             <p>See also: <a href="../../../docs/reference/core/pipeline.html">Pipeline &amp; RAG Reference</a></p>
@@ -163,9 +239,36 @@
                 <tr><th>Property</th><th>Default</th><th>Description</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>contexa.streaming.markerBufferSize</code></td><td><code>100</code></td><td>Buffer size for marker detection in the stream parser</td></tr>
+                <tr><td><code>contexa.streaming.final-response-marker</code></td><td><code>###FINAL_RESPONSE###</code></td><td>Marker emitted before the final structured response</td></tr>
+                <tr><td><code>contexa.streaming.streaming-marker</code></td><td><code>###STREAMING###</code></td><td>Marker prefix for streaming chunks</td></tr>
+                <tr><td><code>contexa.streaming.json-start-marker</code></td><td><code>===JSON_START===</code></td><td>Marker indicating JSON output start</td></tr>
+                <tr><td><code>contexa.streaming.json-end-marker</code></td><td><code>===JSON_END===</code></td><td>Marker indicating JSON output end</td></tr>
+                <tr><td><code>contexa.streaming.timeout</code></td><td><code>PT5M</code></td><td>Overall streaming timeout</td></tr>
+                <tr><td><code>contexa.streaming.max-retries</code></td><td><code>3</code></td><td>Retry count for stream recovery</td></tr>
+                <tr><td><code>contexa.streaming.retry-delay</code></td><td><code>PT1S</code></td><td>Initial retry delay</td></tr>
+                <tr><td><code>contexa.streaming.retry-multiplier</code></td><td><code>1.5</code></td><td>Retry backoff multiplier</td></tr>
+                <tr><td><code>contexa.streaming.marker-buffer-size</code></td><td><code>100</code></td><td>Marker parsing buffer size</td></tr>
+                <tr><td><code>contexa.streaming.sentence-buffering-enabled</code></td><td><code>true</code></td><td>Sentence buffering toggle for chunk smoothing</td></tr>
               </tbody>
             </table></div>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">contexa:
+  streaming:
+    timeout: 5m
+    max-retries: 3
+    retry-delay: 1s
+    retry-multiplier: 1.5
+    marker-buffer-size: 100
+    sentence-buffering-enabled: true</code></pre>
+            </div>
 
             <p>See also: <a href="../../../docs/reference/core/streaming.html">Streaming Reference</a></p>
           </section>
@@ -179,11 +282,37 @@
                 <tr><th>Property</th><th>Default</th><th>Description</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>contexa.advisor.security.enabled</code></td><td><code>true</code></td><td>Enable the security advisor in the advisor chain</td></tr>
-                <tr><td><code>contexa.advisor.security.order</code></td><td><code>50</code></td><td>Execution order (lower = runs first)</td></tr>
-                <tr><td><code>contexa.advisor.security.requireAuthentication</code></td><td><code>false</code></td><td>Require authentication before AI processing</td></tr>
+                <tr><td><code>contexa.advisor.chain-profile</code></td><td><code>STANDARD</code></td><td>Named advisor chain profile</td></tr>
+                <tr><td><code>contexa.advisor.security.enabled</code></td><td><code>true</code></td><td>Enable the security advisor</td></tr>
+                <tr><td><code>contexa.advisor.security.order</code></td><td><code>50</code></td><td>Execution order of the security advisor</td></tr>
+                <tr><td><code>contexa.advisor.security.require-authentication</code></td><td><code>false</code></td><td>Require an authenticated principal before AI processing</td></tr>
+                <tr><td><code>contexa.advisor.soar.approval.enabled</code></td><td><code>true</code></td><td>Enable the SOAR approval advisor</td></tr>
+                <tr><td><code>contexa.advisor.soar.approval.order</code></td><td><code>100</code></td><td>Execution order of the SOAR approval advisor</td></tr>
+                <tr><td><code>contexa.advisor.soar.approval.timeout</code></td><td><code>300</code></td><td>Approval timeout in seconds</td></tr>
               </tbody>
             </table></div>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">contexa:
+  advisor:
+    chain-profile: STANDARD
+    security:
+      enabled: true
+      order: 50
+      require-authentication: false
+    soar:
+      approval:
+        enabled: true
+        order: 100
+        timeout: 300</code></pre>
+            </div>
 
             <p>See also: <a href="../../../docs/reference/core/advisor.html">Advisor System Reference</a></p>
           </section>
@@ -194,26 +323,31 @@
             <p>Common configuration adjustments for specific situations:</p>
 
             <h3>Slow Responses</h3>
-            <p>If LLM responses are too slow, reduce the model size or increase timeouts:</p>
+            <p>If inference is slow, reduce the model footprint and widen the Layer 1 pipeline budget:</p>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">YAML</span>
               </div>
-              <pre><code class="language-yaml">spring:
+              <pre><code class="language-yaml">contexa:
+  llm:
+    chat:
+      ollama:
+        model: qwen2.5:7b
+spring:
   ai:
     security:
       layer1:
-        model: qwen2.5:7b          # Smaller, faster model
+        model: qwen2.5:7b
       tiered:
         layer1:
-          timeout-ms: 60000         # Increase timeout to 60s
           timeout:
-            totalMs: 30000
-            llmMs: 20000</code></pre>
+            total-ms: 5400000
+            llm-ms: 3600000
+            rag-ms: 1200000</code></pre>
             </div>
 
             <h3>RAG Results Are Inaccurate</h3>
-            <p>If retrieved context is not relevant enough, tighten the similarity threshold and reduce top-K:</p>
+            <p>If retrieved context is not relevant enough, tighten the default threshold and reduce the retrieval window:</p>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">YAML</span>
@@ -221,19 +355,20 @@
               <pre><code class="language-yaml">contexa:
   rag:
     defaults:
-      similarityThreshold: 0.85    # Stricter matching
-      topK: 3                      # Fewer but more relevant docs
+      similarity-threshold: 0.85
+      top-k: 3
 spring:
   ai:
     security:
       tiered:
         layer1:
           rag:
-            similarityThreshold: 0.7  # Per-tier threshold</code></pre>
+            similarity-threshold: 0.7
+          vector-search-limit: 6</code></pre>
             </div>
 
             <h3>Token Usage / Cost Optimization</h3>
-            <p>Reduce tokens by limiting prompt content:</p>
+            <p>Reduce prompt size by lowering the Layer 1 prompt and truncation budgets:</p>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">YAML</span>
@@ -244,45 +379,48 @@ spring:
       tiered:
         layer1:
           prompt:
-            maxRagDocuments: 2          # Fewer RAG docs in prompt
-            maxSimilarEvents: 1         # Fewer historical events
-          vectorSearchLimit: 3          # Fewer vector search results
+            max-rag-documents: 2
+            max-similar-events: 1
+          vector-search-limit: 3
         truncation:
           layer1:
-            payload: 100                # Shorter payload excerpts
-            ragDocument: 150            # Shorter RAG doc excerpts</code></pre>
+            payload: 100
+            rag-document: 150</code></pre>
             </div>
 
             <h3>Production Deployment</h3>
-            <p>Recommended settings for production with separate models per tier:</p>
+            <p>Recommended settings for a production deployment with separate chat and embedding runtimes:</p>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">YAML</span>
               </div>
-              <pre><code class="language-yaml">spring:
+              <pre><code class="language-yaml">contexa:
+  llm:
+    chat-model-priority: ollama,anthropic,openai
+    embedding-model-priority: ollama,openai
+    embedding:
+      ollama:
+        dedicated-runtime-enabled: true
+        base-url: http://localhost:11435
+  advisor:
+    security:
+      enabled: true
+      require-authentication: true
+spring:
   ai:
     security:
       layer1:
         model: qwen2.5:14b
-        backup:
-          model: llama3.2:latest
       layer2:
         model: exaone3.5:latest
-        backup:
-          model: deepseek-r1:14b
       tiered:
-        vectorCache:
-          maxSize: 50000
-          expireMinutes: 10
+        vector-cache:
+          max-size: 50000
+          expire-minutes: 10
           enabled: true
-          recordStats: true
+          record-stats: true
         security:
-          trustedProxyValidationEnabled: true
-contexa:
-  advisor:
-    security:
-      enabled: true
-      requireAuthentication: true</code></pre>
+          trusted-proxy-validation-enabled: true</code></pre>
             </div>
           </section>
 
@@ -291,85 +429,90 @@ contexa:
             <h2 id="complete-reference">Complete Property Reference</h2>
 
             <details>
-              <summary><strong>TieredStrategyProperties &mdash; Layer 1 Settings</strong></summary>
+              <summary><strong>TieredStrategyProperties — Layer 1 Settings</strong></summary>
               <div class="table-scroll"><table class="api-table">
                 <thead>
                   <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
                 </thead>
                 <tbody>
-                  <tr><td><code>.rag.similarityThreshold</code></td><td><code>double</code></td><td><code>0.5</code></td><td>Min similarity for RAG retrieval</td></tr>
-                  <tr><td><code>.session.maxRecentActions</code></td><td><code>int</code></td><td><code>100</code></td><td>Max recent session actions in context</td></tr>
-                  <tr><td><code>.cache.maxSize</code></td><td><code>int</code></td><td><code>1000</code></td><td>Max result cache entries</td></tr>
-                  <tr><td><code>.cache.ttlMinutes</code></td><td><code>int</code></td><td><code>30</code></td><td>Cache TTL in minutes</td></tr>
-                  <tr><td><code>.timeout.totalMs</code></td><td><code>long</code></td><td><code>15000</code></td><td>Total analysis timeout (ms)</td></tr>
-                  <tr><td><code>.timeout.llmMs</code></td><td><code>long</code></td><td><code>10000</code></td><td>LLM call timeout (ms)</td></tr>
-                  <tr><td><code>.vectorSearchLimit</code></td><td><code>int</code></td><td><code>5</code></td><td>Max vector search results</td></tr>
-                  <tr><td><code>.prompt.maxSimilarEvents</code></td><td><code>int</code></td><td><code>3</code></td><td>Max similar events in prompt</td></tr>
-                  <tr><td><code>.prompt.maxRagDocuments</code></td><td><code>int</code></td><td><code>5</code></td><td>Max RAG documents in prompt</td></tr>
-                  <tr><td><code>.prompt.includeEventId</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include event ID in prompt</td></tr>
-                  <tr><td><code>.prompt.includeRawTimestamp</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include raw timestamps</td></tr>
-                  <tr><td><code>.prompt.includeRawSessionId</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include raw session ID</td></tr>
-                  <tr><td><code>.prompt.includeFullUserAgent</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include full User-Agent</td></tr>
+                  <tr><td><code>.rag.similarity-threshold</code></td><td><code>double</code></td><td><code>0.5</code></td><td>Layer 1 RAG similarity threshold</td></tr>
+                  <tr><td><code>.session.max-recent-actions</code></td><td><code>int</code></td><td><code>100</code></td><td>Recent action window</td></tr>
+                  <tr><td><code>.cache.max-size</code></td><td><code>int</code></td><td><code>1000</code></td><td>Layer 1 cache size</td></tr>
+                  <tr><td><code>.cache.ttl-minutes</code></td><td><code>int</code></td><td><code>30</code></td><td>Layer 1 cache TTL</td></tr>
+                  <tr><td><code>.timeout.total-ms</code></td><td><code>long</code></td><td><code>4500000</code></td><td>Total Layer 1 budget</td></tr>
+                  <tr><td><code>.timeout.llm-ms</code></td><td><code>long</code></td><td><code>3000000</code></td><td>Layer 1 LLM budget</td></tr>
+                  <tr><td><code>.timeout.rag-ms</code></td><td><code>long</code></td><td><code>1000000</code></td><td>Layer 1 RAG budget</td></tr>
+                  <tr><td><code>.vector-search-limit</code></td><td><code>int</code></td><td><code>12</code></td><td>Vector search result cap</td></tr>
+                  <tr><td><code>.default-budget-profile</code></td><td><code>String</code></td><td><code>CORTEX_L1_STANDARD</code></td><td>Named Layer 1 budget profile</td></tr>
+                  <tr><td><code>.prompt.max-similar-events</code></td><td><code>int</code></td><td><code>3</code></td><td>Prompt similar-event cap</td></tr>
+                  <tr><td><code>.prompt.max-rag-documents</code></td><td><code>int</code></td><td><code>12</code></td><td>Prompt RAG document cap</td></tr>
+                  <tr><td><code>.prompt.include-event-id</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include event id in prompt</td></tr>
+                  <tr><td><code>.prompt.include-raw-timestamp</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include raw timestamp in prompt</td></tr>
+                  <tr><td><code>.prompt.include-raw-session-id</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include raw session id in prompt</td></tr>
+                  <tr><td><code>.prompt.include-full-user-agent</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include full user agent in prompt</td></tr>
                 </tbody>
               </table></div>
             </details>
 
             <details>
-              <summary><strong>TieredStrategyProperties &mdash; Layer 2 Settings</strong></summary>
+              <summary><strong>TieredStrategyProperties — Layer 2 and Shared Settings</strong></summary>
               <div class="table-scroll"><table class="api-table">
                 <thead>
                   <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
                 </thead>
                 <tbody>
-                  <tr><td><code>.rag.similarityThreshold</code></td><td><code>double</code></td><td><code>0.5</code></td><td>Min similarity for RAG retrieval</td></tr>
-                  <tr><td><code>.timeoutMs</code></td><td><code>long</code></td><td><code>10000</code></td><td>Total analysis timeout (ms)</td></tr>
-                  <tr><td><code>.enableSoar</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Enable SOAR integration</td></tr>
-                  <tr><td><code>.ragTopK</code></td><td><code>int</code></td><td><code>10</code></td><td>Top-K RAG results</td></tr>
+                  <tr><td><code>.layer2.rag.similarity-threshold</code></td><td><code>double</code></td><td><code>0.5</code></td><td>Layer 2 RAG similarity threshold</td></tr>
+                  <tr><td><code>.layer2.cache.max-size</code></td><td><code>int</code></td><td><code>1000</code></td><td>Layer 2 cache size</td></tr>
+                  <tr><td><code>.layer2.cache.ttl-minutes</code></td><td><code>int</code></td><td><code>30</code></td><td>Layer 2 cache TTL</td></tr>
+                  <tr><td><code>.layer2.timeout-ms</code></td><td><code>long</code></td><td><code>100000</code></td><td>Layer 2 timeout</td></tr>
+                  <tr><td><code>.layer2.enable-soar</code></td><td><code>boolean</code></td><td><code>false</code></td><td>SOAR activation toggle</td></tr>
+                  <tr><td><code>.layer2.rag-top-k</code></td><td><code>int</code></td><td><code>10</code></td><td>Layer 2 retrieval size</td></tr>
+                  <tr><td><code>.layer2.default-budget-profile</code></td><td><code>String</code></td><td><code>CORTEX_L2_STANDARD</code></td><td>Named Layer 2 budget profile</td></tr>
+                  <tr><td><code>.truncation.layer1.user-agent</code></td><td><code>int</code></td><td><code>150</code></td><td>Layer 1 user-agent truncation</td></tr>
+                  <tr><td><code>.truncation.layer1.payload</code></td><td><code>int</code></td><td><code>200</code></td><td>Layer 1 payload truncation</td></tr>
+                  <tr><td><code>.truncation.layer1.rag-document</code></td><td><code>int</code></td><td><code>300</code></td><td>Layer 1 RAG truncation</td></tr>
+                  <tr><td><code>.truncation.layer2.user-agent</code></td><td><code>int</code></td><td><code>150</code></td><td>Layer 2 user-agent truncation</td></tr>
+                  <tr><td><code>.truncation.layer2.payload</code></td><td><code>int</code></td><td><code>1000</code></td><td>Layer 2 payload truncation</td></tr>
+                  <tr><td><code>.truncation.layer2.rag-document</code></td><td><code>int</code></td><td><code>500</code></td><td>Layer 2 RAG truncation</td></tr>
+                  <tr><td><code>.vector-cache.max-size</code></td><td><code>int</code></td><td><code>10000</code></td><td>Vector cache size</td></tr>
+                  <tr><td><code>.vector-cache.expire-minutes</code></td><td><code>int</code></td><td><code>5</code></td><td>Vector cache TTL</td></tr>
+                  <tr><td><code>.vector-cache.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Vector cache toggle</td></tr>
+                  <tr><td><code>.vector-cache.record-stats</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Vector cache metrics toggle</td></tr>
+                  <tr><td><code>.security.trusted-proxies</code></td><td><code>List&lt;String&gt;</code></td><td><code>[]</code></td><td>Trusted proxy list</td></tr>
+                  <tr><td><code>.security.trusted-proxy-validation-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Trusted proxy validation toggle</td></tr>
+                  <tr><td><code>.prompt-compression.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Runtime prompt compression toggle</td></tr>
                 </tbody>
               </table></div>
             </details>
 
             <details>
-              <summary><strong>Truncation Settings</strong></summary>
-              <p>Controls maximum character lengths to manage prompt size and token usage. Prefix: <code>spring.ai.security.tiered.truncation.layer1</code></p>
+              <summary><strong>Contexa RAG, Advisor, Streaming, and PgVector</strong></summary>
               <div class="table-scroll"><table class="api-table">
                 <thead>
-                  <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
+                  <tr><th>Property</th><th>Default</th><th>Description</th></tr>
                 </thead>
                 <tbody>
-                  <tr><td><code>.userAgent</code></td><td><code>int</code></td><td><code>150</code></td><td>Max chars for User-Agent</td></tr>
-                  <tr><td><code>.payload</code></td><td><code>int</code></td><td><code>200</code></td><td>Max chars for payload</td></tr>
-                  <tr><td><code>.ragDocument</code></td><td><code>int</code></td><td><code>300</code></td><td>Max chars per RAG document</td></tr>
-                </tbody>
-              </table></div>
-            </details>
-
-            <details>
-              <summary><strong>Vector Cache Settings</strong></summary>
-              <p>Prefix: <code>spring.ai.security.tiered.vectorCache</code></p>
-              <div class="table-scroll"><table class="api-table">
-                <thead>
-                  <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td><code>.maxSize</code></td><td><code>int</code></td><td><code>10000</code></td><td>Max cached embeddings</td></tr>
-                  <tr><td><code>.expireMinutes</code></td><td><code>int</code></td><td><code>5</code></td><td>Cache expiry (minutes)</td></tr>
-                  <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enable vector cache</td></tr>
-                  <tr><td><code>.recordStats</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Record hit/miss stats</td></tr>
-                </tbody>
-              </table></div>
-            </details>
-
-            <details>
-              <summary><strong>Proxy Security Settings</strong></summary>
-              <p>Prefix: <code>spring.ai.security.tiered.security</code></p>
-              <div class="table-scroll"><table class="api-table">
-                <thead>
-                  <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td><code>.trustedProxies</code></td><td><code>List&lt;String&gt;</code></td><td><code>[]</code></td><td>Trusted proxy IPs/CIDRs</td></tr>
-                  <tr><td><code>.trustedProxyValidationEnabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Validate proxy headers</td></tr>
+                  <tr><td><code>contexa.rag.behavior.lookback-days</code></td><td><code>30</code></td><td>Behavioral retrieval lookback window</td></tr>
+                  <tr><td><code>contexa.rag.risk.similarity-threshold</code></td><td><code>0.8</code></td><td>Risk retrieval threshold</td></tr>
+                  <tr><td><code>contexa.rag.risk.top-k</code></td><td><code>50</code></td><td>Risk retrieval size</td></tr>
+                  <tr><td><code>contexa.rag.etl.batch-size</code></td><td><code>100</code></td><td>ETL batch size</td></tr>
+                  <tr><td><code>contexa.rag.etl.chunk-size</code></td><td><code>500</code></td><td>ETL chunk size</td></tr>
+                  <tr><td><code>contexa.rag.etl.chunk-overlap</code></td><td><code>50</code></td><td>ETL chunk overlap</td></tr>
+                  <tr><td><code>contexa.rag.etl.behavior.retention-days</code></td><td><code>90</code></td><td>Behavior retention period</td></tr>
+                  <tr><td><code>contexa.advisor.chain-profile</code></td><td><code>STANDARD</code></td><td>Advisor chain profile</td></tr>
+                  <tr><td><code>contexa.advisor.soar.approval.enabled</code></td><td><code>true</code></td><td>SOAR approval advisor toggle</td></tr>
+                  <tr><td><code>contexa.advisor.soar.approval.order</code></td><td><code>100</code></td><td>SOAR approval advisor order</td></tr>
+                  <tr><td><code>contexa.advisor.soar.approval.timeout</code></td><td><code>300</code></td><td>SOAR approval timeout</td></tr>
+                  <tr><td><code>contexa.streaming.timeout</code></td><td><code>PT5M</code></td><td>Streaming timeout</td></tr>
+                  <tr><td><code>contexa.streaming.max-retries</code></td><td><code>3</code></td><td>Streaming retry count</td></tr>
+                  <tr><td><code>contexa.streaming.retry-delay</code></td><td><code>PT1S</code></td><td>Streaming retry delay</td></tr>
+                  <tr><td><code>contexa.streaming.retry-multiplier</code></td><td><code>1.5</code></td><td>Streaming retry multiplier</td></tr>
+                  <tr><td><code>spring.ai.vectorstore.pgvector.dimensions</code></td><td><code>1024</code></td><td>Embedding dimension</td></tr>
+                  <tr><td><code>spring.ai.vectorstore.pgvector.parallel-threads</code></td><td><code>4</code></td><td>Parallel worker count</td></tr>
+                  <tr><td><code>spring.ai.vectorstore.pgvector.search-timeout-ms</code></td><td><code>10000</code></td><td>Search timeout</td></tr>
+                  <tr><td><code>spring.ai.vectorstore.pgvector.store-timeout-ms</code></td><td><code>10000</code></td><td>Store timeout</td></tr>
+                  <tr><td><code>spring.ai.vectorstore.pgvector.document.chunk-size</code></td><td><code>1000</code></td><td>Document chunk size</td></tr>
+                  <tr><td><code>spring.ai.vectorstore.pgvector.document.chunk-overlap</code></td><td><code>200</code></td><td>Document chunk overlap</td></tr>
                 </tbody>
               </table></div>
             </details>

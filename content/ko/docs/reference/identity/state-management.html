@@ -17,7 +17,7 @@
           <!-- Overview -->
           <section class="docs-section">
             <h2 id="overview">개요</h2>
-            <p>DSL에서 인증 방식 뒤에 <code>.session()</code> 또는 <code>.oauth2()</code>를 호출하여 상태를 구성합니다. <code>StateSetter</code>는 가장 최근에 추가된 플로우에 상태를 적용합니다.</p>
+            <p>DSL에서 인증 방식 뒤에 <code>.session()</code> 또는 <code>.oauth2()</code>를 호출하여 상태를 구성합니다. <code>AbstractFlowRegistrar.StateSetter</code>는 가장 최근에 추가된 플로우에 상태를 적용합니다.</p>
 
 <pre><code class="language-java">registry
     .form(f -&gt; f.loginPage("/login"))
@@ -41,12 +41,12 @@
                 <tr><th>항목</th><th>Session</th><th>OAuth2</th></tr>
               </thead>
               <tbody>
-                <tr><td>상태 저장소</td><td>서버 메모리 / Redis</td><td>JWT 토큰 (Stateless)</td></tr>
+                <tr><td>상태 저장소</td><td>기본은 서버 메모리이며, 분산 배포에서는 Redis 기반 공유 저장소를 선택적으로 사용할 수 있음</td><td>JWT 토큰 (Stateless)</td></tr>
                 <tr><td>적합한 용도</td><td>전통적인 웹 앱, SSR</td><td>SPA, API, 마이크로서비스</td></tr>
-                <tr><td>확장성</td><td>Redis 클러스터 필요</td><td>Stateless (수평 확장 용이)</td></tr>
+                <tr><td>확장성</td><td>기본적으로는 인메모리 세션 상태로 동작하며, 다중 인스턴스 공유가 필요할 때 Redis 연동을 선택할 수 있습니다</td><td>Stateless (수평 확장 용이)</td></tr>
                 <tr><td>내장 보안</td><td>세션 고정 공격 보호 (sessionFixation().changeSessionId())</td><td>JWT + OIDC + Zero Trust Filter</td></tr>
                 <tr><td>CSRF</td><td>필수 (쿠키 기반)</td><td>불필요 (토큰 기반)</td></tr>
-                <tr><td>로그아웃</td><td>세션 무효화 + 쿠키 삭제</td><td>토큰 폐기 (OAuth2AuthorizationService)</td></tr>
+                <tr><td>로그아웃</td><td>세션 무효화 + 쿠키 삭제</td><td><code>CompositeLogoutHandler</code>와 <code>DeviceAwareOAuth2AuthorizationService</code>를 통한 인가 정보 무효화</td></tr>
               </tbody>
             </table></div>
           </section>
@@ -122,15 +122,18 @@
                 <tr><td><code>state-type</code></td><td>enum</td><td><code>OAUTH2</code></td><td>인증 상태 타입 (OAUTH2, SESSION)</td></tr>
                 <tr><td><code>token-transport-type</code></td><td>enum</td><td><code>HEADER</code></td><td>토큰 전송 방식 (HEADER, COOKIE, HEADER_COOKIE)</td></tr>
                 <tr><td><code>token-issuer</code></td><td>enum</td><td><code>INTERNAL</code></td><td>토큰 발급자 (INTERNAL, AUTHORIZATION_SERVER)</td></tr>
+                <tr><td><code>factor-selection-type</code></td><td>enum</td><td><code>SELECT</code></td><td>MFA 인증 요소 선택 전략</td></tr>
                 <tr><td><code>access-token-validity</code></td><td>long (ms)</td><td>3600000 (1시간)</td><td>Access 토큰 유효 기간</td></tr>
                 <tr><td><code>refresh-token-validity</code></td><td>long (ms)</td><td>604800000 (7일)</td><td>Refresh 토큰 유효 기간</td></tr>
+                <tr><td><code>refresh-rotate-threshold</code></td><td>long (ms)</td><td>43200000 (12시간)</td><td>Refresh 토큰 회전 임계값</td></tr>
                 <tr><td><code>enable-refresh-token</code></td><td>boolean</td><td>true</td><td>Refresh 토큰 활성화</td></tr>
                 <tr><td><code>allow-multiple-logins</code></td><td>boolean</td><td>false</td><td>동시 다중 로그인 허용</td></tr>
                 <tr><td><code>max-concurrent-logins</code></td><td>int</td><td>3</td><td>최대 동시 로그인 수</td></tr>
                 <tr><td><code>cookie-secure</code></td><td>boolean</td><td>true</td><td>Cookie Secure 플래그</td></tr>
-                <tr><td><code>token-persistence</code></td><td>String</td><td>"memory"</td><td>토큰 저장소 (memory, localstorage)</td></tr>
+                <tr><td><code>token-persistence</code></td><td>String</td><td>"memory"</td><td>생성된 로그인/MFA 페이지와 SDK에 전달되는 기본 토큰 저장 방식</td></tr>
                 <tr><td><code>token-prefix</code></td><td>String</td><td>"Bearer "</td><td>토큰 접두사</td></tr>
                 <tr><td><code>roles-claim</code></td><td>String</td><td>"roles"</td><td>JWT roles claim</td></tr>
+                <tr><td><code>scopes-claim</code></td><td>String</td><td>"scopes"</td><td>JWT scopes claim</td></tr>
                 <tr><td><code>oauth2-csrf</code></td><td>boolean</td><td>false</td><td>OAuth2 CSRF 보호</td></tr>
               </tbody>
             </table></div>
@@ -150,15 +153,20 @@
             <h3 id="oauth2-settings">OAuth2 설정 (spring.auth.oauth2.*)</h3>
             <div class="table-scroll"><table class="api-table">
               <thead>
-                <tr><th>속성</th><th>설명</th></tr>
+                <tr><th>속성</th><th>기본값</th><th>설명</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>client-id</code></td><td>OAuth2 클라이언트 ID</td></tr>
-                <tr><td><code>client-secret</code></td><td>클라이언트 시크릿</td></tr>
-                <tr><td><code>issuer-uri</code></td><td>토큰 발급자 URI</td></tr>
-                <tr><td><code>jwk-key-store-path</code></td><td>JWK 키스토어 경로</td></tr>
-                <tr><td><code>jwk-key-store-password</code></td><td>키스토어 비밀번호</td></tr>
-                <tr><td><code>jwk-key-alias</code></td><td>키 별칭</td></tr>
+                <tr><td><code>client-id</code></td><td><code>default-client</code></td><td>OAuth2 클라이언트 ID</td></tr>
+                <tr><td><code>client-secret</code></td><td><code>173f8245-5f7d-4623-a612-aa0c68f6da4a</code></td><td>클라이언트 시크릿</td></tr>
+                <tr><td><code>issuer-uri</code></td><td><code>http://localhost:9000</code></td><td>토큰 발급자 URI</td></tr>
+                <tr><td><code>token-endpoint</code></td><td><code>/oauth2/token</code></td><td>Authorization Server 토큰 엔드포인트</td></tr>
+                <tr><td><code>scope</code></td><td><code>read</code></td><td>기본 요청 scope</td></tr>
+                <tr><td><code>redirect-uri</code></td><td><code>http://localhost:8080</code></td><td>클라이언트 리다이렉트 URI</td></tr>
+                <tr><td><code>authorized-uri</code></td><td>미설정</td><td>선택적 사전 승인 리다이렉트 URI</td></tr>
+                <tr><td><code>jwk-key-store-path</code></td><td>미설정</td><td>JWK 키스토어 경로</td></tr>
+                <tr><td><code>jwk-key-store-password</code></td><td>미설정</td><td>키스토어 비밀번호</td></tr>
+                <tr><td><code>jwk-key-alias</code></td><td>미설정</td><td>키 별칭</td></tr>
+                <tr><td><code>jwk-key-password</code></td><td>미설정</td><td>키 비밀번호</td></tr>
               </tbody>
             </table></div>
 
@@ -170,26 +178,43 @@
               <tbody>
                 <tr><td><code>session-timeout-ms</code></td><td>600000 (10분)</td><td>MFA 세션 타임아웃</td></tr>
                 <tr><td><code>challenge-timeout-ms</code></td><td>300000 (5분)</td><td>챌린지 타임아웃</td></tr>
+                <tr><td><code>inactivity-timeout</code></td><td>900000 (15분)</td><td>비활성 MFA 세션 타임아웃</td></tr>
+                <tr><td><code>cache-ttl</code></td><td>300000 (5분)</td><td>MFA 상태 캐시 TTL</td></tr>
+                <tr><td><code>session-refresh-interval-ms</code></td><td>30000 (30초)</td><td>활성 MFA 세션 갱신 주기</td></tr>
+                <tr><td><code>state-machine-timeout-ms</code></td><td>10000 (10초)</td><td>상태 머신 실행 타임아웃</td></tr>
                 <tr><td><code>max-retry-attempts</code></td><td>5</td><td>최대 재시도 횟수</td></tr>
                 <tr><td><code>account-lockout-duration-ms</code></td><td>900000 (15분)</td><td>계정 잠금 기간</td></tr>
+                <tr><td><code>minimum-delay-ms</code></td><td>500</td><td>민감한 MFA 동작 사이의 최소 지연</td></tr>
                 <tr><td><code>otp-token-validity-seconds</code></td><td>300</td><td>OTP 유효 기간 (초)</td></tr>
                 <tr><td><code>otp-token-length</code></td><td>6</td><td>OTP 코드 길이</td></tr>
+                <tr><td><code>sms-resend-interval-seconds</code></td><td>60</td><td>SMS 재전송 최소 간격</td></tr>
+                <tr><td><code>email-resend-interval-seconds</code></td><td>120</td><td>이메일 재전송 최소 간격</td></tr>
                 <tr><td><code>device-remember-duration-ms</code></td><td>2592000000 (30일)</td><td>기기 신뢰 유지 기간</td></tr>
-                <tr><td><code>session-storage-type</code></td><td>http-session</td><td>세션 저장소 (http-session, redis, memory)</td></tr>
+                <tr><td><code>state-machine-pool-size</code></td><td>100</td><td>상태 머신 작업 풀 크기</td></tr>
+                <tr><td><code>state-machine-cache-ttl-ms</code></td><td>300000 (5분)</td><td>상태 머신 캐시 TTL</td></tr>
+                <tr><td><code>circuit-breaker-failure-threshold</code></td><td>5</td><td>서킷 브레이커 실패 임계값</td></tr>
+                <tr><td><code>circuit-breaker-timeout-seconds</code></td><td>30</td><td>서킷 브레이커 타임아웃</td></tr>
+                <tr><td><code>detailed-logging-enabled</code></td><td>false</td><td>상세 MFA 디버그 로그 활성화</td></tr>
+                <tr><td><code>metrics-enabled</code></td><td>true</td><td>MFA 메트릭 활성화</td></tr>
+                <tr><td><code>audit-logging-enabled</code></td><td>true</td><td>MFA 감사 로그 활성화</td></tr>
+                <tr><td><code>session-storage-type</code></td><td>http-session</td><td>MFA 세션 저장소 기본 유형</td></tr>
+                <tr><td><code>auto-select-repository</code></td><td>false</td><td>세션 저장소 자동 선택 여부</td></tr>
+                <tr><td><code>repository-priority</code></td><td><code>redis,memory,http-session</code></td><td>저장소 선택 우선순위</td></tr>
+                <tr><td><code>fallback-repository-type</code></td><td><code>http-session</code></td><td>대체 저장소 유형</td></tr>
               </tbody>
             </table></div>
 
-            <h3 id="session-security">세션 보안 설정 (security.session.*)</h3>
+            <h4>MFA 하위 설정 그룹</h4>
             <div class="table-scroll"><table class="api-table">
               <thead>
-                <tr><th>속성</th><th>설명</th></tr>
+                <tr><th>Prefix</th><th>설명</th><th>대표 기본값</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>header.name</code></td><td>세션 헤더 이름 (기본값: X-Auth-Token)</td></tr>
-                <tr><td><code>cookie.name</code></td><td>세션 쿠키 이름 (기본값: SESSION)</td></tr>
-                <tr><td><code>hijack.detection.enabled</code></td><td>세션 하이재킹 탐지 활성화</td></tr>
-                <tr><td><code>threat.ip-change-risk</code></td><td>IP 변경 위험 점수 (기본값: 0.4)</td></tr>
-                <tr><td><code>threat.ua-change-risk</code></td><td>User-Agent 변경 위험 점수 (기본값: 0.3)</td></tr>
+                <tr><td><code>spring.auth.mfa.http-session.*</code></td><td>HTTP Session 기반 MFA 저장소 설정</td><td><code>enabled=true</code>, <code>session-attribute-name=MFA_SESSION_ID</code></td></tr>
+                <tr><td><code>spring.auth.mfa.redis.*</code></td><td>분산 배포용 Redis 기반 MFA 저장소 설정</td><td><code>key-prefix=mfa:session:</code>, <code>cookie-name=MFA_SID</code>, <code>same-site=Strict</code></td></tr>
+                <tr><td><code>spring.auth.mfa.memory.*</code></td><td>인메모리 MFA 저장소 튜닝</td><td><code>cleanup-interval-minutes=5</code>, <code>max-sessions=10000</code></td></tr>
+                <tr><td><code>spring.auth.mfa.sms-factor.*</code></td><td>SMS 요소 전송 설정</td><td><code>provider=default</code>, <code>template-id=mfa_sms_template</code>, <code>enabled=true</code></td></tr>
+                <tr><td><code>spring.auth.mfa.email-factor.*</code></td><td>이메일 요소 전송 설정</td><td><code>from-address=noreply@company.com</code>, <code>template-id=mfa_email_template</code>, <code>enabled=true</code></td></tr>
               </tbody>
             </table></div>
 
@@ -207,8 +232,10 @@
     mfa:
       session-timeout-ms: 600000
       otp-token-validity-seconds: 300
-      session-storage-type: redis</code></pre>
-          </section>
+      session-storage-type: redis
+      redis:
+        key-prefix: mfa:session:
+        cookie-name: MFA_SID</code></pre>
 
           <div class="docs-nav-footer">
             <a href="../../../docs/reference/identity/asep.html" class="docs-nav-link prev">

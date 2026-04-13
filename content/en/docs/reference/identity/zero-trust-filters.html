@@ -1,30 +1,127 @@
-﻿<!-- Breadcrumb -->
+<!-- Breadcrumb -->
 <nav class="breadcrumb">
-  <a href="../../index.html">Home</a>
+  <a href="../../../index.html">Home</a>
   <span class="breadcrumb-separator">/</span>
-  <a href="../../docs/reference/index.html">Reference</a>
+  <a href="../../../docs/reference/index.html">Reference</a>
   <span class="breadcrumb-separator">/</span>
-  <a href="../../docs/reference/identity/dsl.html">Identity</a>
+  <a href="../../../docs/reference/identity/dsl.html">Identity</a>
   <span class="breadcrumb-separator">/</span>
   <span class="breadcrumb-current">Zero Trust Filters</span>
 </nav>
 
 <div class="docs-page-header">
+  <div class="docs-module-badge">
+    <span class="badge badge-info">contexa-identity</span>
+  </div>
   <h1>Zero Trust Filters</h1>
-  <p class="lead">Request-time servlet filters that enforce access control and challenge handling after authentication.</p>
+  <p class="lead">Request-time servlet filters that enforce access control and challenge continuation after authentication. These filters work with <code>AISessionSecurityContextRepository</code>, MFA context state, and <code>ZeroTrustActionRepository</code> to apply runtime zero trust outcomes inside the identity layer.</p>
 </div>
 
 <section class="docs-section">
-  <h2>Access Control Filter</h2>
-  <p><code>ZeroTrustAccessControlFilter</code> evaluates authenticated requests against the persisted runtime decision state and handles allow, block, escalate, and related response paths.</p>
+  <h2 id="overview">Overview</h2>
+  <p>The identity layer uses two dedicated servlet filters. <code>ZeroTrustAccessControlFilter</code> handles <code>BLOCK</code>, <code>ESCALATE</code>, and <code>PENDING_ANALYSIS</code>. <code>ZeroTrustChallengeFilter</code> handles the <code>CHALLENGE</code> path and initializes or resumes MFA challenge sessions.</p>
+
+<pre class="arch-diagram"><code>
+  Runtime Decision Path
+  =====================
+
+  [AISessionSecurityContextRepository]
+              |
+              v
+  [Authenticated Request]
+              |
+              +--> [ZeroTrustAccessControlFilter]
+              |         |- BLOCK
+              |         |- ESCALATE
+              |         `- PENDING_ANALYSIS
+              |
+              `--> [ZeroTrustChallengeFilter]
+                        `- CHALLENGE
+</code></pre>
 </section>
 
 <section class="docs-section">
-  <h2>Challenge Filter</h2>
-  <p><code>ZeroTrustChallengeFilter</code> coordinates challenge initiation for decisions that require additional verification or MFA continuation.</p>
+  <h2 id="access-control-filter">ZeroTrustAccessControlFilter</h2>
+  <p><code>io.contexa.contexaidentity.security.zerotrust.ZeroTrustAccessControlFilter</code> reads the current action with <code>ZeroTrustActionRepository.getCurrentAction(userId, contextBindingHash)</code>. It only intercepts requests when the current runtime decision is <code>BLOCK</code>, <code>ESCALATE</code>, or <code>PENDING_ANALYSIS</code>.</p>
+
+  <div class="table-scroll"><table class="api-table">
+    <thead>
+      <tr><th>Decision</th><th>Behavior</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>BLOCK</code></td><td>Blocks the request immediately, or starts block-resolution MFA through <code>ChallengeMfaInitializer</code> when block-MFA is pending.</td></tr>
+      <tr><td><code>ESCALATE</code></td><td>Returns an escalation response and sets retry metadata using the configured response writer.</td></tr>
+      <tr><td><code>PENDING_ANALYSIS</code></td><td>Returns a pending-analysis response until a definitive runtime action is available.</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The filter deliberately skips logout, zero-trust API endpoints, and <code>/.well-known/</code> paths via <code>shouldNotFilter(...)</code>. It also avoids re-blocking MFA pages and dynamic MFA URLs discovered from <code>MfaFlowUrlRegistry</code> / <code>AuthUrlProvider</code>.</p>
 </section>
 
 <section class="docs-section">
-  <h2>Repository and Runtime Context</h2>
-  <p>The filter chain works together with <code>AISessionSecurityContextRepository</code>, MFA context integration, and action repositories that persist runtime zero trust outcomes.</p>
+  <h2 id="challenge-filter">ZeroTrustChallengeFilter</h2>
+  <p><code>io.contexa.contexaidentity.security.zerotrust.ZeroTrustChallengeFilter</code> handles the <code>CHALLENGE</code> action. It resumes an existing MFA challenge session when possible, or calls <code>ChallengeMfaInitializer.initializeChallengeFlow(...)</code> to create a new challenge session.</p>
+
+  <p>For browser requests, the filter redirects to <code>/zero-trust/challenge-required?mfaUrl=...</code>. For API or AJAX requests, it returns a JSON error body containing <code>mfaUrl</code>, <code>challengeNoticeUrl</code>, <code>sessionId</code>, and the current MFA state.</p>
+
+  <div class="table-scroll"><table class="api-table">
+    <thead>
+      <tr><th>Skipped by <code>shouldNotFilter(...)</code></th><th>Reason</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>/mfa/**</code>, dynamic MFA page URLs</td><td>Prevents re-triggering the challenge filter while the user is already inside an MFA flow.</td></tr>
+      <tr><td><code>/api/mfa/**</code>, <code>/admin/api/mfa/**</code></td><td>Preserves MFA control-plane APIs.</td></tr>
+      <tr><td><code>/webauthn/**</code>, <code>/login/webauthn</code></td><td>Allows WebAuthn registration and challenge processing to complete.</td></tr>
+      <tr><td><code>/zero-trust/**</code>, <code>/.well-known/**</code></td><td>Avoids looping on challenge-notice and well-known endpoints.</td></tr>
+    </tbody>
+  </table></div>
 </section>
+
+<section class="docs-section">
+  <h2 id="repositories-and-context">Repositories and Runtime Context</h2>
+  <p>Both filters depend on the runtime decision repository and MFA context services rather than acting as isolated servlet filters.</p>
+
+  <div class="table-scroll"><table class="api-table">
+    <thead>
+      <tr><th>Component</th><th>Role</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>ZeroTrustActionRepository</code></td><td>Stores and retrieves the current runtime action for a user plus context-binding hash.</td></tr>
+      <tr><td><code>AISessionSecurityContextRepository</code></td><td>Loads the authenticated security context that feeds the post-auth zero trust decision path.</td></tr>
+      <tr><td><code>MfaSessionRepository</code></td><td>Persists or resumes MFA challenge sessions.</td></tr>
+      <tr><td><code>MfaFlowUrlRegistry</code> / <code>AuthUrlProvider</code></td><td>Resolve default and prefixed MFA URLs for browser redirect and API response payloads.</td></tr>
+      <tr><td><code>ChallengeMfaInitializer</code></td><td>Bootstraps challenge MFA when runtime policy requires additional verification.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="docs-section">
+  <h2 id="request-time-sequence">Request-Time Sequence</h2>
+<pre class="arch-diagram"><code>
+  Request-Time Zero Trust Sequence
+  ================================
+
+  [Authenticated Request]
+          |
+          v
+  [ZeroTrustActionRepository.getCurrentAction(...)]
+          |
+          +--> BLOCK / ESCALATE / PENDING_ANALYSIS --> [ZeroTrustAccessControlFilter]
+          |
+          `--> CHALLENGE --> [ZeroTrustChallengeFilter]
+                                   |
+                                   +--> existing MFA session -> redirect / JSON response
+                                   `--> initializeChallengeFlow(...) -> redirect / JSON response
+</code></pre>
+</section>
+
+<div class="docs-nav-footer">
+  <a href="../../../docs/reference/identity/state-management.html" class="docs-nav-link prev">
+    <span class="docs-nav-label">Previous</span>
+    <span class="docs-nav-title">State Management</span>
+  </a>
+  <a href="../../../docs/reference/iam/xacml.html" class="docs-nav-link next">
+    <span class="docs-nav-label">Next</span>
+    <span class="docs-nav-title">Authorization Overview</span>
+  </a>
+</div>

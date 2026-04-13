@@ -11,43 +11,42 @@
               <span class="badge badge-info">contexa-identity</span>
             </div>
             <h1>ASEP Annotations</h1>
-            <p class="lead">An annotation system for declaratively accessing the security context from controllers. Injects the current user, authentication object, and request headers/body/attributes directly into method parameters, and handles security exceptions at the filter chain level.</p>
+            <p class="lead">An annotation system for the ASEP security exception-handling path. It injects the current user, authentication object, and request metadata into <code>@SecurityExceptionHandler</code> method parameters and handles security failures at the filter-chain level before normal Spring MVC exception handling.</p>
           </div>
 
           <!-- Overview -->
           <section class="docs-section">
             <h2 id="overview">Overview</h2>
-            <p>ASEP annotations operate within the Security Filter Chain, before Spring MVC's <code>DispatcherServlet</code>. This allows authentication and authorization failures to be handled at the filter level, intercepting them before Spring MVC exception handling.</p>
+            <p>ASEP annotations are resolved as part of the Contexa security pipeline and provide a dedicated exception-handling path for security failures before normal Spring MVC exception handling. The runtime builds an <code>ASEPFilter</code>, a <code>SecurityExceptionHandlerInvoker</code>, and annotation resolvers from the current authentication flow's ASEP attributes.</p>
 
 <pre class="arch-diagram"><code>
   ASEP Processing Flow
   =====================
 
-  [HTTP Request]
+  [Authentication Flow Config]
        |
        v
-  [Security Filter Chain]
+  [AsepConfigurer]
+       |
+       +--- builds ---> [SecurityExceptionHandlerInvoker]
+       |
+       +--- builds ---> [ASEPFilter]
        |
        v
-  [ASEPFilter] --- on security exception ---&gt;  [@SecurityExceptionHandler]
-       |                                              |
-       v                                              v
-  [DispatcherServlet]                       [Custom Error Response]
-       |
-       v
-  [@SecurityPrincipal]  - Injects current user
-  [@AuthenticationObject] - Injects authentication object
-  [@SecurityRequestHeader] - Injects request header
+  [Security Exception Path] ---&gt; [@SecurityExceptionHandler]
+       |                                  |
+       v                                  v
+  [Argument Resolvers]            [Custom Error Response]
+  [Return Value Handlers]
 </code></pre>
 
             <h3>Enabling ASEP in DSL</h3>
-            <p>Call <code>asep()</code> for each authentication method to configure the ASEP attributes.</p>
+            <p>Call <code>asep()</code> for each authentication method when you need to register custom ASEP exception argument resolvers or return value handlers.</p>
 <pre><code class="language-java">registry
     .form(form -&gt; form
         .loginPage("/login")
         .asep(asep -&gt; asep
-            .enableExceptionHandling(true)
-            .addArgumentResolver(customResolver)))
+            .exceptionArgumentResolver(customResolver)))
     .session(Customizer.withDefaults())
     .build();</code></pre>
 
@@ -57,7 +56,7 @@
           <!-- Argument Injection Annotations -->
           <section class="docs-section">
             <h2 id="argument-injection">Argument Injection Annotations</h2>
-            <p>These annotations enable direct injection of security context data into handler method parameters. Each has a corresponding <code>SecurityHandlerMethodArgumentResolver</code> implementation.</p>
+            <p>These annotations enable direct injection of security context data into ASEP handler method parameters. Each has a corresponding <code>SecurityHandlerMethodArgumentResolver</code> implementation and is resolved inside the ASEP runtime, not as a general-purpose Spring MVC controller argument feature.</p>
 
             <h3 id="security-principal">@SecurityPrincipal</h3>
             <p>Injects the current security principal into a method parameter. Resolves from <code>SecurityContextHolder</code>.</p>
@@ -293,38 +292,28 @@ public class GlobalSecurityExceptionAdvice {
           <!-- Complete Example -->
           <section class="docs-section">
             <h2 id="complete-example">Complete Example</h2>
-            <p>A complete example of a security controller and global exception handling using ASEP annotations.</p>
+            <p>A complete example of security exception handling using ASEP annotations and <code>@SecurityControllerAdvice</code>.</p>
 
-<pre><code class="language-java">@RestController
-@RequestMapping("/api/user")
-public class UserController {
-
-    @GetMapping("/profile")
-    public UserProfile getProfile(
-            @SecurityPrincipal UserDetails user,
-            @AuthenticationObject Authentication auth,
-            @SecurityRequestHeader("X-Device-Id") String deviceId) {
-        return userService.getProfile(user.getUsername());
-    }
-}
-
-@SecurityControllerAdvice
+<pre><code class="language-java">@SecurityControllerAdvice
 public class GlobalSecurityExceptionHandler {
 
     @SecurityExceptionHandler(AuthenticationException.class)
     @SecurityResponseBody
     public ErrorResponse handleAuthError(
             AuthenticationException ex,
-            @SecurityPrincipal UserDetails user) {
-        return new ErrorResponse("AUTH_FAILED", ex.getMessage());
+            @AuthenticationObject Authentication auth,
+            @SecurityRequestHeader("X-Device-Id") String deviceId) {
+        String principalName = auth != null ? auth.getName() : "anonymous";
+        return new ErrorResponse("AUTH_FAILED", principalName + " on device " + deviceId);
     }
 
     @SecurityExceptionHandler(AccessDeniedException.class)
     @SecurityResponseBody
     public ErrorResponse handleAccessDenied(
             AccessDeniedException ex,
-            @SecurityRequestAttribute("requestURI") String uri) {
-        return new ErrorResponse("ACCESS_DENIED", "Forbidden: " + uri);
+            @SecurityPrincipal Object principal,
+            @SecurityCookieValue("ctxa_trace") String traceId) {
+        return new ErrorResponse("ACCESS_DENIED", "principal=" + principal + ", trace=" + traceId);
     }
 }</code></pre>
           </section>
