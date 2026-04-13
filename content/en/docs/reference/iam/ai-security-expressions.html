@@ -12,20 +12,19 @@
             <div class="docs-module-badge">
               <span class="badge badge-warning">contexa-iam</span>
             </div>
-            <h1>AI Security Expressions</h1>
-            <p class="lead">Extend Spring Security's SpEL expression system with AI-powered risk assessment functions. Contexa's <code>AbstractAISecurityExpressionRoot</code> provides real-time Zero Trust action evaluation for both URL-level and method-level authorization decisions.</p>
+            <h1>AI Security Expressions</h1>`r`n            <p class="lead">Extend Spring Security's SpEL expression system with Zero Trust action predicates. Contexa's <code>AbstractAISecurityExpressionRoot</code> exposes the current <code>ZeroTrustAction</code> to both URL-level and method-level authorization decisions.</p>
           </div>
 
           <!-- Overview -->
           <section>
             <h2 id="overview">Overview</h2>
-            <p>Contexa extends Spring Security's expression-based access control with AI-integrated functions that evaluate <code>ZeroTrustAction</code> results in real time. These expressions can be used in both URL-level security configurations and method-level annotations.</p>
+            <p>Contexa extends Spring Security's expression-based access control with AI-integrated predicates that evaluate the current <code>ZeroTrustAction</code>. These expressions can be used in both URL-level security configurations and method-level annotations.</p>
             <p>The expression system is built on two levels:</p>
             <ul>
-              <li><strong>URL-Level</strong> — <code>CustomWebSecurityExpressionRoot</code> for HTTP request matching in URL policies</li>
-              <li><strong>Method-Level</strong> — <code>CustomMethodSecurityExpressionRoot</code> for annotation-based authorization with <code>@Protectable</code></li>
+              <li><strong>URL-Level</strong> - <code>CustomWebSecurityExpressionRoot</code> for HTTP request matching in URL policies</li>
+              <li><strong>Method-Level</strong> - <code>CustomMethodSecurityExpressionRoot</code> for annotation-based authorization with <code>@Protectable</code></li>
             </ul>
-            <p>Both classes extend <code>AbstractAISecurityExpressionRoot</code>, which provides the shared <code>#ai.*</code> expression API. The AI expressions are integrated with the Zero Trust pipeline — <code>ZeroTrustAction</code> objects are retrieved from Redis (and optionally Caffeine cache at the method level) to make authorization decisions based on AI risk assessments.</p>
+            <p>Both classes extend <code>AbstractAISecurityExpressionRoot</code>, which provides the shared <code>#ai.*</code> expression API. At runtime, the expression roots resolve the current <code>ZeroTrustAction</code> from request-scoped state and repository-backed lookups; method-level evaluation adds a short-lived Caffeine cache on top of that lookup path.</p>
           </section>
 
           <!-- Expression API Reference -->
@@ -77,9 +76,9 @@
                   <td>Returns <code>true</code> if the current action matches any of the provided action strings</td>
                 </tr>
                 <tr>
-                  <td><code>#ai.hasActionOrDefault(default, actions...)</code></td>
+                  <td><code>#ai.hasActionOrDefault(defaultAction, actions...)</code></td>
                   <td><code>boolean</code></td>
-                  <td>Checks the provided actions; returns the <code>default</code> boolean value if no <code>ZeroTrustAction</code> is available</td>
+                  <td>Uses <code>defaultAction</code> when no action is currently available, then checks whether the resolved action is included in the provided action list</td>
                 </tr>
               </tbody>
             </table>
@@ -88,7 +87,7 @@
           <!-- URL-Level Expressions -->
           <section>
             <h2 id="url-level">URL-Level Expressions</h2>
-            <p><code>CustomWebSecurityExpressionRoot</code> extends <code>AbstractAISecurityExpressionRoot</code> and adds URL-specific helper methods for HTTP request matching. It is used in URL policies created through the Policy Builder.</p>
+            <p><code>CustomWebSecurityExpressionRoot</code> extends <code>AbstractAISecurityExpressionRoot</code> and adds URL-specific helper methods for HTTP request matching. It is used when persisted URL policies are evaluated through Spring Security's web expression layer.</p>
 
             <h3>Additional URL-Level Methods</h3>
             <table>
@@ -114,7 +113,7 @@
             </table>
 
             <h3>Usage Examples</h3>
-            <p>These expressions are used in URL policy conditions created via the Admin Dashboard or Policy Builder:</p>
+            <p>These expressions are used in stored URL policy conditions managed through the IAM admin surfaces:</p>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">SpEL</span>
@@ -165,11 +164,12 @@
               </tbody>
             </table>
 
-            <h3>Caching</h3>
-            <p>Method-level expressions use a two-layer cache for <code>ZeroTrustAction</code> lookups:</p>
+            <h3>Action Lookup</h3>
+            <p>Method-level expressions resolve <code>ZeroTrustAction</code> through a layered lookup path:</p>
             <ul>
-              <li><strong>Caffeine local cache</strong> — 5-second TTL, maximum 10,000 entries</li>
-              <li><strong>Redis</strong> — Primary distributed store, session-scoped</li>
+              <li><strong>Request attribute</strong> - if the current HTTP request already carries <code>contexa.zeroTrustAction</code>, that action is used first</li>
+              <li><strong>Caffeine local cache</strong> - 5-second TTL, maximum 10,000 entries, method-level only</li>
+              <li><strong><code>ZeroTrustActionRepository</code> lookup</strong> - shared backing lookup used by both URL and method evaluation; the concrete storage depends on deployment configuration</li>
             </ul>
 
             <h3>Usage with @Protectable</h3>
@@ -215,9 +215,9 @@ public List&lt;AuditLog&gt; getAuditLogs() { ... }</code></pre>
                   <td><code>CustomMethodSecurityExpressionRoot</code></td>
                 </tr>
                 <tr>
-                  <td>Cache</td>
-                  <td>Redis only</td>
-                  <td>Caffeine (5s TTL) + Redis</td>
+                  <td>Action Lookup</td>
+                  <td>Request attribute + repository lookup</td>
+                  <td>Request attribute + Caffeine (5s TTL) + repository lookup</td>
                 </tr>
                 <tr>
                   <td>Ownership Check</td>
@@ -241,7 +241,7 @@ public List&lt;AuditLog&gt; getAuditLogs() { ... }</code></pre>
                 </tr>
                 <tr>
                   <td>Typical Use</td>
-                  <td>URL policies via Policy Builder</td>
+                  <td>Stored URL policies</td>
                   <td>Service method annotations</td>
                 </tr>
               </tbody>
@@ -272,8 +272,8 @@ public List&lt;AuditLog&gt; getAuditLogs() { ... }</code></pre>
                 </div>
                 <div class="diagram-arrow-down"></div>
                 <div class="diagram-box">
-                  <span class="diagram-box-name">Stored in Redis</span>
-                  <span class="diagram-box-desc">Session-scoped cache for subsequent evaluations</span>
+                  <span class="diagram-box-name">Repository-backed shared state</span>
+                  <span class="diagram-box-desc">Shared Zero Trust action lookup used across subsequent evaluations</span>
                 </div>
                 <div class="diagram-arrow-down"></div>
                 <div class="diagram-box">
@@ -326,8 +326,8 @@ public List&lt;AuditLog&gt; getAuditLogs() { ... }</code></pre>
               </tbody>
             </table>
 
-            <h3>Risk Score Calculation</h3>
-            <p>The risk score is derived from the AI assessment confidence:</p>
+            <h3>Action Resolution Model</h3>
+            <p>The public AI expression API is action-based. It does not expose a numeric <code>riskScore(...)</code> function. Runtime code resolves the current request to a Zero Trust action such as <code>ALLOW</code>, <code>BLOCK</code>, <code>CHALLENGE</code>, <code>ESCALATE</code>, or <code>PENDING_ANALYSIS</code>, and <code>#ai.*</code> expressions read that action.</p>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">Text</span>
@@ -336,16 +336,14 @@ public List&lt;AuditLog&gt; getAuditLogs() { ... }</code></pre>
                   <span>Copy</span>
                 </button>
               </div>
-              <pre><code>riskScore = 1.0 - aiAssessmentScore
+              <pre><code>Resolved action = ALLOW | BLOCK | CHALLENGE | ESCALATE | PENDING_ANALYSIS
 
-Example:
-  AI confidence = 0.92 (high confidence of safety)
-  Risk score   = 1.0 - 0.92 = 0.08 (low risk)
-  Action       = ALLOW
-
-  AI confidence = 0.25 (low confidence of safety)
-  Risk score   = 1.0 - 0.25 = 0.75 (high risk)
-  Action       = BLOCK or CHALLENGE</code></pre>
+Examples:
+  #ai.isAllowed()
+  #ai.isBlocked()
+  #ai.needsChallenge()
+  #ai.hasActionIn('ALLOW', 'CHALLENGE')
+  #ai.hasActionOrDefault('BLOCK', 'ALLOW')</code></pre>
             </div>
           </section>
 
@@ -356,9 +354,9 @@ Example:
             <h3>Scenario 1: Risk-Based Access Control</h3>
             <p>Use AI expressions to implement tiered access control based on risk level:</p>
             <ul>
-              <li><strong>Low risk</strong> — AI returns <code>ALLOW</code>, access is granted</li>
-              <li><strong>Medium risk</strong> — AI returns <code>CHALLENGE</code>, require additional authentication (MFA)</li>
-              <li><strong>High risk</strong> — AI returns <code>BLOCK</code>, access is denied</li>
+              <li><strong>Low risk</strong> &mdash;AI returns <code>ALLOW</code>, access is granted</li>
+              <li><strong>Medium risk</strong> &mdash;AI returns <code>CHALLENGE</code>, require additional authentication (MFA)</li>
+              <li><strong>High risk</strong> &mdash;AI returns <code>BLOCK</code>, access is denied</li>
             </ul>
             <div class="code-block">
               <div class="code-block-header">
@@ -420,7 +418,7 @@ public MedicalRecord getRecord(Long id) { ... }
 
 // Fallback when AI is unavailable: default to deny
 @Protectable(ownerField = "accountId")
-@PreAuthorize("#ai.hasActionOrDefault(false, 'ALLOW') and hasPermission(#id, 'ACCOUNT', 'UPDATE')")
+@PreAuthorize("#ai.hasActionOrDefault('BLOCK', 'ALLOW') and hasPermission(#id, 'ACCOUNT', 'UPDATE')")
 public void updateAccount(Long id, AccountDto dto) { ... }</code></pre>
             </div>
           </section>
@@ -428,35 +426,35 @@ public void updateAccount(Long id, AccountDto dto) { ... }</code></pre>
           <!-- Creating AI-Aware Policies in Admin -->
           <section>
             <h2 id="admin-guide">Creating AI-Aware Policies in Admin</h2>
-            <p>AI security expressions can be used in policies created through the Admin Dashboard's Policy Builder. This allows administrators to define authorization rules that incorporate AI risk assessment without writing code.</p>
+            <p>AI security expressions can be used in stored SpEL policies managed through the Admin Dashboard. In the OSS flow, administrators work primarily through Policy Center and related policy authoring screens, selecting compatible conditions or entering <code>#ai.*</code> expressions directly.</p>
 
-            <h3>Step 1: Open Policy Builder</h3>
-            <p>Navigate to <strong>IAM → Policies → Create Policy</strong> in the Admin Dashboard. Select the target resource and HTTP method pattern for the policy.</p>
+            <h3>Step 1: Open Policy Center</h3>
+            <p>Navigate to <strong>/admin/policy-center</strong> and choose the appropriate creation flow for the target resource. For URL policies, define the target pattern and HTTP method; for method policies, start from the Resource Workbench when available.</p>
 
             <h3>Step 2: Select AI Condition Template</h3>
-            <p>In the condition editor, choose from predefined AI expression templates or write custom SpEL expressions. Available templates include:</p>
+            <p>In the condition editor, use the supported <code>#ai.*</code> expressions directly or combine them with role, permission, time, and IP conditions. Typical action-based checks include:</p>
             <ul>
-              <li><strong>AI Approved</strong> — <code>#ai.isAllowed()</code></li>
-              <li><strong>AI Not Blocked</strong> — <code>!(#ai.isBlocked())</code></li>
-              <li><strong>AI Approved + Role</strong> — <code>#ai.isAllowed() and hasRole('...')</code></li>
-              <li><strong>Custom AI Expression</strong> — Write any valid SpEL using <code>#ai.*</code> functions</li>
+              <li><strong>AI Approved</strong> &mdash;<code>#ai.isAllowed()</code></li>
+              <li><strong>AI Not Blocked</strong> &mdash;<code>!(#ai.isBlocked())</code></li>
+              <li><strong>AI Approved + Role</strong> &mdash;<code>#ai.isAllowed() and hasRole('...')</code></li>
+              <li><strong>Custom AI Expression</strong> &mdash;Write any valid SpEL using <code>#ai.*</code> functions</li>
             </ul>
 
-            <h3>Step 3: Configure Approval Workflow</h3>
-            <p>For AI-generated policies, an approval workflow is available. Policies with AI expressions can be:</p>
+            <h3>Step 3: Confirm Activation Status</h3>
+            <p>Policies can move through approval states. In OSS code, <code>PENDING</code> and <code>REJECTED</code> policies are skipped by <code>CustomDynamicAuthorizationManager</code>; active runtime policies are typically <code>APPROVED</code> or <code>NOT_REQUIRED</code>.</p>
             <ul>
-              <li><strong>Auto-approved</strong> — Applied immediately for low-risk policy changes</li>
-              <li><strong>Requires review</strong> — Queued for security team review before activation</li>
-              <li><strong>Shadow mode</strong> — Evaluate but do not enforce, for testing AI policy effectiveness</li>
+              <li><strong>NOT_REQUIRED</strong> &mdash;Loaded without an approval gate.</li>
+              <li><strong>PENDING</strong> &mdash;Visible for review but not enforced at runtime.</li>
+              <li><strong>APPROVED / REJECTED</strong> &mdash;Approved policies load into runtime mappings; rejected policies do not.</li>
             </ul>
 
             <h3>Step 4: Monitor Policy Effectiveness</h3>
-            <p>After activation, monitor AI policy outcomes in the Admin Dashboard:</p>
+            <p>After saving a policy, verify it through Policy Center lists, approval status, and audit/security monitoring:</p>
             <ul>
               <li>View allow/deny/challenge rates per policy</li>
-              <li>Track false positive and false negative rates</li>
-              <li>Analyze risk score distributions for protected resources</li>
-              <li>Review escalation patterns and response times</li>
+              <li>Review allow, deny, challenge, and escalation outcomes in audit logs</li>
+              <li>Confirm whether the policy is APPROVED, NOT_REQUIRED, PENDING, or REJECTED</li>
+              <li>Cross-check the resulting SpEL condition and target scope before rollout</li>
             </ul>
           </section>
 
@@ -471,17 +469,17 @@ public void updateAccount(Long id, AccountDto dto) { ... }</code></pre>
               <div class="diagram-flow-vertical">
                 <div class="diagram-box diagram-highlight">
                   <span class="diagram-box-name">Request Attribute</span>
-                  <span class="diagram-box-desc">Checked first — in-request cache for current HTTP request</span>
+                  <span class="diagram-box-desc">Checked first &mdash; in-request cache for current HTTP request</span>
                 </div>
                 <div class="diagram-arrow-down"></div>
                 <div class="diagram-box">
                   <span class="diagram-box-name">Caffeine Local Cache</span>
-                  <span class="diagram-box-desc">Method-level only — 5s TTL, 10K max entries</span>
+                  <span class="diagram-box-desc">Method-level only &mdash;5s TTL, 10K max entries</span>
                 </div>
                 <div class="diagram-arrow-down"></div>
                 <div class="diagram-box diagram-accent">
-                  <span class="diagram-box-name">Redis</span>
-                  <span class="diagram-box-desc">Primary distributed store — session-scoped TTL</span>
+                  <span class="diagram-box-name">Repository-backed lookup</span>
+                  <span class="diagram-box-desc">Shared Zero Trust action repository, often Redis-backed in distributed deployments</span>
                 </div>
               </div>
             </div>
@@ -512,10 +510,10 @@ public void updateAccount(Long id, AccountDto dto) { ... }</code></pre>
                   <td>Method-level only</td>
                 </tr>
                 <tr>
-                  <td>Redis</td>
-                  <td>Distributed (session-scoped)</td>
-                  <td>Session TTL</td>
-                  <td>Unlimited</td>
+                  <td>Repository-backed shared lookup</td>
+                  <td>Shared runtime state</td>
+                  <td>Repository implementation dependent</td>
+                  <td>Implementation dependent</td>
                   <td>Both URL and Method level</td>
                 </tr>
               </tbody>

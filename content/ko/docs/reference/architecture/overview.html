@@ -20,6 +20,10 @@
             <p>Contexa는 Spring Boot를 위한 <strong>AI Native Zero Trust</strong> 보안 플랫폼입니다. 경계 기반 보안에만 의존하는 대신, Contexa는 AI 기반 보안 결정을 통해 <strong>인증 후 지속적인 검증</strong>을 제공합니다. 요청 시점에는 세션 컨텍스트와 기존 결정이 적용되고, 비동기 AI 분석은 후속 요청의 제어에 반영됩니다.</p>
             <p>플랫폼은 각각 고유한 보안 영역을 담당하는 4개의 핵심 모듈과 원활한 Spring Boot 통합을 위한 자동 설정 및 스타터 지원으로 구성됩니다.</p>
 
+            <div class="callout-info">
+              <strong>코드 기준 부트스트랩 체인.</strong> OSS 진입점은 <code>contexa-common</code>의 <code>@EnableAISecurity</code>입니다. 이 애노테이션은 <code>AiSecurityImportSelector</code>를 통해 <code>AiSecurityConfiguration</code>을 로드하고, 이어서 <code>IdentitySecurityCoreAutoConfiguration</code>과 모듈별 자동 구성이 요청 시점 런타임 제어 경로, 비동기 분석 경로, IAM 통합 지점을 연결합니다.
+            </div>
+
             <div class="module-grid">
               <!-- contexa-core -->
               <div class="module-card">
@@ -95,7 +99,11 @@
           <!-- Section 2: Request Processing Flow -->
           <section>
             <h2 id="request-flow">AI Native Zero Trust 흐름</h2>
-            <p>Contexa는 모든 HTTP 요청을 두 가지 별도의 파이프라인으로 처리합니다: 모든 요청에서 실행되는 <strong>동기 Filter Chain</strong>과 백그라운드에서 이벤트를 분석하는 <strong>비동기 AI 파이프라인</strong>입니다. AI 결정은 Redis에 저장되고 <em>다음</em> 요청에서 적용됩니다 &mdash; 이 논블로킹 설계는 분석을 직접 요청 경로 밖으로 유지합니다.</p>
+            <p>Contexa는 모든 HTTP 요청을 두 가지 별도의 파이프라인으로 처리합니다: 모든 요청에서 실행되는 <strong>동기 Filter Chain</strong>과 백그라운드에서 이벤트를 분석하는 <strong>비동기 AI 파이프라인</strong>입니다. 적용 대상 액션은 <code>ZeroTrustActionRepository</code>를 통해 유지되며 <em>다음</em> 요청에서 반영됩니다. distributed 모드에서는 이 공유 상태가 Redis와 Redisson으로 뒷받침됩니다. 이 논블로킹 설계는 분석을 직접 요청 경로 밖으로 유지합니다.</p>
+
+            <div class="callout-info">
+              <strong>주요 코드 기준 지점.</strong> 요청 시점 경로는 <code>AISessionSecurityContextRepository.loadDeferredContext(...)</code>, <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code>, <code>ZeroTrustAccessControlFilter.doFilterInternal(...)</code>, <code>ZeroTrustChallengeFilter.doFilterInternal(...)</code>로 이어집니다. 비동기 분석 경로는 <code>ZeroTrustEventPublisher.publishMethodAuthorization(...)</code>, <code>ZeroTrustEventListener.handleZeroTrustEvent(...)</code>, <code>SecurityEventProcessor.process(...)</code>, <code>SecurityDecisionEnforcementHandler.handle(...)</code>로 이어집니다.
+            </div>
 
             <h3>동기 Filter Chain</h3>
             <p>Spring Security Filter Chain은 모든 HTTP 요청을 순서대로 처리합니다. 필터는 요청을 검사, 게이트 또는 보강하지만 LLM을 직접 호출하지는 않습니다.</p>
@@ -114,7 +122,7 @@
 
               <div class="arch-flow-node arch-flow-node--filter">
                 ZeroTrustAccessControlFilter
-                <span class="arch-flow-detail">이 사용자에 대한 ZeroTrustAction을 Redis에서 읽어옵니다 -- <em>이전</em> 요청에서 비동기 AI 파이프라인이 내린 결정을 적용합니다.</span>
+                <span class="arch-flow-detail">이 사용자에 대한 현재 액션을 <code>ZeroTrustActionRepository</code>에서 읽어옵니다. distributed 모드에서는 이 공유 상태가 Redis 기반으로 유지되며, 비동기 AI 파이프라인이 <em>이전</em> 요청에서 계산한 결정을 여기서 적용합니다.</span>
               </div>
               <div class="arch-flow-connector"></div>
 
@@ -169,7 +177,7 @@
             </div>
 
             <h3>비동기 AI 파이프라인</h3>
-            <p><code>ZeroTrustEventListener</code>는 <code>@EventListener</code>를 통해 <code>ZeroTrustSpringEvent</code>를 동기적으로 수신하며, 비동기 처리 파이프라인으로의 브릿지 역할을 합니다. AI는 백그라운드에서 위협을 평가하고 결정을 Redis에 저장하며, 이 결정은 사용자의 <em>다음</em> 요청에서 <code>ZeroTrustAccessControlFilter</code>에 의해 적용됩니다.</p>
+            <p><code>ZeroTrustEventListener</code>는 <code>@EventListener</code>를 통해 <code>ZeroTrustSpringEvent</code>를 동기적으로 수신하며, 비동기 처리 파이프라인으로의 브릿지 역할을 합니다. AI는 백그라운드에서 위협을 평가하고, 적용 대상 액션을 <code>ZeroTrustActionRepository</code>에 기록합니다. distributed 모드에서는 Redis 기반 저장소와 Redisson 전파가 이 상태를 후속 요청에 노출합니다.</p>
 
             <div class="arch-flow">
               <div class="arch-flow-node arch-flow-node--filter" style="border:2px dashed var(--brand-primary);background:var(--bg-secondary)">
@@ -224,7 +232,7 @@
 
               <div class="arch-flow-node arch-flow-node--decision">
                 SecurityDecisionEnforcementHandler <span style="opacity:0.7">(order=55)</span>
-                <span class="arch-flow-detail"><code>ZeroTrustActionRepository</code>를 통해 Redis에 ZeroTrustAction을 저장합니다. BLOCK 시: Redisson RTopic을 통해 브로드캐스트합니다. SHADOW 모드에서는 건너뜁니다.</span>
+                <span class="arch-flow-detail">적용 대상 액션을 <code>ZeroTrustActionRepository</code>에 기록합니다. BLOCK 시에는 차단 상태를 세우고, distributed 모드에서는 Redisson RTopic 기반 전파가 이어질 수 있습니다.</span>
               </div>
               <div style="margin-top:var(--space-3);padding:var(--space-2) var(--space-4);background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:var(--radius-md);text-align:center;font-size:var(--text-xs);color:var(--text-secondary);font-weight:500">
                 <code style="font-size:var(--text-xs)">ZeroTrustActionRepository</code>(Redis 또는 인메모리)에 저장 -> <strong>다음 요청에서 적용</strong>
@@ -263,7 +271,7 @@
               <!-- 3. ZeroTrustSecurityService -->
               <div class="arch-flow-node arch-flow-node--agent">
                 ZeroTrustSecurityService
-                <span class="arch-flow-detail">Redis에서 <code>ZeroTrustAction</code>을 읽어옴 -> <code>Authentication</code>을 <code>ZeroTrustAuthenticationToken</code>으로 교체합니다</span>
+                <span class="arch-flow-detail"><code>ZeroTrustActionRepository</code>에서 현재 액션을 읽어오고, distributed 모드에서는 이 상태가 Redis 기반으로 유지되며, <code>Authentication</code>을 <code>ZeroTrustAuthenticationToken</code>으로 교체합니다</span>
                 <span class="arch-flow-badge" style="margin-top:16px">AI 결정 -> Spring Security Authority</span>
               </div>
               <div class="arch-flow-connector"></div>
@@ -338,6 +346,10 @@
   +-- contexa-core
   +-- contexa-common</div>
 
+            <div class="callout-info">
+              <strong>의존성 기준.</strong> 이 그래프는 OSS 루트의 <code>settings.gradle</code>과 각 모듈의 <code>build.gradle</code>에 선언된 실제 모듈 구성을 반영합니다. 애플리케이션 진입 의존성은 starter이고, <code>contexa-autoconfigure</code>가 Spring Boot 런타임 배선을 담당합니다.
+            </div>
+
             <table style="width:100%;border-collapse:collapse;margin:var(--space-4) 0;font-size:var(--text-sm)">
               <thead>
                 <tr style="border-bottom:2px solid var(--border-medium)">
@@ -376,6 +388,10 @@
             <h2 id="infrastructure-modes">인프라 모드</h2>
             <p>Contexa는 두 가지 인프라 모드를 지원하여, 개발 시에는 무의존성 설정으로 시작하고 프로덕션에서는 분산 아키텍처로 확장할 수 있습니다.</p>
 
+            <div class="callout-info">
+              <strong>인프라 모드 코드 기준.</strong> 인프라 모드는 <code>contexa.infrastructure.mode</code> 아래의 <code>ContexaProperties.InfrastructureMode</code>로 바인딩됩니다. 분산 전용 빈은 조건부 자동 구성으로 활성화되고, standalone 모드는 인메모리 구현을 기본값으로 사용합니다.
+            </div>
+
             <div class="mode-cards">
               <div class="mode-card">
                 <h3 style="color:var(--color-info)">STANDALONE</h3>
@@ -412,17 +428,21 @@
             <h2 id="shadow-mode">Shadow Mode</h2>
             <p>Contexa는 안전하고 점진적인 도입을 위한 <strong>Shadow Mode</strong>를 지원합니다. 단일 프로퍼티 <code>security.zerotrust.mode</code>로 제어되며, AI 결정이 적용되는지 아니면 로깅만 되는지를 결정합니다.</p>
 
+            <div class="callout-info">
+              <strong>Shadow/Enforce 코드 기준.</strong> 이 동작은 <code>SecurityZeroTrustProperties.SecurityMode</code>로 제어됩니다. SHADOW에서는 분석은 계속 수행되지만 런타임 액션을 저장하거나 적용하지 않고, ENFORCE에서는 같은 분석 결과를 액션 저장소에 기록한 뒤 런타임 필터가 이를 소비합니다.
+            </div>
+
             <div class="mode-cards">
               <div class="mode-card">
                 <h3 style="color:var(--zt-challenge)">SHADOW</h3>
-                <p>전체 AI 파이프라인이 실행됩니다 -- HCAD 분석, 계층형 LLM 평가, 리스크 점수 산정 -- 하지만 <code>SecurityDecisionEnforcementHandler</code>가 <code>canHandle()</code>을 통해 적용을 건너뜁니다. Redis에 어떤 액션도 저장되지 않습니다. 모든 AI 결정은 감사 로그에만 기록됩니다.</p>
+                <p>전체 AI 파이프라인은 계속 실행됩니다 -- HCAD 분석, 계층형 LLM 평가, 리스크 점수 산정까지 수행됩니다. 다만 런타임은 관찰 모드로 유지되며, 요청 시점 제어는 활성화되지 않습니다. 이 모드의 목적은 분석 결과와 운영 신호를 검토하는 것입니다.</p>
                 <div style="display:flex;flex-direction:column;gap:var(--space-1)">
                   <code>security.zerotrust.mode: SHADOW</code>
                 </div>
               </div>
               <div class="mode-card">
                 <h3 style="color:var(--zt-allow)">ENFORCE</h3>
-                <p>기본 모드입니다. AI 결정이 <code>SecurityDecisionEnforcementHandler</code>에 의해 Redis에 저장되고 후속 요청에서 <code>ZeroTrustAccessControlFilter</code>에 의해 적용됩니다. BLOCK, CHALLENGE, ESCALATE 액션이 활성화된 완전 적용 모드입니다.</p>
+                <p>기본 모드입니다. 적용 대상 액션이 <code>ZeroTrustActionRepository</code>에 기록되고, 후속 요청에서 <code>ZeroTrustAccessControlFilter</code>와 관련 제로 트러스트 필터가 이를 집행합니다. BLOCK, CHALLENGE, ESCALATE가 실제 요청 경로에서 활성화됩니다.</p>
                 <div style="display:flex;flex-direction:column;gap:var(--space-1)">
                   <code>security.zerotrust.mode: ENFORCE</code>
                 </div>
@@ -438,12 +458,16 @@
             <h2 id="ai-integration">AI 통합 지점</h2>
             <p>AI 및 LLM 기능은 플랫폼 전반에 깊이 통합되어 있습니다. 다음은 AI 기반 결정이 이루어지는 주요 지점입니다.</p>
 
+            <div class="callout-info">
+              <strong>이 섹션의 코드 앵커.</strong> 아래 항목은 <code>SecurityPlaneAgent</code>, <code>Layer1ContextualStrategy</code>, <code>Layer2ExpertStrategy</code>, <code>UnifiedLLMOrchestrator</code>, <code>AIAdaptiveMfaPolicyProvider</code>, <code>ApprovalService.requestApproval(...)</code>, <code>AuditingHandler</code>, <code>CentralAuditFacade</code> 같은 실제 런타임 구성요소에 의해 뒷받침됩니다.
+            </div>
+
             <ol class="ai-list">
               <li>
                 <div class="ai-list-num">1</div>
                 <div class="ai-list-content">
                   <strong>Zero Trust 위협 평가</strong>
-                  <span>SecurityPlaneAgent는 계층형 LLM 전략을 사용합니다 -- Layer 1은 빠른 컨텍스트 분석, Layer 2는 심층 전문가 조사 -- 모든 의심스러운 요청을 평가하고 ZeroTrustAction을 생성합니다.</span>
+                  <span>SecurityPlaneAgent는 계층형 LLM 전략을 사용합니다 -- Layer 1은 빠른 컨텍스트 분석, Layer 2는 심층 전문가 조사 -- 의심스러운 요청을 평가하고, 제안 액션과 최종 적용 액션을 담은 <code>SecurityDecision</code>를 생성합니다.</span>
                 </div>
               </li>
               <li>
@@ -470,8 +494,8 @@
               <li>
                 <div class="ai-list-num">5</div>
                 <div class="ai-list-content">
-                  <strong>AI 생성 XACML 정책</strong>
-                  <span>플랫폼은 AI를 사용하여 XACML 접근 제어 정책을 생성하고 제안할 수 있어, 세밀한 제어를 유지하면서 정책 작성의 수작업을 줄입니다.</span>
+                  <strong>AI 보강 XACML 정책 맥락</strong>
+                  <span>플랫폼은 XACML 평가에 AI 기반 런타임 컨텍스트와 메서드 수준 보안 신호를 결합하여, 자동 정책 생성 자체를 핵심 모델로 내세우지 않으면서도 운영자가 정책 의도를 더 정교하게 다듬을 수 있게 합니다.</span>
                 </div>
               </li>
               <li>
