@@ -68,7 +68,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";</code></pre>
               <span>Copy</span>
             </button>
           </div>
-          <pre><code class="language-bash">ollama pull qwen2.5:7b
+          <pre><code class="language-bash">ollama pull qwen3.5:9b
 ollama pull mxbai-embed-large</code></pre>
         </div>
       </div>
@@ -121,7 +121,7 @@ ollama pull mxbai-embed-large</code></pre>
                   </button>
                 </div>
                 <pre><code class="language-xml">&lt;dependency&gt;
-    &lt;groupId&gt;io.contexa&lt;/groupId&gt;
+    &lt;groupId&gt;ai.ctxa&lt;/groupId&gt;
     &lt;artifactId&gt;spring-boot-starter-contexa&lt;/artifactId&gt;
     &lt;version&gt;0.1.0&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
@@ -138,7 +138,7 @@ ollama pull mxbai-embed-large</code></pre>
             <div class="step-number">2</div>
             <div>
               <h2 class="step-title">Enable AI Security</h2>
-              <p class="step-desc">Annotate your main application class with <code>@EnableAISecurity</code>. This activates the full Contexa AI security infrastructure, including a default <code>PlatformConfig</code> created through <code>IdentityDslRegistry</code>, which triggers the Zero Trust configurer mechanism automatically.</p>
+              <p class="step-desc">Annotate your main application class with <code>@EnableAISecurity</code>. This activates the full Contexa AI security infrastructure. If no user-defined <code>PlatformConfig</code> bean is present, <code>AiSecurityConfiguration.platformDslConfig()</code> auto-registers a default one built through <code>IdentityDslRegistry</code>, wiring the Zero Trust filter chain automatically.</p>
 
               <div class="code-block" style="margin-top: var(--space-4);">
                 <div class="code-block-header">
@@ -159,7 +159,7 @@ public class MyApplication {
               </div>
 
               <div class="callout callout-info" style="margin-top: var(--space-4);">
-                <p><strong>What happens behind the scenes</strong> &mdash; <code>@EnableAISecurity</code> imports <code>AiSecurityImportSelector</code>, which conditionally registers the AI security infrastructure. If no custom <code>PlatformConfig</code> bean exists, a default one is created via <code>IdentityDslRegistry</code>.</p>
+                <p><strong>What happens behind the scenes</strong> &mdash; <code>@EnableAISecurity</code> is meta-annotated with <code>@Import(AiSecurityImportSelector.class)</code>, which imports <code>AiSecurityConfiguration</code>. That configuration class contains <code>platformDslConfig()</code>, a <code>@ConditionalOnMissingBean(PlatformConfig.class)</code> factory that builds a default <code>PlatformConfig</code> via <code>IdentityDslRegistry</code> when you have not declared your own.</p>
               </div>
             </div>
           </div>
@@ -182,6 +182,18 @@ public class MyApplication {
                 <pre><code class="language-yaml">contexa:
   infrastructure:
     mode: standalone
+  llm:
+    chatModelPriority: ollama,anthropic,openai
+    embeddingModelPriority: ollama,openai
+    chat:
+      ollama:
+        baseUrl: http://127.0.0.1:11434
+        model: qwen3.5:9b
+        keepAlive: 24h
+    embedding:
+      ollama:
+        baseUrl: http://127.0.0.1:11434
+        model: mxbai-embed-large
 
 spring:
   datasource:
@@ -191,20 +203,6 @@ spring:
     driver-class-name: org.postgresql.Driver
 
   ai:
-    chat:
-      model:
-        priority: ollama
-
-    ollama:
-      base-url: http://127.0.0.1:11434
-      chat:
-        options:
-          model: qwen2.5:7b
-          keep-alive: "24h"
-      embedding:
-        enabled: true
-        model: mxbai-embed-large
-
     vectorstore:
       pgvector:
         table-name: vector_store
@@ -220,7 +218,7 @@ spring:
               </div>
 
               <div class="callout callout-info" style="margin-top: var(--space-4);">
-                <p><strong>Model Priority</strong> &mdash; The <code>contexa.llm.chat-model-priority</code> property accepts a comma-separated list of providers. Contexa will attempt each provider in order, falling back to the next if unavailable. Supported values: <code>ollama</code>, <code>anthropic</code>, <code>openai</code>.</p>
+                <p><strong>Model Priority</strong> &mdash; The <code>contexa.llm.chatModelPriority</code> property accepts a comma-separated list of providers. Contexa will attempt each provider in order, falling back to the next if unavailable. Supported values: <code>ollama</code>, <code>anthropic</code>, <code>openai</code>. The default is <code>ollama,anthropic,openai</code>.</p>
               </div>
             </div>
           </div>
@@ -290,7 +288,7 @@ mvn spring-boot:run</code></pre>
         <div class="section-header">
           <span class="eyebrow">Method-Level Security</span>
           <h2>Protect Your First Method</h2>
-          <p class="lead">Apply AI-driven zero trust enforcement to any service method using the <code>@Protectable</code> annotation. The Zero Trust engine evaluates each invocation through the HCAD pipeline and produces a <code>ZeroTrustAction</code> decision.</p>
+          <p class="lead">Apply AI-driven zero trust enforcement to any service method using the <code>@Protectable</code> annotation. Each invocation is intercepted by <code>AuthorizationManagerMethodInterceptor</code> and evaluated by <code>ProtectableMethodAuthorizationManager</code> through Spring Security's <code>MethodSecurityExpressionHandler</code>. When <code>sync = true</code>, <code>SynchronousProtectableDecisionService</code> invokes <code>SecurityPlaneAgent</code> inline and produces a <code>ZeroTrustAction</code> decision before the method returns; when <code>sync = false</code> (default), a <code>ZeroTrustSpringEvent</code> is published and evaluation runs asynchronously.</p>
         </div>
 
         <div class="code-block">
@@ -367,7 +365,7 @@ public class OrderService {
               <tr>
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);"><code>ALLOW</code></td>
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">200</td>
-                <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">1500s</td>
+                <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">15s</td>
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">Request proceeds normally</td>
               </tr>
               <tr>
@@ -392,7 +390,7 @@ public class OrderService {
                 <td style="padding: var(--space-3) var(--space-4);"><code>PENDING_ANALYSIS</code></td>
                 <td style="padding: var(--space-3) var(--space-4);">503</td>
                 <td style="padding: var(--space-3) var(--space-4);">0s</td>
-                <td style="padding: var(--space-3) var(--space-4);">AI analysis in progress; request deferred until evaluation completes</td>
+                <td style="padding: var(--space-3) var(--space-4);">AI analysis in progress; user receives <code>ROLE_PENDING_ANALYSIS</code> and request is deferred until evaluation completes</td>
               </tr>
             </tbody>
           </table>
