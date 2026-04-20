@@ -102,10 +102,18 @@
 
             <div class="api-method">
               <div class="api-method-header">
+                <span class="api-method-name">getDomains()</span>
+                <span class="api-method-return">Set&lt;String&gt;</span>
+              </div>
+              <div class="api-method-desc">Returns the set of domain names that currently hold at least one <code>BaseAdvisor</code>.</div>
+            </div>
+
+            <div class="api-method">
+              <div class="api-method-header">
                 <span class="api-method-name">getStats()</span>
                 <span class="api-method-return">RegistryStats</span>
               </div>
-              <div class="api-method-desc">Returns statistics including total advisors, total domains, and advisors-per-domain counts.</div>
+              <div class="api-method-desc">Returns statistics. <code>RegistryStats</code> is a static nested class exposing the public fields <code>totalAdvisors</code> (int), <code>totalDomains</code> (int), and <code>advisorsPerDomain</code> (<code>Map&lt;String, Integer&gt;</code>).</div>
             </div>
           </section>
 
@@ -145,18 +153,28 @@
 
             <h3>Overridable Hooks</h3>
             <ul>
-              <li><code>beforeStream()</code> — Defaults to calling <code>beforeCall()</code>. Override for stream-specific pre-processing.</li>
-              <li><code>afterStream()</code> — No-op by default. Override for stream-specific post-processing.</li>
-              <li><code>enrichContext(Map&lt;String, Object&gt; context)</code> — Adds <code>advisor.domain</code>, <code>advisor.name</code>, and <code>advisor.timestamp</code> to the context.</li>
-              <li><code>handleBlockingError(AdvisorException e, ChatClientRequest request)</code> — Handles blocking errors by setting error context and rethrowing.</li>
+              <li><code>beforeStream(ChatClientRequest request)</code> — Defaults to calling <code>beforeCall(request)</code>. Override for stream-specific pre-processing.</li>
+              <li><code>afterStream(ChatClientResponse response, ChatClientRequest request)</code> — No-op by default. Invoked on every streamed <code>ChatClientResponse</code>. Override for stream-specific post-processing.</li>
+              <li><code>enrichContext(Map&lt;String, Object&gt; context)</code> — Adds <code>advisor.domain</code>, <code>advisor.name</code>, and <code>advisor.timestamp</code> to the request context.</li>
+              <li><code>handleBlockingError(AdvisorException e, ChatClientRequest request)</code> — Sets <code>advisor.error</code>, <code>advisor.error.message</code>, <code>advisor.error.domain</code>, and <code>advisor.blocked.by</code> on the request context and rethrows the exception.</li>
+            </ul>
+
+            <h3>Lifecycle &amp; State</h3>
+            <ul>
+              <li><code>getName()</code> &mdash; Returns the full advisor name formatted as <code>domain.name</code>.</li>
+              <li><code>getOrder()</code> &mdash; Returns the constructor <code>order</code> value. Lower values execute first.</li>
+              <li><code>isEnabled()</code> &mdash; Returns whether the advisor is currently enabled. Override to consult external configuration.</li>
+              <li><code>setEnabled(boolean enabled)</code> &mdash; Toggles the advisor at runtime. Called by <code>AdvisorRegistry.enableDomain(...)</code>, <code>disableDomain(...)</code>, <code>enableAll()</code>, and <code>disableAll()</code>.</li>
+              <li><code>validate()</code> &mdash; Invoked by the registry during <code>register(...)</code>. Returns <code>false</code> when <code>domain</code> or <code>name</code> is empty, causing registration to be rolled back.</li>
             </ul>
 
             <h3>Error Handling</h3>
-            <p><code>AdvisorException</code> supports two modes:</p>
+            <p><code>AdvisorException</code> is created through two static factory methods and supports two modes:</p>
             <ul>
-              <li><strong>Blocking</strong> — Halts the advisor chain and prevents the LLM call. Used for security enforcement.</li>
-              <li><strong>Non-blocking</strong> — Logs the error and continues the chain. Used for optional enrichment.</li>
+              <li><code>AdvisorException.blocking(domain, advisorName, message)</code> &mdash; Halts the advisor chain and prevents the LLM call. Used for security enforcement.</li>
+              <li><code>AdvisorException.nonBlocking(domain, advisorName, message)</code> &mdash; Logs the error and continues the chain with <code>chain.nextCall(request)</code>. Used for optional enrichment.</li>
             </ul>
+            <p>Any other <code>Exception</code> thrown from <code>beforeCall</code>/<code>afterCall</code> is treated as non-blocking: the failure is recorded as <code>{advisorName}.error</code> on the request context and the chain continues.</p>
           </section>
 
           <!-- SecurityContextAdvisor -->

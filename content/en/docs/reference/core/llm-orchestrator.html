@@ -135,22 +135,41 @@ Flux&lt;String&gt; chunks = orchestrator.stream(context);</code></pre>
               </thead>
               <tbody>
                 <tr><td><code>prompt</code></td><td><code>Prompt</code></td><td>The Spring AI prompt to send to the LLM.</td></tr>
-                <tr><td><code>analysisLevel</code></td><td><code>AnalysisLevel</code></td><td>Analysis depth: QUICK, NORMAL, or DEEP. Determines the default tier.</td></tr>
-                <tr><td><code>tier</code></td><td><code>Integer</code></td><td>Explicit semantic tier. The current runtime accepts 1 or 2 as configured layers and normalizes higher values to layer 2.</td></tr>
-                <tr><td><code>preferredModel</code></td><td><code>String</code></td><td>Explicit model name. Bypasses all tier-based selection.</td></tr>
-                <tr><td><code>userId</code></td><td><code>String</code></td><td>Authenticated user ID for security context.</td></tr>
                 <tr><td><code>requestId</code></td><td><code>String</code></td><td>Unique request ID for tracing.</td></tr>
+                <tr><td><code>userId</code></td><td><code>String</code></td><td>Authenticated user ID for security context.</td></tr>
+                <tr><td><code>sessionId</code></td><td><code>String</code></td><td>Session identifier carried with the request.</td></tr>
+                <tr><td><code>preferredModel</code></td><td><code>String</code></td><td>Explicit model name. Bypasses all tier-based selection.</td></tr>
+                <tr><td><code>securityTaskType</code></td><td><code>SecurityTaskType</code></td><td>Security task classification. Used when <code>analysisLevel</code> is absent to resolve the default tier.</td></tr>
+                <tr><td><code>tier</code></td><td><code>Integer</code></td><td>Explicit semantic tier. The current runtime accepts 1 or 2 as configured layers and normalizes higher values to layer 2.</td></tr>
+                <tr><td><code>analysisLevel</code></td><td><code>AnalysisLevel</code></td><td>Analysis depth: QUICK, NORMAL, or DEEP. Determines the default tier.</td></tr>
+                <tr><td><code>timeoutMs</code></td><td><code>Integer</code></td><td>Explicit timeout override in milliseconds. When null, the tier/analysisLevel default is used.</td></tr>
                 <tr><td><code>temperature</code></td><td><code>Double</code></td><td>Sampling temperature override.</td></tr>
+                <tr><td><code>topP</code></td><td><code>Double</code></td><td>Top-p (nucleus sampling) override.</td></tr>
+                <tr><td><code>seed</code></td><td><code>Integer</code></td><td>Deterministic sampling seed. Useful for reproducible analysis results.</td></tr>
                 <tr><td><code>maxTokens</code></td><td><code>Integer</code></td><td>Maximum output tokens override.</td></tr>
+                <tr><td><code>chatOptions</code></td><td><code>ChatOptions</code></td><td>Spring AI ChatOptions to pass directly to the model. Overrides individual temperature/maxTokens settings.</td></tr>
                 <tr><td><code>streamingMode</code></td><td><code>Boolean</code></td><td>Whether to use streaming execution.</td></tr>
                 <tr><td><code>toolCallbacks</code></td><td><code>List&lt;ToolCallback&gt;</code></td><td>Tool callbacks for tool-calling execution.</td></tr>
                 <tr><td><code>toolProviders</code></td><td><code>List&lt;Object&gt;</code></td><td>Tool provider objects for tool-calling execution.</td></tr>
-                <tr><td><code>seed</code></td><td><code>Integer</code></td><td>Deterministic sampling seed. Useful for reproducible analysis results.</td></tr>
-                <tr><td><code>chatOptions</code></td><td><code>ChatOptions</code></td><td>Spring AI ChatOptions to pass directly to the model. Overrides individual temperature/maxTokens settings.</td></tr>
+                <tr><td><code>toolExecutionEnabled</code></td><td><code>Boolean</code></td><td>Master flag for tool execution. Set automatically by <code>addToolCallback(...)</code>.</td></tr>
                 <tr><td><code>advisors</code></td><td><code>List&lt;Advisor&gt;</code></td><td>Request-scoped advisors applied in addition to the global AdvisorRegistry.</td></tr>
-                <tr><td><code>metadata</code></td><td><code>Map&lt;String, Object&gt;</code></td><td>Arbitrary metadata. Recognized keys: <code>disableRetries</code> (skip retry logic), <code>disableOllamaThinking</code> (suppress Ollama ThinkOption).</td></tr>
+                <tr><td><code>advisorEnabled</code></td><td><code>Boolean</code></td><td>Whether global/request advisors are applied for this call. Defaults to <code>true</code> in the factory methods.</td></tr>
+                <tr><td><code>metadata</code></td><td><code>Map&lt;String, Object&gt;</code></td><td>Arbitrary metadata map. Consumers (such as <code>UnifiedLLMOrchestrator</code>) may read custom keys like <code>requestedModelId</code>, <code>runtimeModelId</code>, or <code>selectedModelId</code>; see the <code>UnifiedLLMOrchestrator</code> source for the keys that it actually reads.</td></tr>
               </tbody>
             </table></div>
+
+            <h4>AnalysisLevel Default Model Names</h4>
+            <p>Each <code>AnalysisLevel</code> value also exposes a default model name via <code>getDefaultModelName()</code>. These defaults are used by the orchestrator when tier resolution falls back without a configured layer model:</p>
+            <table class="enum-table">
+              <thead>
+                <tr><th>Value</th><th>Default Model Name</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>QUICK</code></td><td><code>tinyllama:latest</code></td></tr>
+                <tr><td><code>NORMAL</code></td><td><code>llama3.1:8b</code></td></tr>
+                <tr><td><code>DEEP</code></td><td><code>llama3.1:8b</code></td></tr>
+              </tbody>
+            </table>
 
             <h3>Factory &amp; Helper Methods</h3>
             <div class="table-scroll"><table class="api-table">
@@ -386,6 +405,13 @@ public class RequestLoggingAdvisor extends BaseAdvisor {
                   <span class="api-method-return">Mono&lt;ChatResponse&gt;</span>
                 </div>
                 <div class="api-method-desc">Returns full <code>ChatResponse</code> including tool call details.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">callToolCallbacksResponse(Prompt prompt, ToolCallback[] toolCallbacks)</span>
+                  <span class="api-method-return">Mono&lt;ChatResponse&gt;</span>
+                </div>
+                <div class="api-method-desc">Same as <code>callToolsResponse</code> but accepts an explicit <code>ToolCallback</code> array.</div>
               </div>
               <div class="api-method">
                 <div class="api-method-header">

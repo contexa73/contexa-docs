@@ -1,307 +1,486 @@
 <nav class="breadcrumb">
             <a href="../../../index.html">홈</a>
             <span class="breadcrumb-separator">/</span>
-            <a href="../../../docs/reference/index.html">Reference</a>
+            <a href="../../../docs/reference/index.html">레퍼런스</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">AI Strategy</span>
+            <span class="breadcrumb-current">커스텀 AI 만들기</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
             </div>
-            <h1>AI Strategy</h1>
-            <p class="lead">AI Strategy 시스템은 <code>DiagnosisType</code>을 기반으로 AI 요청을 적절한 처리 Lab으로 라우팅합니다. <code>AIStrategyRegistry</code>는 모든 Strategy 구현체를 자동 탐색하며, <code>AINativeProcessor</code>는 분산 락 및 감사 로깅이 포함된 고수준 <code>AICoreOperations</code> 인터페이스를 제공합니다.</p>
+            <h1>커스텀 AI 만들기</h1>
+            <p class="lead">Contexa AI 진단 프로세스를 사용해 자체 AI 기반 기능을 구축합니다. 이 가이드는 Strategy, Lab, Pipeline 아키텍처로 도메인 타입 정의부터 REST 엔드포인트 노출까지 완전한 커스텀 AI 기능 생성 과정을 안내합니다.</p>
           </div>
 
-          <!-- Overview -->
+          <!-- What You'll Build -->
           <section class="docs-section">
-            <h2 id="overview">개요</h2>
-            <p>Strategy 레이어는 API/Streaming 레이어와 AI Lab 사이에 위치합니다. 각 <code>AIStrategy</code> 구현체는 하나의 <code>DiagnosisType</code>을 처리하고 연관된 Lab에 처리를 위임합니다. 전체 실행 흐름은 다음과 같습니다:</p>
+            <h2 id="what-youll-build">무엇을 만들게 됩니까</h2>
+            <p>이 가이드를 따라 다음 기능을 모두 갖춘 AI 기능을 완성합니다:</p>
+            <ul>
+              <li>REST API를 통해 도메인별 입력을 수신</li>
+              <li>AI 진단 프로세스로 요청 라우팅</li>
+              <li>JSON 파싱이 적용된 구조화된 LLM 응답 생성</li>
+              <li>표준(동기) 모드와 스트리밍(SSE) 모드 모두 지원</li>
+              <li>벡터 스토어에서 RAG 컨텍스트를 선택적으로 조회</li>
+            </ul>
 
+            <h3>전체 실행 흐름</h3>
+            <p>Contexa의 모든 AI 요청은 다음 실행 경로를 따릅니다:</p>
             <div class="arch-flow">
-              <div class="arch-flow-step">AICoreOperations</div>
+              <div class="arch-flow-step">Controller</div>
               <div class="arch-flow-arrow"></div>
               <div class="arch-flow-step">AINativeProcessor</div>
               <div class="arch-flow-arrow"></div>
-              <div class="arch-flow-step">DistributedStrategyExecutor</div>
-              <div class="arch-flow-arrow"></div>
               <div class="arch-flow-step">AIStrategyRegistry</div>
               <div class="arch-flow-arrow"></div>
-              <div class="arch-flow-step highlight">AIStrategy → AILab</div>
+              <div class="arch-flow-step highlight">Strategy</div>
+              <div class="arch-flow-arrow"></div>
+              <div class="arch-flow-step highlight">Lab</div>
+              <div class="arch-flow-arrow"></div>
+              <div class="arch-flow-step">Pipeline (6 단계)</div>
+            </div>
+
+            <p><strong>강조</strong>된 컴포넌트가 사용자가 구현할 부분입니다. 프레임워크는 나머지 모든 것 — 요청 라우팅, 분산 잠금, 감사 로깅, LLM 실행, 응답 파싱 — 을 처리합니다.</p>
+
+            <div class="callout callout-info">
+              <strong>예제 도메인</strong><br>
+              이 가이드는 <em>상품 추천</em> 기능을 예제로 사용합니다. 동일한 패턴이 감정 분석, 코드 리뷰, 문서 요약 또는 모든 커스텀 AI 작업에 적용됩니다.
             </div>
           </section>
 
-          <!-- AIStrategy -->
+          <!-- Architecture -->
           <section class="docs-section">
-            <h2 id="ai-strategy">AIStrategy&lt;T, R&gt;</h2>
-            <p>도메인별 AI 처리 Strategy의 핵심 인터페이스입니다. 각 구현체는 하나의 <code>DiagnosisType</code>을 처리합니다.</p>
-
-            <div class="api-signature">
-              <code>public interface AIStrategy&lt;T extends DomainContext, R extends AIResponse&gt;</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getSupportedType()</span>
-                <span class="api-method-return">DiagnosisType</span>
-              </div>
-              <div class="api-method-desc">이 Strategy가 처리하는 <code>DiagnosisType</code>을 반환합니다. 레지스트리에서 라우팅에 사용됩니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getPriority()</span>
-                <span class="api-method-return">int</span>
-              </div>
-              <div class="api-method-desc">이 Strategy의 우선순위를 반환합니다. 동일한 타입을 처리하는 여러 Strategy가 있을 경우 가장 낮은 우선순위가 선택됩니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">execute(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">R</span>
-              </div>
-              <div class="api-method-desc">동기 실행. 실패 시 <code>DiagnosisException</code>을 던집니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeAsync(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc">리액티브 <code>Mono</code>를 반환하는 비동기 실행.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeStream(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Flux&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">Streaming 실행. <code>supportsStreaming()</code>이 <code>true</code>를 반환할 때만 사용 가능합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">supportsStreaming()</span>
-                <span class="api-method-return">boolean</span>
-              </div>
-              <div class="api-method-desc">이 Strategy가 Streaming을 지원하는지 여부를 반환합니다. 기본값: <code>false</code>.</div>
-            </div>
-          </section>
-
-          <!-- AbstractAIStrategy -->
-          <section class="docs-section">
-            <h2 id="abstract-ai-strategy">AbstractAIStrategy&lt;T, R&gt;</h2>
-            <p>Strategy에서 Lab으로의 위임 패턴을 구현하는 기본 클래스입니다. <code>AILabFactory</code>를 사용하여 런타임에 Lab을 해석합니다.</p>
-
-            <div class="api-signature">
-              <code>public abstract class AbstractAIStrategy&lt;T extends DomainContext, R extends AIResponse&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;implements AIStrategy&lt;T, R&gt;</code>
-            </div>
-
-            <h3>템플릿 메서드 흐름</h3>
-            <ol>
-              <li><code>validateRequest(request)</code> — 수신된 요청을 검증합니다.</li>
-              <li><code>getRequiredLab()</code> — <code>getLabType()</code>을 사용하여 <code>AILabFactory</code>를 통해 Lab을 해석합니다.</li>
-              <li><code>convertLabRequest(request)</code> — <code>AIRequest</code>를 Lab의 요청 형식으로 변환합니다.</li>
-              <li><code>processLabExecution(lab, labRequest, request)</code> — Lab을 실행하고 응답을 반환합니다.</li>
-            </ol>
-
-            <h3>추상 메서드 (구현 필수)</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getLabType()</span>
-                <span class="api-method-return">Class&lt;?&gt;</span>
-              </div>
-              <div class="api-method-desc">이 Strategy가 위임하는 <code>AILab</code> 클래스 타입을 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">validateRequest(AIRequest&lt;T&gt; request)</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">요청을 검증합니다. 유효하지 않은 요청의 경우 <code>DiagnosisException</code>을 던지세요.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">convertLabRequest(AIRequest&lt;T&gt; request)</span>
-                <span class="api-method-return">Object</span>
-              </div>
-              <div class="api-method-desc">범용 <code>AIRequest</code>를 Lab의 특정 요청 타입으로 변환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">processLabExecution(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
-                <span class="api-method-return">R</span>
-              </div>
-              <div class="api-method-desc">변환된 요청으로 Lab을 실행하고 타입이 지정된 응답을 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">processLabExecutionAsync(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc">비동기 Lab 실행. 리액티브 Lab 구현을 위해 오버라이드하세요.</div>
-            </div>
-          </section>
-
-          <!-- AIStrategyRegistry -->
-          <section class="docs-section">
-            <h2 id="ai-strategy-registry">AIStrategyRegistry</h2>
-            <p>모든 <code>AIStrategy</code> 빈을 자동 탐색하고 <code>DiagnosisType</code>별로 요청을 라우팅합니다. 동일한 타입을 처리하는 여러 Strategy가 있을 경우 가장 낮은 우선순위가 선택됩니다.</p>
-
-            <div class="api-signature">
-              <code>public class AIStrategyRegistry</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getStrategy(DiagnosisType diagnosisType)</span>
-                <span class="api-method-return">AIStrategy&lt;T, R&gt;</span>
-              </div>
-              <div class="api-method-desc">주어진 진단 타입에 대한 Strategy를 반환합니다. 등록된 Strategy가 없으면 <code>DiagnosisException</code>을 던집니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeStrategyAsync(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc"><code>request.getDiagnosisType()</code>으로 Strategy를 조회하고 비동기로 실행합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeStrategyStream(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Flux&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">Strategy를 조회하고 Streaming 모드로 실행합니다.</div>
-            </div>
-          </section>
-
-          <!-- AICoreOperations -->
-          <section class="docs-section">
-            <h2 id="ai-core-operations">AICoreOperations&lt;T&gt;</h2>
-            <p>AI 처리를 위한 고수준 인터페이스입니다. <code>StandardStreamingService</code>와 컨트롤러에서 사용됩니다.</p>
-
-            <div class="api-signature">
-              <code>public interface AICoreOperations&lt;T extends DomainContext&gt;</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">process(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc">요청을 처리하고 타입이 지정된 응답을 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">processStream(AIRequest&lt;T&gt; request)</span>
-                <span class="api-method-return">Flux&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">요청을 Streaming 모드로 처리합니다.</div>
-            </div>
-          </section>
-
-          <!-- AINativeProcessor -->
-          <section class="docs-section">
-            <h2 id="ai-native-processor">AINativeProcessor&lt;T&gt;</h2>
-            <p>주요 <code>AICoreOperations</code> 구현체입니다. Strategy 실행 전후에 분산 락 및 감사 로깅을 추가합니다.</p>
-
-            <div class="api-signature">
-              <code>public final class AINativeProcessor&lt;T extends DomainContext&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;implements AICoreOperations&lt;T&gt;</code>
-            </div>
-
-            <h3>주요 동작</h3>
-            <ul>
-              <li><strong>분산 락</strong> — Strategy 실행 전 <code>DistributedLockService</code>를 통해 락을 획득합니다. 분산 배포에서는 Redis 구현이 사용될 수 있고, 단일 JVM 환경에서는 메모리 기반 구현이 사용됩니다. 기본 락 타임아웃은 30분입니다.</li>
-              <li><strong>감사 로깅</strong> — 실행 전 감사 추적 항목을 생성하고 실행 후 결과 또는 오류로 완료합니다.</li>
-              <li><strong>노드 식별</strong> — 각 노드는 락 소유권을 위한 고유 ID를 생성합니다.</li>
-            </ul>
-          </section>
-
-          <!-- DistributedStrategyExecutor -->
-          <section class="docs-section">
-            <h2 id="distributed-strategy-executor">DistributedStrategyExecutor&lt;T&gt;</h2>
-            <p><code>AINativeProcessor</code>와 <code>AIStrategyRegistry</code>를 연결합니다. 오류 래핑 및 결과 검증을 처리합니다.</p>
-
-            <div class="api-signature">
-              <code>public class DistributedStrategyExecutor&lt;T extends DomainContext&gt;</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeDistributedStrategyAsync(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
-                <span class="api-method-return">Mono&lt;R&gt;</span>
-              </div>
-              <div class="api-method-desc">결과 검증과 함께 <code>AIStrategyRegistry.executeStrategyAsync()</code>에 위임합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">executeDistributedStrategyStream(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType, String auditId)</span>
-                <span class="api-method-return">Flux&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">오류 처리와 함께 <code>AIStrategyRegistry.executeStrategyStream()</code>에 위임합니다.</div>
-            </div>
-          </section>
-
-          <!-- LabExecutionStrategy -->
-          <section class="docs-section">
-            <h2 id="lab-execution-strategy">LabExecutionStrategy</h2>
-            <p>다단계 워크플로우, 폴백 동작, 품질 게이트를 포함하여 Lab이 어떻게 실행되어야 하는지 정의하는 설정 객체입니다.</p>
-
-            <div class="api-signature">
-              <code>public class LabExecutionStrategy</code>
-            </div>
+            <h2 id="architecture">아키텍처</h2>
+            <p>AI 진단 프로세스는 3계층 아키텍처를 사용합니다. 각 계층은 명확한 책임을 가집니다:</p>
 
             <div class="table-scroll"><table class="api-table">
               <thead>
-                <tr><th>속성</th><th>타입</th><th>설명</th></tr>
+                <tr><th>계층</th><th>클래스</th><th>책임</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>strategyId</code></td><td><code>String</code></td><td>고유 Strategy 식별자.</td></tr>
-                <tr><td><code>operationType</code></td><td><code>String</code></td><td>실행되는 작업의 유형.</td></tr>
-                <tr><td><code>executionSteps</code></td><td><code>List&lt;LabExecutionStep&gt;</code></td><td>종속성과 타임아웃이 포함된 정렬된 Lab 실행 단계 목록.</td></tr>
-                <tr><td><code>fallbackStrategy</code></td><td><code>FallbackStrategy</code></td><td>폴백 동작을 정의합니다 (IMMEDIATE, GRADUAL, FULL_RECOVERY, EMERGENCY).</td></tr>
-                <tr><td><code>qualityGate</code></td><td><code>QualityGate</code></td><td>정확도, 응답 시간, 신뢰도에 대한 품질 임계값.</td></tr>
+                <tr>
+                  <td><strong>Strategy</strong></td>
+                  <td><code>AbstractAIStrategy</code></td>
+                  <td><code>DiagnosisType</code>으로 요청을 라우팅하고, 입력을 검증하며, 적절한 Lab에 위임합니다.</td>
+                </tr>
+                <tr>
+                  <td><strong>Lab</strong></td>
+                  <td><code>AbstractAILab</code></td>
+                  <td>도메인 데이터를 수집·보강한 후 LLM 처리를 위해 Pipeline에 위임합니다.</td>
+                </tr>
+                <tr>
+                  <td><strong>Pipeline</strong></td>
+                  <td><code>PipelineOrchestrator</code></td>
+                  <td>6개 처리 단계 실행: 컨텍스트 검색, 전처리, 프롬프트 생성, LLM 실행, 응답 파싱, 후처리.</td>
+                </tr>
               </tbody>
             </table></div>
 
-            <h3>QualityGate</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">passesQualityGate(double accuracy, double responseTime, double confidence)</span>
-                <span class="api-method-return">boolean</span>
-              </div>
-              <div class="api-method-desc">세 가지 지표가 모두 각각의 임계값을 충족하면 <code>true</code>를 반환합니다.</div>
-            </div>
-
-            <h3>FallbackStrategy.FallbackType Enum</h3>
-            <table class="enum-table">
+            <h3>사용자 구현 vs 프레임워크 제공</h3>
+            <div class="table-scroll"><table class="api-table">
               <thead>
-                <tr><th>값</th><th>설명</th></tr>
+                <tr><th>컴포넌트</th><th>사용자 구현</th><th>용도</th></tr>
               </thead>
               <tbody>
-                <tr><td><code>IMMEDIATE</code></td><td>즉시 폴백 Lab으로 전환.</td></tr>
-                <tr><td><code>GRADUAL</code></td><td>더 단순한 처리로 점진적 성능 저하.</td></tr>
-                <tr><td><code>FULL_RECOVERY</code></td><td>폴백 전 전체 복구 시도.</td></tr>
-                <tr><td><code>EMERGENCY</code></td><td>최소 처리로 긴급 폴백.</td></tr>
+                <tr><td><code>DomainContext</code></td><td>필수</td><td>도메인 입력 데이터 모델</td></tr>
+                <tr><td><code>AIResponse</code></td><td>필수</td><td>도메인 출력 데이터 모델</td></tr>
+                <tr><td><code>PromptTemplate</code></td><td>필수</td><td>LLM용 시스템·사용자 프롬프트와 JSON 스키마</td></tr>
+                <tr><td><code>Lab</code></td><td>필수</td><td>데이터 보강 및 파이프라인 오케스트레이션</td></tr>
+                <tr><td><code>Strategy</code></td><td>필수</td><td>요청 검증 및 Lab 위임</td></tr>
+                <tr><td><code>ContextRetriever</code></td><td>선택</td><td>벡터 스토어로부터 RAG 컨텍스트</td></tr>
+                <tr><td><code>DomainResponseProcessor</code></td><td>선택</td><td>커스텀 응답 후처리</td></tr>
+                <tr><td><code>Controller</code></td><td>필수</td><td>표준·스트리밍용 REST 엔드포인트</td></tr>
               </tbody>
-            </table>
+            </table></div>
           </section>
 
-          <!-- Code Examples -->
+          <!-- Step 1: Define Domain Types -->
           <section class="docs-section">
-            <h2 id="examples">코드 예제</h2>
+            <h2 id="step-1">Step 1: 도메인 타입 정의</h2>
+            <p>먼저 입력 컨텍스트와 출력 응답을 정의합니다. 이는 AI 기능이 다루는 데이터 모델입니다.</p>
 
-            <h3>커스텀 Strategy 구현</h3>
+            <h3>DomainContext &mdash; 입력</h3>
+            <p>도메인별 입력 데이터를 담기 위해 <code>DomainContext</code>를 확장합니다. 필수 메서드는 도메인을 식별하는 문자열을 반환하는 <code>getDomainType()</code> 하나뿐입니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Getter
+public class ProductContext extends DomainContext {
+
+    private final String productId;
+    private final String category;
+    private final List&lt;String&gt; userPreferences;
+
+    public ProductContext(String productId, String category,
+                          List&lt;String&gt; userPreferences) {
+        this.productId = productId;
+        this.category = category;
+        this.userPreferences = userPreferences;
+    }
+
+    @Override
+    public String getDomainType() {
+        return "PRODUCT_RECOMMENDATION";
+    }
+}</code></pre>
+            </div>
+
+            <p><code>DomainContext</code>는 다음 내장 필드를 제공합니다: <code>contextId</code>(자동 생성 UUID), <code>createdAt</code>(타임스탬프), <code>userId</code>, <code>sessionId</code>, <code>organizationId</code>, <code>metadata</code> 맵. 추가 키-값 쌍을 첨부하려면 <code>addMetadata(key, value)</code>를 사용하고, 타입 지정 값을 조회하려면 <code>getMetadata(key, Class&lt;T&gt;)</code>를 사용합니다.</p>
+
+            <h3>AIResponse &mdash; 출력</h3>
+            <p>LLM이 생성할 구조화된 출력을 정의하기 위해 <code>AIResponse</code>를 확장합니다. 이 클래스는 LLM 응답을 역직렬화하는 JSON 파서가 사용합니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Getter @Setter
+@NoArgsConstructor
+public class ProductRecommendationResponse extends AIResponse {
+
+    private List&lt;Recommendation&gt; recommendations;
+    private double confidence;
+    private String reasoning;
+
+    @Getter @Setter
+    @NoArgsConstructor
+    public static class Recommendation {
+        private String productName;
+        private String reason;
+        private double score;
+    }
+}</code></pre>
+            </div>
+
+            <div class="callout callout-warning">
+              <strong>중요</strong><br>
+              <code>AIResponse</code> 하위 클래스는 무인자 생성자와 setter 메서드를 가져야 합니다 (또는 <code>@NoArgsConstructor</code>와 <code>@Setter</code> 사용). JSON 파서가 이를 사용해 LLM 출력을 역직렬화합니다.
+            </div>
+
+            <h3>Lab Request DTO</h3>
+            <p>Lab 입력용 단순 DTO를 정의합니다. Strategy가 <code>AIRequest</code>를 변환해 전달하는 객체입니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Getter @AllArgsConstructor
+public class ProductRecommendationRequest {
+    private final String productId;
+    private final String category;
+    private final List&lt;String&gt; userPreferences;
+}</code></pre>
+            </div>
+
+            <h3>타입 식별자</h3>
+            <p><code>TemplateType</code>은 사용할 프롬프트 템플릿을 식별합니다. <code>DiagnosisType</code>은 요청을 처리할 strategy를 식별합니다. 둘 다 단순 래퍼 클래스입니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// AIRequest에서 사용해 프롬프트 템플릿을 선택
+new TemplateType("PRODUCT_RECOMMENDATION")
+
+// AIRequest에서 사용해 올바른 strategy로 라우팅
+new DiagnosisType("PRODUCT_RECOMMENDATION")</code></pre>
+            </div>
+          </section>
+
+          <!-- Step 2: Create the Prompt Template -->
+          <section class="docs-section">
+            <h2 id="step-2">Step 2: 프롬프트 템플릿 생성</h2>
+            <p>프롬프트 템플릿은 LLM이 보는 내용을 정의합니다: 시스템 프롬프트(역할, 규칙, 출력 형식)와 사용자 프롬프트(데이터를 포함한 실제 질의). 표준 모드와 스트리밍 모드용으로 두 개의 템플릿이 필요합니다.</p>
+
+            <h3>표준 프롬프트 템플릿</h3>
+            <p><code>AbstractStandardPromptTemplate&lt;T&gt;</code>를 확장합니다 (<code>T</code>는 응답 타입). 프레임워크는 <code>BeanOutputConverter</code>를 사용해 응답 클래스로부터 JSON 스키마 지시문을 자동 생성합니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Component
+public class ProductPromptTemplate
+        extends AbstractStandardPromptTemplate&lt;ProductRecommendationResponse&gt; {
+
+    public ProductPromptTemplate() {
+        super(ProductRecommendationResponse.class);
+    }
+
+    @Override
+    public TemplateType getSupportedType() {
+        return new TemplateType("PRODUCT_RECOMMENDATION");
+    }
+
+    @Override
+    protected String generateDomainSystemPrompt(
+            AIRequest&lt;? extends DomainContext&gt; request,
+            String systemMetadata) {
+        return """
+            You are a product recommendation AI assistant.
+            Analyze the user's preferences and product category
+            to generate personalized recommendations.
+
+            Rules:
+            - Provide 3-5 recommendations ranked by relevance
+            - Each recommendation must include a reason and score (0.0-1.0)
+            - Set overall confidence based on preference match quality
+            - Be specific about why each product fits the user's needs
+            """;
+    }
+
+    @Override
+    public String generateUserPrompt(
+            AIRequest&lt;? extends DomainContext&gt; request,
+            String contextInfo) {
+        ProductContext ctx = (ProductContext) request.getContext();
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("[Query]\n");
+        prompt.append("Product ID: ").append(ctx.getProductId()).append("\n");
+        prompt.append("Category: ").append(ctx.getCategory()).append("\n");
+        prompt.append("User Preferences: ")
+              .append(String.join(", ", ctx.getUserPreferences()))
+              .append("\n");
+
+        if (contextInfo != null &amp;&amp; !contextInfo.isEmpty()) {
+            prompt.append("\n[Context]\n").append(contextInfo);
+        }
+        return prompt.toString();
+    }
+}</code></pre>
+            </div>
+
+            <h3>스트리밍 프롬프트 템플릿</h3>
+            <p>스트리밍 모드에서는 <code>AbstractStreamingPromptTemplate</code>를 확장합니다. 핵심 차이는 <code>getJsonSchemaExample()</code>입니다 — LLM이 구조화된 출력의 템플릿으로 사용할 구체적인 JSON 예제를 제공하며, 스트리밍 프로토콜 마커로 감쌉니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Component
+public class ProductStreamingPromptTemplate
+        extends AbstractStreamingPromptTemplate {
+
+    @Override
+    public TemplateType getSupportedType() {
+        return new TemplateType("PRODUCT_RECOMMENDATION_STREAMING");
+    }
+
+    @Override
+    protected String generateDomainSystemPrompt(
+            AIRequest&lt;? extends DomainContext&gt; request,
+            String systemMetadata) {
+        return """
+            You are a product recommendation AI assistant.
+            First, provide a natural language analysis of the user's
+            preferences, then generate structured recommendations.
+            """;
+    }
+
+    @Override
+    protected String getJsonSchemaExample() {
+        return """
+            {
+              "recommendations": [
+                {
+                  "productName": "Example Product",
+                  "reason": "Matches preference for...",
+                  "score": 0.95
+                }
+              ],
+              "confidence": 0.88,
+              "reasoning": "Based on the user's preferences..."
+            }
+            """;
+    }
+
+    @Override
+    public String generateUserPrompt(
+            AIRequest&lt;? extends DomainContext&gt; request,
+            String contextInfo) {
+        ProductContext ctx = (ProductContext) request.getContext();
+        return String.format(
+            "Recommend products for category '%s' based on " +
+            "preferences: %s",
+            ctx.getCategory(),
+            String.join(", ", ctx.getUserPreferences()));
+    }
+}</code></pre>
+            </div>
+
+            <div class="callout callout-info">
+              <strong>스트리밍 프로토콜 동작 방식</strong><br>
+              스트리밍 모드에서 LLM은 먼저 <code>###STREAMING###</code> 접두사가 붙은 자연어 텍스트를 출력한 뒤, <code>===JSON_START===</code>와 <code>===JSON_END===</code> 마커 사이에 구조화된 JSON을 출력합니다. 프레임워크가 모든 마커 감지와 JSON 추출을 자동 처리합니다. 자세한 내용은 <a href="../../../docs/reference/core/streaming.html">스트리밍</a>을 참조하세요.
+            </div>
+          </section>
+
+          <!-- Step 3: Implement the Lab -->
+          <section class="docs-section">
+            <h2 id="step-3">Step 3: Lab 구현</h2>
+            <p>Lab은 요청이 Pipeline에 도달하기 전 도메인 데이터 수집과 보강이 일어나는 곳입니다. <code>AbstractAILab&lt;Req, Res&gt;</code>를 확장하고 처리 메서드를 오버라이드합니다.</p>
+
+            <h3>Lab 실행 패턴</h3>
+            <p>Lab은 세 가지 실행 모드를 가진 템플릿 메서드 패턴을 따릅니다:</p>
+            <ul>
+              <li><code>doProcess(request)</code> &mdash; 동기 실행, 응답을 직접 반환</li>
+              <li><code>doProcessAsync(request)</code> &mdash; 비동기 실행, <code>Mono&lt;Res&gt;</code> 반환</li>
+              <li><code>doProcessStream(request)</code> &mdash; 스트리밍 실행, <code>Flux&lt;String&gt;</code> 반환</li>
+            </ul>
+
+            <p>일반적 패턴: <code>AIRequest</code> 빌드, Pipeline 구성, 위임.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Component
+public class ProductRecommendationLab
+        extends AbstractAILab&lt;ProductRecommendationRequest,
+                               ProductRecommendationResponse&gt; {
+
+    private final PipelineOrchestrator orchestrator;
+
+    public ProductRecommendationLab(PipelineOrchestrator orchestrator) {
+        super("ProductRecommendation");
+        this.orchestrator = orchestrator;
+    }
+
+    @Override
+    protected ProductRecommendationResponse doProcess(
+            ProductRecommendationRequest request) throws Exception {
+        return doProcessAsync(request).block();
+    }
+
+    @Override
+    protected Mono&lt;ProductRecommendationResponse&gt; doProcessAsync(
+            ProductRecommendationRequest request) {
+        AIRequest&lt;ProductContext&gt; aiRequest =
+            buildAIRequest(request, "PRODUCT_RECOMMENDATION");
+
+        PipelineConfiguration config = PipelineConfiguration.builder()
+            .addStep(PipelineConfiguration.PipelineStep.CONTEXT_RETRIEVAL)
+            .addStep(PipelineConfiguration.PipelineStep.PREPROCESSING)
+            .addStep(PipelineConfiguration.PipelineStep.PROMPT_GENERATION)
+            .addStep(PipelineConfiguration.PipelineStep.LLM_EXECUTION)
+            .addStep(PipelineConfiguration.PipelineStep.RESPONSE_PARSING)
+            .addStep(PipelineConfiguration.PipelineStep.POSTPROCESSING)
+            .timeoutSeconds(120)
+            .build();
+
+        return orchestrator.execute(
+            aiRequest, config, ProductRecommendationResponse.class);
+    }
+
+    @Override
+    protected Flux&lt;String&gt; doProcessStream(
+            ProductRecommendationRequest request) {
+        AIRequest&lt;ProductContext&gt; aiRequest =
+            buildAIRequest(request,
+                           "PRODUCT_RECOMMENDATION_STREAMING");
+
+        PipelineConfiguration config = PipelineConfiguration.builder()
+            .addStep(PipelineConfiguration.PipelineStep.CONTEXT_RETRIEVAL)
+            .addStep(PipelineConfiguration.PipelineStep.PREPROCESSING)
+            .addStep(PipelineConfiguration.PipelineStep.PROMPT_GENERATION)
+            .addStep(PipelineConfiguration.PipelineStep.LLM_EXECUTION)
+            .enableStreaming(true)
+            .timeoutSeconds(120)
+            .build();
+
+        return orchestrator.executeStream(aiRequest, config);
+    }
+
+    private AIRequest&lt;ProductContext&gt; buildAIRequest(
+            ProductRecommendationRequest request,
+            String templateName) {
+        ProductContext context = new ProductContext(
+            request.getProductId(),
+            request.getCategory(),
+            request.getUserPreferences());
+
+        return new AIRequest&lt;&gt;(
+            context,
+            new TemplateType(templateName),
+            new DiagnosisType("PRODUCT_RECOMMENDATION"));
+    }
+}</code></pre>
+            </div>
+
+            <h3>데이터 보강 패턴</h3>
+            <p>더 복잡한 기능을 위해, Pipeline에 보내기 전 추가 데이터로 요청을 보강할 수 있습니다. 이 패턴은 도메인 데이터(데이터베이스·외부 API 등)를 수집해 <code>AIRequest</code>의 파라미터로 추가합니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">// Inside your Lab, before calling orchestrator:
+private AIRequest&lt;ProductContext&gt; enrichRequest(
+        AIRequest&lt;ProductContext&gt; request) {
+    // Collect domain data from your services
+    String productData = productService
+        .getProductDetails(request.getContext().getProductId());
+    String userHistory = userService
+        .getPurchaseHistory(request.getContext().getUserId());
+
+    // Add as parameters - these become available in the prompt
+    request.withParameter("productData", productData);
+    request.withParameter("userHistory", userHistory);
+    request.withParameter("systemMetadata",
+        "Product catalog size: " + productService.getCatalogSize());
+
+    return request;
+}</code></pre>
+            </div>
+
+            <div class="callout callout-info">
+              <strong>표준 vs 스트리밍 Pipeline 구성</strong><br>
+              표준 모드에서는 6단계 모두 포함합니다 (CONTEXT_RETRIEVAL부터 POSTPROCESSING까지). 스트리밍 모드에서는 처음 4단계(LLM_EXECUTION까지)만 사용하고 <code>enableStreaming(true)</code>를 설정합니다. 스트리밍 실행기가 응답을 <code>Flux&lt;String&gt;</code>으로 직접 전달합니다.
+            </div>
+          </section>
+
+          <!-- Step 4: Implement the Strategy -->
+          <section class="docs-section">
+            <h2 id="step-4">Step 4: Strategy 구현</h2>
+            <p>Strategy는 <code>DiagnosisType</code>을 기준으로 AI 요청을 올바른 Lab으로 라우팅합니다. 입력을 검증하고, Lab을 해결하고, 요청 형식을 변환하며, 실행을 위임합니다.</p>
+
+            <p><code>AbstractAIStrategy&lt;T, R&gt;</code>를 확장하고 다섯 개의 추상 메서드 <code>validateRequest</code>, <code>getLabType</code>, <code>convertLabRequest</code>, <code>processLabExecution</code>, <code>processLabExecutionAsync</code>를 구현합니다. 스트리밍이 필요하면 <code>processLabExecutionStream</code>과 <code>supportsStreaming</code>도 오버라이드합니다.</p>
+
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">Java</span>
@@ -340,15 +519,15 @@ public class ProductRecommendationStrategy
             throws DiagnosisException {
         if (request.getContext() == null) {
             throw new DiagnosisException(
-                    getSupportedType().name(),
-                    "INVALID_REQUEST",
-                    "ProductContext is required");
+                getSupportedType().name(),
+                "INVALID_REQUEST",
+                "ProductContext is required");
         }
         if (request.getContext().getCategory() == null) {
             throw new DiagnosisException(
-                    getSupportedType().name(),
-                    "INVALID_REQUEST",
-                    "Product category is required");
+                getSupportedType().name(),
+                "INVALID_REQUEST",
+                "Product category is required");
         }
     }
 
@@ -358,9 +537,9 @@ public class ProductRecommendationStrategy
             throws DiagnosisException {
         ProductContext ctx = request.getContext();
         return new ProductRecommendationRequest(
-                ctx.getProductId(),
-                ctx.getCategory(),
-                ctx.getUserPreferences());
+            ctx.getProductId(),
+            ctx.getCategory(),
+            ctx.getUserPreferences());
     }
 
     @Override
@@ -368,14 +547,118 @@ public class ProductRecommendationStrategy
             Object lab, Object labRequest,
             AIRequest&lt;ProductContext&gt; request) throws Exception {
         ProductRecommendationLab productLab =
-                (ProductRecommendationLab) lab;
+            (ProductRecommendationLab) lab;
         return productLab.process(
-                (ProductRecommendationRequest) labRequest);
+            (ProductRecommendationRequest) labRequest);
+    }
+
+    @Override
+    protected Mono&lt;ProductRecommendationResponse&gt;
+            processLabExecutionAsync(
+                Object lab, Object labRequest,
+                AIRequest&lt;ProductContext&gt; request) {
+        ProductRecommendationLab productLab =
+            (ProductRecommendationLab) lab;
+        return productLab.processAsync(
+            (ProductRecommendationRequest) labRequest);
+    }
+
+    @Override
+    protected Flux&lt;String&gt; processLabExecutionStream(
+            Object lab, Object labRequest,
+            AIRequest&lt;ProductContext&gt; request) {
+        ProductRecommendationLab productLab =
+            (ProductRecommendationLab) lab;
+        return productLab.processStream(
+            (ProductRecommendationRequest) labRequest);
+    }
+
+    @Override
+    public boolean supportsStreaming() {
+        return true;
     }
 }</code></pre>
             </div>
 
-            <h3>AICoreOperations 사용</h3>
+            <h3>템플릿 메서드 실행 순서</h3>
+            <p><code>AbstractAIStrategy</code>는 템플릿 메서드 패턴을 사용합니다. 각 공개 진입점은 검증·Lab 해석·요청 변환을 공통으로 수행한 뒤 매칭되는 <code>processLabExecution*</code> 메서드로 분기합니다:</p>
+            <ol>
+              <li><code>validateRequest(request)</code> &mdash; 들어오는 <code>AIRequest</code>를 검증합니다.</li>
+              <li><code>getRequiredLab()</code> &mdash; <code>getLabType()</code>으로 <code>AILabFactory</code>를 통해 Lab을 해석합니다.</li>
+              <li><code>convertLabRequest(request)</code> &mdash; <code>AIRequest</code>를 Lab의 요청 형식으로 변환합니다.</li>
+              <li>공개 진입점별로 분기합니다: <code>execute(...)</code>는 <code>processLabExecution(...)</code>, <code>executeAsync(...)</code>는 <code>processLabExecutionAsync(...)</code>, <code>executeStream(...)</code>은 <code>supportsStreaming()</code> 확인 후 <code>processLabExecutionStream(...)</code>을 호출합니다.</li>
+            </ol>
+          </section>
+
+          <!-- Step 5: Add RAG Context (Optional) -->
+          <section class="docs-section">
+            <h2 id="step-5">Step 5: RAG 컨텍스트 추가 (선택)</h2>
+            <p>기능이 LLM 프롬프트에 벡터 스토어의 관련 컨텍스트를 보강해야 한다면 <code>ContextRetriever</code> 클래스를 확장합니다. Pipeline의 CONTEXT_RETRIEVAL 단계가 등록된 retriever를 자동으로 호출합니다.</p>
+
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@Component
+public class ProductContextRetriever extends ContextRetriever {
+
+    public ProductContextRetriever(
+            VectorStore vectorStore,
+            ContexaRagProperties ragProperties) {
+        super(vectorStore, ragProperties);
+    }
+
+    @Override
+    public ContextRetrievalResult retrieveContext(
+            AIRequest&lt;? extends DomainContext&gt; request) {
+        if (!(request.getContext() instanceof ProductContext ctx)) {
+            return new ContextRetrievalResult("", List.of(), Map.of());
+        }
+
+        String query = ctx.getCategory() + " " +
+            String.join(" ", ctx.getUserPreferences());
+
+        List&lt;Document&gt; docs = vectorOperations
+            .searchSimilar(query);
+
+        String contextInfo = docs.stream()
+            .map(Document::getText)
+            .collect(Collectors.joining("\n\n"));
+
+        return new ContextRetrievalResult(
+            contextInfo,
+            docs,
+            Map.of("retrieverType", "product",
+                    "timestamp", Instant.now().toString()));
+    }
+}</code></pre>
+            </div>
+
+            <p>조회된 <code>contextInfo</code>는 PROMPT_GENERATION 단계에서 프롬프트 템플릿의 <code>generateUserPrompt()</code> 메서드에 <code>contextInfo</code> 파라미터로 자동 전달됩니다.</p><div class="callout callout-info"><strong>질의 소스</strong><br>기본 <code>ContextRetriever</code>는 <code>request.getParameter("naturalLanguageQuery", String.class)</code>를 읽습니다. <code>setNaturalLanguageQuery(...)</code>만 호출했다면 <code>extractQueryFromRequest()</code>를 오버라이드하거나 동일한 값을 요청 파라미터로 추가해야 합니다.</div>
+
+            <div class="callout callout-info">
+              <strong>벡터 스토어 설정</strong><br>
+              RAG를 사용하려면 벡터 스토어가 구성되어 있어야 합니다. Contexa는 pgvector를 기본 지원합니다. <code>contexa.rag.defaults.top-k</code>·<code>contexa.rag.defaults.similarity-threshold</code> 등 RAG 속성은 <a href="../../../docs/install/configuration/ai.html">AI 설정</a>을 참조하세요.
+            </div>
+          </section>
+
+          <!-- Step 6: Wire It Together -->
+          <section class="docs-section">
+            <h2 id="step-6">Step 6: 모든 것 연결</h2>
+            <p><code>AIRequest</code> 객체를 빌드하고 streaming 서비스에 위임하는 REST 컨트롤러를 만듭니다. 이것이 AI 기능의 진입점입니다.</p>
+
+            <h3>두 가지 실행 경로</h3>
+            <p>다음 두 경로 중 하나로 AI 기능을 호출할 수 있습니다:</p>
+            <ul>
+              <li><strong>Strategy/Lab 경로</strong> &mdash; <code>AINativeProcessor</code>(또는 <code>StandardStreamingService</code>)를 사용해 <code>AIStrategyRegistry</code>를 거쳐 Strategy → Lab → Pipeline으로 라우팅. 분산 잠금과 감사 로깅 제공.</li>
+              <li><strong>Direct Lab 경로</strong> &mdash; Lab을 직접 주입해 <code>processAsync()</code> 또는 <code>processStream()</code> 호출. 더 단순하지만 strategy 라우팅과 감사를 우회.</li>
+            </ul>
+
+            <h3>Strategy/Lab 경로 컨트롤러 (권장)</h3>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">Java</span>
@@ -385,27 +668,420 @@ public class ProductRecommendationStrategy
                 </button>
               </div>
               <pre><code class="language-java">@RestController
-public class ProductController {
+@RequestMapping("/api/recommend")
+public class ProductRecommendationController {
 
-    private final AICoreOperations&lt;ProductContext&gt; aiProcessor;
+    private final StandardStreamingService streamingService;
+    private final AINativeProcessor&lt;ProductContext&gt; aiProcessor;
 
-    @PostMapping("/api/products/recommend")
-    public Mono&lt;ProductRecommendationResponse&gt; recommend(
-            @RequestBody ProductRequest body) {
+    public ProductRecommendationController(
+            StandardStreamingService streamingService,
+            AINativeProcessor&lt;ProductContext&gt; aiProcessor) {
+        this.streamingService = streamingService;
+        this.aiProcessor = aiProcessor;
+    }
 
-        ProductContext context = body.toProductContext();
-        AIRequest&lt;ProductContext&gt; request = new AIRequest&lt;&gt;(
-                context,
-                new TemplateType("PRODUCT_RECOMMENDATION"),
-                new DiagnosisType("PRODUCT_RECOMMENDATION"));
-        request.setNaturalLanguageQuery(
-                "Recommend products for this request");
+    @PostMapping
+    public Mono&lt;ResponseEntity&lt;ProductRecommendationResponse&gt;&gt;
+            recommend(@RequestBody RecommendRequest body) {
+        AIRequest&lt;ProductContext&gt; request = buildRequest(body,
+            "PRODUCT_RECOMMENDATION");
+        return streamingService.process(
+                request, aiProcessor,
+                ProductRecommendationResponse.class)
+            .map(ResponseEntity::ok);
+    }
 
-        return aiProcessor.process(
-                request, ProductRecommendationResponse.class);
+    @PostMapping(value = "/stream",
+        produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux&lt;ServerSentEvent&lt;String&gt;&gt; recommendStream(
+            @RequestBody RecommendRequest body) {
+        AIRequest&lt;ProductContext&gt; request = buildRequest(body,
+            "PRODUCT_RECOMMENDATION_STREAMING");
+        return streamingService.stream(request, aiProcessor);
+    }
+
+    private AIRequest&lt;ProductContext&gt; buildRequest(
+            RecommendRequest body, String templateName) {
+        ProductContext context = new ProductContext(
+            body.getProductId(),
+            body.getCategory(),
+            body.getPreferences());
+        return new AIRequest&lt;&gt;(
+            context,
+            new TemplateType(templateName),
+            new DiagnosisType("PRODUCT_RECOMMENDATION"));
     }
 }</code></pre>
             </div>
+
+            <h3>애플리케이션 설정</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">Java</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-java">@SpringBootApplication
+@EnableAISecurity  // from io.contexa.contexacommon.annotation
+public class MyAiApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(MyAiApplication.class, args);
+    }
+}</code></pre>
+            </div>
+
+            <h3>최소 구성</h3>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">spring:
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        model: qwen2.5:7b
+
+spring:
+  ai:
+    security:
+      layer1:
+        model: qwen2.5:14b
+      layer2:
+        model: exaone3.5:latest
+      tiered:
+        layer1:
+          timeout-ms: 30000
+        layer2:
+          timeout-ms: 60000
+contexa:
+  streaming:
+    timeout: PT5M</code></pre>
+            </div>
+
+            <p>RAG, Advisor, 모델 계층 설정을 포함한 전체 속성 레퍼런스는 <a href="../../../docs/install/configuration/ai.html">AI 설정</a>을 참조하세요.</p>
+          </section>
+
+          <!-- Configuration -->
+          <section class="docs-section">
+            <h2 id="configuration">설정</h2>
+            <p>커스텀 AI 기능에 영향을 주는 주요 속성:</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead>
+                <tr><th>속성</th><th>설명</th><th>기본값</th></tr>
+              </thead>
+                <tr><td><code>spring.ai.security.layer1.model</code></td><td>Layer 1 분석에 사용되는 기본 모델</td><td>qwen2.5:14b</td></tr>
+                <tr><td><code>spring.ai.security.layer2.model</code></td><td>Layer 2 분석에 사용되는 기본 모델</td><td>exaone3.5:latest</td></tr>
+                <tr><td><code>spring.ai.security.tiered.layer1.timeout-ms</code></td><td>Layer 1 모델 실행에 적용되는 타임아웃</td><td>30000</td></tr>
+                <tr><td><code>spring.ai.security.tiered.layer2.timeout-ms</code></td><td>Layer 2 모델 실행에 적용되는 타임아웃</td><td>60000</td></tr>
+                <tr><td><code>contexa.streaming.timeout</code></td><td>선택된 strategy가 청크 출력을 방출할 때 사용되는 스트리밍 타임아웃</td><td>PT5M</td></tr>
+              </tbody>
+            </table></div>
+
+            <div class="callout callout-info">
+              <strong>전체 설정 레퍼런스</strong><br>
+              AI 속성 전체 목록은 <a href="../../../docs/install/configuration/ai.html">AI 설정</a>을 참조하세요.
+            </div>
+          </section>
+
+          <!-- API Reference (collapsible) -->
+          <section class="docs-section">
+            <h2 id="api-reference">API 레퍼런스</h2>
+
+            <details>
+              <summary><strong>AIStrategy&lt;T, R&gt; 인터페이스</strong></summary>
+              <div class="api-signature">
+                <code>public interface AIStrategy&lt;T extends DomainContext, R extends AIResponse&gt;</code>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getSupportedType()</span>
+                  <span class="api-method-return">DiagnosisType</span>
+                </div>
+                <div class="api-method-desc">이 strategy가 처리하는 <code>DiagnosisType</code>을 반환합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getPriority()</span>
+                  <span class="api-method-return">int</span>
+                </div>
+                <div class="api-method-desc">동일 타입 strategy 간 우선순위. 낮을수록 우선.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">execute(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">R</span>
+                </div>
+                <div class="api-method-desc">동기 실행.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeAsync(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Mono&lt;R&gt;</span>
+                </div>
+                <div class="api-method-desc">비동기 실행.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeStream(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">스트리밍 실행.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">supportsStreaming()</span>
+                  <span class="api-method-return">boolean</span>
+                </div>
+                <div class="api-method-desc">이 strategy가 스트리밍을 지원하는지 여부. 기본값: <code>false</code>.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>AbstractAIStrategy&lt;T, R&gt; 추상 메서드</strong></summary>
+              <div class="api-signature">
+                <code>public abstract class AbstractAIStrategy&lt;T extends DomainContext, R extends AIResponse&gt; implements AIStrategy&lt;T, R&gt;</code>
+              </div>
+              <p>생성자: <code>protected AbstractAIStrategy(AILabFactory labFactory)</code></p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getLabType()</span>
+                  <span class="api-method-return">Class&lt;?&gt;</span>
+                </div>
+                <div class="api-method-desc">이 strategy가 위임할 Lab 클래스를 반환합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">validateRequest(AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">void</span>
+                </div>
+                <div class="api-method-desc">요청을 검증합니다. 잘못된 입력은 <code>DiagnosisException</code>을 발생시킵니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">convertLabRequest(AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">Object</span>
+                </div>
+                <div class="api-method-desc"><code>AIRequest</code>를 Lab의 요청 타입으로 변환합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">processLabExecution(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">R</span>
+                </div>
+                <div class="api-method-desc">동기 lab 실행.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">processLabExecutionAsync(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">Mono&lt;R&gt;</span>
+                </div>
+                <div class="api-method-desc">비동기 lab 실행. 추상 메서드로 선언되어 있어 모든 서브클래스가 반드시 구현해야 합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">processLabExecutionStream(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">스트리밍 lab 실행. 추상이 아니며 기본 구현은 <code>Flux.error(new UnsupportedOperationException(...))</code>을 반환합니다. 스트리밍을 활성화하려면 <code>supportsStreaming()</code>과 함께 오버라이드합니다.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>AbstractAILab&lt;Req, Res&gt;</strong></summary>
+              <div class="api-signature">
+                <code>public abstract class AbstractAILab&lt;Req, Res&gt; implements AILab&lt;Req, Res&gt;</code>
+              </div>
+              <p>생성자: <code>protected AbstractAILab(String labName)</code></p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">doProcess(Req request)</span>
+                  <span class="api-method-return">Res</span>
+                </div>
+                <div class="api-method-desc">동기 처리 로직 오버라이드.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">doProcessAsync(Req request)</span>
+                  <span class="api-method-return">Mono&lt;Res&gt;</span>
+                </div>
+                <div class="api-method-desc">비동기 처리 오버라이드. 기본 구현은 <code>doProcess()</code>를 Mono로 감쌉니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">doProcessStream(Req request)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">스트리밍 처리 오버라이드.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">validateRequest(Req request)</span>
+                  <span class="api-method-return">void</span>
+                </div>
+                <div class="api-method-desc">처리 전에 호출됩니다. lab 수준 검증 추가용 오버라이드.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">preProcess(Req request)</span>
+                  <span class="api-method-return">void</span>
+                </div>
+                <div class="api-method-desc"><code>doProcess()</code> 전에 호출됩니다. 전처리 훅용 오버라이드.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">postProcess(Req request, Res result)</span>
+                  <span class="api-method-return">void</span>
+                </div>
+                <div class="api-method-desc"><code>doProcess()</code> 후에 호출됩니다. 후처리 훅용 오버라이드.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>AIRequest&lt;T&gt;</strong></summary>
+              <div class="api-signature">
+                <code>public class AIRequest&lt;T extends DomainContext&gt;</code>
+              </div>
+              <p>생성자: <code>public AIRequest(T context, TemplateType templateType, DiagnosisType diagnosisType)</code></p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">withParameter(String key, Object value)</span>
+                  <span class="api-method-return">AIRequest&lt;T&gt;</span>
+                </div>
+                <div class="api-method-desc">요청에 파라미터를 추가합니다. 체이닝을 위해 <code>this</code>를 반환합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getParameter(String key, Class&lt;P&gt; type)</span>
+                  <span class="api-method-return">P</span>
+                </div>
+                <div class="api-method-desc">키로 타입이 지정된 파라미터를 조회합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getContext()</span>
+                  <span class="api-method-return">T</span>
+                </div>
+                <div class="api-method-desc">도메인 컨텍스트를 반환합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getPromptTemplate()</span>
+                  <span class="api-method-return">TemplateType</span>
+                </div>
+                <div class="api-method-desc">프롬프트 선택용 템플릿 타입을 반환합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">setNaturalLanguageQuery(String query)</span>
+                  <span class="api-method-return">void</span>
+                </div>
+                <div class="api-method-desc">자체 템플릿 또는 strategy에서 사용할 요청 필드를 설정합니다. 기본 <code>ContextRetriever</code>는 <code>getParameter(...)</code>를 통해 <code>"naturalLanguageQuery"</code> 요청 파라미터를 찾고, 파라미터가 없으면 <code>context.toString()</code>으로 폴백합니다.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>AIStrategyRegistry</strong></summary>
+              <div class="api-signature">
+                <code>public class AIStrategyRegistry</code>
+              </div>
+              <p>Spring이 모든 <code>AIStrategy</code> 빈을 레지스트리에 주입합니다. 동일한 <code>DiagnosisType</code>을 선언한 전략이 여러 개 있을 때는 <code>getPriority()</code> 값이 가장 낮은 전략이 유지됩니다.</p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getStrategy(DiagnosisType diagnosisType)</span>
+                  <span class="api-method-return">AIStrategy&lt;T, R&gt;</span>
+                </div>
+                <div class="api-method-desc">주어진 <code>DiagnosisType</code>으로 등록된 전략을 반환합니다. 등록된 전략이 없으면 코드 <code>STRATEGY_NOT_FOUND</code>의 <code>DiagnosisException</code>을 던집니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeStrategy(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">R</span>
+                </div>
+                <div class="api-method-desc">동기 실행. 내부적으로 <code>executeStrategyAsync(...)</code>를 호출한 뒤 최대 5초간 block합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeStrategyAsync(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Mono&lt;R&gt;</span>
+                </div>
+                <div class="api-method-desc">전략을 조회해 비동기로 실행합니다. 요청에 <code>DiagnosisType</code>이 없으면 코드 <code>MISSING_DIAGNOSIS_TYPE</code>의 <code>DiagnosisException</code>을 방출합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeStrategyStream(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">전략을 조회해 스트리밍 모드로 실행합니다. 요청에 <code>DiagnosisType</code>이 없으면 코드 <code>MISSING_DIAGNOSIS_TYPE</code>의 <code>DiagnosisException</code>을 방출합니다.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>AINativeProcessor&lt;T&gt;</strong></summary>
+              <div class="api-signature">
+                <code>public final class AINativeProcessor&lt;T extends DomainContext&gt; implements AICoreOperations&lt;T&gt;</code>
+              </div>
+              <p>AI 처리의 기본 진입점입니다. strategy 실행을 분산 잠금과 감사 로깅으로 감쌉니다.</p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">process(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">Mono&lt;R&gt;</span>
+                </div>
+                <div class="api-method-desc">분산 잠금과 감사 추적과 함께 strategy 계층을 통해 요청을 처리합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">processStream(AIRequest&lt;T&gt; request)</span>
+                  <span class="api-method-return">Flux&lt;String&gt;</span>
+                </div>
+                <div class="api-method-desc">strategy 계층을 통한 스트리밍 처리.</div>
+              </div>
+            </details>
+
+            <details>
+              <summary><strong>PromptTemplate 인터페이스</strong></summary>
+              <h4>AbstractStandardPromptTemplate&lt;T&gt;</h4>
+              <p>생성자: <code>protected AbstractStandardPromptTemplate(Class&lt;T&gt; responseType)</code></p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getSupportedType()</span>
+                  <span class="api-method-return">TemplateType</span>
+                </div>
+                <div class="api-method-desc">이 템플릿이 처리하는 템플릿 타입을 반환합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">generateDomainSystemPrompt(AIRequest&lt;?&gt; request, String systemMetadata)</span>
+                  <span class="api-method-return">String</span>
+                </div>
+                <div class="api-method-desc">도메인 특화 시스템 프롬프트를 반환합니다. 프레임워크가 JSON 형식 지시문을 자동으로 추가합니다.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">generateUserPrompt(AIRequest&lt;?&gt; request, String contextInfo)</span>
+                  <span class="api-method-return">String</span>
+                </div>
+                <div class="api-method-desc">사용자 프롬프트를 반환합니다. <code>contextInfo</code>는 사용 가능한 RAG 조회 컨텍스트를 담습니다.</div>
+              </div>
+
+              <h4>AbstractStreamingPromptTemplate</h4>
+              <p>위와 동일한 메서드와 함께:</p>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">getJsonSchemaExample()</span>
+                  <span class="api-method-return">String</span>
+                </div>
+                <div class="api-method-desc">스트리밍 모드에서 LLM의 구조화된 출력 템플릿으로 사용할 JSON 예제를 반환합니다.</div>
+              </div>
+            </details>
           </section>
 
           <!-- Related -->
@@ -413,27 +1089,23 @@ public class ProductController {
             <h2 id="related">관련 문서</h2>
             <div class="related-links">
               <div class="related-links-grid">
-                <a href="../../../docs/reference/core/overview.html" class="related-link-card">
-                  <h3>AI Engine Overview</h3>
-                  <p>AI 엔진 아키텍처 및 진단 프로세스 개요.</p>
+                <a href="../../../docs/reference/core/pipeline.html" class="related-link-card">
+                  <h3>Pipeline 및 RAG</h3>
+                  <p>Lab이 LLM 실행, 컨텍스트 검색, 응답 파싱을 위해 위임하는 6단계 파이프라인.</p>
                 </a>
                 <a href="../../../docs/reference/core/streaming.html" class="related-link-card">
-                  <h3>Streaming</h3>
-                  <p>StandardStreamingService는 Strategy/Lab Streaming 경로에 AICoreOperations를 사용합니다.</p>
+                  <h3>스트리밍</h3>
+                  <p>SSE 스트리밍 프로토콜, 클라이언트 측 통합, AI 엔드포인트를 감싸는 StandardStreamingService.</p>
                 </a>
-                <a href="../../../docs/reference/core/pipeline.html" class="related-link-card">
-                  <h3>AI Pipeline</h3>
-                  <p>Strategy 레이어를 우회하는 대안 실행 경로.</p>
+                <a href="../../../docs/reference/core/llm-orchestrator.html" class="related-link-card">
+                  <h3>LLM 및 모델</h3>
+                  <p>파이프라인이 LLM 호출, 모델 계층 선택, advisor 통합에 사용하는 UnifiedLLMOrchestrator.</p>
+                </a>
+                <a href="../../../docs/install/configuration/ai.html" class="related-link-card">
+                  <h3>AI 설정</h3>
+                  <p>모델 계층, 파이프라인 설정, RAG, 스트리밍, advisor를 포함한 AI 속성 전체 레퍼런스.</p>
                 </a>
               </div>
-            </div>
-          </section>
-
-          <!-- Configuration Reference -->
-          <section>
-            <div class="callout callout-info">
-              <strong>설정 레퍼런스</strong><br>
-              AI Strategy가 사용하는 모델 계층, 폴백, 스트리밍 관련 속성은 <a href="../../../docs/install/configuration/ai.html">AI 설정</a>을 참조하세요. 현재 OSS 코어에서는 <code>TieredLLMProperties</code>, <code>ContexaProperties</code>, <code>StreamingProperties</code>가 주요 구성 축입니다.
             </div>
           </section>
 
@@ -442,8 +1114,8 @@ public class ProductController {
               <span class="docs-nav-label">이전</span>
               <span class="docs-nav-title">Advisor 시스템</span>
             </a>
-            <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="docs-nav-link next">
+            <a href="../../../docs/reference/core/pipeline.html" class="docs-nav-link next">
               <span class="docs-nav-label">다음</span>
-              <span class="docs-nav-title">Zero Trust</span>
+              <span class="docs-nav-title">Pipeline 및 RAG</span>
             </a>
           </div>

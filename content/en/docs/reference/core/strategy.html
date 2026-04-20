@@ -133,7 +133,7 @@ public class ProductContext extends DomainContext {
 }</code></pre>
             </div>
 
-            <p><code>DomainContext</code> provides built-in fields: <code>contextId</code> (auto-generated UUID), <code>userId</code>, <code>sessionId</code>, <code>organizationId</code>, and a <code>metadata</code> map. Use <code>addMetadata(key, value)</code> to attach additional key-value pairs.</p>
+            <p><code>DomainContext</code> provides built-in fields: <code>contextId</code> (auto-generated UUID), <code>createdAt</code> (timestamp), <code>userId</code>, <code>sessionId</code>, <code>organizationId</code>, and a <code>metadata</code> map. Use <code>addMetadata(key, value)</code> to attach additional key-value pairs, or <code>getMetadata(key, Class&lt;T&gt;)</code> to retrieve a typed value.</p>
 
             <h3>AIResponse &mdash; Your Output</h3>
             <p>Extend <code>AIResponse</code> to define the structured output the LLM will produce. This class is used by the JSON parser to deserialize the LLM response.</p>
@@ -479,7 +479,7 @@ private AIRequest&lt;ProductContext&gt; enrichRequest(
             <h2 id="step-4">Step 4: Implement the Strategy</h2>
             <p>The Strategy routes AI requests to the correct Lab based on <code>DiagnosisType</code>. It validates the input, resolves the Lab, converts the request format, and delegates execution.</p>
 
-            <p>Extend <code>AbstractAIStrategy&lt;T, R&gt;</code> and implement the four abstract methods:</p>
+            <p>Extend <code>AbstractAIStrategy&lt;T, R&gt;</code> and implement its five abstract methods: <code>validateRequest</code>, <code>getLabType</code>, <code>convertLabRequest</code>, <code>processLabExecution</code>, and <code>processLabExecutionAsync</code>. Override <code>processLabExecutionStream</code> and <code>supportsStreaming</code> as well when you need streaming.</p>
 
             <div class="code-block">
               <div class="code-block-header">
@@ -581,12 +581,12 @@ public class ProductRecommendationStrategy
             </div>
 
             <h3>Template Method Execution Order</h3>
-            <p><code>AbstractAIStrategy</code> uses a template method pattern. When <code>execute()</code>, <code>executeAsync()</code>, or <code>executeStream()</code> is called, the framework runs these steps in order:</p>
+            <p><code>AbstractAIStrategy</code> uses a template method pattern. Each public entry point validates, resolves the Lab, converts the request, and finally dispatches to the matching <code>processLabExecution*</code> method:</p>
             <ol>
-              <li><code>validateRequest(request)</code> &mdash; Validate the incoming <code>AIRequest</code></li>
-              <li><code>getRequiredLab()</code> &mdash; Resolve the Lab via <code>AILabFactory</code> using <code>getLabType()</code></li>
-              <li><code>convertLabRequest(request)</code> &mdash; Convert the <code>AIRequest</code> to the Lab's request format</li>
-              <li><code>processLabExecution(lab, labRequest, request)</code> &mdash; Execute the Lab and return the response</li>
+              <li><code>validateRequest(request)</code> &mdash; Validate the incoming <code>AIRequest</code>.</li>
+              <li><code>getRequiredLab()</code> &mdash; Resolve the Lab via <code>AILabFactory</code> using <code>getLabType()</code>.</li>
+              <li><code>convertLabRequest(request)</code> &mdash; Convert the <code>AIRequest</code> to the Lab's request format.</li>
+              <li>Dispatch based on the public entry point: <code>execute(...)</code> calls <code>processLabExecution(...)</code>, <code>executeAsync(...)</code> calls <code>processLabExecutionAsync(...)</code>, <code>executeStream(...)</code> calls <code>processLabExecutionStream(...)</code> after checking <code>supportsStreaming()</code>.</li>
             </ol>
           </section>
 
@@ -622,8 +622,8 @@ public class ProductContextRetriever extends ContextRetriever {
         String query = ctx.getCategory() + " " +
             String.join(" ", ctx.getUserPreferences());
 
-        List&lt;Document&gt; docs = vectorStore
-            .similaritySearch(query);
+        List&lt;Document&gt; docs = vectorOperations
+            .searchSimilar(query);
 
         String contextInfo = docs.stream()
             .map(Document::getText)
@@ -884,14 +884,14 @@ contexa:
                   <span class="api-method-name">processLabExecutionAsync(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
                   <span class="api-method-return">Mono&lt;R&gt;</span>
                 </div>
-                <div class="api-method-desc">Asynchronous lab execution.</div>
+                <div class="api-method-desc">Asynchronous lab execution. Declared abstract &mdash; every subclass must implement it.</div>
               </div>
               <div class="api-method">
                 <div class="api-method-header">
                   <span class="api-method-name">processLabExecutionStream(Object lab, Object labRequest, AIRequest&lt;T&gt; request)</span>
                   <span class="api-method-return">Flux&lt;String&gt;</span>
                 </div>
-                <div class="api-method-desc">Streaming lab execution. Override to enable streaming.</div>
+                <div class="api-method-desc">Streaming lab execution. Non-abstract &mdash; the default implementation returns a <code>Flux.error(new UnsupportedOperationException(...))</code>. Override together with <code>supportsStreaming()</code> to enable streaming.</div>
               </div>
             </details>
 
@@ -993,26 +993,34 @@ contexa:
               <div class="api-signature">
                 <code>public class AIStrategyRegistry</code>
               </div>
+              <p>Spring autowires every <code>AIStrategy</code> bean into the registry. When multiple strategies declare the same <code>DiagnosisType</code>, the registry keeps the one with the lowest <code>getPriority()</code> value.</p>
               <div class="api-method">
                 <div class="api-method-header">
                   <span class="api-method-name">getStrategy(DiagnosisType diagnosisType)</span>
                   <span class="api-method-return">AIStrategy&lt;T, R&gt;</span>
                 </div>
-                <div class="api-method-desc">Returns the strategy for the given type. Throws <code>DiagnosisException</code> if not found.</div>
+                <div class="api-method-desc">Returns the strategy registered for the given <code>DiagnosisType</code>. Throws a <code>DiagnosisException</code> with code <code>STRATEGY_NOT_FOUND</code> when none is registered.</div>
+              </div>
+              <div class="api-method">
+                <div class="api-method-header">
+                  <span class="api-method-name">executeStrategy(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
+                  <span class="api-method-return">R</span>
+                </div>
+                <div class="api-method-desc">Synchronous execution. Internally calls <code>executeStrategyAsync(...)</code> and blocks for up to 5 seconds.</div>
               </div>
               <div class="api-method">
                 <div class="api-method-header">
                   <span class="api-method-name">executeStrategyAsync(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
                   <span class="api-method-return">Mono&lt;R&gt;</span>
                 </div>
-                <div class="api-method-desc">Looks up and executes the strategy asynchronously.</div>
+                <div class="api-method-desc">Looks up and executes the strategy asynchronously. Emits a <code>DiagnosisException</code> with code <code>MISSING_DIAGNOSIS_TYPE</code> when the request has no <code>DiagnosisType</code>.</div>
               </div>
               <div class="api-method">
                 <div class="api-method-header">
                   <span class="api-method-name">executeStrategyStream(AIRequest&lt;T&gt; request, Class&lt;R&gt; responseType)</span>
                   <span class="api-method-return">Flux&lt;String&gt;</span>
                 </div>
-                <div class="api-method-desc">Looks up and executes the strategy in streaming mode.</div>
+                <div class="api-method-desc">Looks up and executes the strategy in streaming mode. Emits a <code>DiagnosisException</code> with code <code>MISSING_DIAGNOSIS_TYPE</code> when the request has no <code>DiagnosisType</code>.</div>
               </div>
             </details>
 
