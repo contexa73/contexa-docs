@@ -1,0 +1,634 @@
+<!-- Breadcrumb -->
+          <nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Prompt Engineering</span>
+          </nav>
+
+          <!-- Page Header -->
+          <div class="docs-page-header">
+            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
+              <span class="badge">contexa-common</span>
+              <span class="badge">contexa-core</span>
+              <span class="badge">autonomous</span>
+            </div>
+            <h1>Prompt Engineering</h1>
+            <p class="lead">Contexa turns every authenticated HTTP request &mdash; whether from a human or an agent &mdash; into a structured prompt an LLM can reason about consistently. Getting there takes six stages: <strong>collect &rarr; process &rarr; harden &rarr; standardise &rarr; compose &rarr; calibrate</strong>. This page follows the flow end to end.</p>
+          </div>
+
+
+          <!-- Section 1: Six-stage pipeline -->
+          <section>
+            <h2 id="pipeline">Six-stage pipeline</h2>
+            <p>A prompt is never built on the spot. Six stages collect, organise and verify every fact around the request before anything reaches the LLM. Each stage lives in its own package and the output of one stage is the input of the next.</p>
+
+            <div class="pipeline-six">
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">1</span>
+                <div class="pipeline-stage-name">Collect</div>
+                <div class="pipeline-stage-pkg">common/security</div>
+                <div class="pipeline-stage-desc">Three evidence stamps</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">2</span>
+                <div class="pipeline-stage-name">Process</div>
+                <div class="pipeline-stage-pkg">autonomous/context</div>
+                <div class="pipeline-stage-desc">Session, work, role-scope profiles</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">3</span>
+                <div class="pipeline-stage-name">Harden</div>
+                <div class="pipeline-stage-pkg">context/hardener</div>
+                <div class="pipeline-stage-desc">Injection defence, format enforcement</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">4</span>
+                <div class="pipeline-stage-name">Standardise</div>
+                <div class="pipeline-stage-pkg">CanonicalSecurityContext</div>
+                <div class="pipeline-stage-desc">22 fields + 7 profiles in one record</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">5</span>
+                <div class="pipeline-stage-name">Compose</div>
+                <div class="pipeline-stage-pkg">tiered/prompt</div>
+                <div class="pipeline-stage-desc">Fourteen section builders</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">6</span>
+                <div class="pipeline-stage-name">Calibrate</div>
+                <div class="pipeline-stage-pkg">guardrail · calibration</div>
+                <div class="pipeline-stage-desc">Autonomy guardrail and learned calibration</div>
+              </div>
+            </div>
+
+            <div class="callout-info">
+              <strong>Design principle.</strong> Every stage fails open: a missing output never blocks the next stage. If the evidence for a section is absent, that section is omitted from the prompt and the LLM is told directly not to draw strong conclusions about that area.
+            </div>
+          </section>
+
+
+          <!-- Section 2: Collect -->
+          <section>
+            <h2 id="stage-1-collect">Stage 1 &middot; Collect</h2>
+            <p>Once a request enters the Spring Security filter chain, an <code>AuthBridge</code> implementation pulls the principal out of headers, session attributes or request attributes. The extracted evidence is packaged into three kinds of <strong>evidence stamps</strong>. Those three stamps are the raw input for every later stage.</p>
+
+            <div class="stamp-trio">
+              <div class="stamp-card stamp-card--auth">
+                <div class="stamp-card-icon">AU</div>
+                <div class="stamp-card-title">Authentication stamp</div>
+                <div class="stamp-card-sub">AuthenticationStamp</div>
+                <ul>
+                  <li>principalType &middot; subject class</li>
+                  <li>authenticationType</li>
+                  <li>authenticationAssurance</li>
+                  <li>mfaCompleted</li>
+                  <li>authenticationSource</li>
+                  <li>sessionId &middot; authenticationTime</li>
+                </ul>
+              </div>
+              <div class="stamp-card stamp-card--authz">
+                <div class="stamp-card-icon">AZ</div>
+                <div class="stamp-card-title">Authorization stamp</div>
+                <div class="stamp-card-sub">AuthorizationStamp</div>
+                <ul>
+                  <li>effect (ALLOW &middot; DENY &middot; UNKNOWN)</li>
+                  <li>privileged action flag</li>
+                  <li>policyId &middot; policyVersion</li>
+                  <li>decisionSource</li>
+                  <li>effectiveRoles &middot; effectiveAuthorities</li>
+                </ul>
+              </div>
+              <div class="stamp-card stamp-card--deleg">
+                <div class="stamp-card-icon">DG</div>
+                <div class="stamp-card-title">Delegation stamp</div>
+                <div class="stamp-card-sub">DelegationStamp</div>
+                <ul>
+                  <li>subjectId &middot; the human delegator</li>
+                  <li>agentId &middot; the acting principal</li>
+                  <li>objectiveId &middot; objectiveFamily</li>
+                  <li>allowedOperations</li>
+                  <li>allowedResources</li>
+                  <li>containmentOnly &middot; expiresAt</li>
+                </ul>
+              </div>
+            </div>
+
+            <h3 style="margin-top:var(--space-8)">Five evidence quality tiers</h3>
+            <p>Not all evidence carries the same weight. A signal the customer sent explicitly is the strongest; a platform-observed structural signal comes next; a fallback derived from runtime continuity is the weakest. <code>BridgeSemanticBoundaryPolicy</code> tags every collected field with one of the tiers below.</p>
+
+            <div class="quality-ladder">
+              <div class="quality-rung quality-rung--best">
+                <div class="quality-rung-rank">1</div>
+                <div>
+                  <div class="quality-rung-name">EXPLICIT_CUSTOMER_SIGNAL</div>
+                  <div class="quality-rung-desc">Signal the customer sent explicitly in headers or parameters</div>
+                </div>
+                <span class="quality-rung-score">Top</span>
+              </div>
+              <div class="quality-rung quality-rung--high">
+                <div class="quality-rung-rank">2</div>
+                <div>
+                  <div class="quality-rung-name">STRUCTURAL_DISCOVERY_ONLY</div>
+                  <div class="quality-rung-desc">Signal the platform auto-discovered from structural patterns</div>
+                </div>
+                <span class="quality-rung-score">High</span>
+              </div>
+              <div class="quality-rung quality-rung--med">
+                <div class="quality-rung-rank">3</div>
+                <div>
+                  <div class="quality-rung-name">DERIVED_RUNTIME_FALLBACK</div>
+                  <div class="quality-rung-desc">Signal inferred from runtime continuity as a fallback</div>
+                </div>
+                <span class="quality-rung-score">Medium</span>
+              </div>
+              <div class="quality-rung quality-rung--low">
+                <div class="quality-rung-rank">4</div>
+                <div>
+                  <div class="quality-rung-name">HEURISTIC_HINT_ONLY</div>
+                  <div class="quality-rung-desc">Hint only. Semantic conclusions are not allowed</div>
+                </div>
+                <span class="quality-rung-score">Low</span>
+              </div>
+              <div class="quality-rung quality-rung--none">
+                <div class="quality-rung-rank">5</div>
+                <div>
+                  <div class="quality-rung-name">UNAVAILABLE</div>
+                  <div class="quality-rung-desc">No evidence for this area</div>
+                </div>
+                <span class="quality-rung-score">None</span>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- Section 3: Process -->
+          <section>
+            <h2 id="stage-2-process">Stage 2 &middot; Process</h2>
+            <p>Raw evidence alone is not enough for the LLM to decide whether a user is acting differently from usual. Stage 2 expands it through three families of components that turn primitive facts into observable patterns.</p>
+
+            <div class="process-trio">
+              <div class="process-col process-col--collect">
+                <div class="process-col-head">
+                  <span class="process-col-dot"></span>
+                  <span class="process-col-title">Collectors</span>
+                </div>
+                <ul>
+                  <li>SessionNarrativeCollector &mdash; in-session action sequence</li>
+                  <li>ProtectableWorkProfileCollector &mdash; usual work profile</li>
+                  <li>RoleScopeCollector &mdash; current role scope snapshot</li>
+                </ul>
+              </div>
+              <div class="process-col process-col--enrich">
+                <div class="process-col-head">
+                  <span class="process-col-dot"></span>
+                  <span class="process-col-title">Enrichers</span>
+                </div>
+                <ul>
+                  <li>AuthenticationContextProvider &mdash; auth strength</li>
+                  <li>DelegationContextProvider &mdash; delegation scope</li>
+                  <li>PeerCohortContextProvider &mdash; cohort outliers</li>
+                  <li>FrictionContextProvider &mdash; MFA &amp; approval history</li>
+                  <li>OrganizationContextProvider &mdash; org hierarchy</li>
+                  <li>ReasoningMemoryContextProvider &mdash; prior cases</li>
+                </ul>
+              </div>
+              <div class="process-col process-col--infer">
+                <div class="process-col-head">
+                  <span class="process-col-dot"></span>
+                  <span class="process-col-title">Inference</span>
+                </div>
+                <ul>
+                  <li>ObjectiveDriftEvaluator &mdash; agent objective drift</li>
+                  <li>ObservedScopeInferenceService &mdash; observed scope</li>
+                  <li>ContextCoverageEvaluator &mdash; coverage level</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="callout-info">
+              <strong>Agent-specific inference.</strong> Unlike humans, agents must act only within their allowed objective. <code>ObjectiveDriftEvaluator</code> checks in real time whether the request's resource and action family fall inside the <code>allowedOperations</code> and <code>allowedResources</code> declared by the delegation stamp.
+            </div>
+          </section>
+
+
+          <!-- Section 4: Harden -->
+          <section>
+            <h2 id="stage-3-harden">Stage 3 &middot; Harden</h2>
+            <p>Prompt injection, field spoofing and signal forgery are the top threats for any LLM-based security system. <code>CanonicalSecurityContextHardener</code> puts every field through field-specific normalisation before it ever reaches the model.</p>
+
+            <div class="anatomy-split">
+              <div class="anatomy-panel">
+                <div class="anatomy-head anatomy-head--sys">Input validation</div>
+                <div class="anatomy-body">
+                  <ol>
+                    <li>Replace null fields with safe defaults</li>
+                    <li>Trim strings and cap length</li>
+                    <li>Normalise enum values</li>
+                    <li>Validate time and coordinate ranges</li>
+                    <li>Normalise language / country codes to ISO</li>
+                    <li>Decode payloads and filter to 80%+ printable chars</li>
+                  </ol>
+                </div>
+              </div>
+              <div class="anatomy-panel">
+                <div class="anatomy-head anatomy-head--usr">Profile hardening</div>
+                <div class="anatomy-body">
+                  <ol>
+                    <li>Preserve session narrative burst flags</li>
+                    <li>Drop negative values from the work profile</li>
+                    <li>Deduplicate role scope while keeping order</li>
+                    <li>Pin approval-lineage order in friction</li>
+                    <li>Clean reasoning-memory guardrails</li>
+                    <li>Normalise trust profile decision states</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- Section 5: Standardise -->
+          <section>
+            <h2 id="stage-4-standardise">Stage 4 &middot; Standardise</h2>
+            <p>After stage 3, every piece of evidence is consolidated into a single immutable record &mdash; <code>CanonicalSecurityContext</code>. Twenty-two fields and seven profiles sit in well-known places, so the compose stage always knows where each field lives.</p>
+
+            <div class="canonical-layout">
+              <div class="canonical-cell">
+                <h4>Subject</h4>
+                <ul>
+                  <li>userId</li>
+                  <li>organizationId</li>
+                  <li>tenantId</li>
+                  <li>principalType</li>
+                  <li>roleSet</li>
+                  <li>authoritySet</li>
+                </ul>
+              </div>
+              <div class="canonical-cell">
+                <h4>Session</h4>
+                <ul>
+                  <li>sessionId</li>
+                  <li>clientIp</li>
+                  <li>userAgent</li>
+                  <li>authenticationType</li>
+                  <li>mfaVerified</li>
+                  <li>concurrentSessions</li>
+                </ul>
+              </div>
+              <div class="canonical-cell">
+                <h4>Delegation</h4>
+                <ul>
+                  <li>delegated</li>
+                  <li>agentId</li>
+                  <li>objectiveId</li>
+                  <li>allowedOperations</li>
+                  <li>allowedResources</li>
+                  <li>objectiveDrift</li>
+                </ul>
+              </div>
+              <div class="canonical-cell">
+                <h4>Authorization</h4>
+                <ul>
+                  <li>effectiveRoles</li>
+                  <li>effectivePermissions</li>
+                  <li>scopeTags</li>
+                  <li>authorizationEffect</li>
+                  <li>policyId</li>
+                  <li>policyVersion</li>
+                </ul>
+              </div>
+              <div class="canonical-cell">
+                <h4>Intent</h4>
+                <ul>
+                  <li>botUserAgent</li>
+                  <li>impossibleTravel</li>
+                  <li>intentMissingReferer</li>
+                </ul>
+              </div>
+              <div class="canonical-cell">
+                <h4>Location &middot; IP</h4>
+                <ul>
+                  <li>country &middot; city</li>
+                  <li>latitude &middot; longitude</li>
+                  <li>IP band &middot; ASN</li>
+                </ul>
+              </div>
+              <div class="canonical-cell">
+                <h4>Resource</h4>
+                <ul>
+                  <li>resourceType</li>
+                  <li>businessLabel</li>
+                  <li>sensitivity</li>
+                  <li>actionFamily</li>
+                </ul>
+              </div>
+              <div class="canonical-cell">
+                <h4>Seven profiles</h4>
+                <ul>
+                  <li>SessionNarrative</li>
+                  <li>Work</li>
+                  <li>RoleScope</li>
+                  <li>PeerCohort</li>
+                  <li>Friction</li>
+                  <li>ReasoningMemory</li>
+                  <li>ObservedScope</li>
+                </ul>
+              </div>
+            </div>
+
+            <h3 style="margin-top:var(--space-8)">Four coverage levels</h3>
+            <p><code>ContextCoverageEvaluator</code> grades how complete the record is by counting filled fields and available profiles. A low grade automatically injects a warning into the prompt telling the LLM not to draw strong conclusions from "usual work patterns".</p>
+
+            <div class="coverage-meter">
+              <div class="coverage-row">
+                <span class="coverage-label">BUSINESS_AWARE</span>
+                <div class="coverage-bar"><div class="coverage-fill coverage-fill--best"></div></div>
+                <span class="coverage-note">Identity, session, scope, resource and observed patterns all present</span>
+              </div>
+              <div class="coverage-row">
+                <span class="coverage-label">SCOPE_AWARE</span>
+                <div class="coverage-bar"><div class="coverage-fill coverage-fill--good"></div></div>
+                <span class="coverage-note">Identity and scope only; observed profiles missing</span>
+              </div>
+              <div class="coverage-row">
+                <span class="coverage-label">IDENTITY_AWARE</span>
+                <div class="coverage-bar"><div class="coverage-fill coverage-fill--ok"></div></div>
+                <span class="coverage-note">Identity only; scope and profiles missing</span>
+              </div>
+              <div class="coverage-row">
+                <span class="coverage-label">ENVIRONMENT_ONLY</span>
+                <div class="coverage-bar"><div class="coverage-fill coverage-fill--poor"></div></div>
+                <span class="coverage-note">Only environmental signals (IP, time) available</span>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- Section 6: Compose -->
+          <section>
+            <h2 id="stage-5-compose">Stage 5 &middot; Compose</h2>
+            <p>The standardised context now becomes a prompt. <code>SecurityDecisionPromptSections</code> orchestrates the work and fourteen section builders render their own areas. When a field is missing, the builder for that section simply emits nothing.</p>
+
+            <h3>System side and user side</h3>
+            <div class="anatomy-split">
+              <div class="anatomy-panel">
+                <div class="anatomy-head anatomy-head--sys">System message</div>
+                <div class="anatomy-body">
+                  <p>Tells the LLM its role, the policy, and the expected output format. Stable across requests.</p>
+                  <ol>
+                    <li>Security policy instructions</li>
+                    <li>Format and length constraints</li>
+                    <li>JSON schema enforcement</li>
+                    <li>Governance version stamp</li>
+                  </ol>
+                </div>
+              </div>
+              <div class="anatomy-panel">
+                <div class="anatomy-head anatomy-head--usr">User message</div>
+                <div class="anatomy-body">
+                  <p>Lists the evidence for the current request, section by section. Changes per request.</p>
+                  <ol>
+                    <li>Current event</li>
+                    <li>Canonical context and coverage</li>
+                    <li>Identity and authority</li>
+                    <li>Device, location, session</li>
+                    <li>Delegation, friction, behaviour profile</li>
+                    <li>Threat knowledge and organisational learning</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+
+            <h3 style="margin-top:var(--space-8)">Fourteen section builders</h3>
+            <div class="builder-grid">
+              <div class="builder-tile builder-tile--system">
+                <span class="builder-tile-tag builder-tile-tag--sys">SYS</span>
+                <div class="builder-tile-name">SecurityInstruction</div>
+                <div class="builder-tile-desc">Policy &amp; format guidance</div>
+              </div>
+              <div class="builder-tile builder-tile--system">
+                <span class="builder-tile-tag builder-tile-tag--sys">SYS</span>
+                <div class="builder-tile-name">SecurityDecisionContract</div>
+                <div class="builder-tile-desc">Enforces the JSON schema</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">SecurityEvent</div>
+                <div class="builder-tile-desc">Current request &amp; payload</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">SecurityCanonicalContext</div>
+                <div class="builder-tile-desc">Bridge resolution &amp; coverage</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">IdentityAuthority</div>
+                <div class="builder-tile-desc">Identity &amp; authority set</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">RoleScope</div>
+                <div class="builder-tile-desc">Role scope &amp; expected families</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">BehaviorProfile</div>
+                <div class="builder-tile-desc">Personal &amp; organisational norm</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">Device</div>
+                <div class="builder-tile-desc">OS &amp; browser fingerprint</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">Location</div>
+                <div class="builder-tile-desc">Country &middot; city &middot; IP band</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">Session</div>
+                <div class="builder-tile-desc">Session state &amp; MFA</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">Delegation</div>
+                <div class="builder-tile-desc">Delegation scope &amp; drift</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">Friction</div>
+                <div class="builder-tile-desc">MFA &amp; approval history</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">ContextQuality</div>
+                <div class="builder-tile-desc">Coverage &amp; trust metrics</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                <div class="builder-tile-name">ThreatLearning</div>
+                <div class="builder-tile-desc">Threat intel &amp; org learning</div>
+              </div>
+            </div>
+
+            <div class="callout-info">
+              <strong>Conditional inclusion.</strong> Each builder first queries <code>CanonicalContextFieldPolicy.has*()</code>. If a field is absent, the whole section is dropped, so the prompt always carries only "honest" information. <code>PromptGovernanceDescriptor</code> stamps the model and version for reproducibility.
+            </div>
+          </section>
+
+
+          <!-- Section 7: Calibrate -->
+          <section>
+            <h2 id="stage-6-calibrate">Stage 6 &middot; Calibrate</h2>
+            <p>Getting a response back from the LLM is not the end. Two safety layers adjust the result in sequence: the <strong>autonomy guardrail</strong> and the <strong>runtime calibration</strong>.</p>
+
+            <h3>Autonomy guardrail</h3>
+            <p>If the LLM's <code>confidence</code> is below a threshold or the output deviates from the schema, <code>PromptConfidenceGuardrail</code> forces the final action up to a safer tier. The proposed action and the enforced action are stored separately to keep the audit trail intact.</p>
+
+            <div class="guardrail-flow">
+              <div class="guardrail-track">
+                <div class="guardrail-node guardrail-node--allow">
+                  <span class="guardrail-action">ALLOW</span>
+                  <span class="guardrail-label">LLM proposal</span>
+                </div>
+                <div class="guardrail-arrow">&rarr;</div>
+                <div class="guardrail-node guardrail-node--chall">
+                  <span class="guardrail-action">CHALLENGE</span>
+                  <span class="guardrail-label">Guardrail steps in</span>
+                </div>
+                <div class="guardrail-arrow">&rarr;</div>
+                <div class="guardrail-node guardrail-node--escal">
+                  <span class="guardrail-action">ESCALATE</span>
+                  <span class="guardrail-label">Final enforcement</span>
+                </div>
+              </div>
+              <div class="guardrail-caption">As confidence drops, the enforced action steps up one safer tier at a time.</div>
+            </div>
+
+            <h3 style="margin-top:var(--space-8)">Runtime calibration</h3>
+            <p>Decisions the guardrail did not touch are fine-tuned by <code>SecurityDecisionCalibrationService</code> using learned profiles. Confidence adjustments and action biases are applied based on past observations.</p>
+
+            <ul class="calib-list">
+              <li><strong>Scenario classification</strong> &mdash; group the current request with past similar scenarios (for example, unfamiliar location + unusual resource)</li>
+              <li><strong>Profile selection</strong> &mdash; pick only profiles that have enough samples and operator review</li>
+              <li><strong>Action bias</strong> &mdash; one of INCREASE_CHALLENGE &middot; DECREASE_CHALLENGE &middot; NONE</li>
+              <li><strong>BLOCK is immutable</strong> &mdash; a BLOCK decision is never changed by a bias (safety first)</li>
+              <li><strong>Guardrail wins</strong> &mdash; if the guardrail already intervened, calibration is skipped</li>
+            </ul>
+          </section>
+
+
+          <!-- Section 8: Final decision -->
+          <section>
+            <h2 id="final-decision">The final decision record</h2>
+            <p>What comes out the other end is the <code>SecurityDecision</code>. It is not just "ALLOW" or "BLOCK". It is an auditable record that carries the LLM's raw judgement, the policy intervention, and the learning calibration &mdash; all three.</p>
+
+            <div class="outcome-frame">
+              <h3>SecurityDecision fields</h3>
+              <div class="outcome-matrix">
+                <div class="outcome-field">
+                  <div class="outcome-field-name">action</div>
+                  <div class="outcome-field-desc">The LLM's first-pass proposal</div>
+                </div>
+                <div class="outcome-field">
+                  <div class="outcome-field-name">autonomousAction</div>
+                  <div class="outcome-field-desc">Final enforced action after guardrail and calibration</div>
+                </div>
+                <div class="outcome-field">
+                  <div class="outcome-field-name">llmAuditRiskScore / Confidence</div>
+                  <div class="outcome-field-desc">Raw LLM scores &mdash; audit only, never enforced</div>
+                </div>
+                <div class="outcome-field">
+                  <div class="outcome-field-name">autonomyConstraintApplied</div>
+                  <div class="outcome-field-desc">Whether the guardrail fired and why</div>
+                </div>
+                <div class="outcome-field">
+                  <div class="outcome-field-name">calibrationApplied</div>
+                  <div class="outcome-field-desc">Whether runtime calibration ran and which profile</div>
+                </div>
+                <div class="outcome-field">
+                  <div class="outcome-field-name">processingLayer</div>
+                  <div class="outcome-field-desc">1 = fast tier &middot; 2 = expert tier (escalation)</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- Section 9: Human vs Agent -->
+          <section>
+            <h2 id="persona-compare">How prompts differ for humans and agents</h2>
+            <p>The pipeline is the same, but the centre of gravity shifts depending on who the subject is. For a human, the key axis is "deviation from the usual pattern". For an agent, it is "staying within the allowed objective".</p>
+
+            <div class="persona-compare">
+              <div class="persona-col persona-col--human">
+                <div class="persona-col-title">
+                  <span class="persona-col-icon">H</span>
+                  <span class="persona-col-name">Human</span>
+                </div>
+                <table class="persona-table">
+                  <tr><th>Subject type</th><td>HUMAN</td></tr>
+                  <tr><th>Delegation stamp</th><td>Usually absent</td></tr>
+                  <tr><th>Key profiles</th><td>Work &middot; PeerCohort &middot; Friction</td></tr>
+                  <tr><th>Key sections</th><td>IdentityAuthority &middot; BehaviorProfile</td></tr>
+                  <tr><th>Decision axis</th><td>Deviation from usual behaviour</td></tr>
+                  <tr><th>MFA signal</th><td>Verified at login time</td></tr>
+                </table>
+              </div>
+              <div class="persona-col persona-col--agent">
+                <div class="persona-col-title">
+                  <span class="persona-col-icon">A</span>
+                  <span class="persona-col-name">Agent</span>
+                </div>
+                <table class="persona-table">
+                  <tr><th>Subject type</th><td>AGENT &middot; SERVICE_ACCOUNT</td></tr>
+                  <tr><th>Delegation stamp</th><td>Required. delegated = true + agentId</td></tr>
+                  <tr><th>Key profiles</th><td>ObservedScope &middot; RoleScope</td></tr>
+                  <tr><th>Key sections</th><td>Delegation &middot; ObjectiveDrift</td></tr>
+                  <tr><th>Decision axis</th><td>Drift from the allowed objective</td></tr>
+                  <tr><th>MFA signal</th><td>Verified when the delegation token was issued</td></tr>
+                </table>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- Related documents -->
+          <section>
+            <h2 id="related">Related documentation</h2>
+            <div class="related-links-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--space-3);margin:var(--space-4) 0">
+              <a href="../../../docs/reference/architecture/overview.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Platform Architecture</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Module overview and request flow</span>
+              </a>
+              <a href="../../../docs/reference/architecture/hcad-early-detection.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">HCAD Early Threat Detection</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Behavioural signal collection and early analysis</span>
+              </a>
+              <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Zero Trust Flow</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Enforcement and authority swap</span>
+              </a>
+              <a href="../../../docs/reference/iam/protectable.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">@Protectable</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Protected resource annotation</span>
+              </a>
+            </div>
+          </section>
+
+
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Zero Trust Flow</span>
+            </a>
+            <a href="../../../docs/reference/common/overview.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Common Contracts</span>
+            </a>
+          </div>
