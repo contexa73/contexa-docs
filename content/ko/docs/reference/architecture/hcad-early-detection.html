@@ -1,0 +1,614 @@
+<!-- Breadcrumb -->
+          <nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">레퍼런스</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">HCAD 조기 위협 탐지</span>
+          </nav>
+
+          <!-- Page Header -->
+          <div class="docs-page-header">
+            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
+              <span class="badge">contexa-core</span>
+              <span class="badge">contexa-identity</span>
+              <span class="badge">hcad</span>
+            </div>
+            <h1>HCAD 조기 위협 탐지</h1>
+            <p class="lead">HCAD(Host &amp; Context Anomaly Detection)는 인증된 HTTP 요청이 보호 대상 리소스(@Protectable)에 도달하기 전에 행동 신호를 수집하고, 위험 점수를 계산하여 AI 분석 파이프라인을 조기 개시합니다. HCAD 자체는 차단 결정을 내리지 않고, 분석 개시 조건만 계산합니다.</p>
+          </div>
+
+
+          <!-- ============================================ -->
+          <!-- Section 1: 개요 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="overview">개요</h2>
+            <p>HCAD 조기 위협 탐지는 요청이 컨트롤러에 도달하기 전 필터 체인(Filter Chain) 단계(Order=30)에서 동작합니다. 각 요청에서 9개 차원의 행동 신호를 수집하고, 핵심 신호(Anchor Signal)와 보조 신호(Corroborating Signal)의 가중치를 합산해 위험 점수를 생성합니다. 점수가 임계값(redlineScore=70)을 넘고 핵심 신호가 1개 이상 포함되면 LLM 기반 비동기 분석이 <strong>보호 대상 접근 이전</strong>에 시작됩니다.</p>
+
+            <div class="callout-info">
+              <strong>설계 원칙.</strong> HCAD는 항상 요청을 통과(fail-open)시키며 차단·챌린지를 직접 수행하지 않습니다. 집행은 기존 <code>ZeroTrustActionRepository</code> 기반의 비동기 enforcement 경로에서만 이뤄지고, HCAD는 그 경로를 일찍 기동하는 역할만 담당합니다.
+            </div>
+
+            <h3 style="margin-top:var(--space-6)">요청 도착부터 결정까지의 단계</h3>
+            <div class="journey-arc">
+              <div class="journey-node">
+                <div class="journey-node-stage">Stage 1</div>
+                <div class="journey-node-name">HTTP 요청 도착</div>
+                <div class="journey-node-desc">인증된 세션이 Filter Chain 에 진입</div>
+              </div>
+              <div class="journey-node">
+                <div class="journey-node-stage">Stage 2</div>
+                <div class="journey-node-name">HCADFilter</div>
+                <div class="journey-node-desc">행동 신호 수집. 차단하지 않음</div>
+              </div>
+              <div class="journey-node">
+                <div class="journey-node-stage">Stage 3</div>
+                <div class="journey-node-name">신호 점수화</div>
+                <div class="journey-node-desc">9가지 신호 → 위험 점수</div>
+              </div>
+              <div class="journey-node">
+                <div class="journey-node-stage">Stage 4</div>
+                <div class="journey-node-name">조기 분석 개시</div>
+                <div class="journey-node-desc">점수가 임계치 이상이면 AI 이벤트 발행</div>
+              </div>
+              <div class="journey-node">
+                <div class="journey-node-stage">Stage 5</div>
+                <div class="journey-node-name">LLM 파이프라인</div>
+                <div class="journey-node-desc">기존 비동기 분석 경로에 합류</div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 2: 도달 시점 비교 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="timing">분석 개시 시점 비교</h2>
+            <p>HCAD가 없는 기본 경로에서는 AI 분석이 보호 대상 리소스 접근 시점에 시작됩니다. HCAD 조기 탐지가 활성화되면, 이미 강한 이상 징후가 있는 요청은 필터 단계에서 즉시 분석이 예약됩니다.</p>
+
+            <div class="timeline-compare">
+              <div class="timeline-col timeline-col--baseline">
+                <div class="timeline-col-title">기본 경로 (HCAD 조기 탐지 미사용)</div>
+                <div class="timeline-track">
+                  <div class="timeline-seg timeline-seg--auth" style="left:0;width:15%">인증</div>
+                  <div class="timeline-seg timeline-seg--filter" style="left:15%;width:15%">Filter</div>
+                  <div class="timeline-seg timeline-seg--wait" style="left:30%;width:40%">컨트롤러 도달 대기</div>
+                  <div class="timeline-seg timeline-seg--analyze" style="left:70%;width:20%">LLM 분석</div>
+                  <div class="timeline-seg timeline-seg--decide" style="left:90%;width:10%">결정</div>
+                </div>
+                <div class="timeline-legend">
+                  <span><span class="timeline-legend-dot" style="background:var(--brand-secondary)"></span>인증</span>
+                  <span><span class="timeline-legend-dot" style="background:#06b6d4"></span>필터 체인</span>
+                  <span><span class="timeline-legend-dot" style="background:#94a3b8"></span>대기</span>
+                  <span><span class="timeline-legend-dot" style="background:var(--brand-primary)"></span>LLM 분석</span>
+                </div>
+              </div>
+              <div class="timeline-col timeline-col--hcad">
+                <div class="timeline-col-title">HCAD 조기 탐지 활성화</div>
+                <div class="timeline-track">
+                  <div class="timeline-seg timeline-seg--auth" style="left:0;width:15%">인증</div>
+                  <div class="timeline-seg timeline-seg--filter" style="left:15%;width:15%">HCAD</div>
+                  <div class="timeline-seg timeline-seg--analyze" style="left:30%;width:55%">LLM 분석 (조기 개시)</div>
+                  <div class="timeline-seg timeline-seg--decide" style="left:85%;width:15%">결정 반영</div>
+                </div>
+                <div class="timeline-legend">
+                  <span><span class="timeline-legend-dot" style="background:var(--brand-secondary)"></span>인증</span>
+                  <span><span class="timeline-legend-dot" style="background:#06b6d4"></span>HCAD 수집</span>
+                  <span><span class="timeline-legend-dot" style="background:var(--brand-primary)"></span>조기 분석</span>
+                  <span><span class="timeline-legend-dot" style="background:var(--zt-block)"></span>결정</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 3: 9차원 행동 신호 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="signal-dimensions">9차원 행동 신호</h2>
+            <p>HCAD는 매 요청마다 <code>HCADContext</code> 값 객체를 생성하며, 여기에 사용자·세션·디바이스·지리·행동·인증·리소스·의도·기준선 정보를 함께 담습니다. 이 객체가 이후 점수 계산과 LLM 컨텍스트의 공통 입력이 됩니다.</p>
+
+            <div class="dimension-wheel">
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">ID</div>
+                <div class="dimension-hex-title">요청 식별</div>
+                <ul class="dimension-hex-items">
+                  <li>userId · sessionId</li>
+                  <li>requestPath · httpMethod</li>
+                  <li>remoteIp</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">GEO</div>
+                <div class="dimension-hex-title">시간·지리</div>
+                <ul class="dimension-hex-items">
+                  <li>country · city</li>
+                  <li>latitude · longitude</li>
+                  <li>currentAccessHour</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">NEW</div>
+                <div class="dimension-hex-title">신규성</div>
+                <ul class="dimension-hex-items">
+                  <li>isNewSession</li>
+                  <li>isNewDevice</li>
+                  <li>isNewUser</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">AUTH</div>
+                <div class="dimension-hex-title">인증</div>
+                <ul class="dimension-hex-items">
+                  <li>authenticationMethod</li>
+                  <li>failedLoginAttempts</li>
+                  <li>hasValidMFA</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">BHV</div>
+                <div class="dimension-hex-title">행동 패턴</div>
+                <ul class="dimension-hex-items">
+                  <li>recentRequestCount (5분)</li>
+                  <li>lastRequestInterval</li>
+                  <li>previousPath</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">BL</div>
+                <div class="dimension-hex-title">평소 행동 기준</div>
+                <ul class="dimension-hex-items">
+                  <li>baselineConfidence</li>
+                  <li>updateCount</li>
+                  <li>avgTrustScore</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">RES</div>
+                <div class="dimension-hex-title">리소스</div>
+                <ul class="dimension-hex-items">
+                  <li>resourceType</li>
+                  <li>isSensitiveResource</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">INT</div>
+                <div class="dimension-hex-title">의도 신호</div>
+                <ul class="dimension-hex-items">
+                  <li>intentBotUserAgent</li>
+                  <li>intentMissingReferer</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">VEC</div>
+                <div class="dimension-hex-title">벡터 변환</div>
+                <ul class="dimension-hex-items">
+                  <li>toVector() — 384차원</li>
+                  <li>toJson()</li>
+                  <li>toCompactString()</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 4: 신호 가중치 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="signals">신호 가중치 모델</h2>
+            <p>신호는 두 종류로 나뉩니다. <strong>핵심 신호(Anchor)</strong>는 단독으로도 조기 분석을 유발할 수 있을 만큼 무거운 가중치를 가집니다. <strong>보조 신호(Corroborating)</strong>는 여러 개가 누적돼야 의미를 갖습니다. 최종 규칙은 "핵심 신호 ≥ 1개 AND 총점 ≥ 70".</p>
+
+            <h3>핵심 신호 (Anchor)</h3>
+            <div class="weight-chart">
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--anchor">A</span>IMPOSSIBLE_TRAVEL</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--anchor" style="width:45%"></div></div>
+                <div class="weight-bar-value">45</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--anchor">A</span>AUTH_CONTEXT_INCONSISTENT</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--anchor" style="width:40%"></div></div>
+                <div class="weight-bar-value">40</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--anchor">A</span>FAILED_LOGIN_BURST</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--anchor" style="width:30%"></div></div>
+                <div class="weight-bar-value">30</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--anchor">A</span>NEW_DEVICE</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--anchor" style="width:25%"></div></div>
+                <div class="weight-bar-value">25</div>
+              </div>
+            </div>
+
+            <h3 style="margin-top:var(--space-6)">보조 신호 (Corroborating)</h3>
+            <div class="weight-chart">
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--corr">C</span>SENSITIVE_SURFACE</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--corr" style="width:20%"></div></div>
+                <div class="weight-bar-value">20</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--corr">C</span>REQUEST_BURST</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--corr" style="width:10%"></div></div>
+                <div class="weight-bar-value">10</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--corr">C</span>RAPID_SEQUENCE</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--corr" style="width:10%"></div></div>
+                <div class="weight-bar-value">10</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--corr">C</span>PREVIOUS_PATH_JUMP</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--corr" style="width:10%"></div></div>
+                <div class="weight-bar-value">10</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--corr">C</span>BASELINE_UNCERTAIN</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--corr" style="width:5%"></div></div>
+                <div class="weight-bar-value">5</div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 5: 점수 밴드 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="bands">위험 점수 밴드</h2>
+            <p>합산 점수는 0~100 척도에서 네 구간으로 분류됩니다. 조기 분석은 RED 구간에 진입하면서 핵심 신호가 포함된 경우에만 발동합니다.</p>
+
+            <div class="score-ruler">
+              <div class="score-ruler-track">
+                <div class="score-ruler-labels">
+                  <span style="flex:0 0 30%">LOW</span>
+                  <span style="flex:0 0 20%">MEDIUM</span>
+                  <span style="flex:0 0 20%">HIGH</span>
+                  <span style="flex:0 0 30%">REDLINE</span>
+                </div>
+                <div class="score-ruler-marker" style="left:30%" data-label="30"></div>
+                <div class="score-ruler-marker" style="left:50%" data-label="50"></div>
+                <div class="score-ruler-marker" style="left:70%" data-label="70 redline"></div>
+              </div>
+              <div class="score-ruler-scale">
+                <span class="score-ruler-tick" style="left:0">0</span>
+                <span class="score-ruler-tick" style="left:25%">25</span>
+                <span class="score-ruler-tick" style="left:50%">50</span>
+                <span class="score-ruler-tick" style="left:75%">75</span>
+                <span class="score-ruler-tick" style="left:100%">100</span>
+              </div>
+            </div>
+
+            <table class="band-table">
+              <thead>
+                <tr>
+                  <th>밴드</th>
+                  <th>점수 구간</th>
+                  <th>의미</th>
+                  <th>조기 분석 개시</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="band-chip band-chip--low">LOW</span></td>
+                  <td>0 – 29</td>
+                  <td>정상 범주</td>
+                  <td>아니오</td>
+                </tr>
+                <tr>
+                  <td><span class="band-chip band-chip--medium">MEDIUM</span></td>
+                  <td>30 – 49</td>
+                  <td>경미한 이상</td>
+                  <td>아니오</td>
+                </tr>
+                <tr>
+                  <td><span class="band-chip band-chip--high">HIGH</span></td>
+                  <td>50 – 69</td>
+                  <td>주시 필요</td>
+                  <td>아니오 (기존 경로)</td>
+                </tr>
+                <tr>
+                  <td><span class="band-chip band-chip--redline">REDLINE</span></td>
+                  <td>70 – 100</td>
+                  <td>즉각 점검 대상</td>
+                  <td><strong>예</strong> (핵심 신호 1개 이상 포함 시)</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="callout-info">
+              <strong>추가 임계값.</strong> <code>highRiskScore=50</code>, <code>mediumRiskScore=30</code>, <code>lowBaselineConfidenceThreshold=0.35</code>. 평소 행동 기준(baseline)의 신뢰도가 0.35 미만인 사용자는 보조 신호 <code>BASELINE_UNCERTAIN</code>이 자동 부여됩니다.
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 6: 판정 레코드 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="assessment">판정 레코드 구조</h2>
+            <p>점수 계산 결과는 불변 레코드 <code>HcadPreProtectablePromotionAssessment</code>에 담겨 <code>HCADContext.additionalAttributes</code>와 HTTP request attribute 양쪽에 투영됩니다. 이 레코드가 이후 감사·설명·평가에 사용되는 공통 진실원천입니다.</p>
+
+            <div class="status-matrix">
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">score</div>
+                <div class="status-matrix-cell">0~100 정수. 모든 신호의 가중치 합산</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">band</div>
+                <div class="status-matrix-cell">LOW · MEDIUM · HIGH · REDLINE 중 하나</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">eligible</div>
+                <div class="status-matrix-cell">조기 분석 개시 대상 여부 (true/false)</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">anchorSignals</div>
+                <div class="status-matrix-cell">감지된 핵심 신호 enum 집합</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">corroboratingSignals</div>
+                <div class="status-matrix-cell">감지된 보조 신호 enum 집합</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">reasonCodes</div>
+                <div class="status-matrix-cell">사유 코드 배열. 운영자 설명 용도</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">summary</div>
+                <div class="status-matrix-cell">한 줄 요약 문자열</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">evaluationVersion</div>
+                <div class="status-matrix-cell">평가 로직 버전. 향후 점수 모델 재튜닝과 비교 재현 용도</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">rawSignalSnapshot</div>
+                <div class="status-matrix-cell">원시 신호 값 스냅샷. verifier 재검증에 사용</div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 7: 조기 분석 트리거 체인 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="trigger-chain">조기 분석 트리거 체인</h2>
+            <p>HCAD 필터 이후 배치되는 <code>AuthenticatedPendingAnomalyTriggerFilter</code>는 5단계 게이트를 통과한 요청에 한해 이벤트를 발행합니다. 각 단계는 서로 독립적으로 실패할 수 있으며, 어떤 단계에서 중단되든 기존 요청 흐름은 영향을 받지 않습니다.</p>
+
+            <div class="gate-chain">
+              <div class="gate-step">
+                <div class="gate-step-num">1</div>
+                <div class="gate-step-name">자격 확인</div>
+                <div class="gate-step-desc">인증 여부 · action=PENDING_ANALYSIS · 평가 존재 확인</div>
+              </div>
+              <div class="gate-step">
+                <div class="gate-step-num">2</div>
+                <div class="gate-step-name">증거 검증</div>
+                <div class="gate-step-desc">설명 필드 준비도 확인. 증거 보고서 생성</div>
+              </div>
+              <div class="gate-step">
+                <div class="gate-step-num">3</div>
+                <div class="gate-step-name">중복 제거</div>
+                <div class="gate-step-desc">재전송 대기 시간(cooldown) 중이면 통과 중단</div>
+              </div>
+              <div class="gate-step">
+                <div class="gate-step-num">4</div>
+                <div class="gate-step-name">동시 실행 제어</div>
+                <div class="gate-step-desc">분산 락(TTL 기반) 획득 시도</div>
+              </div>
+              <div class="gate-step">
+                <div class="gate-step-num">5</div>
+                <div class="gate-step-name">이벤트 발행</div>
+                <div class="gate-step-desc">조기 분석 이벤트 발행 + 재전송 대기 시간 마킹</div>
+              </div>
+            </div>
+
+            <div class="callout-info">
+              <strong>담당 컴포넌트.</strong> <code>PendingAnomalyEligibilityGate</code> (1), <code>PendingAnomalyEvidenceCheckService</code> (2), <code>AnalysisTriggerStateRepository</code> (3·4), <code>PendingAnomalyEventTriggerService</code> (5). 5단계 모두 통과한 요청은 <code>ZeroTrustEventPublisher.publishPreProtectableThreat()</code>로 연결됩니다.
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 8: 평소 행동 기준 학습 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="baseline">평소 행동 기준 학습</h2>
+            <p>HCAD가 "이 사용자에게 정상인가" 를 판단하려면 먼저 무엇이 정상인지 알아야 합니다. <code>BaselineLearningService</code>는 신뢰 등급이 높은 요청에서 IP 대역·접근 시간·경로·User-Agent·OS·인증 방식을 관찰해 개인·조직 두 단계의 기준선을 점진적으로 갱신합니다.</p>
+
+            <h3>학습 방식</h3>
+            <div class="dimension-grid">
+              <div class="dimension-card">
+                <h4>지수 이동 평균 (EMA)</h4>
+                <ul>
+                  <li>newTrust = α·current + (1-α)·old</li>
+                  <li>최근 관측에 더 큰 가중</li>
+                  <li>느린 드리프트 자연 반영</li>
+                </ul>
+              </div>
+              <div class="dimension-card">
+                <h4>최저 빈도 제거 (LFU)</h4>
+                <ul>
+                  <li>IP · 경로 · UA · OS 집합</li>
+                  <li>최소 빈도 요소부터 퇴거</li>
+                  <li>집합 크기 상한 유지</li>
+                </ul>
+              </div>
+              <div class="dimension-card">
+                <h4>개인 기준선</h4>
+                <ul>
+                  <li>최소 10 샘플 이후 활성</li>
+                  <li>신뢰도 단계 상승</li>
+                  <li>사용자별 독립 보관</li>
+                </ul>
+              </div>
+              <div class="dimension-card">
+                <h4>조직 기준선</h4>
+                <ul>
+                  <li>개인 데이터 부재 시 대체</li>
+                  <li>동류 그룹(cohort) 통계</li>
+                  <li>초기 사용자 보호막</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 9: 이벤트 페이로드 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="payload">이벤트 페이로드 필드</h2>
+            <p>5단계 트리거를 통과한 요청은 <code>PRE_PROTECTABLE_REDLINE</code> 이벤트로 발행되며, 이후 기존 비동기 LLM 파이프라인과 감사 시스템이 이 페이로드를 소비합니다. 설계 계약상 모든 판정 근거가 페이로드에 담겨 있어야 하며, 이 구조는 향후 외부 verifier 시나리오에서도 그대로 재사용됩니다.</p>
+
+            <table class="payload-table">
+              <thead>
+                <tr>
+                  <th>필드</th>
+                  <th>타입</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>hcadEscalationScore</code></td>
+                  <td>integer</td>
+                  <td>0~100 위험 점수</td>
+                </tr>
+                <tr>
+                  <td><code>hcadEscalationBand</code></td>
+                  <td>enum</td>
+                  <td>LOW · MEDIUM · HIGH · REDLINE</td>
+                </tr>
+                <tr>
+                  <td><code>hcadEscalationEligible</code></td>
+                  <td>boolean</td>
+                  <td>조기 분석 개시 대상 여부</td>
+                </tr>
+                <tr>
+                  <td><code>hcadEscalationReasons</code></td>
+                  <td>string[]</td>
+                  <td>사유 코드 배열. 감지된 신호 목록</td>
+                </tr>
+                <tr>
+                  <td><code>hcadEscalationSummary</code></td>
+                  <td>string</td>
+                  <td>한 줄 요약. 관리자 알림 용도</td>
+                </tr>
+                <tr>
+                  <td><code>hcadEscalationVersion</code></td>
+                  <td>string</td>
+                  <td>평가 로직 버전. 재현성 보장</td>
+                </tr>
+                <tr>
+                  <td><code>rawSignalSnapshot</code></td>
+                  <td>object</td>
+                  <td>원시 신호 값. verifier 재평가 입력</td>
+                </tr>
+                <tr>
+                  <td><code>action</code></td>
+                  <td>enum</td>
+                  <td>항상 <code>PENDING_ANALYSIS</code>. 실제 집행 액션은 비동기 LLM 분석이 결정</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 10: 인프라 모드와 배선 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="infrastructure">인프라 모드와 배선</h2>
+            <p>HCAD의 세션 메타데이터·요청 카운팅·디바이스 기록은 인프라 모드에 따라 저장소가 다릅니다. 둘은 동일한 <code>HCADDataStore</code> 계약을 구현하므로 애플리케이션 코드는 영향을 받지 않습니다.</p>
+
+            <div class="mode-cards">
+              <div class="mode-card">
+                <h3 style="color:var(--color-info)">STANDALONE</h3>
+                <p>개발·테스트 환경의 기본 모드. 모든 상태가 JVM 내부에 존재합니다.</p>
+                <code>InMemoryHCADDataStore</code>
+                <ul style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--text-secondary);padding-left:var(--space-5)">
+                  <li>ConcurrentHashMap 기반</li>
+                  <li>TreeMap 을 이용한 5분 요청 윈도우</li>
+                  <li>외부 의존성 없음</li>
+                </ul>
+              </div>
+              <div class="mode-card">
+                <h3 style="color:var(--zt-allow)">DISTRIBUTED</h3>
+                <p>다중 인스턴스 운영 환경. 상태를 Redis에 저장하여 전체 노드가 공유합니다.</p>
+                <code>RedisHCADDataStore</code>
+                <ul style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--text-secondary);padding-left:var(--space-5)">
+                  <li>Hash · Set · Sorted Set 구조</li>
+                  <li>세션 TTL 24h · 디바이스 TTL 30d</li>
+                  <li>인스턴스 전체에서 일관된 판정</li>
+                </ul>
+              </div>
+            </div>
+
+            <h3 style="margin-top:var(--space-6)">배선 지점</h3>
+            <div class="status-matrix">
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">HCADFilterConfigurer</div>
+                <div class="status-matrix-cell">Spring Security 필터 체인에 <code>HCADFilter</code>를 Order=30으로 삽입</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">PendingAnomalyTriggerConfigurer</div>
+                <div class="status-matrix-cell">HCAD 필터 이후 트리거 필터 배치</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">CoreHCADAutoConfiguration</div>
+                <div class="status-matrix-cell">점수 산정기·저장소·서비스 빈 자동 등록</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">IdentitySecurityCoreAutoConfiguration</div>
+                <div class="status-matrix-cell">HCAD 경로와 Identity 필터 체인 통합</div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- 관련 문서 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="related">관련 문서</h2>
+            <div class="related-links-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--space-3);margin:var(--space-4) 0">
+              <a href="../../../docs/reference/architecture/overview.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">플랫폼 아키텍처</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">모듈 개요 및 요청 흐름</span>
+              </a>
+              <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Zero Trust 흐름</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">비동기 분석과 동기 집행</span>
+              </a>
+              <a href="../../../docs/reference/iam/protectable.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">@Protectable</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">보호 대상 어노테이션</span>
+              </a>
+              <a href="../../../docs/install/shadow-mode.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Shadow Mode</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">점진적 도입 전략</span>
+              </a>
+            </div>
+          </section>
+
+
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/architecture/overview.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">플랫폼 아키텍처</span>
+            </a>
+            <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">Zero Trust 흐름</span>
+            </a>
+          </div>

@@ -1,0 +1,614 @@
+<!-- Breadcrumb -->
+          <nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">HCAD Early Threat Detection</span>
+          </nav>
+
+          <!-- Page Header -->
+          <div class="docs-page-header">
+            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
+              <span class="badge">contexa-core</span>
+              <span class="badge">contexa-identity</span>
+              <span class="badge">hcad</span>
+            </div>
+            <h1>HCAD Early Threat Detection</h1>
+            <p class="lead">HCAD (Host &amp; Context Anomaly Detection) collects behavioural signals from authenticated HTTP requests, scores them, and starts the asynchronous AI analysis pipeline <em>before</em> the request ever reaches a protected resource (<code>@Protectable</code>). HCAD itself never blocks or challenges &mdash; it only decides whether the LLM pipeline should start analysing early.</p>
+          </div>
+
+
+          <!-- ============================================ -->
+          <!-- Section 1: Overview -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="overview">Overview</h2>
+            <p>HCAD early threat detection runs inside the Spring Security filter chain at Order = 30, well before controllers or <code>@Protectable</code> methods are reached. On every request it collects nine dimensions of behavioural signals, combines them into a risk score using anchor and corroborating signal weights, and emits an early-analysis event when the score crosses <code>redlineScore = 70</code> with at least one anchor signal present.</p>
+
+            <div class="callout-info">
+              <strong>Design principle.</strong> HCAD always lets requests through (fail-open) and never blocks or challenges on its own. Enforcement is still handled exclusively by the existing asynchronous Zero Trust path backed by <code>ZeroTrustActionRepository</code>. HCAD only makes that path start earlier.
+            </div>
+
+            <h3 style="margin-top:var(--space-6)">From request arrival to decision</h3>
+            <div class="journey-arc">
+              <div class="journey-node">
+                <div class="journey-node-stage">Stage 1</div>
+                <div class="journey-node-name">HTTP request</div>
+                <div class="journey-node-desc">Authenticated session enters the filter chain</div>
+              </div>
+              <div class="journey-node">
+                <div class="journey-node-stage">Stage 2</div>
+                <div class="journey-node-name">HCADFilter</div>
+                <div class="journey-node-desc">Collects signals. Never blocks.</div>
+              </div>
+              <div class="journey-node">
+                <div class="journey-node-stage">Stage 3</div>
+                <div class="journey-node-name">Signal scoring</div>
+                <div class="journey-node-desc">9 dimensions &rarr; risk score</div>
+              </div>
+              <div class="journey-node">
+                <div class="journey-node-stage">Stage 4</div>
+                <div class="journey-node-name">Early analysis</div>
+                <div class="journey-node-desc">Fires an AI event when the threshold is crossed</div>
+              </div>
+              <div class="journey-node">
+                <div class="journey-node-stage">Stage 5</div>
+                <div class="journey-node-name">LLM pipeline</div>
+                <div class="journey-node-desc">Joins the existing async analysis path</div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 2: Timing comparison -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="timing">When analysis begins</h2>
+            <p>Without HCAD early detection, AI analysis begins only when a protected resource is reached. With HCAD enabled, requests that already carry strong anomaly signals get their analysis scheduled at the filter stage &mdash; before any controller code runs.</p>
+
+            <div class="timeline-compare">
+              <div class="timeline-col timeline-col--baseline">
+                <div class="timeline-col-title">Baseline path (no early detection)</div>
+                <div class="timeline-track">
+                  <div class="timeline-seg timeline-seg--auth" style="left:0;width:15%">Auth</div>
+                  <div class="timeline-seg timeline-seg--filter" style="left:15%;width:15%">Filter</div>
+                  <div class="timeline-seg timeline-seg--wait" style="left:30%;width:40%">Waiting for controller</div>
+                  <div class="timeline-seg timeline-seg--analyze" style="left:70%;width:20%">LLM</div>
+                  <div class="timeline-seg timeline-seg--decide" style="left:90%;width:10%">Enforce</div>
+                </div>
+                <div class="timeline-legend">
+                  <span><span class="timeline-legend-dot" style="background:var(--brand-secondary)"></span>Authentication</span>
+                  <span><span class="timeline-legend-dot" style="background:#06b6d4"></span>Filter chain</span>
+                  <span><span class="timeline-legend-dot" style="background:#94a3b8"></span>Idle wait</span>
+                  <span><span class="timeline-legend-dot" style="background:var(--brand-primary)"></span>LLM analysis</span>
+                </div>
+              </div>
+              <div class="timeline-col timeline-col--hcad">
+                <div class="timeline-col-title">With HCAD early detection</div>
+                <div class="timeline-track">
+                  <div class="timeline-seg timeline-seg--auth" style="left:0;width:15%">Auth</div>
+                  <div class="timeline-seg timeline-seg--filter" style="left:15%;width:15%">HCAD</div>
+                  <div class="timeline-seg timeline-seg--analyze" style="left:30%;width:55%">LLM analysis (early)</div>
+                  <div class="timeline-seg timeline-seg--decide" style="left:85%;width:15%">Enforce</div>
+                </div>
+                <div class="timeline-legend">
+                  <span><span class="timeline-legend-dot" style="background:var(--brand-secondary)"></span>Authentication</span>
+                  <span><span class="timeline-legend-dot" style="background:#06b6d4"></span>HCAD collection</span>
+                  <span><span class="timeline-legend-dot" style="background:var(--brand-primary)"></span>Early analysis</span>
+                  <span><span class="timeline-legend-dot" style="background:var(--zt-block)"></span>Enforcement</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 3: Nine signal dimensions -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="signal-dimensions">Nine behavioural signal dimensions</h2>
+            <p>On every request, HCAD builds an <code>HCADContext</code> value object that carries nine dimensions of information: identity, session, device, geography, behaviour, authentication, resource, intent, and baseline. The same object is used by the scorer and later by the LLM pipeline as shared context.</p>
+
+            <div class="dimension-wheel">
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">ID</div>
+                <div class="dimension-hex-title">Request identity</div>
+                <ul class="dimension-hex-items">
+                  <li>userId &middot; sessionId</li>
+                  <li>requestPath &middot; httpMethod</li>
+                  <li>remoteIp</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">GEO</div>
+                <div class="dimension-hex-title">Time &amp; geography</div>
+                <ul class="dimension-hex-items">
+                  <li>country &middot; city</li>
+                  <li>latitude &middot; longitude</li>
+                  <li>currentAccessHour</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">NEW</div>
+                <div class="dimension-hex-title">Novelty</div>
+                <ul class="dimension-hex-items">
+                  <li>isNewSession</li>
+                  <li>isNewDevice</li>
+                  <li>isNewUser</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">AUTH</div>
+                <div class="dimension-hex-title">Authentication</div>
+                <ul class="dimension-hex-items">
+                  <li>authenticationMethod</li>
+                  <li>failedLoginAttempts</li>
+                  <li>hasValidMFA</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">BHV</div>
+                <div class="dimension-hex-title">Behaviour pattern</div>
+                <ul class="dimension-hex-items">
+                  <li>recentRequestCount (5 min)</li>
+                  <li>lastRequestInterval</li>
+                  <li>previousPath</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">BL</div>
+                <div class="dimension-hex-title">Normal-behaviour baseline</div>
+                <ul class="dimension-hex-items">
+                  <li>baselineConfidence</li>
+                  <li>updateCount</li>
+                  <li>avgTrustScore</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">RES</div>
+                <div class="dimension-hex-title">Resource</div>
+                <ul class="dimension-hex-items">
+                  <li>resourceType</li>
+                  <li>isSensitiveResource</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">INT</div>
+                <div class="dimension-hex-title">Intent</div>
+                <ul class="dimension-hex-items">
+                  <li>intentBotUserAgent</li>
+                  <li>intentMissingReferer</li>
+                </ul>
+              </div>
+              <div class="dimension-hex">
+                <div class="dimension-hex-icon">VEC</div>
+                <div class="dimension-hex-title">Vectorisation</div>
+                <ul class="dimension-hex-items">
+                  <li>toVector() &mdash; 384 dims</li>
+                  <li>toJson()</li>
+                  <li>toCompactString()</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 4: Signal weights -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="signals">Signal weight model</h2>
+            <p>Signals fall into two classes. <strong>Anchor signals</strong> are heavy enough that a single anchor can push the request into the early-analysis path. <strong>Corroborating signals</strong> carry meaning only when several accumulate. The final rule is "at least one anchor AND total &ge; 70".</p>
+
+            <h3>Anchor signals</h3>
+            <div class="weight-chart">
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--anchor">A</span>IMPOSSIBLE_TRAVEL</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--anchor" style="width:45%"></div></div>
+                <div class="weight-bar-value">45</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--anchor">A</span>AUTH_CONTEXT_INCONSISTENT</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--anchor" style="width:40%"></div></div>
+                <div class="weight-bar-value">40</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--anchor">A</span>FAILED_LOGIN_BURST</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--anchor" style="width:30%"></div></div>
+                <div class="weight-bar-value">30</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--anchor">A</span>NEW_DEVICE</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--anchor" style="width:25%"></div></div>
+                <div class="weight-bar-value">25</div>
+              </div>
+            </div>
+
+            <h3 style="margin-top:var(--space-6)">Corroborating signals</h3>
+            <div class="weight-chart">
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--corr">C</span>SENSITIVE_SURFACE</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--corr" style="width:20%"></div></div>
+                <div class="weight-bar-value">20</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--corr">C</span>REQUEST_BURST</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--corr" style="width:10%"></div></div>
+                <div class="weight-bar-value">10</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--corr">C</span>RAPID_SEQUENCE</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--corr" style="width:10%"></div></div>
+                <div class="weight-bar-value">10</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--corr">C</span>PREVIOUS_PATH_JUMP</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--corr" style="width:10%"></div></div>
+                <div class="weight-bar-value">10</div>
+              </div>
+              <div class="weight-bar-row">
+                <div class="weight-bar-label"><span class="weight-bar-tag weight-bar-tag--corr">C</span>BASELINE_UNCERTAIN</div>
+                <div class="weight-bar-track"><div class="weight-bar-fill weight-bar-fill--corr" style="width:5%"></div></div>
+                <div class="weight-bar-value">5</div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 5: Score bands -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="bands">Risk score bands</h2>
+            <p>The aggregated score on a 0&ndash;100 scale is classified into four bands. Early analysis kicks in once the request enters the RED band <em>and</em> an anchor signal is present.</p>
+
+            <div class="score-ruler">
+              <div class="score-ruler-track">
+                <div class="score-ruler-labels">
+                  <span style="flex:0 0 30%">LOW</span>
+                  <span style="flex:0 0 20%">MEDIUM</span>
+                  <span style="flex:0 0 20%">HIGH</span>
+                  <span style="flex:0 0 30%">REDLINE</span>
+                </div>
+                <div class="score-ruler-marker" style="left:30%" data-label="30"></div>
+                <div class="score-ruler-marker" style="left:50%" data-label="50"></div>
+                <div class="score-ruler-marker" style="left:70%" data-label="70 redline"></div>
+              </div>
+              <div class="score-ruler-scale">
+                <span class="score-ruler-tick" style="left:0">0</span>
+                <span class="score-ruler-tick" style="left:25%">25</span>
+                <span class="score-ruler-tick" style="left:50%">50</span>
+                <span class="score-ruler-tick" style="left:75%">75</span>
+                <span class="score-ruler-tick" style="left:100%">100</span>
+              </div>
+            </div>
+
+            <table class="band-table">
+              <thead>
+                <tr>
+                  <th>Band</th>
+                  <th>Score range</th>
+                  <th>Meaning</th>
+                  <th>Triggers early analysis</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="band-chip band-chip--low">LOW</span></td>
+                  <td>0 &ndash; 29</td>
+                  <td>Normal</td>
+                  <td>No</td>
+                </tr>
+                <tr>
+                  <td><span class="band-chip band-chip--medium">MEDIUM</span></td>
+                  <td>30 &ndash; 49</td>
+                  <td>Mild anomaly</td>
+                  <td>No</td>
+                </tr>
+                <tr>
+                  <td><span class="band-chip band-chip--high">HIGH</span></td>
+                  <td>50 &ndash; 69</td>
+                  <td>Worth watching</td>
+                  <td>No (existing path handles it)</td>
+                </tr>
+                <tr>
+                  <td><span class="band-chip band-chip--redline">REDLINE</span></td>
+                  <td>70 &ndash; 100</td>
+                  <td>Inspect now</td>
+                  <td><strong>Yes</strong>, provided an anchor signal is present</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="callout-info">
+              <strong>Other thresholds.</strong> <code>highRiskScore = 50</code>, <code>mediumRiskScore = 30</code>, <code>lowBaselineConfidenceThreshold = 0.35</code>. When a user's normal-behaviour baseline confidence is below 0.35, the corroborating signal <code>BASELINE_UNCERTAIN</code> is added automatically.
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 6: Assessment record -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="assessment">Assessment record structure</h2>
+            <p>The scorer output is stored in an immutable record &mdash; <code>HcadPreProtectablePromotionAssessment</code> &mdash; and projected into both <code>HCADContext.additionalAttributes</code> and HTTP request attributes. This record is the single source of truth for every downstream explanation, audit entry, and verifier replay.</p>
+
+            <div class="status-matrix">
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">score</div>
+                <div class="status-matrix-cell">Integer from 0 to 100. Sum of all signal weights</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">band</div>
+                <div class="status-matrix-cell">One of LOW &middot; MEDIUM &middot; HIGH &middot; REDLINE</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">eligible</div>
+                <div class="status-matrix-cell">Whether the request qualifies for early analysis (true/false)</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">anchorSignals</div>
+                <div class="status-matrix-cell">Set of detected anchor signal enums</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">corroboratingSignals</div>
+                <div class="status-matrix-cell">Set of detected corroborating signal enums</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">reasonCodes</div>
+                <div class="status-matrix-cell">Array of reason codes. Used for operator explanations</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">summary</div>
+                <div class="status-matrix-cell">One-line summary string</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">evaluationVersion</div>
+                <div class="status-matrix-cell">Scorer version. Enables reproducible comparison across model updates</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">rawSignalSnapshot</div>
+                <div class="status-matrix-cell">Snapshot of raw signal values. Used by verifiers for replay</div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 7: Early-analysis trigger chain -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="trigger-chain">Early-analysis trigger chain</h2>
+            <p>Placed right after the HCAD filter, <code>AuthenticatedPendingAnomalyTriggerFilter</code> publishes an event only when a request passes five sequential gates. Any gate can stop the flow independently &mdash; the original request path is never affected.</p>
+
+            <div class="gate-chain">
+              <div class="gate-step">
+                <div class="gate-step-num">1</div>
+                <div class="gate-step-name">Eligibility</div>
+                <div class="gate-step-desc">Authenticated · action = PENDING_ANALYSIS · assessment present</div>
+              </div>
+              <div class="gate-step">
+                <div class="gate-step-num">2</div>
+                <div class="gate-step-name">Evidence</div>
+                <div class="gate-step-desc">Explanation fields complete. Produces evidence report</div>
+              </div>
+              <div class="gate-step">
+                <div class="gate-step-num">3</div>
+                <div class="gate-step-name">Dedup</div>
+                <div class="gate-step-desc">Skips if still inside cooldown (resend wait) window</div>
+              </div>
+              <div class="gate-step">
+                <div class="gate-step-num">4</div>
+                <div class="gate-step-name">In-flight lock</div>
+                <div class="gate-step-desc">Attempts to acquire a TTL-based distributed lock</div>
+              </div>
+              <div class="gate-step">
+                <div class="gate-step-num">5</div>
+                <div class="gate-step-name">Publish</div>
+                <div class="gate-step-desc">Emits the early-analysis event and marks cooldown</div>
+              </div>
+            </div>
+
+            <div class="callout-info">
+              <strong>Responsible components.</strong> <code>PendingAnomalyEligibilityGate</code> (1), <code>PendingAnomalyEvidenceCheckService</code> (2), <code>AnalysisTriggerStateRepository</code> (3 &amp; 4), <code>PendingAnomalyEventTriggerService</code> (5). Requests passing all five gates are forwarded to <code>ZeroTrustEventPublisher.publishPreProtectableThreat()</code>.
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 8: Baseline learning -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="baseline">Normal-behaviour baseline learning</h2>
+            <p>Before HCAD can decide what is abnormal for a user, it has to learn what is normal. <code>BaselineLearningService</code> observes high-trust requests and incrementally updates two baselines &mdash; one per user, one per cohort &mdash; across IP ranges, access hours, paths, User-Agents, operating systems, and authentication methods.</p>
+
+            <h3>Learning mechanics</h3>
+            <div class="dimension-grid">
+              <div class="dimension-card">
+                <h4>Exponential Moving Average (EMA)</h4>
+                <ul>
+                  <li>newTrust = &alpha;&middot;current + (1-&alpha;)&middot;old</li>
+                  <li>Weights recent observations more</li>
+                  <li>Absorbs gradual drift naturally</li>
+                </ul>
+              </div>
+              <div class="dimension-card">
+                <h4>Least-Frequently-Used eviction</h4>
+                <ul>
+                  <li>IP &middot; path &middot; UA &middot; OS sets</li>
+                  <li>Drops the least-frequent element first</li>
+                  <li>Keeps set sizes bounded</li>
+                </ul>
+              </div>
+              <div class="dimension-card">
+                <h4>Personal baseline</h4>
+                <ul>
+                  <li>Activates after 10+ samples</li>
+                  <li>Confidence tier rises gradually</li>
+                  <li>Stored per user</li>
+                </ul>
+              </div>
+              <div class="dimension-card">
+                <h4>Organisational baseline</h4>
+                <ul>
+                  <li>Fallback when personal data is absent</li>
+                  <li>Cohort-level statistics</li>
+                  <li>Protects brand-new users</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 9: Event payload -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="payload">Event payload fields</h2>
+            <p>Requests that clear all five gates are published as <code>PRE_PROTECTABLE_REDLINE</code> events and then consumed by the existing asynchronous LLM pipeline and audit system. The payload contract carries every judgement input, so the same structure can later be reused by external verifier scenarios.</p>
+
+            <table class="payload-table">
+              <thead>
+                <tr>
+                  <th>Field</th>
+                  <th>Type</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>hcadEscalationScore</code></td>
+                  <td>integer</td>
+                  <td>Risk score between 0 and 100</td>
+                </tr>
+                <tr>
+                  <td><code>hcadEscalationBand</code></td>
+                  <td>enum</td>
+                  <td>LOW &middot; MEDIUM &middot; HIGH &middot; REDLINE</td>
+                </tr>
+                <tr>
+                  <td><code>hcadEscalationEligible</code></td>
+                  <td>boolean</td>
+                  <td>Whether early analysis fired</td>
+                </tr>
+                <tr>
+                  <td><code>hcadEscalationReasons</code></td>
+                  <td>string[]</td>
+                  <td>Reason codes for each detected signal</td>
+                </tr>
+                <tr>
+                  <td><code>hcadEscalationSummary</code></td>
+                  <td>string</td>
+                  <td>One-line summary for operator alerts</td>
+                </tr>
+                <tr>
+                  <td><code>hcadEscalationVersion</code></td>
+                  <td>string</td>
+                  <td>Scorer version &mdash; ensures reproducibility</td>
+                </tr>
+                <tr>
+                  <td><code>rawSignalSnapshot</code></td>
+                  <td>object</td>
+                  <td>Raw signal values for verifier replay</td>
+                </tr>
+                <tr>
+                  <td><code>action</code></td>
+                  <td>enum</td>
+                  <td>Always <code>PENDING_ANALYSIS</code>. Enforcement action is decided by the LLM pipeline later</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 10: Infrastructure modes &amp; wiring -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="infrastructure">Infrastructure modes &amp; wiring</h2>
+            <p>HCAD's session metadata, request counters, and device records live in a storage layer that swaps implementations based on the infrastructure mode. Both implementations satisfy the same <code>HCADDataStore</code> contract, so application code is unaffected.</p>
+
+            <div class="mode-cards">
+              <div class="mode-card">
+                <h3 style="color:var(--color-info)">STANDALONE</h3>
+                <p>Default mode for development and testing. All state lives in-process.</p>
+                <code>InMemoryHCADDataStore</code>
+                <ul style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--text-secondary);padding-left:var(--space-5)">
+                  <li>Backed by <code>ConcurrentHashMap</code></li>
+                  <li><code>TreeMap</code> 5-minute request window</li>
+                  <li>Zero external dependencies</li>
+                </ul>
+              </div>
+              <div class="mode-card">
+                <h3 style="color:var(--zt-allow)">DISTRIBUTED</h3>
+                <p>Multi-instance deployments. State is shared through Redis.</p>
+                <code>RedisHCADDataStore</code>
+                <ul style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--text-secondary);padding-left:var(--space-5)">
+                  <li>Hash &middot; Set &middot; Sorted Set structures</li>
+                  <li>Session TTL 24 h &middot; device TTL 30 d</li>
+                  <li>Consistent judgement across all instances</li>
+                </ul>
+              </div>
+            </div>
+
+            <h3 style="margin-top:var(--space-6)">Wiring points</h3>
+            <div class="status-matrix">
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">HCADFilterConfigurer</div>
+                <div class="status-matrix-cell">Inserts <code>HCADFilter</code> into the Spring Security filter chain at Order = 30</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">PendingAnomalyTriggerConfigurer</div>
+                <div class="status-matrix-cell">Places the trigger filter immediately after HCADFilter</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">CoreHCADAutoConfiguration</div>
+                <div class="status-matrix-cell">Registers the scorer, data store and service beans</div>
+              </div>
+              <div class="status-matrix-row">
+                <div class="status-matrix-cell status-matrix-key">IdentitySecurityCoreAutoConfiguration</div>
+                <div class="status-matrix-cell">Integrates the HCAD path with the rest of the identity filter chain</div>
+              </div>
+            </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Related documents -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="related">Related documentation</h2>
+            <div class="related-links-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--space-3);margin:var(--space-4) 0">
+              <a href="../../../docs/reference/architecture/overview.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Platform Architecture</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Module overview and request flow</span>
+              </a>
+              <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Zero Trust Flow</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Asynchronous analysis and synchronous enforcement</span>
+              </a>
+              <a href="../../../docs/reference/iam/protectable.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">@Protectable</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Protected resource annotation</span>
+              </a>
+              <a href="../../../docs/install/shadow-mode.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Shadow Mode</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Gradual adoption strategy</span>
+              </a>
+            </div>
+          </section>
+
+
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/architecture/overview.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Platform Architecture</span>
+            </a>
+            <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Zero Trust Flow</span>
+            </a>
+          </div>
