@@ -8,10 +8,25 @@
 
   var scrollHandler = null;
 
+  function ensureTocSidebar(content) {
+    var tocSidebar = document.getElementById('docs-toc-sidebar');
+    if (tocSidebar) return tocSidebar;
+
+    var docsLayout = content.closest('.docs-layout') || document.querySelector('.docs-layout');
+    if (!docsLayout) return null;
+
+    tocSidebar = document.createElement('aside');
+    tocSidebar.className = 'docs-toc-sidebar';
+    tocSidebar.id = 'docs-toc-sidebar';
+    tocSidebar.setAttribute('aria-label', 'On this page navigation');
+    docsLayout.appendChild(tocSidebar);
+    return tocSidebar;
+  }
+
   function init() {
     var content = document.querySelector('.docs-content-inner');
-    var tocSidebar = document.getElementById('docs-toc-sidebar');
     if (!content) return;
+    var tocSidebar = ensureTocSidebar(content);
 
     // Clean up previous TOC
     if (tocSidebar) tocSidebar.innerHTML = '';
@@ -25,7 +40,12 @@
     }
 
     var headings = content.querySelectorAll('h2[id], h3[id]');
-    if (headings.length < 2) return;
+    if (headings.length < 2) {
+      if (tocSidebar) tocSidebar.hidden = true;
+      return;
+    }
+    if (!tocSidebar) return;
+    tocSidebar.hidden = false;
 
     // Build TOC
     var toc = document.createElement('nav');
@@ -64,17 +84,8 @@
     toc.appendChild(title);
     toc.appendChild(list);
 
-    // Insert into right sidebar if available, else inline
-    if (tocSidebar) {
-      tocSidebar.appendChild(toc);
-    } else {
-      var pageHeader = content.querySelector('.docs-page-header');
-      if (pageHeader && pageHeader.nextSibling) {
-        pageHeader.parentNode.insertBefore(toc, pageHeader.nextSibling);
-      } else {
-        content.insertBefore(toc, content.firstChild);
-      }
-    }
+    // TOC is always rendered into the right-side docs column.
+    tocSidebar.appendChild(toc);
 
     // Scroll spy
     initScrollSpy(headings, list);

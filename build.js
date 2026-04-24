@@ -108,6 +108,53 @@ function rewriteInternalAttributesToAbsolute(html, relPath, lang) {
     return attr + '="' + rewritten + '"';
   });
 }
+
+function appendInsideFirstElementByClass(html, className, insertion) {
+  const classPattern = new RegExp(`<([a-zA-Z][\\w:-]*)\\b[^>]*class="[^"]*\\b${className}\\b[^"]*"[^>]*>`, 'i');
+  const openMatch = classPattern.exec(html);
+  if (!openMatch) return html;
+
+  const tagName = openMatch[1].toLowerCase();
+  const startIndex = openMatch.index;
+  const openEndIndex = startIndex + openMatch[0].length;
+  const tagPattern = new RegExp(`<\\/?${tagName}\\b[^>]*>`, 'gi');
+  tagPattern.lastIndex = startIndex;
+
+  let depth = 0;
+  let match;
+  while ((match = tagPattern.exec(html)) !== null) {
+    const token = match[0];
+    const isClosing = token.startsWith('</');
+    const isSelfClosing = token.endsWith('/>');
+
+    if (!isClosing) {
+      if (!isSelfClosing) depth++;
+      continue;
+    }
+
+    depth--;
+    if (depth === 0 && match.index >= openEndIndex) {
+      return html.slice(0, match.index) + insertion + html.slice(match.index);
+    }
+  }
+
+  return html;
+}
+
+function ensureDocsTocSidebar(html, relPath) {
+  if (!(relPath.startsWith('docs' + path.sep) || relPath.startsWith('docs/'))) {
+    return html;
+  }
+  if (html.indexOf('id="docs-toc-sidebar"') !== -1) {
+    return html;
+  }
+
+  return appendInsideFirstElementByClass(
+    html,
+    'docs-layout',
+    '      <aside class="docs-toc-sidebar" id="docs-toc-sidebar" aria-label="On this page navigation"></aside>\n'
+  );
+}
 // ?? i18n Marker Resolution ?????????????????????????????????
 
 function flattenObject(obj, prefix) {
@@ -284,16 +331,8 @@ function build() {
         html = html.replace(/\n\s*<!-- Mobile sidebar toggle button -->\s*\n/g, '\n');
 
         // 13. Inject right-side TOC sidebar container for docs pages
-        //     Must be inside .docs-layout (flex sibling of .docs-content)
-        if (relPath.startsWith('docs' + path.sep) || relPath.startsWith('docs/')) {
-          if (html.indexOf('docs-toc-sidebar') === -1) {
-            // Insert before the closing </div> of .docs-layout, which is followed by </main>
-            html = html.replace(
-              /(    <\/div>\n  <\/main>)/,
-              '      <aside class="docs-toc-sidebar" id="docs-toc-sidebar"></aside>\n$1'
-            );
-          }
-        }
+        //     Must be inside .docs-layout (flex sibling of .docs-content).
+        html = ensureDocsTocSidebar(html, relPath);
 
         // Write output
         fs.mkdirSync(path.dirname(outFile), { recursive: true });
