@@ -278,6 +278,125 @@ docker compose up -d</code></pre>
         <section>
           <h2 id="troubleshooting">문제 해결</h2>
 
+          <h3 id="enable-ai-security-startup-errors"><code>@EnableAISecurity</code> 시동 오류 가이드</h3>
+          <p>수동 설치로 <code>spring-boot-starter-contexa</code> 만 추가하고 <code>@EnableAISecurity</code> 를 선언하면, 시동 시점에 다음 세 가지 오류가 순서대로 노출될 수 있습니다. <strong>contexa-cli 가 자동으로 추가하는 의존성은 <code>spring-boot-starter-contexa</code> 한 개뿐</strong>이므로, 나머지는 사용자가 본인 빌드에 직접 추가해야 합니다. 각 오류마다 원인과 해결책을 정확히 표시합니다.</p>
+
+          <h4>오류 1 — <code>contexa.datasource.url must be configured for @EnableAISecurity</code></h4>
+          <div class="callout callout-warning">
+            <p><strong>전체 메시지</strong>: <code>java.lang.IllegalStateException: contexa.datasource.url must be configured for @EnableAISecurity. Use a dedicated Contexa database by default; sharing the application database requires explicit POC approval.</code></p>
+          </div>
+          <p><strong>원인</strong> — Contexa 는 보안 정책·세션·벡터 인덱스를 사용자 운영 DB 와 분리된 전용 PostgreSQL 에 저장합니다. <code>@EnableAISecurity</code> 가 활성화되면 <code>contexa.datasource.url</code> 이 반드시 설정되어 있어야 하며, 미설정 시 <code>ContexaDataSourceIsolation</code> 검증이 즉시 실패합니다.</p>
+          <p><strong>해결</strong> — 사용자 <code>application.yml</code> 에 contexa 전용 데이터소스 설정을 추가합니다.</p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">application.yml</span></div>
+            <pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+    username: ${CONTEXA_DB_USERNAME:contexa}
+    password: ${CONTEXA_DB_PASSWORD:contexa1234!@#}
+    driver-class-name: org.postgresql.Driver
+    isolation:
+      contexa-owned-application: true</code></pre>
+          </div>
+          <p>운영 DB 와 동일 인스턴스에 별도 스키마로 두려면 운영팀과 사전 승인 후 같은 URL 을 사용하실 수 있습니다. 기본은 별도 DB(권장).</p>
+
+          <h4>오류 2 — <code>No Spring AI ChatModel is configured for CONTEXA</code></h4>
+          <div class="callout callout-warning">
+            <p><strong>전체 메시지</strong>: <code>No Spring AI ChatModel is configured for CONTEXA. Add at least one Spring AI chat provider starter to your application dependencies (for example org.springframework.ai:spring-ai-starter-model-openai, org.springframework.ai:spring-ai-starter-model-anthropic, or org.springframework.ai:spring-ai-starter-model-ollama), then configure the matching provider under spring.ai.*</code></p>
+          </div>
+          <p><strong>원인</strong> — Contexa 의 LLM 티어 자동 설정(<code>CoreLLMTieredAutoConfiguration</code>) 이 ChatModel 빈을 요구하지만, classpath 에 Spring AI provider starter 가 없습니다. <code>spring-boot-starter-contexa</code> 는 ChatModel starter 를 transitive 의존성으로 끌고 오지 <strong>않습니다</strong> — 어떤 provider(Ollama/OpenAI/Anthropic) 를 쓰실지는 사용자 결정이라서입니다.</p>
+          <p><strong>해결</strong> — 본인이 사용하실 provider starter 한 개 이상을 빌드에 추가하시고, 매칭 설정을 <code>spring.ai.*</code> 아래에 두십시오.</p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">build.gradle (Ollama 예시)</span></div>
+            <pre><code class="language-groovy">dependencies {
+    implementation 'ai.ctxa:spring-boot-starter-contexa:0.1.0'
+    // 아래는 @EnableAISecurity 사용 시 직접 추가 (provider 1개 이상)
+    implementation 'org.springframework.ai:spring-ai-starter-model-ollama'
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">application.yml (Ollama 예시)</span></div>
+            <pre><code class="language-yaml">spring:
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: qwen2.5:7b
+          keep-alive: "24h"
+      embedding:
+        enabled: true
+        model: mxbai-embed-large</code></pre>
+          </div>
+          <p>OpenAI 또는 Anthropic 사용 시 <code>spring-ai-starter-model-openai</code> / <code>spring-ai-starter-model-anthropic</code> 으로 교체하시고 <code>spring.ai.openai.*</code> / <code>spring.ai.anthropic.*</code> 에 API 키를 설정하십시오.</p>
+
+          <h4>오류 3 — <code>rag-vector capability unresolved</code> / <code>SecurityDecisionPostProcessor</code> 미생성</h4>
+          <div class="callout callout-warning">
+            <p><strong>전체 메시지(요약)</strong>: <code>[ContexaCapability] rag-vector ... Resolve rag-vector first; SecurityDecisionPostProcessor is created only after UnifiedVectorService is available.</code></p>
+          </div>
+          <p><strong>원인</strong> — <code>@EnableAISecurity</code> 의 의사결정 후처리기(<code>SecurityDecisionPostProcessor</code>) 가 <code>UnifiedVectorService</code> 를 의존하고, 그 뿌리에는 Spring AI <code>VectorStore</code> 빈이 있습니다. classpath 에 pgvector 벡터스토어 starter 가 없으면 <code>rag-vector</code> capability 가 미해결되어 후속 빈 트리가 생성되지 않습니다.</p>
+          <p><strong>해결</strong> — pgvector 벡터스토어 starter 를 추가하시고, <code>contexa.vectorstore.pgvector.*</code> 를 설정합니다. PostgreSQL 컨테이너는 <code>pgvector/pgvector:pg16</code> 이미지를 사용하셔야 <code>vector</code> 확장이 자동 활성화됩니다.</p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">build.gradle</span></div>
+            <pre><code class="language-groovy">dependencies {
+    implementation 'org.springframework.ai:spring-ai-starter-vector-store-pgvector'
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">application.yml</span></div>
+            <pre><code class="language-yaml">contexa:
+  vectorstore:
+    pgvector:
+      table-name: vector_store
+      index-type: HNSW
+      distance-type: COSINE_DISTANCE
+      dimensions: 1024
+      initialize-schema: true</code></pre>
+          </div>
+
+          <div class="callout callout-info">
+            <p><strong>왜 contexa-cli 가 spring-ai-* 를 자동 추가하지 않는가</strong> — Spring AI provider/벡터스토어 starter 를 모든 사용자에게 자동 주입하면 <code>@EnableAISecurity</code> 를 선언하지 <strong>않은</strong> 사용자 앱에서도 <code>PgVectorStore</code> / <code>ChatModel</code> 빈이 생성되려 시도하면서 시동이 깨집니다. Contexa 의 contract 는 "한 줄(<code>spring-boot-starter-contexa</code>)만 추가, 나머지는 사용자 결정" 입니다. <code>contexa init</code> 종료 시점에도 next.steps 에 위 의존성 라인을 그대로 출력해 드립니다.</p>
+          </div>
+
+          <h3 id="infra-troubleshooting">인프라 문제 해결</h3>
+
+          <h4>컨테이너 이름 충돌 — <code>The container name "/contexa-postgres" is already in use</code></h4>
+          <div class="callout callout-warning">
+            <p><strong>전체 메시지(요약)</strong>: <code>Error response from daemon: Conflict. The container name "/contexa-postgres" is already in use by container "&lt;hash&gt;". You have to remove (or rename) that container to be able to reuse that name.</code></p>
+            <p>이어서 contexa-cli 가 출력: <code>× Docker start failed. Run manually: docker compose up -d</code></p>
+          </div>
+          <p><strong>원인</strong> — 같은 이름의 컨테이너(<code>contexa-postgres</code>, <code>contexa-ollama</code> 등) 가 이미 호스트에 존재합니다. Docker 데몬은 같은 이름의 컨테이너 두 개를 동시에 가질 수 없습니다. 보통 다음 두 케이스입니다:</p>
+          <ul>
+            <li>이전 <code>contexa init</code> 실행이 만든 컨테이너가 그대로 살아있음 → <strong>그대로 사용해도 무방</strong></li>
+            <li>다른 프로젝트가 같은 이름을 점유 중 → <strong>그쪽을 정리하거나 simulate 격리 모드로 전환</strong></li>
+          </ul>
+          <p><strong>해결 방법 1 — 기존 컨테이너 그대로 사용 (권장, 데이터 보존)</strong></p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">Shell</span></div>
+            <pre><code class="language-bash"># 1) 기존 컨테이너가 떠있는지 확인
+docker ps --filter "name=contexa-" --format "table {{.Names}}\t{{.Status}}"
+
+# 2) 떠있다면 그대로 두고 애플리케이션만 시작
+./gradlew bootRun</code></pre>
+          </div>
+          <p><strong>해결 방법 2 — 기존 컨테이너 제거 후 재생성 (데이터 손실 주의)</strong></p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">Shell</span></div>
+            <pre><code class="language-bash"># 정지 + 제거 (볼륨은 보존)
+docker rm -f contexa-postgres contexa-ollama
+# 분산 모드도 같이 정리하려면
+docker rm -f contexa-redis contexa-zookeeper contexa-kafka
+
+# 다시 시작
+contexa init --distributed</code></pre>
+          </div>
+          <p><strong>해결 방법 3 — 격리된 시뮬레이션 모드로 전환 (운영 컨테이너 보호)</strong></p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">Shell</span></div>
+            <pre><code class="language-bash">contexa init --simulate</code></pre>
+          </div>
+          <p><code>--simulate</code> 옵션은 컨테이너 이름 prefix 를 <code>ctxa-sim-</code> 로 분리하고 포트도 +20000 으로 띄워, 운영 컨테이너와 충돌 없이 사이드 바이 사이드로 사용할 수 있습니다.</p>
+
           <table class="docs-table">
             <thead>
               <tr>
@@ -296,7 +415,11 @@ docker compose up -d</code></pre>
               </tr>
               <tr>
                 <td>AI 모델 미발견</td>
-                <td>모델 다운로드: <code>docker exec contexa-ollama ollama pull qwen3.5:9b</code></td>
+                <td>모델 다운로드: <code>docker exec contexa-ollama ollama pull qwen2.5:7b</code> 및 <code>... pull mxbai-embed-large</code></td>
+              </tr>
+              <tr>
+                <td><code>vector</code> 확장 누락 (PostgreSQL)</td>
+                <td>이미지를 <code>pgvector/pgvector:pg16</code> 으로 사용하시거나, 기존 DB 라면 <code>CREATE EXTENSION IF NOT EXISTS vector;</code> 를 한 번 실행하십시오.</td>
               </tr>
               <tr>
                 <td>포트 충돌</td>

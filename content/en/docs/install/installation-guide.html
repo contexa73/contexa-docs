@@ -277,6 +277,125 @@ docker compose up -d</code></pre>
         <section>
           <h2 id="troubleshooting">Troubleshooting</h2>
 
+          <h3 id="enable-ai-security-startup-errors"><code>@EnableAISecurity</code> startup error guide</h3>
+          <p>If you went through the manual install (added only <code>spring-boot-starter-contexa</code> and declared <code>@EnableAISecurity</code>), you may hit the following three errors in sequence at startup. <strong>The only dependency contexa-cli auto-injects is <code>spring-boot-starter-contexa</code></strong>; the rest must be added by you. Each error below shows the exact message, root cause, and fix.</p>
+
+          <h4>Error 1 &mdash; <code>contexa.datasource.url must be configured for @EnableAISecurity</code></h4>
+          <div class="callout callout-warning">
+            <p><strong>Full message</strong>: <code>java.lang.IllegalStateException: contexa.datasource.url must be configured for @EnableAISecurity. Use a dedicated Contexa database by default; sharing the application database requires explicit POC approval.</code></p>
+          </div>
+          <p><strong>Root cause</strong> &mdash; Contexa stores security policy, sessions and the vector index in a dedicated PostgreSQL instance, isolated from your application database. When <code>@EnableAISecurity</code> is on, <code>contexa.datasource.url</code> must be set or <code>ContexaDataSourceIsolation</code> fails fast.</p>
+          <p><strong>Fix</strong> &mdash; add a Contexa-owned datasource block to your <code>application.yml</code>:</p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">application.yml</span></div>
+            <pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+    username: ${CONTEXA_DB_USERNAME:contexa}
+    password: ${CONTEXA_DB_PASSWORD:contexa1234!@#}
+    driver-class-name: org.postgresql.Driver
+    isolation:
+      contexa-owned-application: true</code></pre>
+          </div>
+          <p>You may share the application's PostgreSQL instance via a separate schema if your operations team explicitly approves it. The default is a separate database (recommended).</p>
+
+          <h4>Error 2 &mdash; <code>No Spring AI ChatModel is configured for CONTEXA</code></h4>
+          <div class="callout callout-warning">
+            <p><strong>Full message</strong>: <code>No Spring AI ChatModel is configured for CONTEXA. Add at least one Spring AI chat provider starter to your application dependencies (for example org.springframework.ai:spring-ai-starter-model-openai, org.springframework.ai:spring-ai-starter-model-anthropic, or org.springframework.ai:spring-ai-starter-model-ollama), then configure the matching provider under spring.ai.*</code></p>
+          </div>
+          <p><strong>Root cause</strong> &mdash; Contexa's tiered LLM auto-configuration (<code>CoreLLMTieredAutoConfiguration</code>) requires a <code>ChatModel</code> bean, but no Spring AI provider starter is on the classpath. <code>spring-boot-starter-contexa</code> intentionally does <strong>not</strong> pull a ChatModel starter as a transitive dependency &mdash; the choice of provider (Ollama / OpenAI / Anthropic) is yours.</p>
+          <p><strong>Fix</strong> &mdash; add at least one provider starter to your build and configure the matching <code>spring.ai.*</code> block:</p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">build.gradle (Ollama example)</span></div>
+            <pre><code class="language-groovy">dependencies {
+    implementation 'ai.ctxa:spring-boot-starter-contexa:0.1.0'
+    // Add only when you declare @EnableAISecurity (one provider or more)
+    implementation 'org.springframework.ai:spring-ai-starter-model-ollama'
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">application.yml (Ollama example)</span></div>
+            <pre><code class="language-yaml">spring:
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: qwen2.5:7b
+          keep-alive: "24h"
+      embedding:
+        enabled: true
+        model: mxbai-embed-large</code></pre>
+          </div>
+          <p>For OpenAI or Anthropic, swap in <code>spring-ai-starter-model-openai</code> / <code>spring-ai-starter-model-anthropic</code> and set the API key under <code>spring.ai.openai.*</code> / <code>spring.ai.anthropic.*</code>.</p>
+
+          <h4>Error 3 &mdash; <code>rag-vector capability unresolved</code> / <code>SecurityDecisionPostProcessor</code> not created</h4>
+          <div class="callout callout-warning">
+            <p><strong>Full message (excerpt)</strong>: <code>[ContexaCapability] rag-vector ... Resolve rag-vector first; SecurityDecisionPostProcessor is created only after UnifiedVectorService is available.</code></p>
+          </div>
+          <p><strong>Root cause</strong> &mdash; the <code>@EnableAISecurity</code> decision post-processor (<code>SecurityDecisionPostProcessor</code>) depends on <code>UnifiedVectorService</code>, which in turn requires a Spring AI <code>VectorStore</code> bean. Without the pgvector vector-store starter on the classpath, the <code>rag-vector</code> capability stays unresolved and the downstream bean tree never wires up.</p>
+          <p><strong>Fix</strong> &mdash; add the pgvector vector-store starter and configure <code>contexa.vectorstore.pgvector.*</code>. Use the <code>pgvector/pgvector:pg16</code> Docker image so the <code>vector</code> extension is enabled out of the box.</p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">build.gradle</span></div>
+            <pre><code class="language-groovy">dependencies {
+    implementation 'org.springframework.ai:spring-ai-starter-vector-store-pgvector'
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">application.yml</span></div>
+            <pre><code class="language-yaml">contexa:
+  vectorstore:
+    pgvector:
+      table-name: vector_store
+      index-type: HNSW
+      distance-type: COSINE_DISTANCE
+      dimensions: 1024
+      initialize-schema: true</code></pre>
+          </div>
+
+          <div class="callout callout-info">
+            <p><strong>Why doesn't contexa-cli auto-add spring-ai-*?</strong> &mdash; Auto-injecting Spring AI provider and vector-store starters into every customer would break customers who depend on <code>spring-boot-starter-contexa</code> without declaring <code>@EnableAISecurity</code>: <code>PgVectorStore</code> and <code>ChatModel</code> beans would try to instantiate against missing infrastructure and fail startup. Contexa's contract is "one line (<code>spring-boot-starter-contexa</code>) only, the rest is yours". <code>contexa init</code>'s next.steps section prints the exact dependency lines you need to add by hand.</p>
+          </div>
+
+          <h3 id="infra-troubleshooting">Infrastructure issues</h3>
+
+          <h4>Container name conflict &mdash; <code>The container name "/contexa-postgres" is already in use</code></h4>
+          <div class="callout callout-warning">
+            <p><strong>Full message (excerpt)</strong>: <code>Error response from daemon: Conflict. The container name "/contexa-postgres" is already in use by container "&lt;hash&gt;". You have to remove (or rename) that container to be able to reuse that name.</code></p>
+            <p>Followed by contexa-cli: <code>× Docker start failed. Run manually: docker compose up -d</code></p>
+          </div>
+          <p><strong>Root cause</strong> &mdash; a container with the same name (<code>contexa-postgres</code>, <code>contexa-ollama</code>, ...) already exists on the host. The Docker daemon does not allow two containers to share a name. Two common cases:</p>
+          <ul>
+            <li>A previous <code>contexa init</code> run left those containers up &mdash; <strong>safe to reuse as-is</strong>.</li>
+            <li>Another project occupies the same name &mdash; <strong>clean it up, or switch to the isolated simulate mode</strong>.</li>
+          </ul>
+          <p><strong>Option 1 &mdash; keep the existing containers (recommended, preserves data)</strong></p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">Shell</span></div>
+            <pre><code class="language-bash"># 1) confirm the containers are running
+docker ps --filter "name=contexa-" --format "table {{.Names}}\t{{.Status}}"
+
+# 2) leave them up and just start the app
+./gradlew bootRun</code></pre>
+          </div>
+          <p><strong>Option 2 &mdash; remove and recreate (DATA LOSS WARNING)</strong></p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">Shell</span></div>
+            <pre><code class="language-bash"># Stop + remove (volumes are preserved)
+docker rm -f contexa-postgres contexa-ollama
+# Distributed mode also needs:
+docker rm -f contexa-redis contexa-zookeeper contexa-kafka
+
+# Recreate
+contexa init --distributed</code></pre>
+          </div>
+          <p><strong>Option 3 &mdash; switch to the isolated simulation mode (protects production containers)</strong></p>
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-lang">Shell</span></div>
+            <pre><code class="language-bash">contexa init --simulate</code></pre>
+          </div>
+          <p><code>--simulate</code> namespaces the containers under the <code>ctxa-sim-</code> prefix and shifts ports by +20000, so the simulation stack runs side-by-side with production without colliding.</p>
+
           <table class="docs-table">
             <thead>
               <tr>
@@ -295,7 +414,11 @@ docker compose up -d</code></pre>
               </tr>
               <tr>
                 <td>AI model not found</td>
-                <td>Pull models: <code>docker exec contexa-ollama ollama pull qwen3.5:9b</code></td>
+                <td>Pull models: <code>docker exec contexa-ollama ollama pull qwen2.5:7b</code> and <code>... pull mxbai-embed-large</code></td>
+              </tr>
+              <tr>
+                <td><code>vector</code> extension missing (PostgreSQL)</td>
+                <td>Use the <code>pgvector/pgvector:pg16</code> image, or on an existing DB run <code>CREATE EXTENSION IF NOT EXISTS vector;</code> once.</td>
               </tr>
               <tr>
                 <td>Port conflicts</td>
