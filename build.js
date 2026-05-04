@@ -285,8 +285,8 @@ function build() {
 
         const headTags = [
           `<!-- Favicon -->`,
-          `<link rel="icon" type="image/png" sizes="32x32" href="/assets/img/logo.png">`,
-          `<link rel="apple-touch-icon" href="/assets/img/logo.png">`,
+          `<link rel="icon" type="image/png" sizes="32x32" href="/assets/img/dark.png">`,
+          `<link rel="apple-touch-icon" href="/assets/img/dark.png">`,
           `<!-- Open Graph -->`,
           `<meta property="og:type" content="website">`,
           `<meta property="og:title" content="${pageTitle}">`,
