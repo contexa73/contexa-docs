@@ -281,7 +281,7 @@ function build() {
         const titleMatch = html.match(/<title>([^<]*)<\/title>/);
         const pageTitle = titleMatch ? titleMatch[1] : 'Contexa';
         const descMatch = html.match(/<meta\s+name="description"\s+content="([^"]*)"/);
-        const pageDesc = descMatch ? descMatch[1] : 'AI-Native Security Platform for Spring';
+        const pageDesc = descMatch ? descMatch[1] : 'AI-Native Post-Authentication Security Platform';
 
         const headTags = [
           `<!-- Favicon -->`,
