@@ -142,6 +142,66 @@ spring:
           timeout-ms: 60000</code></pre>
             </div>
 
+            <h3 id="hybrid-selection">Recommended selection (OpenAI + Anthropic with Ollama failover)</h3>
+            <p>The platform can chain managed cloud providers with the local Ollama runtime so that chat calls degrade gracefully when an API key is missing or a cloud endpoint is unreachable. The example below uses <code>OpenAI</code> as the primary chat provider, <code>Anthropic</code> as the second-tier failover, and the local <code>Ollama</code> runtime as the offline / no-key fallback. Embedding always goes through <code>OpenAI</code>.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">contexa:
+  llm:
+    selection:
+      chat:
+        mode: dynamic-priority
+        priority: openai,anthropic,ollama
+      embedding:
+        mode: dynamic-priority
+        priority: openai</code></pre>
+            </div>
+            <h4 id="hybrid-selection-keys">Key meaning</h4>
+            <ul>
+              <li><strong><code>mode: dynamic-priority</code></strong> &mdash; the orchestrator walks the comma-separated <code>priority</code> list in order and selects the first provider whose <code>ChatModel</code> / <code>EmbeddingModel</code> bean is present and reachable. The runtime form <code>dynamic-priority</code> is the kebab-case spelling of the <code>Mode.DYNAMIC_PRIORITY</code> enum; both forms bind to the same value through Spring's relaxed binding.</li>
+              <li><strong><code>priority: openai,anthropic,ollama</code></strong> &mdash; chat calls try <code>OpenAI</code> first; if the OpenAI client is missing the key or returns an unrecoverable error, the orchestrator falls back to <code>Anthropic</code>; if Anthropic is also unavailable, the call lands on the local <code>Ollama</code> runtime. List order is the failover order, so cheaper / more reliable providers should appear earlier.</li>
+              <li><strong><code>priority: openai</code></strong> (embedding) &mdash; <code>Anthropic</code> does not ship an embedding model in Spring AI, and the embedding path is dimension-pinned to <code>1536</code> in the platform's pgvector schema, which matches <code>OpenAI</code>'s <code>text-embedding-3-small</code> / <code>text-embedding-ada-002</code>. Mixing in an Ollama embedding model (typically 768 / 1024 dimensions) would write vectors of an incompatible width into the same column and break similarity search. Keep embeddings on a single 1536-dimension provider.</li>
+            </ul>
+            <h4 id="cloud-only-selection-providers">Pair the selection block with the Spring AI provider properties</h4>
+            <p>The <code>contexa.llm.selection.*</code> block decides <em>which</em> provider is called, but the actual API keys and model names live under the standard Spring AI property tree:</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">spring:
+  ai:
+    retry:
+      max-attempts: 1
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:disabled}
+      chat:
+        options:
+          model: claude-3-sonnet-20240229
+    openai:
+      api-key: ${OPENAI_API_KEY:disabled}
+      base-url: https://api.openai.com
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.3</code></pre>
+            </div>
+            <ul>
+              <li><strong>API key placeholders</strong> &mdash; the literal <code>disabled</code> default keeps the auto-configuration from registering a real client when the operator has not supplied an environment variable. Setting <code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code> activates the corresponding provider; leaving them as <code>disabled</code> intentionally skips that branch and lets the next provider in the priority list take over.</li>
+              <li><strong><code>spring.ai.retry.max-attempts: 1</code></strong> &mdash; with two providers chained via <code>dynamic-priority</code>, retrying the same failing provider inside Spring AI is wasted latency. <code>1</code> keeps each call single-shot and lets the CONTEXA fail-over selector pick the next entry.</li>
+              <li><strong>Model identifiers</strong> &mdash; <code>gpt-4o-mini</code> is recommended for Tier 1 (low-latency Layer 1 contextual decisions) and <code>claude-3-sonnet-20240229</code> for Tier 2 (forensic Layer 2 reasoning). Swap with newer SKUs as they become available.</li>
+              <li><strong><code>temperature: 0.3</code></strong> on the OpenAI side is intentional: security-decision prompts benefit from low temperature; raising it widens drift in BLOCK / ESCALATE boundaries.</li>
+            </ul>
+
             <p>OpenAI and Anthropic provider credentials are configured through Spring AI's own provider properties such as <code>spring.ai.openai.*</code> and <code>spring.ai.anthropic.*</code>; Contexa only selects between the available provider beans.</p>
             <p>See also: <a href="../../../docs/reference/core/llm-orchestrator.html">LLM &amp; Models Reference</a></p>
           </section>

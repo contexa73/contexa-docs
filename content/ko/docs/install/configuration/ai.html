@@ -83,6 +83,66 @@ spring:
             </div>
 
             <p>OpenAI, Anthropic 자격 증명은 Spring AI의 <code>spring.ai.openai.*</code>, <code>spring.ai.anthropic.*</code>에서 구성하고, Contexa는 등록된 provider bean 중 우선순위에 따라 선택합니다.</p>
+
+            <h3 id="hybrid-selection">권장 선택 구성 (OpenAI + Anthropic + Ollama 페일오버)</h3>
+            <p>관리형 클라우드 제공자와 로컬 Ollama 런타임을 함께 묶으면, API 키가 없거나 클라우드 엔드포인트가 도달 불가능할 때 채팅 호출이 자연스럽게 다음 단계로 떨어집니다. 아래 예제는 <code>OpenAI</code> 를 1차 채팅 제공자, <code>Anthropic</code> 을 2차 페일오버, 로컬 <code>Ollama</code> 런타임을 오프라인 / 키 없음 상태의 최종 폴백으로 사용합니다. 임베딩은 항상 <code>OpenAI</code> 를 사용합니다.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">contexa:
+  llm:
+    selection:
+      chat:
+        mode: dynamic-priority
+        priority: openai,anthropic,ollama
+      embedding:
+        mode: dynamic-priority
+        priority: openai</code></pre>
+            </div>
+            <h4 id="hybrid-selection-keys">키별 의미</h4>
+            <ul>
+              <li><strong><code>mode: dynamic-priority</code></strong> &mdash; 오케스트레이터가 콤마로 구분된 <code>priority</code> 목록을 순서대로 평가하여, <code>ChatModel</code> / <code>EmbeddingModel</code> Bean 이 등록되고 호출 가능한 첫 제공자를 선택합니다. <code>dynamic-priority</code>는 <code>Mode.DYNAMIC_PRIORITY</code> enum 의 kebab-case 표기이며, 두 형태 모두 Spring 의 relaxed binding 으로 동일한 값에 바인딩됩니다.</li>
+              <li><strong><code>priority: openai,anthropic,ollama</code></strong> &mdash; 채팅 호출은 먼저 <code>OpenAI</code> 를 시도하고, OpenAI 클라이언트의 키가 없거나 복구 불가 오류가 발생하면 오케스트레이터가 <code>Anthropic</code> 으로 페일오버합니다. Anthropic 도 사용 불가일 때는 로컬 <code>Ollama</code> 런타임으로 떨어집니다. 목록 순서가 곧 페일오버 순서이므로, 비용이 낮거나 더 안정적인 제공자를 앞에 둡니다.</li>
+              <li><strong><code>priority: openai</code></strong> (임베딩) &mdash; <code>Anthropic</code> 은 Spring AI 에 임베딩 모델을 제공하지 않으며, 플랫폼의 pgvector 스키마는 임베딩 차원을 <code>1536</code> 으로 고정합니다. 이는 <code>OpenAI</code> 의 <code>text-embedding-3-small</code> / <code>text-embedding-ada-002</code> 차원과 일치합니다. 임베딩 목록에 Ollama (보통 768 / 1024 차원) 를 섞으면 같은 컬럼에 폭이 다른 벡터가 기록되어 유사도 검색이 깨집니다. 임베딩은 <strong>1536 차원 단일 제공자</strong> 로 유지하십시오.</li>
+            </ul>
+            <h4 id="cloud-only-selection-providers">선택 블록과 Spring AI 제공자 속성 짝짓기</h4>
+            <p><code>contexa.llm.selection.*</code> 블록은 어느 제공자를 호출할지를 결정하지만, 실제 API 키와 모델 식별자는 표준 Spring AI 속성 트리에 둡니다.</p>
+            <div class="code-block">
+              <div class="code-block-header">
+                <span class="code-block-lang">YAML</span>
+                <button class="code-copy-btn" type="button" aria-label="Copy code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-yaml">spring:
+  ai:
+    retry:
+      max-attempts: 1
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:disabled}
+      chat:
+        options:
+          model: claude-3-sonnet-20240229
+    openai:
+      api-key: ${OPENAI_API_KEY:disabled}
+      base-url: https://api.openai.com
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.3</code></pre>
+            </div>
+            <ul>
+              <li><strong>API 키 자리표시자</strong> &mdash; 기본값 <code>disabled</code> 문자열은 운영자가 환경 변수를 주입하지 않은 상태에서 자동 구성이 실제 클라이언트를 등록하지 않도록 막습니다. <code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code> 를 설정하면 해당 제공자가 활성화되고, <code>disabled</code> 그대로 두면 의도적으로 그 분기를 건너뛰어 우선순위의 다음 제공자가 처리합니다.</li>
+              <li><strong><code>spring.ai.retry.max-attempts: 1</code></strong> &mdash; <code>dynamic-priority</code> 로 두 제공자를 연쇄 구성한 환경에서는 Spring AI 내부에서 같은 실패 제공자를 재시도하는 것은 지연만 늘립니다. <code>1</code> 로 각 호출을 단일 시도로 묶고, CONTEXA 의 페일오버 선택자가 다음 항목을 고르도록 합니다.</li>
+              <li><strong>모델 식별자</strong> &mdash; <code>gpt-4o-mini</code> 는 Tier 1 (낮은 지연시간의 Layer 1 컨텍스트 결정) 에, <code>claude-3-sonnet-20240229</code> 는 Tier 2 (포렌식 Layer 2 추론) 에 권장합니다. 새 SKU 가 출시되면 그에 맞게 교체합니다.</li>
+              <li>OpenAI 측의 <strong><code>temperature: 0.3</code></strong> 은 의도적입니다. 보안 결정 프롬프트는 낮은 temperature 가 유리하며, 이 값을 높이면 BLOCK / ESCALATE 경계 판단의 편차가 커집니다.</li>
+            </ul>
           </section>
 
           <!-- TieredStrategyProperties -->
