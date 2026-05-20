@@ -413,7 +413,10 @@ function build() {
   let unresolvedCount = 0;
   const distFiles = findHtmlFiles(DIST_DIR);
   for (const file of distFiles) {
-    const content = fs.readFileSync(file, 'utf-8');
+    let content = fs.readFileSync(file, 'utf-8');
+    // Remove pre and code blocks to ignore false positive markers like docker formatting (e.g., {{.Names}})
+    content = content.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, '')
+                     .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, '');
     const markers = content.match(/\{\{[^}]+\}\}/g);
     if (markers) {
       const relPath = path.relative(DIST_DIR, file);
