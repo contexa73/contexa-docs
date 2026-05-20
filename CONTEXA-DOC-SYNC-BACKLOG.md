@@ -1,4 +1,4 @@
-﻿# CONTEXA 문서/메인 사이트 정합화 백로그
+# CONTEXA 문서/메인 사이트 정합화 백로그
 
 ## 1. 목적
 
@@ -311,3 +311,24 @@
 - 누락된 핵심 OSS 축이 문서 메뉴와 페이지에 반영되었다.
 - 아키텍처 페이지가 과장 없는 코드 기준 설명으로 바뀌었다.
 - `contexa-site`는 `demo` 코드를 유지하면서도 공개 첫인상이 현재 제품 정체성과 충돌하지 않게 정리된다.
+
+## 9. 아키텍처 문서 심층 검사 결과 발견된 정합성 불일치 사항 (2026-05-20 추가)
+
+`contexa-docs > Architecture` 하위 4개 문서(`overview.html`, `zero-trust-flow.html`, `prompt-engineering.html`, `hcad-early-detection.html`)와 실제 `contexa-core` / `contexa-identity` 소스 코드를 심층 대조한 결과, 다음의 3가지 명확한 불일치 사항이 식별되어 수정 백로그에 추가합니다.
+
+### 9.1 `overview.html` - Shadow/Enforce 모드 제어 프로퍼티 접두사 (`contexa.`) 누락
+- **현상**: 문서 429~447라인에서 제로트러스트 섀도/엔포스 제어 속성을 `security.zerotrust.mode`로 서술함.
+- **코드 진실원천**: `SecurityZeroTrustProperties.java`의 `@ConfigurationProperties(prefix = "contexa.security.zerotrust")`에 의해 실제 바인딩 속성은 `contexa.security.zerotrust.mode` 임.
+- **조치 계획**: 문서 내 `security.zerotrust.mode` 및 관련 예제 코드를 모두 접두사 `contexa.`를 포함한 `contexa.security.zerotrust.mode`로 교정함.
+
+### 9.2 `zero-trust-flow.html` - ZeroTrustAction과 Block-MFA/MFA Challenge 매핑 엇갈림
+- **현상**: 문서에서는 `CHALLENGE` 액션에 대해 "최대 2회 시도 후 실패 시 BLOCK으로 에스컬레이션"이라고 설명하며, `BLOCK` 액션은 추가 구제 없이 즉시 403 Forbidden 및 차단 페이지(`/zero-trust/blocked`)로 간다고 묘사함.
+- **코드 진실원천**: 
+  - `ZeroTrustAccessControlFilter.java`는 `case BLOCK`에 진입할 때 `handleBlockWithMfa(...)`를 실행하여 최대 2회(`maxBlockMfaAttempts=2`)의 Block-MFA를 트리거하고, 시도 횟수 초과 혹은 실패 시 비소로 최종 차단(`handleBlocked`)함.
+  - `ZeroTrustChallengeFilter.java`는 `case CHALLENGE`일 때 `ZeroTrustAction.CHALLENGE`를 수신해 사용자에게 일반 MFA 챌린지를 제공함.
+- **조치 계획**: 실제 구현과 일치하도록 문서 내 `BLOCK` 및 `CHALLENGE` 액션의 후속 처리 절차와 Block-MFA의 논리적 흐름 묘사를 교정함.
+
+### 9.3 `prompt-engineering.html` - 섹션 키와 Catalog Enum 명칭 미세 불일치
+- **현상**: 문서 17개 섹션 계획 설명(404라인~)에 기재된 섹션 명칭(예: `USER_IDENTITY`, `RAG_CONTEXT` 등) 및 필드 조립 구성이 실제 자바 소스의 맵 키와 세부적으로 일치하지 않음.
+- **코드 진실원천**: `SecurityPromptSectionCatalog.java`의 Enum 상수(`USER_BEHAVIOR_CONTEXT` 등)와 `SecurityDecisionPromptSections.java`의 `systemSectionPlans`, `userSectionPlans` 내 조립 순서 및 로직.
+- **조치 계획**: 프롬프트 조립에 사용되는 정확한 Catalog 키 및 실제 섹션 필드 조립 구현을 반영하여 섹션 구조 명칭을 소스 코드 기준으로 업데이트함.

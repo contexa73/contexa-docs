@@ -1,0 +1,139 @@
+<!-- Breadcrumb -->
+<nav class="breadcrumb">
+  <a href="../../index.html">Home</a>
+  <span class="breadcrumb-separator">/</span>
+  <a href="../../docs/reference/index.html">Reference</a>
+  <span class="breadcrumb-separator">/</span>
+  <a href="overview.html">Autoconfigure</a>
+  <span class="breadcrumb-separator">/</span>
+  <span class="breadcrumb-current">AI Security Configuration</span>
+</nav>
+
+<div class="docs-page-header">
+  <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
+    <span class="badge">contexa-common</span>
+    <span class="badge">contexa-autoconfigure</span>
+    <span class="badge">bootstrap</span>
+  </div>
+  <h1>AI Security Activation &amp; Bootstrapping</h1>
+  <p class="lead">Describes the inner workings of how <code>@EnableAISecurity</code>, <code>SecurityMode</code>, and <code>AiSecurityImportSelector</code> dynamically load and bootstrap the Contexa AI-Native Zero Trust infrastructure in legacy Spring Boot applications.</p>
+</div>
+
+<section class="docs-section">
+  <h2>The @EnableAISecurity Annotation</h2>
+  <p><code>@EnableAISecurity</code> is the core annotation designed for seamless integration with legacy systems. Placing this annotation on a Spring Boot main configuration class (typically annotated with <code>@SpringBootApplication</code>) activates the entire Contexa AI security infrastructure.</p>
+  
+  <h3>Example Usage</h3>
+  <pre><code class="language-java">@SpringBootApplication
+@EnableAISecurity(
+    mode = SecurityMode.SANDBOX,
+    authObjectLocation = AuthObjectLocation.AUTO
+)
+public class LegacyApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(LegacyApplication.class, args);
+    }
+}</code></pre>
+
+  <h3>Annotation Attribute Reference</h3>
+  <div class="table-scroll"><table class="api-table">
+    <thead>
+      <tr>
+        <th>Attribute</th>
+        <th>Type</th>
+        <th>Default Value</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>mode</code></td>
+        <td><code>SecurityMode</code></td>
+        <td><code>SecurityMode.SANDBOX</code></td>
+        <td>Determines the operational enforcement mode of the AI security framework.</td>
+      </tr>
+      <tr>
+        <td><code>authObjectLocation</code></td>
+        <td><code>AuthObjectLocation</code></td>
+        <td><code>AuthObjectLocation.AUTO</code></td>
+        <td>Provides a hint for extracting legacy authenticated objects.</td>
+      </tr>
+      <tr>
+        <td><code>authObjectAttribute</code></td>
+        <td><code>String</code></td>
+        <td><code>""</code></td>
+        <td>The session or request attribute key used for authentication handoff.</td>
+      </tr>
+      <tr>
+        <td><code>authObjectType</code></td>
+        <td><code>Class&lt;?&gt;</code></td>
+        <td><code>Object.class</code></td>
+        <td>Type hint for reflective extraction of the legacy authentication object.</td>
+      </tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="docs-section">
+  <h2>SecurityMode Operation</h2>
+  <p>To support incremental migration and safe canary deployments, Contexa supports two distinct enforcement modes:</p>
+  <ul>
+    <li><strong><code>SANDBOX</code> (Sandbox Mode)</strong>: The default mode for legacy integration. Rather than directly enforcing actions like block redirection or MFA challenges on client requests, it logs decisions to audit records. This is ideal for validating AI model accuracy without impacting live services.</li>
+    <li><strong><code>FULL</code> (Full Protection Mode)</strong>: Activates active Zero Trust enforcement. Any detected anomaly or security violation triggers real-time response actions, such as immediate redirection to blocked status pages or enforcing MFA verification step-ups.</li>
+  </ul>
+</section>
+
+<section class="docs-section">
+  <h2>AiSecurityImportSelector and Dynamic Wiring</h2>
+  <p>Contexa uses <code>AiSecurityImportSelector</code> to bootstrap its configuration dynamically without requiring compile-time classpath coupling.</p>
+  <p>When the Spring application starts, the container parses the <code>@Import(AiSecurityImportSelector.class)</code> metadata on <code>@EnableAISecurity</code>. The selector performs the following steps:</p>
+  <ol>
+    <li>Reads annotation attributes (such as <code>mode</code>, <code>authObjectLocation</code>) from the target configuration class.</li>
+    <li>Maps and binds these values to **System Properties** as shown in the table below, distributing them across the runtime context.</li>
+    <li>Returns the class name of the target configuration in <code>contexa-autoconfigure</code>: <code>io.contexa.autoconfigure.ai.AiSecurityConfiguration</code>, triggering dynamic bean provisioning.</li>
+  </ol>
+
+  <h3>System Properties Bindings</h3>
+  <div class="table-scroll"><table class="api-table">
+    <thead>
+      <tr>
+        <th>System Property Key</th>
+        <th>Source Attribute</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>contexa.ai.security.mode</code></td>
+        <td><code>mode</code></td>
+        <td>Controls the overall enforcement level of the AI security framework.</td>
+      </tr>
+      <tr>
+        <td><code>contexa.ai.security.auth-object.location</code></td>
+        <td><code>authObjectLocation</code></td>
+        <td>Hint identifying where to retrieve the legacy authentication artifact.</td>
+      </tr>
+      <tr>
+        <td><code>contexa.ai.security.auth-object.attribute</code></td>
+        <td><code>authObjectAttribute</code></td>
+        <td>Name of the specific attribute key used in the handoff.</td>
+      </tr>
+      <tr>
+        <td><code>contexa.ai.security.auth-object.type</code></td>
+        <td><code>authObjectType</code></td>
+        <td>Fully qualified class name of the target extraction type.</td>
+      </tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="docs-section">
+  <h2>Authenticated Object Locations (AuthObjectLocation)</h2>
+  <p>The <code>AuthObjectLocation</code> enum tells the framework where to extract legacy session/user contexts from:</p>
+  <ul>
+    <li><strong><code>AUTO</code></strong>: Sequentially scans request attributes, session stores, and request headers to locate authentications.</li>
+    <li><strong><code>SESSION</code></strong>: Retrieves authentication details from the active <code>HttpSession</code> via the designated attribute key.</li>
+    <li><strong><code>REQUEST_ATTRIBUTE</code></strong>: Retrieves details directly from the <code>HttpServletRequest</code> attributes.</li>
+    <li><strong><code>HEADER</code></strong>: Extracts values from specific incoming HTTP headers.</li>
+  </ul>
+</section>

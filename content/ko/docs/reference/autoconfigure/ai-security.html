@@ -1,0 +1,139 @@
+<!-- Breadcrumb -->
+<nav class="breadcrumb">
+  <a href="../../index.html">홈</a>
+  <span class="breadcrumb-separator">/</span>
+  <a href="../../docs/reference/index.html">Reference</a>
+  <span class="breadcrumb-separator">/</span>
+  <a href="overview.html">Autoconfigure</a>
+  <span class="breadcrumb-separator">/</span>
+  <span class="breadcrumb-current">AI Security 설정</span>
+</nav>
+
+<div class="docs-page-header">
+  <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
+    <span class="badge">contexa-common</span>
+    <span class="badge">contexa-autoconfigure</span>
+    <span class="badge">bootstrap</span>
+  </div>
+  <h1>AI Security 활성화 및 부트스트랩</h1>
+  <p class="lead"><code>@EnableAISecurity</code>, <code>SecurityMode</code>, <code>AiSecurityImportSelector</code>를 사용해 레거시 Spring Boot 애플리케이션에 Contexa AI Native Zero Trust 인프라를 동적으로 로드하고 부트스트랩하는 원리를 설명합니다.</p>
+</div>
+
+<section class="docs-section">
+  <h2>@EnableAISecurity 어노테이션</h2>
+  <p><code>@EnableAISecurity</code>는 레거시 시스템과의 심리스한 통합을 위해 제공되는 핵심 어노테이션입니다. Spring Boot의 주 설정 클래스(보통 <code>@SpringBootApplication</code>이 선언된 클래스)에 이 어노테이션을 선언하는 것만으로 Contexa의 전체 AI 보안 프레임워크가 활성화됩니다.</p>
+  
+  <h3>선언 예시</h3>
+  <pre><code class="language-java">@SpringBootApplication
+@EnableAISecurity(
+    mode = SecurityMode.SANDBOX,
+    authObjectLocation = AuthObjectLocation.AUTO
+)
+public class LegacyApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(LegacyApplication.class, args);
+    }
+}</code></pre>
+
+  <h3>어노테이션 속성 상세</h3>
+  <div class="table-scroll"><table class="api-table">
+    <thead>
+      <tr>
+        <th>속성</th>
+        <th>타입</th>
+        <th>기본값</th>
+        <th>설명</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>mode</code></td>
+        <td><code>SecurityMode</code></td>
+        <td><code>SecurityMode.SANDBOX</code></td>
+        <td>AI 보안의 동작 모드를 결정합니다.</td>
+      </tr>
+      <tr>
+        <td><code>authObjectLocation</code></td>
+        <td><code>AuthObjectLocation</code></td>
+        <td><code>AuthObjectLocation.AUTO</code></td>
+        <td>레거시 인증 객체를 추출할 위치를 힌트로 지정합니다.</td>
+      </tr>
+      <tr>
+        <td><code>authObjectAttribute</code></td>
+        <td><code>String</code></td>
+        <td><code>""</code></td>
+        <td>세션 또는 요청 속성 기반으로 인증 핸드오프를 수행할 때 사용할 속성명입니다.</td>
+      </tr>
+      <tr>
+        <td><code>authObjectType</code></td>
+        <td><code>Class&lt;?&gt;</code></td>
+        <td><code>Object.class</code></td>
+        <td>반사적(Reflective) 추출을 수행할 인증 객체의 구체적인 타입 힌트입니다.</td>
+      </tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="docs-section">
+  <h2>SecurityMode 동작 방식</h2>
+  <p>Contexa는 점진적인 마이그레이션과 안전한 배포를 지원하기 위해 두 가지 보안 동작 모드를 지원합니다.</p>
+  <ul>
+    <li><strong><code>SANDBOX</code> (샌드박스 모드)</strong>: 레거시 통합의 기본값입니다. AI 기반 차단(BLOCK)이나 MFA 강제(CHALLENGE) 등의 집행 조치를 실제 클라이언트 요청에 직접 적용하는 대신, 감지 및 분석 결과를 감사 로그로만 남깁니다. 기존 서비스 영향도를 최소화하면서 AI 모델의 탐지 성능을 튜닝할 때 유용합니다.</li>
+    <li><strong><code>FULL</code> (전체 보호 모드)</strong>: 완전한 AI Native Zero Trust 보안을 집행합니다. 이상 징후나 위협이 감지되면 실시간으로 차단 페이지로 리다이렉트하거나 강한 MFA 인증 챌린지를 적용합니다.</li>
+  </ul>
+</section>
+
+<section class="docs-section">
+  <h2>AiSecurityImportSelector와 동적 와이어링</h2>
+  <p>Contexa는 컴파일 타임 의존성을 격리하면서 동적으로 자동 구성을 부트스트랩하기 위해 <code>AiSecurityImportSelector</code>를 활용합니다.</p>
+  <p><code>@EnableAISecurity</code> 어노테이션 내부에 선언된 <code>@Import(AiSecurityImportSelector.class)</code>에 의해 Spring Container 기동 시 이 셀렉터가 호출됩니다. <code>AiSecurityImportSelector</code>는 다음과 같은 절차를 밟습니다:</p>
+  <ol>
+    <li>어노테이션의 메타데이터로부터 속성값(<code>mode</code>, <code>authObjectLocation</code> 등)을 읽어들입니다.</li>
+    <li>읽어들인 설정값들을 아래 표와 같이 <strong>시스템 프로퍼티(System Properties)</strong>로 바인딩하여 런타임에 전파합니다.</li>
+    <li>최종적으로 <code>contexa-autoconfigure</code> 모듈의 핵심 진입점인 <code>io.contexa.autoconfigure.ai.AiSecurityConfiguration</code> 클래스명을 Spring IoC 컨테이너에 전달하여 동적 임포트를 완료합니다.</li>
+  </ol>
+
+  <h3>바인딩되는 시스템 프로퍼티</h3>
+  <div class="table-scroll"><table class="api-table">
+    <thead>
+      <tr>
+        <th>시스템 프로퍼티 키</th>
+        <th>상응 어노테이션 속성</th>
+        <th>설명</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>contexa.ai.security.mode</code></td>
+        <td><code>mode</code></td>
+        <td>시스템 전체의 AI 보안 집행 강도를 제어합니다.</td>
+      </tr>
+      <tr>
+        <td><code>contexa.ai.security.auth-object.location</code></td>
+        <td><code>authObjectLocation</code></td>
+        <td>인증 브릿지가 legacy 인증 스탬프를 추출하는 위치입니다.</td>
+      </tr>
+      <tr>
+        <td><code>contexa.ai.security.auth-object.attribute</code></td>
+        <td><code>authObjectAttribute</code></td>
+        <td>핸드오프에 사용되는 구체적인 속성명 키 정보입니다.</td>
+      </tr>
+      <tr>
+        <td><code>contexa.ai.security.auth-object.type</code></td>
+        <td><code>authObjectType</code></td>
+        <td>역직렬화 및 리플렉션 매핑에 활용되는 클래스 타입 정보입니다.</td>
+      </tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="docs-section">
+  <h2>인증 객체 추출 위치 (AuthObjectLocation)</h2>
+  <p>레거시 인증 아티팩트를 획득하기 위해 <code>AuthObjectLocation</code>을 통해 명시적으로 위치를 지정할 수 있습니다.</p>
+  <ul>
+    <li><strong><code>AUTO</code></strong>: 기본 설정이며, 요청 속성, 세션, 헤더 등을 자동으로 순차 스캔하여 객체를 식별합니다.</li>
+    <li><strong><code>SESSION</code></strong>: <code>HttpSession</code> 영역에서 대상 속성명으로 바인딩된 인증 객체를 로드합니다.</li>
+    <li><strong><code>REQUEST_ATTRIBUTE</code></strong>: <code>HttpServletRequest</code>의 attribute 맵 내에서 데이터를 식별합니다.</li>
+    <li><strong><code>HEADER</code></strong>: HTTP 요청 헤더로부터 전달받은 토큰 정보에서 추출합니다.</li>
+  </ul>
+</section>
