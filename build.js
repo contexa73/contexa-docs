@@ -21,6 +21,8 @@ const DIST_DIR = path.join(ROOT, 'dist');
 
 const LANGUAGES = ['en', 'ko'];
 const CACHE_BUST = '?v=' + Date.now();
+const DOCS_BASE_URL = 'https://docs.ctxa.ai';
+const SITE_BASE_URL = 'https://ctxa.ai';
 
 // ?? Utilities ??????????????????????????????????????????????
 
@@ -274,16 +276,23 @@ function build() {
 
         // 6. Add hreflang, favicon, and OG meta tags in <head>
         const pageUrl = '/' + relPath.replace(/\\/g, '/');
+        // hreflang: 절대 URL 사용 (Google 권장)
         const hreflangTags = LANGUAGES.map(l =>
-          `<link rel="alternate" hreflang="${l}" href="/${l}${pageUrl}">`
+          `<link rel="alternate" hreflang="${l}" href="${DOCS_BASE_URL}/${l}${pageUrl}">`
         ).join('\n  ');
+        // x-default hreflang (영어를 기본으로)
+        const hreflangDefault = `<link rel="alternate" hreflang="x-default" href="${DOCS_BASE_URL}/en${pageUrl}">`;
+        // canonical URL
+        const canonicalUrl = `${DOCS_BASE_URL}/${lang}${pageUrl}`;
 
         const titleMatch = html.match(/<title>([^<]*)<\/title>/);
         const pageTitle = titleMatch ? titleMatch[1] : 'Contexa';
         const descMatch = html.match(/<meta\s+name="description"\s+content="([^"]*)"/);
-        const pageDesc = descMatch ? descMatch[1] : 'AI-Native Post-Authentication Security Platform';
+        const pageDesc = descMatch ? descMatch[1] : 'AI-Native Post-Authentication Security Platform for Spring';
 
         const headTags = [
+          `<!-- Canonical -->`,
+          `<link rel="canonical" href="${canonicalUrl}">`,
           `<!-- Favicon -->`,
           `<link rel="icon" type="image/png" sizes="32x32" href="/assets/img/contexa.png">`,
           `<link rel="apple-touch-icon" href="/assets/img/contexa.png">`,
@@ -291,15 +300,16 @@ function build() {
           `<meta property="og:type" content="website">`,
           `<meta property="og:title" content="${pageTitle}">`,
           `<meta property="og:description" content="${pageDesc}">`,
-          `<meta property="og:image" content="https://ctxa.ai/assets/img/logo.png">`,
-          `<meta property="og:url" content="https://ctxa.ai/${lang}${pageUrl}">`,
+          `<meta property="og:image" content="${DOCS_BASE_URL}/assets/img/contexa.png">`,
+          `<meta property="og:url" content="${canonicalUrl}">`,
           `<meta property="og:site_name" content="Contexa">`,
           `<!-- Twitter Card -->`,
-          `<meta name="twitter:card" content="summary">`,
+          `<meta name="twitter:card" content="summary_large_image">`,
           `<meta name="twitter:title" content="${pageTitle}">`,
           `<meta name="twitter:description" content="${pageDesc}">`,
-          `<meta name="twitter:image" content="https://ctxa.ai/assets/img/logo.png">`,
+          `<meta name="twitter:image" content="${DOCS_BASE_URL}/assets/img/contexa.png">`,
           `<!-- Hreflang -->`,
+          hreflangDefault,
           ...hreflangTags.split('\n  ')
         ].join('\n  ');
 
@@ -348,12 +358,20 @@ function build() {
   }
 
   // Create root index.html with language detection redirect
+  // SEO: Googlebot이 읽을 수 있도록 메타 정보 + canonical + noindex 처리
   const rootIndex = `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Contexa</title>
+  <title>Contexa — AI-Native Post-Authentication Runtime Security for Spring</title>
+  <meta name="description" content="Contexa is an open-source AI-Native Zero Trust security platform for Spring Boot. Runtime protection against prompt injection, unauthorized AI agent actions, and post-authentication threats.">
+  <link rel="canonical" href="${DOCS_BASE_URL}/en/index.html">
+  <link rel="alternate" hreflang="en" href="${DOCS_BASE_URL}/en/index.html">
+  <link rel="alternate" hreflang="ko" href="${DOCS_BASE_URL}/ko/index.html">
+  <link rel="alternate" hreflang="x-default" href="${DOCS_BASE_URL}/en/index.html">
+  <meta name="robots" content="noindex, follow">
+  <meta http-equiv="refresh" content="0; url=/en/index.html">
   <script>
     var lang = (navigator.language || '').startsWith('ko') ? 'ko' : 'en';
     var stored = localStorage.getItem('contexa-lang');
@@ -362,7 +380,9 @@ function build() {
   </script>
 </head>
 <body>
-  <p>Redirecting...</p>
+  <h1>Contexa — AI-Native Post-Authentication Runtime Security for Spring</h1>
+  <p>AI-Native Zero Trust security platform for Spring Boot applications.</p>
+  <p><a href="/en/index.html">View in English</a> | <a href="/ko/index.html">한국어로 보기</a></p>
 </body>
 </html>`;
   fs.writeFileSync(path.join(DIST_DIR, 'index.html'), rootIndex, 'utf-8');
@@ -408,11 +428,62 @@ function build() {
     console.log(`  ${lang}: ${searchIndex.length} pages indexed (${(JSON.stringify(searchIndex).length / 1024).toFixed(1)} KB)`);
   }
 
+  // Generate sitemap.xml
+  console.log('Generating sitemap.xml...');
+  const now = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const distFiles = findHtmlFiles(DIST_DIR);
+  const sitemapUrls = [];
+
+  for (const file of distFiles) {
+    const relToDistRaw = path.relative(DIST_DIR, file).replace(/\\/g, '/');
+    // root index는 noindex이므로 제외, 404 페이지 제외
+    if (relToDistRaw === 'index.html') continue;
+    if (relToDistRaw.includes('404')) continue;
+
+    // 언어별 페이지만 포함
+    const langMatch = relToDistRaw.match(/^(en|ko)\//);
+    if (!langMatch) continue;
+
+    const pageFullUrl = `${DOCS_BASE_URL}/${relToDistRaw}`;
+
+    // 중요도 설정: 루트 index와 get-started는 높게
+    let priority = '0.7';
+    if (relToDistRaw.match(/^\/?(en|ko)\/index\.html$/)) priority = '1.0';
+    else if (relToDistRaw.includes('get-started')) priority = '0.9';
+    else if (relToDistRaw.includes('architecture') || relToDistRaw.includes('overview')) priority = '0.8';
+
+    sitemapUrls.push(`  <url>
+    <loc>${pageFullUrl}</loc>
+    <lastmod>${now}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>${priority}</priority>
+  </url>`);
+  }
+
+  const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml">
+${sitemapUrls.join('\n')}
+</urlset>`;
+  fs.writeFileSync(path.join(DIST_DIR, 'sitemap.xml'), sitemapXml, 'utf-8');
+  console.log(`  ${sitemapUrls.length} URLs in sitemap.xml\n`);
+
+  // Generate robots.txt
+  console.log('Generating robots.txt...');
+  const robotsTxt = `User-agent: *
+Allow: /
+Disallow: /assets/search-index-*.json
+
+Sitemap: ${DOCS_BASE_URL}/sitemap.xml
+`;
+  fs.writeFileSync(path.join(DIST_DIR, 'robots.txt'), robotsTxt, 'utf-8');
+  console.log('  robots.txt generated\n');
+
   // Verification: check for unresolved markers
   console.log('Verification...');
   let unresolvedCount = 0;
-  const distFiles = findHtmlFiles(DIST_DIR);
-  for (const file of distFiles) {
+  const verifyFiles = findHtmlFiles(DIST_DIR);
+  for (const file of verifyFiles) {
     let content = fs.readFileSync(file, 'utf-8');
     // Remove pre and code blocks to ignore false positive markers like docker formatting (e.g., {{.Names}})
     content = content.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, '')
@@ -431,7 +502,7 @@ function build() {
     console.warn(`  ${unresolvedCount} unresolved markers remain\n`);
   }
 
-  console.log(`Build complete: ${LANGUAGES.length} languages, ${distFiles.length} output files`);
+  console.log(`Build complete: ${LANGUAGES.length} languages, ${verifyFiles.length} output files`);
 }
 
 build();
