@@ -288,7 +288,7 @@ function build() {
         const titleMatch = html.match(/<title>([^<]*)<\/title>/);
         const pageTitle = titleMatch ? titleMatch[1] : 'Contexa';
         const descMatch = html.match(/<meta\s+name="description"\s+content="([^"]*)"/);
-        const pageDesc = descMatch ? descMatch[1] : 'AI-Native Post-Authentication Security Platform for Spring';
+        const pageDesc = descMatch ? descMatch[1] : 'Contexa: AI-Native Post-Authentication Runtime Security & Zero Trust for Spring Security. Real-time protection for Authenticated User Behavior Security and AI Agent threats.';
 
         const headTags = [
           `<!-- Canonical -->`,
@@ -364,8 +364,8 @@ function build() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Contexa — AI-Native Post-Authentication Runtime Security for Spring</title>
-  <meta name="description" content="Contexa is an open-source AI-Native Zero Trust security platform for Spring Boot. Runtime protection against prompt injection, unauthorized AI agent actions, and post-authentication threats.">
+  <title>Contexa — Post-Auth Security & AI Agent Runtime Security (Zero Trust for Spring Security)</title>
+  <meta name="description" content="Contexa is an open-source Post-Auth Security and AI Agent Runtime Security platform. Fuses Zero Trust with Spring Security for Authenticated User Behavior Security.">
   <link rel="canonical" href="${DOCS_BASE_URL}/en/index.html">
   <link rel="alternate" hreflang="en" href="${DOCS_BASE_URL}/en/index.html">
   <link rel="alternate" hreflang="ko" href="${DOCS_BASE_URL}/ko/index.html">
