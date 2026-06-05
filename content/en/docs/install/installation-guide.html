@@ -325,7 +325,7 @@ docker compose up -d</code></pre>
             <p><strong>Full message</strong>: <code>No Spring AI ChatModel is configured for CONTEXA. Add at least one Spring AI chat provider starter to your application dependencies (for example org.springframework.ai:spring-ai-starter-model-openai, org.springframework.ai:spring-ai-starter-model-anthropic, or org.springframework.ai:spring-ai-starter-model-ollama), then configure the matching provider under spring.ai.*</code></p>
           </div>
           <p><strong>Root cause</strong> &mdash; Contexa's tiered LLM auto-configuration (<code>CoreLLMTieredAutoConfiguration</code>) requires a <code>ChatModel</code> bean, but no Spring AI provider starter is on the classpath. <code>spring-boot-starter-contexa</code> intentionally does <strong>not</strong> pull a ChatModel starter as a transitive dependency &mdash; the choice of provider (Ollama / OpenAI / Anthropic) is yours.</p>
-          <p><strong>Fix</strong> &mdash; add at least one provider starter to your build and configure the matching <code>spring.ai.*</code> block:</p>
+          <p><strong>Fix</strong> &mdash; add at least one provider starter to your build and configure the matching <code>contexa.llm.*</code> block (Contexa bypasses Spring AI's default autoconfiguration and manages model creation via its dedicated <code>contexa.llm</code> namespace):</p>
           <div class="code-block">
             <div class="code-block-header"><span class="code-block-lang">build.gradle (Ollama example)</span></div>
             <pre><code class="language-groovy">dependencies {
@@ -336,19 +336,24 @@ docker compose up -d</code></pre>
           </div>
           <div class="code-block">
             <div class="code-block-header"><span class="code-block-lang">application.yml (Ollama example)</span></div>
-            <pre><code class="language-yaml">spring:
-  ai:
-    ollama:
-      base-url: http://localhost:11434
+            <pre><code class="language-yaml">contexa:
+  llm:
+    selection:
       chat:
-        options:
-          model: qwen2.5:14b
-          keep-alive: "24h"
-      embedding:
-        enabled: true
-        model: mxbai-embed-large</code></pre>
+        mode: dynamic-priority
+        priority: openai,ollama,anthropic
+    chat:
+      ollama:
+        baseUrl: ${CONTEXA_CHAT_OLLAMA_BASE_URL:http://127.0.0.1:11434}
+        model: ${CONTEXA_CHAT_OLLAMA_MODEL:qwen2.5:7b}
+        keepAlive: ${CONTEXA_OLLAMA_CHAT_KEEP_ALIVE:30m}
+    embedding:
+      ollama:
+        dedicatedRuntimeEnabled: false
+        model: ${CONTEXA_EMBEDDING_OLLAMA_MODEL:mxbai-embed-large}
+        dimensions: ${CONTEXA_EMBEDDING_OLLAMA_DIMENSIONS:1024}</code></pre>
           </div>
-          <p>For OpenAI or Anthropic, swap in <code>spring-ai-starter-model-openai</code> / <code>spring-ai-starter-model-anthropic</code> and set the API key under <code>spring.ai.openai.*</code> / <code>spring.ai.anthropic.*</code>.</p>
+          <p>For OpenAI or Anthropic, swap in <code>spring-ai-starter-model-openai</code> / <code>spring-ai-starter-model-anthropic</code> and set the API key under <code>contexa.llm.openai.*</code> / <code>contexa.llm.anthropic.*</code>.</p>
 
           <h4>Error 3 &mdash; <code>rag-vector capability unresolved</code> / <code>SecurityDecisionPostProcessor</code> not created</h4>
           <div class="callout callout-warning">
@@ -367,9 +372,6 @@ docker compose up -d</code></pre>
             <pre><code class="language-yaml">contexa:
   vectorstore:
     pgvector:
-      table-name: vector_store
-      index-type: HNSW
-      distance-type: COSINE_DISTANCE
       dimensions: 1024
       initialize-schema: true</code></pre>
           </div>
