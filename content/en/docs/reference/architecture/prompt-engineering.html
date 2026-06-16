@@ -115,8 +115,8 @@
               </div>
             </div>
 
-            <h3 style="margin-top:var(--space-8)">Five evidence quality tiers</h3>
-            <p>Not all evidence carries the same weight. A signal the customer sent explicitly is the strongest; a platform-observed structural signal comes next; a fallback derived from runtime continuity is the weakest. <code>BridgeSemanticBoundaryPolicy</code> tags every collected field with one of the tiers below.</p>
+            <h3 style="margin-top:var(--space-8)">Six evidence quality tiers</h3>
+            <p>Not all evidence carries the same weight. A signal the customer sent explicitly is the strongest; a platform-observed structural signal comes next; a fallback derived from runtime continuity is the weakest. <code>BridgeSemanticBoundaryPolicy</code> tags every collected field with one of the six tiers below.</p>
 
             <div class="quality-ladder">
               <div class="quality-rung quality-rung--best">
@@ -151,8 +151,16 @@
                 </div>
                 <span class="quality-rung-score">Low</span>
               </div>
-              <div class="quality-rung quality-rung--none">
+              <div class="quality-rung" style="border-left: 4px solid var(--color-info, #0ea5e9); background: rgba(14, 165, 233, 0.05);">
                 <div class="quality-rung-rank">5</div>
+                <div>
+                  <div class="quality-rung-name">BRIDGE_COMPLETENESS_ONLY</div>
+                  <div class="quality-rung-desc">Special quality signal for identifying the completeness of bridge coverage reports</div>
+                </div>
+                <span class="quality-rung-score" style="color: var(--color-info, #0ea5e9)">Completeness Only</span>
+              </div>
+              <div class="quality-rung quality-rung--none">
+                <div class="quality-rung-rank">6</div>
                 <div>
                   <div class="quality-rung-name">UNAVAILABLE</div>
                   <div class="quality-rung-desc">No evidence for this area</div>
@@ -176,7 +184,7 @@
                 </div>
                 <ul>
                   <li>SessionNarrativeCollector &mdash; in-session action sequence</li>
-                  <li>ProtectableWorkProfileCollector &mdash; usual work profile</li>
+                  <li>ProtectableWorkProfileCollector &mdash; usual work profile for resources protected by the <a href="../../iam/protectable.html">@Protectable</a> annotation</li>
                   <li>RoleScopeCollector &mdash; current role scope snapshot</li>
                 </ul>
               </div>
@@ -337,6 +345,71 @@
               </div>
             </div>
 
+            <h4>CanonicalSecurityContext Java Structure</h4>
+            <p>Below is the actual structure of <code>CanonicalSecurityContext</code>, which consolidates and normalizes 22 base security fields and 7 behavioral profiles into a single standard record:</p>
+            <pre><code class="language-java">@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class CanonicalSecurityContext {
+    private Actor actor;                             // Actor identity (userId, tenantId, roleSet, etc.)
+    private Session session;                         // Session/Auth state (sessionId, clientIp, mfaVerified, etc.)
+    private Device device;                           // Device fingerprint (os, browser, etc.)
+    private Intent intent;                           // Behavioral intent analysis (botUserAgent, impossibleTravel, etc.)
+    private Location location;                       // Geo/Network location (country, city, ipBand, asn, etc.)
+    private Resource resource;                       // Target resource metadata (resourceId, sensitivity, actionFamily, etc.)
+    private Authorization authorization;             // Pre-existing authorization outcome (effectiveRoles, policyId, etc.)
+    private Delegation delegation;                   // Delegated authority evidence (delegated, agentId, allowedOperations, etc.)
+    private ExecutionSubject executionSubject;
+    private ExecutionEnvelope executionEnvelope;
+    private Bridge bridge;                           // Bridge discovery & coverage details
+    private ObservedScope observedScope;             // Observed behavior boundary snapshot
+    
+    // 7 behavioral/security profiles
+    private SessionNarrativeProfile sessionNarrativeProfile;  // Session action narrative sequence
+    private WorkProfile workProfile;                          // Individual work profile baseline
+    private RoleScopeProfile roleScopeProfile;                // Role scope expectation profile
+    private PeerCohortProfile peerCohortProfile;              // Peer cohort outlier profile
+    private FrictionProfile frictionProfile;                  // Friction and approval lineage profile
+    private ReasoningMemoryProfile reasoningMemoryProfile;    // RAG & reinforced reasoning memory profile
+    
+    private ContextCoverageReport coverage;          // Context coverage report
+    @Builder.Default
+    private Map&lt;String, Object&gt; attributes = new LinkedHashMap&lt;&gt;();
+    @Builder.Default
+    private List&lt;ContextTrustProfile&gt; contextTrustProfiles = new ArrayList&lt;&gt;();
+    @Builder.Default
+    private Instant collectedAt = Instant.now();
+
+    // Nested static classes examples
+    @Data public static class Actor {
+        private String userId;
+        private String organizationId;
+        private String tenantId;
+        private String principalType;
+        private List&lt;String&gt; roleSet;
+        private List&lt;String&gt; authoritySet;
+    }
+
+    @Data public static class Session {
+        private String sessionId;
+        private String clientIp;
+        private String userAgent;
+        private String authenticationType;
+        private Boolean mfaVerified;
+        private Integer concurrentSessions;
+    }
+
+    @Data public static class Delegation {
+        private Boolean delegated;
+        private String agentId;
+        private String objectiveId;
+        private List&lt;String&gt; allowedOperations;
+        private List&lt;String&gt; allowedResources;
+        private Boolean objectiveDrift;              // Delegation drift flag
+    }
+}</code></pre>
+
             <h3 style="margin-top:var(--space-8)">Four coverage levels</h3>
             <p><code>ContextCoverageEvaluator</code> grades how complete the record is by counting filled fields and available profiles. A low grade automatically injects a warning into the prompt telling the LLM not to draw strong conclusions from "usual work patterns".</p>
 
@@ -401,95 +474,156 @@
             </div>
 
             <h3 style="margin-top:var(--space-8)">18 section plans</h3>
+            <p>During prompt composition, each section is governed by the priority tiers below under token limit constraints (Token Budget). If the token limit is exceeded, sections are omitted or compressed in order from P2 to P1. P0 sections are required and are never omitted.</p>
+            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-4);font-size:var(--text-xs);font-weight:600">
+              <span style="padding:2px 8px;background:#ef4444;color:white;border-radius:4px">P0 (Required)</span>
+              <span style="padding:2px 8px;background:#f59e0b;color:white;border-radius:4px">P1 (High Value)</span>
+              <span style="padding:2px 8px;background:#10b981;color:white;border-radius:4px">P2 (Supporting)</span>
+            </div>
+
             <div class="builder-grid">
               <div class="builder-tile builder-tile--system">
-                <span class="builder-tile-tag builder-tile-tag--sys">SYS</span>
-                <div class="builder-tile-name">SYSTEM_INSTRUCTION</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--sys">SYS</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">SYSTEM_INSTRUCTION</div>
                 <div class="builder-tile-desc">Policy &amp; format guidance</div>
               </div>
               <div class="builder-tile builder-tile--system">
-                <span class="builder-tile-tag builder-tile-tag--sys">SYS</span>
-                <div class="builder-tile-name">DECISION_CONTRACT</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--sys">SYS</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">DECISION_CONTRACT</div>
                 <div class="builder-tile-desc">Enforces the JSON schema</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">CURRENT_REQUEST_AND_EVENT</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">CURRENT_REQUEST_AND_EVENT</div>
                 <div class="builder-tile-desc">Current request &amp; payload</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">BRIDGE_AND_COVERAGE</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">BRIDGE_AND_COVERAGE</div>
                 <div class="builder-tile-desc">Bridge resolution &amp; coverage</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">IDENTITY_AND_ROLE</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">IDENTITY_AND_ROLE</div>
                 <div class="builder-tile-desc">Identity &amp; authority set</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">RESOURCE_AND_ACTION</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">RESOURCE_AND_ACTION</div>
                 <div class="builder-tile-desc">Resource &amp; action semantics</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">ROLE_SCOPE</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">ROLE_SCOPE</div>
                 <div class="builder-tile-desc">Role scope &amp; expected families</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">OBSERVED_AND_PERSONAL_WORK_PATTERN</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">OBSERVED_AND_PERSONAL_WORK_PATTERN</div>
                 <div class="builder-tile-desc">Personal &amp; organisational norm</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">RAG_EVIDENCE_CONTEXT</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">RAG_EVIDENCE_CONTEXT</div>
                 <div class="builder-tile-desc">RAG retrieved security context documents</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">SUPPORTING_LEARNING_CONTEXT</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">SUPPORTING_LEARNING_CONTEXT</div>
                 <div class="builder-tile-desc">Reference learning &amp; supporting evidence</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">DEVICE_CONTEXT</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">DEVICE_CONTEXT</div>
                 <div class="builder-tile-desc">OS &amp; browser fingerprint</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">LOCATION_CONTEXT</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">LOCATION_CONTEXT</div>
                 <div class="builder-tile-desc">Country &middot; city &middot; IP band</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">INTENT_SIGNAL_CONTEXT</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">INTENT_SIGNAL_CONTEXT</div>
                 <div class="builder-tile-desc">Request intent &amp; referer signals</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">SESSION_NARRATIVE</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">SESSION_NARRATIVE</div>
                 <div class="builder-tile-desc">Session state &amp; MFA</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">DELEGATED_OBJECTIVE</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">DELEGATED_OBJECTIVE</div>
                 <div class="builder-tile-desc">Delegation scope &amp; drift</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">FRICTION_AND_APPROVAL</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">FRICTION_AND_APPROVAL</div>
                 <div class="builder-tile-desc">MFA &amp; approval history</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">EXPLICIT_MISSING_KNOWLEDGE</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">EXPLICIT_MISSING_KNOWLEDGE</div>
                 <div class="builder-tile-desc">Missing knowledge &amp; trust limits</div>
               </div>
               <div class="builder-tile">
-                <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                <div class="builder-tile-name">THREAT_LEARNING_AND_MEMORY</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
+                  <span style="font-size:9px;padding:1px 4px;background:#10b981;color:white;border-radius:2px;font-weight:700">P2</span>
+                </div>
+                <div class="builder-tile-name" style="margin-top:var(--space-2)">THREAT_LEARNING_AND_MEMORY</div>
                 <div class="builder-tile-desc">Threat intel &amp; org learning</div>
               </div>
             </div>
@@ -586,6 +720,38 @@
                 </div>
               </div>
             </div>
+
+            <h4>SecurityDecision Result Record JSON Example</h4>
+            <p>Below is an example of the finalized <code>SecurityDecision</code> JSON payload. In this scenario, the autonomy guardrail intervened (<code>autonomyConstraintApplied: true</code>) to escalate the primary LLM proposal from <code>ALLOW</code> to <code>CHALLENGE</code> due to low confidence:</p>
+            <pre><code class="language-json">{
+  "eventId": "evt_8a9f3b2c1d",
+  "action": "ALLOW",
+  "autonomousAction": "CHALLENGE",
+  "riskScore": 65.0,
+  "confidence": 0.45,
+  "llmAuditRiskScore": 65.0,
+  "llmAuditConfidence": 0.45,
+  "analysisTime": 1781572000000,
+  "processingTimeMs": 342,
+  "processingLayer": 1,
+  "llmModel": "cortex-l1-interactive",
+  "threatCategory": "ANOMALOUS_ACCESS",
+  "reasoning": "User access from a new device (fingerprint mismatch) and unusual time of day, but baseline confidence is too low to completely block.",
+  "mitigationActions": [
+    "PROMPT_MFA_CHALLENGE"
+  ],
+  "requiresApproval": false,
+  "autonomyConstraintApplied": true,
+  "autonomyConstraintReasons": [
+    "LOW_CONFIDENCE_ESCALATION"
+  ],
+  "autonomyConstraintSummary": "LLM confidence (0.45) is below the required threshold (0.60). Automatically escalated from ALLOW to CHALLENGE.",
+  "technicalFallbackApplied": false,
+  "sessionContext": {
+    "sessionId": "sess_9283f12a",
+    "clientIp": "192.0.2.1"
+  }
+}</code></pre>
           </section>
 
 
