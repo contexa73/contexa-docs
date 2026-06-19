@@ -24,10 +24,10 @@
           <!-- ============================================ -->
           <section>
             <h2 id="overview">Overview</h2>
-            <p>HCAD early threat detection runs before controllers or <code>@Protectable</code> methods are reached by having <code>HCADFilterConfigurer</code> insert <code>HCADFilter</code> before Spring Security's <code>AuthorizationFilter</code>. The current configurer order is <code>SecurityConfigurer.HIGHEST_PRECEDENCE + 115</code>, followed by <code>AuthenticatedPendingAnomalyTriggerFilter</code> at <code>HIGHEST_PRECEDENCE + 116</code>. On every request it collects nine dimensions of behavioural signals, combines them into a risk score using anchor and corroborating signal weights, and emits an early-analysis event when the score crosses <code>redlineScore = 70</code> with at least one anchor signal present.</p>
+            <p>HCAD early threat detection runs before controllers or <code>@Protectable</code> methods are reached by having <code>HCADFilterConfigurer</code> insert <code>HCADFilter</code> before Spring Security's <code>AuthorizationFilter</code>. The current configurer order is <code>SecurityConfigurer.HIGHEST_PRECEDENCE + 115</code>, followed by <code>AuthenticatedPendingAnomalyTriggerFilter</code> at <code>HIGHEST_PRECEDENCE + 116</code>. HCAD is not a final risk decision engine. It is an early gate that decides whether an authenticated request is worth sending to the LLM analysis path before a protected resource is reached.</p>
 
             <div class="callout-info">
-              <strong>Design principle.</strong> HCAD always lets requests through (fail-open) and never blocks or challenges on its own. Enforcement is still handled exclusively by the existing asynchronous Zero Trust path backed by <code>ZeroTrustActionRepository</code>. HCAD only makes that path start earlier.
+              <strong>Design principle.</strong> HCAD always lets requests through (fail-open) and never blocks or challenges on its own. The default pre-trigger mode is <code>SHADOW</code>: a candidate can start LLM analysis, but runtime side effects are suppressed at the event boundary. Enforced actions are still owned by the normal Zero Trust decision path.
             </div>
 
             <h3 style="margin-top:var(--space-6)">From request arrival to decision</h3>
@@ -45,17 +45,17 @@
               <div class="journey-node">
                 <div class="journey-node-stage">Stage 3</div>
                 <div class="journey-node-name">Signal scoring</div>
-                <div class="journey-node-desc">9 dimensions &rarr; risk score</div>
+                <div class="journey-node-desc">Trusted projection &rarr; early-analysis score</div>
               </div>
               <div class="journey-node">
                 <div class="journey-node-stage">Stage 4</div>
                 <div class="journey-node-name">Early analysis</div>
-                <div class="journey-node-desc">Fires an AI event when the threshold is crossed</div>
+                <div class="journey-node-desc">Records an evaluation row and qualifies the candidate</div>
               </div>
               <div class="journey-node">
                 <div class="journey-node-stage">Stage 5</div>
                 <div class="journey-node-name">LLM pipeline</div>
-                <div class="journey-node-desc">Joins the existing async analysis path</div>
+                <div class="journey-node-desc">Runs once through the shared trigger coordinator</div>
               </div>
             </div>
           </section>
@@ -105,11 +105,15 @@
 
 
           <!-- ============================================ -->
-          <!-- Section 3: Nine signal dimensions -->
+          <!-- Section 3: Trusted fast context projection -->
           <!-- ============================================ -->
           <section>
-            <h2 id="signal-dimensions">Nine behavioural signal dimensions</h2>
-            <p>On every request, HCAD builds an <code>HCADContext</code> value object that carries nine dimensions of information: identity, session, device, geography, behaviour, authentication, resource, intent, and baseline. The same object is used by the scorer and later by the LLM pipeline as shared context.</p>
+            <h2 id="signal-dimensions">Trusted fast context projection</h2>
+            <p>HCAD scoring is now based on <code>TrustedHcadContextProjection</code>, created by <code>TrustedHcadContextProjectionFactory</code>. Only fields with <code>TRUSTED_SERVER</code>, <code>BRIDGE_VERIFIED</code>, or <code>STORE_DERIVED</code> provenance can influence pre-trigger scoring. Client-provided simulation headers, official-inspection override slots, RAG/vector/MCP data, and external threat-pack inputs are excluded from the hot-path decision.</p>
+
+            <div class="callout-warning">
+              <strong>Trust boundary.</strong> HCAD does not score arbitrary request headers such as resource sensitivity or business impact. If a value cannot be traced to trusted server state, a verified bridge, or a store-derived baseline/history, it is ignored before the LLM trigger.
+            </div>
 
             <div class="dimension-wheel">
               <div class="dimension-hex">
@@ -125,18 +129,18 @@
                 <div class="dimension-hex-icon">GEO</div>
                 <div class="dimension-hex-title">Time &amp; geography</div>
                 <ul class="dimension-hex-items">
-                  <li>country &middot; city</li>
-                  <li>latitude &middot; longitude</li>
-                  <li>currentAccessHour</li>
+                  <li>clientIp</li>
+                  <li>impossibleTravel</li>
+                  <li>trusted server time</li>
                 </ul>
               </div>
               <div class="dimension-hex">
-                <div class="dimension-hex-icon">NEW</div>
-                <div class="dimension-hex-title">Novelty</div>
+                <div class="dimension-hex-icon">CTX</div>
+                <div class="dimension-hex-title">Context binding</div>
                 <ul class="dimension-hex-items">
-                  <li>isNewSession</li>
-                  <li>isNewDevice</li>
-                  <li>isNewUser</li>
+                  <li>contextBindingHash</li>
+                  <li>tenantId</li>
+                  <li>organizationId</li>
                 </ul>
               </div>
               <div class="dimension-hex">
@@ -152,8 +156,8 @@
                 <div class="dimension-hex-icon">BHV</div>
                 <div class="dimension-hex-title">Behaviour pattern</div>
                 <ul class="dimension-hex-items">
-                  <li>recentRequestCount (5 min)</li>
-                  <li>lastRequestInterval</li>
+                  <li>requestBurst</li>
+                  <li>rapidSequence</li>
                   <li>previousPath</li>
                 </ul>
               </div>
@@ -162,33 +166,35 @@
                 <div class="dimension-hex-title">Normal-behaviour baseline</div>
                 <ul class="dimension-hex-items">
                   <li>baselineConfidence</li>
-                  <li>updateCount</li>
-                  <li>avgTrustScore</li>
+                  <li>baselineEstablished</li>
+                  <li>STORE_DERIVED source</li>
                 </ul>
               </div>
               <div class="dimension-hex">
                 <div class="dimension-hex-icon">RES</div>
-                <div class="dimension-hex-title">Resource</div>
+                <div class="dimension-hex-title">Resource binding</div>
                 <ul class="dimension-hex-items">
-                  <li>resourceType</li>
-                  <li>isSensitiveResource</li>
+                  <li>normalizedPath</li>
+                  <li>httpMethod</li>
+                  <li>verificationRequired</li>
                 </ul>
               </div>
               <div class="dimension-hex">
-                <div class="dimension-hex-icon">INT</div>
-                <div class="dimension-hex-title">Intent</div>
+                <div class="dimension-hex-icon">AUTHZ</div>
+                <div class="dimension-hex-title">Authorization bridge</div>
                 <ul class="dimension-hex-items">
-                  <li>intentBotUserAgent</li>
-                  <li>intentMissingReferer</li>
+                  <li>authorizationPolicyId</li>
+                  <li>authorizationPrivileged</li>
+                  <li>recentPermissionChanges</li>
                 </ul>
               </div>
               <div class="dimension-hex">
-                <div class="dimension-hex-icon">VEC</div>
-                <div class="dimension-hex-title">Vectorisation</div>
+                <div class="dimension-hex-icon">EXCL</div>
+                <div class="dimension-hex-title">Excluded inputs</div>
                 <ul class="dimension-hex-items">
-                  <li>toVector() &mdash; 384 dims</li>
-                  <li>toJson()</li>
-                  <li>toCompactString()</li>
+                  <li>RAG / vector / MCP</li>
+                  <li>simulation headers</li>
+                  <li>client risk overrides</li>
                 </ul>
               </div>
             </div>
@@ -333,7 +339,7 @@
           <!-- ============================================ -->
           <section>
             <h2 id="assessment">Assessment record structure</h2>
-            <p>The scorer output is stored in an immutable record &mdash; <code>HcadPreProtectablePromotionAssessment</code> &mdash; and projected into both <code>HCADContext.additionalAttributes</code> and HTTP request attributes. This record is the single source of truth for every downstream explanation, audit entry, and verifier replay.</p>
+            <p>The scorer output is stored in an immutable record &mdash; <code>HcadPreProtectablePromotionAssessment</code> &mdash; and attached to HTTP request attributes for the pending-anomaly trigger chain. Candidate, trigger, duplicate, and LLM-outcome state is persisted separately in <code>hcad_detection_evaluation</code>. The runtime audit log keeps only summary trace data; monitoring statistics are computed from the dedicated evaluation table.</p>
 
             <div class="status-matrix">
               <div class="status-matrix-row">
@@ -374,30 +380,26 @@
               </div>
             </div>
 
-            <h4>HCAD Context Assessment & Early Event Publishing Java Simulation</h4>
-            <p>Example code illustrating how the filter chain collects context and evaluates signals before request reaches the protected controller:</p>
-            <pre><code class="language-java">// 1. Collect 9-dimensional behavioral context from the incoming HTTP request
-HCADContext hcadContext = HCADContext.builder()
-        .userId("user_9921")
-        .sessionId("session_xyz789")
-        .remoteIp("198.51.100.45")
-        .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...")
-        .requestPath("/api/v1/sensitive/resource")
-        .httpMethod("POST")
-        .isNewDevice(true)           // New device detected (Anchor Signal)
-        .recentRequestCount(15)      // 15 requests within 5m (Corroborating Signal)
-        .failedLoginAttempts(0)
-        .build();
+            <h4>Trusted projection assessment and evaluation persistence</h4>
+            <p>Example code illustrating the current hot-path shape before a request reaches the protected controller:</p>
+            <pre><code class="language-java">// Simplified from HCADFilter.
+// 1. Build a canonical fast projection from trusted sources only
+TrustedHcadContextProjection projection =
+        trustedProjectionFactory.project(request, authentication);
 
-// 2. Evaluate risk score and check if it qualifies for early analysis promotion
-HcadPreProtectablePromotionAssessment assessment = hcadScoreModel.evaluate(hcadContext);
+// 2. Score only trusted fields; ignoredInputs are kept for explanation, not scoring
+HcadPreProtectablePromotionAssessment assessment =
+        hcadPreProtectablePromotionScorer.score(projection);
 
-// 3. If the score exceeds the threshold (redlineScore=70) with at least 1 anchor signal
+// 3. Attach the assessment to request attributes for the trigger chain
+HcadPreProtectablePromotionRequestProjector.project(
+        request,
+        assessment,
+        hcadProperties.getPreTrigger().effectiveMode());
+
+// 4. The orchestrator persists hcad_detection_evaluation and coordinates LLM dedup
 if (assessment.eligible()) {
-    // 4. Publish early threat event to kick off the asynchronous LLM pipeline
-    eventPublisher.publishPreProtectableThreat(
-            new PreProtectableThreatEvent(hcadContext, assessment)
-    );
+    pendingAnomalyTriggerOrchestrator.maybeTrigger(request, authentication);
 }</code></pre>
           </section>
 
@@ -407,7 +409,7 @@ if (assessment.eligible()) {
           <!-- ============================================ -->
           <section>
             <h2 id="trigger-chain">Early-analysis trigger chain</h2>
-            <p>Placed right after the HCAD filter, <code>AuthenticatedPendingAnomalyTriggerFilter</code> publishes an event only when a request passes five sequential gates. Any gate can stop the flow independently &mdash; the original request path is never affected.</p>
+            <p>Placed right after the HCAD filter, <code>AuthenticatedPendingAnomalyTriggerFilter</code> publishes an event only when a request passes the sequential gates below. Any gate can stop the flow independently &mdash; the original request path is never affected. HCAD and <code>@Protectable</code> triggers share an idempotency key so the same request does not produce duplicate LLM analysis.</p>
 
             <div class="gate-chain">
               <div class="gate-step">
@@ -423,22 +425,22 @@ if (assessment.eligible()) {
               <div class="gate-step">
                 <div class="gate-step-num">3</div>
                 <div class="gate-step-name">Dedup</div>
-                <div class="gate-step-desc">Skips if still inside cooldown (resend wait) window</div>
+                <div class="gate-step-desc">Suppresses repeated candidates with the same request/context signature</div>
               </div>
               <div class="gate-step">
                 <div class="gate-step-num">4</div>
-                <div class="gate-step-name">In-flight lock</div>
-                <div class="gate-step-desc">Attempts to acquire a TTL-based distributed lock</div>
+                <div class="gate-step-name">Trigger coordinator</div>
+                <div class="gate-step-desc">Merges HCAD and @Protectable triggers into one LLM analysis lease</div>
               </div>
               <div class="gate-step">
                 <div class="gate-step-num">5</div>
                 <div class="gate-step-name">Publish</div>
-                <div class="gate-step-desc">Emits the early-analysis event and marks cooldown</div>
+                <div class="gate-step-desc">Emits the early-analysis event and records trigger state</div>
               </div>
             </div>
 
             <div class="callout-info">
-              <strong>Responsible components.</strong> <code>PendingAnomalyEligibilityGate</code> (1), <code>PendingAnomalyEvidenceCheckService</code> (2), <code>AnalysisTriggerStateRepository</code> (3 &amp; 4), <code>PendingAnomalyEventTriggerService</code> (5). Requests passing all five gates are forwarded to <code>ZeroTrustEventPublisher.publishPreProtectableThreat()</code>.
+              <strong>Responsible components.</strong> <code>PendingAnomalyEligibilityGate</code> (1), <code>PendingAnomalyEvidenceCheckService</code> (2), <code>HcadLlmTriggerCoordinator</code> and <code>AnalysisTriggerStateRepository</code> (3 &amp; 4), <code>PendingAnomalyEventTriggerService</code> (5). Requests passing all gates are forwarded to <code>ZeroTrustEventPublisher.publishPreProtectableThreat()</code>.
             </div>
           </section>
 
@@ -505,6 +507,21 @@ if (assessment.eligible()) {
               </thead>
               <tbody>
                 <tr>
+                  <td><code>hcadEvaluationId</code></td>
+                  <td>string</td>
+                  <td>Primary evaluation identifier persisted in <code>hcad_detection_evaluation</code></td>
+                </tr>
+                <tr>
+                  <td><code>hcadMode</code></td>
+                  <td>enum</td>
+                  <td><code>OBSERVE</code>, <code>SHADOW</code>, or <code>ENFORCE</code>; default is <code>SHADOW</code></td>
+                </tr>
+                <tr>
+                  <td><code>decisionBoundaryMode</code></td>
+                  <td>enum</td>
+                  <td>Set to <code>SHADOW</code> for HCAD shadow candidates so enforcement side effects are skipped</td>
+                </tr>
+                <tr>
                   <td><code>hcadEscalationScore</code></td>
                   <td>integer</td>
                   <td>Risk score between 0 and 100</td>
@@ -538,6 +555,11 @@ if (assessment.eligible()) {
                   <td><code>rawSignalSnapshot</code></td>
                   <td>object</td>
                   <td>Raw signal values for verifier replay</td>
+                </tr>
+                <tr>
+                  <td><code>duplicateSuppressed</code></td>
+                  <td>boolean</td>
+                  <td>True when the coordinator suppresses a duplicate HCAD/@Protectable trigger</td>
                 </tr>
                 <tr>
                   <td><code>action</code></td>
@@ -591,13 +613,34 @@ if (assessment.eligible()) {
               </div>
               <div class="status-matrix-row">
                 <div class="status-matrix-cell status-matrix-key">CoreHCADAutoConfiguration</div>
-                <div class="status-matrix-cell">Registers the scorer, data store and service beans</div>
+                <div class="status-matrix-cell">Registers projection, scorer, evaluation writer, data store, and trigger coordination beans</div>
               </div>
               <div class="status-matrix-row">
                 <div class="status-matrix-cell status-matrix-key">IdentitySecurityCoreAutoConfiguration</div>
                 <div class="status-matrix-cell">Integrates the HCAD path with the rest of the identity filter chain</div>
               </div>
             </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 11: Shadow monitoring -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="shadow-monitoring">Shadow monitoring and qualification</h2>
+            <p>HCAD pre-trigger evaluation is observable through the IAM admin page <code>/contexa/admin/security-monitor/hcad</code>. The page reads from <code>hcad_detection_evaluation</code> and provides day, week, month, and year windows for candidate count, LLM trigger count, precision, false positives, observable false negatives, unknown ratio, average LLM latency, duplicate suppression, signal performance, resource performance, user/session repeats, and estimated wasted cost.</p>
+
+            <table class="payload-table">
+              <thead>
+                <tr><th>Qualification setting</th><th>Default</th><th>Meaning</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>contexa.hcad.pre-trigger.qualification.shadow-min-precision</code></td><td><code>0.80</code></td><td>Minimum precision for considering shadow data meaningful</td></tr>
+                <tr><td><code>contexa.hcad.pre-trigger.qualification.limited-enforce-min-precision</code></td><td><code>0.90</code></td><td>Minimum precision before limited enforce is recommended</td></tr>
+                <tr><td><code>contexa.hcad.pre-trigger.qualification.default-enforce-min-precision</code></td><td><code>0.95</code></td><td>Minimum precision before default enforce is recommended</td></tr>
+                <tr><td><code>contexa.hcad.pre-trigger.qualification.minimum-sample-size</code></td><td><code>100</code></td><td>Minimum sample count for evaluating promotion readiness</td></tr>
+              </tbody>
+            </table>
           </section>
 
 

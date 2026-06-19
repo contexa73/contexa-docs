@@ -24,10 +24,10 @@
           <!-- ============================================ -->
           <section>
             <h2 id="overview">개요</h2>
-            <p>HCAD 조기 위협 탐지는 요청이 컨트롤러에 도달하기 전, <code>HCADFilterConfigurer</code>가 <code>HCADFilter</code>를 Spring Security의 <code>AuthorizationFilter</code> 앞에 삽입하는 방식으로 동작합니다. 현재 configurer 순서는 <code>SecurityConfigurer.HIGHEST_PRECEDENCE + 115</code>이며, 뒤이어 <code>AuthenticatedPendingAnomalyTriggerFilter</code>가 <code>HIGHEST_PRECEDENCE + 116</code> 순서로 배치됩니다. 각 요청에서 9개 차원의 행동 신호를 수집하고, 핵심 신호(Anchor Signal)와 보조 신호(Corroborating Signal)의 가중치를 합산해 위험 점수를 생성합니다. 점수가 임계값(redlineScore=70)을 넘고 핵심 신호가 1개 이상 포함되면 LLM 기반 비동기 분석이 <strong>보호 대상 접근 이전</strong>에 시작됩니다.</p>
+            <p>HCAD 조기 위협 탐지는 요청이 컨트롤러에 도달하기 전, <code>HCADFilterConfigurer</code>가 <code>HCADFilter</code>를 Spring Security의 <code>AuthorizationFilter</code> 앞에 삽입하는 방식으로 동작합니다. 현재 configurer 순서는 <code>SecurityConfigurer.HIGHEST_PRECEDENCE + 115</code>이며, 뒤이어 <code>AuthenticatedPendingAnomalyTriggerFilter</code>가 <code>HIGHEST_PRECEDENCE + 116</code> 순서로 배치됩니다. HCAD는 최종 위험 판정기가 아니라, 보호 대상 리소스에 도달하기 전에 인증된 요청을 LLM 분석 경로로 보낼 가치가 있는지 판단하는 조기 게이트입니다.</p>
 
             <div class="callout-info">
-              <strong>설계 원칙.</strong> HCAD는 항상 요청을 통과(fail-open)시키며 차단·챌린지를 직접 수행하지 않습니다. 집행은 기존 <code>ZeroTrustActionRepository</code> 기반의 비동기 enforcement 경로에서만 이뤄지고, HCAD는 그 경로를 일찍 기동하는 역할만 담당합니다.
+              <strong>설계 원칙.</strong> HCAD는 항상 요청을 통과(fail-open)시키며 차단·챌린지를 직접 수행하지 않습니다. 기본 pre-trigger 모드는 <code>SHADOW</code>입니다. 후보 요청은 LLM 분석을 시작할 수 있지만 런타임 부작용은 event boundary에서 억제됩니다. 실제 집행은 일반 Zero Trust 판정 경로가 담당합니다.
             </div>
 
             <h3 style="margin-top:var(--space-6)">요청 도착부터 결정까지의 단계</h3>
@@ -45,17 +45,17 @@
               <div class="journey-node">
                 <div class="journey-node-stage">Stage 3</div>
                 <div class="journey-node-name">신호 점수화</div>
-                <div class="journey-node-desc">9가지 신호 → 위험 점수</div>
+                <div class="journey-node-desc">신뢰 projection → 조기 분석 점수</div>
               </div>
               <div class="journey-node">
                 <div class="journey-node-stage">Stage 4</div>
                 <div class="journey-node-name">조기 분석 개시</div>
-                <div class="journey-node-desc">점수가 임계치 이상이면 AI 이벤트 발행</div>
+                <div class="journey-node-desc">평가 행을 저장하고 후보 여부 판정</div>
               </div>
               <div class="journey-node">
                 <div class="journey-node-stage">Stage 5</div>
                 <div class="journey-node-name">LLM 파이프라인</div>
-                <div class="journey-node-desc">기존 비동기 분석 경로에 합류</div>
+                <div class="journey-node-desc">공통 trigger coordinator를 통해 1회 실행</div>
               </div>
             </div>
           </section>
@@ -105,11 +105,15 @@
 
 
           <!-- ============================================ -->
-          <!-- Section 3: 9차원 행동 신호 -->
+          <!-- Section 3: 신뢰 fast context projection -->
           <!-- ============================================ -->
           <section>
-            <h2 id="signal-dimensions">9차원 행동 신호</h2>
-            <p>HCAD는 매 요청마다 <code>HCADContext</code> 값 객체를 생성하며, 여기에 사용자·세션·디바이스·지리·행동·인증·리소스·의도·기준선 정보를 함께 담습니다. 이 객체가 이후 점수 계산과 LLM 컨텍스트의 공통 입력이 됩니다.</p>
+            <h2 id="signal-dimensions">신뢰 fast context projection</h2>
+            <p>HCAD scoring은 <code>TrustedHcadContextProjectionFactory</code>가 생성하는 <code>TrustedHcadContextProjection</code>을 기준으로 수행됩니다. pre-trigger scoring에는 <code>TRUSTED_SERVER</code>, <code>BRIDGE_VERIFIED</code>, <code>STORE_DERIVED</code> 출처가 확인된 필드만 반영됩니다. 클라이언트가 보낸 시뮬레이션 헤더, 공식검사 override slot, RAG/vector/MCP 데이터, 외부 threat pack 입력은 hot path 판단에서 제외됩니다.</p>
+
+            <div class="callout-warning">
+              <strong>신뢰 경계.</strong> HCAD는 resource sensitivity나 business impact 같은 임의 요청 헤더를 점수화하지 않습니다. 신뢰 가능한 서버 상태, 검증된 bridge, 저장소에서 파생된 baseline/history로 추적되지 않는 값은 LLM trigger 이전 판단에서 무시됩니다.
+            </div>
 
             <div class="dimension-wheel">
               <div class="dimension-hex">
@@ -125,18 +129,18 @@
                 <div class="dimension-hex-icon">GEO</div>
                 <div class="dimension-hex-title">시간·지리</div>
                 <ul class="dimension-hex-items">
-                  <li>country · city</li>
-                  <li>latitude · longitude</li>
-                  <li>currentAccessHour</li>
+                  <li>clientIp</li>
+                  <li>impossibleTravel</li>
+                  <li>trusted server time</li>
                 </ul>
               </div>
               <div class="dimension-hex">
-                <div class="dimension-hex-icon">NEW</div>
-                <div class="dimension-hex-title">신규성</div>
+                <div class="dimension-hex-icon">CTX</div>
+                <div class="dimension-hex-title">컨텍스트 바인딩</div>
                 <ul class="dimension-hex-items">
-                  <li>isNewSession</li>
-                  <li>isNewDevice</li>
-                  <li>isNewUser</li>
+                  <li>contextBindingHash</li>
+                  <li>tenantId</li>
+                  <li>organizationId</li>
                 </ul>
               </div>
               <div class="dimension-hex">
@@ -152,8 +156,8 @@
                 <div class="dimension-hex-icon">BHV</div>
                 <div class="dimension-hex-title">행동 패턴</div>
                 <ul class="dimension-hex-items">
-                  <li>recentRequestCount (5분)</li>
-                  <li>lastRequestInterval</li>
+                  <li>requestBurst</li>
+                  <li>rapidSequence</li>
                   <li>previousPath</li>
                 </ul>
               </div>
@@ -162,33 +166,35 @@
                 <div class="dimension-hex-title">평소 행동 기준</div>
                 <ul class="dimension-hex-items">
                   <li>baselineConfidence</li>
-                  <li>updateCount</li>
-                  <li>avgTrustScore</li>
+                  <li>baselineEstablished</li>
+                  <li>STORE_DERIVED source</li>
                 </ul>
               </div>
               <div class="dimension-hex">
                 <div class="dimension-hex-icon">RES</div>
-                <div class="dimension-hex-title">리소스</div>
+                <div class="dimension-hex-title">리소스 바인딩</div>
                 <ul class="dimension-hex-items">
-                  <li>resourceType</li>
-                  <li>isSensitiveResource</li>
+                  <li>normalizedPath</li>
+                  <li>httpMethod</li>
+                  <li>verificationRequired</li>
                 </ul>
               </div>
               <div class="dimension-hex">
-                <div class="dimension-hex-icon">INT</div>
-                <div class="dimension-hex-title">의도 신호</div>
+                <div class="dimension-hex-icon">AUTHZ</div>
+                <div class="dimension-hex-title">인가 bridge</div>
                 <ul class="dimension-hex-items">
-                  <li>intentBotUserAgent</li>
-                  <li>intentMissingReferer</li>
+                  <li>authorizationPolicyId</li>
+                  <li>authorizationPrivileged</li>
+                  <li>recentPermissionChanges</li>
                 </ul>
               </div>
               <div class="dimension-hex">
-                <div class="dimension-hex-icon">VEC</div>
-                <div class="dimension-hex-title">벡터 변환</div>
+                <div class="dimension-hex-icon">EXCL</div>
+                <div class="dimension-hex-title">제외 입력</div>
                 <ul class="dimension-hex-items">
-                  <li>toVector() — 384차원</li>
-                  <li>toJson()</li>
-                  <li>toCompactString()</li>
+                  <li>RAG / vector / MCP</li>
+                  <li>simulation headers</li>
+                  <li>client risk overrides</li>
                 </ul>
               </div>
             </div>
@@ -333,7 +339,7 @@
           <!-- ============================================ -->
           <section>
             <h2 id="assessment">판정 레코드 구조</h2>
-            <p>점수 계산 결과는 불변 레코드 <code>HcadPreProtectablePromotionAssessment</code>에 담겨 <code>HCADContext.additionalAttributes</code>와 HTTP request attribute 양쪽에 투영됩니다. 이 레코드가 이후 감사·설명·평가에 사용되는 공통 진실원천입니다.</p>
+            <p>점수 계산 결과는 불변 레코드 <code>HcadPreProtectablePromotionAssessment</code>에 담기며, pending anomaly trigger chain이 읽을 수 있도록 HTTP request attribute에 연결됩니다. 후보, trigger, 중복 억제, LLM 결과 상태는 별도의 <code>hcad_detection_evaluation</code> 테이블에 저장됩니다. 런타임 <code>audit_log</code>에는 감사 추적용 요약만 남기고, 통계와 관리자 화면은 전용 평가 테이블을 기준으로 집계합니다.</p>
 
             <div class="status-matrix">
               <div class="status-matrix-row">
@@ -374,30 +380,26 @@
               </div>
             </div>
 
-            <h4>HCAD 컨텍스트 평가 및 조기 이벤트 발행 자바 시뮬레이션</h4>
-            <p>보호 리소스에 도달하기 전, 필터 체인에서 수집된 컨텍스트와 신호 평가가 일어나는 메커니즘을 나타낸 예시 코드입니다:</p>
-            <pre><code class="language-java">// 1. 요청으로부터 9차원 행동 컨텍스트 정보 수집
-HCADContext hcadContext = HCADContext.builder()
-        .userId("user_9921")
-        .sessionId("session_xyz789")
-        .remoteIp("198.51.100.45")
-        .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...")
-        .requestPath("/api/v1/sensitive/resource")
-        .httpMethod("POST")
-        .isNewDevice(true)           // 신규 디바이스 감지 (핵심 신호)
-        .recentRequestCount(15)      // 5분 내 요청 15회 (보조 신호)
-        .failedLoginAttempts(0)
-        .build();
+            <h4>신뢰 projection 평가 및 평가 테이블 저장</h4>
+            <p>보호 리소스에 도달하기 전, 현재 hot path에서 일어나는 흐름을 축약한 예시 코드입니다:</p>
+            <pre><code class="language-java">// HCADFilter 흐름을 단순화한 예시입니다.
+// 1. 신뢰 출처 기반 canonical fast projection 생성
+TrustedHcadContextProjection projection =
+        trustedProjectionFactory.project(request, authentication);
 
-// 2. HCAD 점수 모델을 사용하여 위험도 계산 및 분석 개시 조건 충족 여부 확인
-HcadPreProtectablePromotionAssessment assessment = hcadScoreModel.evaluate(hcadContext);
+// 2. 신뢰 필드만 점수화. ignoredInputs는 설명용으로만 보관하고 scoring에는 쓰지 않음
+HcadPreProtectablePromotionAssessment assessment =
+        hcadPreProtectablePromotionScorer.score(projection);
 
-// 3. 임계치(redlineScore=70)를 초과하고 핵심 신호가 1개 이상 존재하여 조기 분석 대상인 경우
+// 3. trigger chain이 읽을 수 있도록 request attribute에 assessment 연결
+HcadPreProtectablePromotionRequestProjector.project(
+        request,
+        assessment,
+        hcadProperties.getPreTrigger().effectiveMode());
+
+// 4. orchestrator가 hcad_detection_evaluation 저장과 LLM 중복 억제를 조정
 if (assessment.eligible()) {
-    // 4. 비동기 LLM 분석 파이프라인 기동을 위해 이벤트 발행
-    eventPublisher.publishPreProtectableThreat(
-            new PreProtectableThreatEvent(hcadContext, assessment)
-    );
+    pendingAnomalyTriggerOrchestrator.maybeTrigger(request, authentication);
 }</code></pre>
           </section>
 
@@ -407,7 +409,7 @@ if (assessment.eligible()) {
           <!-- ============================================ -->
           <section>
             <h2 id="trigger-chain">조기 분석 트리거 체인</h2>
-            <p>HCAD 필터 이후 배치되는 <code>AuthenticatedPendingAnomalyTriggerFilter</code>는 5단계 게이트를 통과한 요청에 한해 이벤트를 발행합니다. 각 단계는 서로 독립적으로 실패할 수 있으며, 어떤 단계에서 중단되든 기존 요청 흐름은 영향을 받지 않습니다.</p>
+            <p>HCAD 필터 이후 배치되는 <code>AuthenticatedPendingAnomalyTriggerFilter</code>는 아래의 순차 게이트를 통과한 요청에 한해 이벤트를 발행합니다. 각 단계는 서로 독립적으로 실패할 수 있으며, 어떤 단계에서 중단되든 기존 요청 흐름은 영향을 받지 않습니다. HCAD와 <code>@Protectable</code> trigger는 같은 idempotency key를 공유하므로 동일 요청에서 LLM 분석이 중복 실행되지 않습니다.</p>
 
             <div class="gate-chain">
               <div class="gate-step">
@@ -423,12 +425,12 @@ if (assessment.eligible()) {
               <div class="gate-step">
                 <div class="gate-step-num">3</div>
                 <div class="gate-step-name">중복 제거</div>
-                <div class="gate-step-desc">재전송 대기 시간(cooldown) 중이면 통과 중단</div>
+                <div class="gate-step-desc">동일 request/context signature의 반복 후보 억제</div>
               </div>
               <div class="gate-step">
                 <div class="gate-step-num">4</div>
-                <div class="gate-step-name">동시 실행 제어</div>
-                <div class="gate-step-desc">분산 락(TTL 기반) 획득 시도</div>
+                <div class="gate-step-name">Trigger coordinator</div>
+                <div class="gate-step-desc">HCAD와 @Protectable trigger를 하나의 LLM analysis lease로 병합</div>
               </div>
               <div class="gate-step">
                 <div class="gate-step-num">5</div>
@@ -438,7 +440,7 @@ if (assessment.eligible()) {
             </div>
 
             <div class="callout-info">
-              <strong>담당 컴포넌트.</strong> <code>PendingAnomalyEligibilityGate</code> (1), <code>PendingAnomalyEvidenceCheckService</code> (2), <code>AnalysisTriggerStateRepository</code> (3·4), <code>PendingAnomalyEventTriggerService</code> (5). 5단계 모두 통과한 요청은 <code>ZeroTrustEventPublisher.publishPreProtectableThreat()</code>로 연결됩니다.
+              <strong>담당 컴포넌트.</strong> <code>PendingAnomalyEligibilityGate</code> (1), <code>PendingAnomalyEvidenceCheckService</code> (2), <code>AnalysisTriggerStateRepository</code>와 <code>HcadLlmTriggerCoordinator</code> (3·4), <code>PendingAnomalyEventTriggerService</code> (5). 모든 게이트를 통과한 요청은 <code>ZeroTrustEventPublisher.publishPreProtectableThreat()</code>로 연결됩니다.
             </div>
           </section>
 
@@ -505,6 +507,21 @@ if (assessment.eligible()) {
               </thead>
               <tbody>
                 <tr>
+                  <td><code>hcadEvaluationId</code></td>
+                  <td>string</td>
+                  <td><code>hcad_detection_evaluation</code>에 저장되는 기본 평가 ID</td>
+                </tr>
+                <tr>
+                  <td><code>hcadMode</code></td>
+                  <td>enum</td>
+                  <td><code>OBSERVE</code> · <code>SHADOW</code> · <code>ENFORCE</code>. 기본값은 <code>SHADOW</code></td>
+                </tr>
+                <tr>
+                  <td><code>decisionBoundaryMode</code></td>
+                  <td>enum</td>
+                  <td>HCAD shadow 후보에서는 <code>SHADOW</code>로 설정되어 enforcement 부작용을 건너뜁니다.</td>
+                </tr>
+                <tr>
                   <td><code>hcadEscalationScore</code></td>
                   <td>integer</td>
                   <td>0~100 위험 점수</td>
@@ -538,6 +555,11 @@ if (assessment.eligible()) {
                   <td><code>rawSignalSnapshot</code></td>
                   <td>object</td>
                   <td>원시 신호 값. verifier 재평가 입력</td>
+                </tr>
+                <tr>
+                  <td><code>duplicateSuppressed</code></td>
+                  <td>boolean</td>
+                  <td>coordinator가 HCAD/@Protectable 중복 trigger를 억제했는지 여부</td>
                 </tr>
                 <tr>
                   <td><code>action</code></td>
@@ -591,13 +613,63 @@ if (assessment.eligible()) {
               </div>
               <div class="status-matrix-row">
                 <div class="status-matrix-cell status-matrix-key">CoreHCADAutoConfiguration</div>
-                <div class="status-matrix-cell">점수 산정기·저장소·서비스 빈 자동 등록</div>
+                <div class="status-matrix-cell">projection·scorer·evaluation writer·data store·trigger coordination 빈 자동 등록</div>
               </div>
               <div class="status-matrix-row">
                 <div class="status-matrix-cell status-matrix-key">IdentitySecurityCoreAutoConfiguration</div>
                 <div class="status-matrix-cell">HCAD 경로와 Identity 필터 체인 통합</div>
               </div>
             </div>
+          </section>
+
+
+          <!-- ============================================ -->
+          <!-- Section 11: Shadow 모니터링 -->
+          <!-- ============================================ -->
+          <section>
+            <h2 id="shadow-monitoring">Shadow 모니터링과 승격 기준</h2>
+            <p>HCAD pre-trigger 평가는 IAM 관리자 화면 <code>/contexa/admin/security-monitor/hcad</code>에서 확인합니다. 이 화면은 <code>hcad_detection_evaluation</code>을 기준으로 일·주·월·연 기간의 후보 수, LLM 호출 수, precision, false positive, 관측 가능한 false negative, unknown 비율, 평균 LLM latency, 중복 억제 수, signal별 성능, resource별 성능, 사용자·세션 반복, 예상 낭비 비용을 집계합니다.</p>
+
+            <div class="callout-info">
+              <strong>운영 원칙.</strong> HCAD는 자동으로 enforce 전환을 수행하지 않습니다. 관리자 화면은 shadow 관측 결과와 권장 상태를 제시하고, 실제 전환 여부는 운영자가 판단합니다.
+            </div>
+
+            <table class="payload-table">
+              <thead>
+                <tr>
+                  <th>설정</th>
+                  <th>기본값</th>
+                  <th>의미</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>contexa.hcad.pre-trigger.mode</code></td>
+                  <td><code>shadow</code></td>
+                  <td><code>observe</code>, <code>shadow</code>, <code>enforce</code>, <code>disabled</code> 중 선택</td>
+                </tr>
+                <tr>
+                  <td><code>contexa.hcad.pre-trigger.qualification.shadow-min-precision</code></td>
+                  <td><code>0.80</code></td>
+                  <td>shadow 유지 최소 기준</td>
+                </tr>
+                <tr>
+                  <td><code>contexa.hcad.pre-trigger.qualification.limited-enforce-min-precision</code></td>
+                  <td><code>0.90</code></td>
+                  <td>제한적 enforce 권장 기준</td>
+                </tr>
+                <tr>
+                  <td><code>contexa.hcad.pre-trigger.qualification.default-enforce-min-precision</code></td>
+                  <td><code>0.95</code></td>
+                  <td>기본 enforce 권장 기준</td>
+                </tr>
+                <tr>
+                  <td><code>contexa.hcad.pre-trigger.qualification.minimum-sample-size</code></td>
+                  <td><code>100</code></td>
+                  <td>권장 판단에 필요한 최소 표본 수</td>
+                </tr>
+              </tbody>
+            </table>
           </section>
 
 
