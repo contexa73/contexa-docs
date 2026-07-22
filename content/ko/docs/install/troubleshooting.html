@@ -17,7 +17,7 @@
 <section>
   <h2 id="contexa-doctor">Contexa Doctor 활용하기</h2>
   <p>Contexa는 JDK, 도커 데몬, 데이터베이스, AI 모델 등 여러 인프라가 엮여 작동합니다. 설치 중 오류가 발생하거나 동작이 의심스러울 때 아래 명령어로 로컬 환경을 전수 스캔하십시오.</p>
-  
+
   <div class="code-block">
     <div class="code-block-header">
       <span class="code-block-lang">Shell</span>
@@ -29,32 +29,29 @@
     <pre><code class="language-bash">contexa doctor</code></pre>
   </div>
 
-  <p>진단기가 상태를 분석하여 결함이 있는 항목에 대해 명확한 조치 명령어(<code>[FIX]</code>)를 제시합니다. 또한 <code>contexa init --check</code> 명령어를 사용해 설치를 시도하기 전에 미리 환경의 기동 적합성을 사전 테스트해 볼 수도 있습니다.</p>
+  <p>진단기는 선택한 설치 경로에 필요한 항목만 확인합니다. 프로젝트를 변경하지 않고 사전 점검만 하려면 <code>contexa init --check</code>를 실행하고, 별도 상태 보고가 필요하면 <code>contexa doctor</code>를 사용합니다.</p>
 </section>
 
 <!-- Section 2: Error Catalog -->
 <section>
   <h2 id="error-catalog">주요 장애 카탈로그 및 해결책</h2>
-  
+
   <h3>① Permission Denied (권한 오류)</h3>
   <p>CLI 설치 시 시스템 공용 디렉토리(<code>/usr/local/bin</code>)에 실행 바이너리를 작성할 수 없을 때 발생합니다.</p>
   <div class="callout callout-warning">
     <p><strong>에러 예시</strong>: <code>Permission denied to write /usr/local/bin/contexa</code></p>
   </div>
-  <p><strong>해결 방법</strong>:</p>
-  <ul>
-    <li>
-      <strong>권한 상승 설치</strong>: <code>sudo</code> 명령어를 사용해 설치 스크립트를 구동하십시오.
-      <pre><code>curl -fsSL https://install.ctxa.ai | sudo sh</code></pre>
-    </li>
-    <li>
-      <strong>사용자 홈 디렉토리 격리 설치</strong>: 권한 상승이 불가능한 경우 개인 바이너리 경로를 prefix로 전달하십시오.
-      <pre><code>curl -fsSL https://install.ctxa.ai | sh -s -- --prefix ~/.local/bin</code></pre>
-    </li>
-  </ul>
+  <p><strong>해결 방법</strong>: 설치기는 <code>/usr/local/bin</code>에 쓸 수 없으면 자동으로 <code>~/.local/bin</code>을 사용합니다. 설치 위치를 명시하려면 <code>CONTEXA_INSTALL_DIR</code>만 지정합니다. 설치 스크립트 자체를 <code>sudo</code>로 실행하지 마세요.</p>
+  <pre><code>installer="$(mktemp)"
+curl -fsSL --connect-timeout 5 --max-time 30 https://install.ctxa.ai/install.sh -o "$installer"
+CONTEXA_INSTALL_DIR="$HOME/.local/bin" sh "$installer"
+status=$?
+rm -f "$installer"
+test $status -eq 0</code></pre>
+  <p>설치 후 <code>~/.local/bin</code>이 <code>PATH</code>에 없다면 셸 설정에 추가한 뒤 새 터미널에서 <code>contexa --version</code>을 확인합니다.</p>
 
   <h3>② Docker not running (도커 미기동)</h3>
-  <p>초기화 작업 중 인프라 컨테이너를 가동하려 할 때 도커 엔진이 켜져 있지 않아 발생합니다.</p>
+  <p>로컬 Docker 인프라, 시뮬레이션, 분산 모드를 선택했는데 Docker 서비스가 비활성 상태일 때만 발생합니다.</p>
   <div class="callout callout-warning">
     <p><strong>에러 예시</strong>: <code>Docker daemon is not running or unreachable.</code></p>
   </div>
@@ -73,14 +70,14 @@
   </div>
   <p><strong>해결 방법</strong>:</p>
   <ul>
-    <li><strong>자동 우회 (호스트 인프라 재사용)</strong>: Contexa CLI는 포트 충돌 감지 시 해당 컨테이너 기동을 안전하게 스킵하고 호스트에서 기동 중인 데이터베이스에 자동 연결을 시도하도록 설계되어 있습니다.</li>
+    <li><strong>기존 서비스 확인</strong>: 포트를 점유한 서비스가 의도한 PostgreSQL/Ollama인지 먼저 확인합니다. CLI가 임의로 종료하거나 설정을 바꾸지 않으므로, 재사용할 연결 정보는 사용자가 선택한 인프라 설정과 일치시켜야 합니다.</li>
     <li><strong>격리 시뮬레이션 모드 사용</strong>: 기존 로컬 서비스와 충돌 없이 온전히 컨테이너를 띄우려면 simulate 모드로 초기화하십시오. 포트가 <code>+20000</code> 으로 격리 매핑되어 띄워집니다.
       <pre><code>contexa init --simulate</code></pre>
     </li>
   </ul>
 
   <h3>④ Ollama Model Missing (AI 모델 유실)</h3>
-  <p>Ollama 런타임은 동작하지만 AI 보안 인가 판단 및 임베딩 분석을 위한 인공지능 가중치 모델이 다운로드되어 있지 않아 런타임 예외를 유발하는 현상입니다.</p>
+  <p>AI provider로 Ollama를 선택했지만 필요한 모델 파일이 아직 런타임 환경에 내려받아지지 않은 경우에만 발생합니다.</p>
   <div class="callout callout-warning">
     <p><strong>에러 예시</strong>: <code>Model 'qwen2.5:7b' is missing on Ollama server.</code></p>
   </div>
@@ -88,6 +85,14 @@
   <pre><code>docker exec -it contexa-ollama ollama pull qwen2.5:7b
 docker exec -it contexa-ollama ollama pull mxbai-embed-large</code></pre>
   <p>메모리가 부족한 저사양 머신의 경우 환경 변수(<code>OLLAMA_CHAT_MODEL</code>)를 지정해 경량 대체 모델(예: <code>qwen2.5:3b</code> 또는 <code>1.5b</code>)을 풀링하고 <code>application.yml</code> 설정을 동기화하여 해결할 수 있습니다.</p>
+  <h3>⑤ Starter만 추가했는데 Contexa 테이블이 없음</h3>
+  <p><code>@EnableAISecurity</code>가 없는 dependency-only 상태에서는 정상입니다. Starter 추가만으로 Contexa 필터, 인증 Provider 또는 IAM 스키마를 만들지 않습니다. OSS와 Enterprise의 테이블은 각 기능이 활성화된 서버 런타임이 기동될 때 해당 모듈의 책임으로 생성·검증합니다.</p>
+
+  <h3>⑥ <code>contexa reset</code>이 일부 변경을 되돌리지 않음</h3>
+  <p><code>reset</code>은 설치 매니페스트에 기록된 CLI 소유 변경만 되돌립니다. 사용자가 원래 추가한 Starter나 설치 후 직접 수정한 파일은 임의로 삭제·덮어쓰지 않습니다. 충돌 보고가 나오면 파일과 매니페스트를 확인한 뒤 사용자 변경을 직접 정리하십시오. 확인만 하려면 <code>contexa reset --simulate</code>를 사용합니다.</p>
+
+  <h3>⑦ <code>ai.ctxa</code> 의존성을 찾지 못함</h3>
+  <p>정식 <code>0.1.0</code> 소비자는 <code>mavenCentral()</code>만 사용합니다. Spring milestone/snapshot 또는 Sonatype snapshot 저장소를 일반 사용자 빌드에 추가하지 마세요. 게시 직후라면 Maven Central 동기화가 끝난 뒤 다시 시도하고, 좌표가 <code>ai.ctxa:spring-boot-starter-contexa:0.1.0</code>인지 확인합니다.</p>
 </section>
 
 <!-- Navigation Footer -->

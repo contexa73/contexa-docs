@@ -16,8 +16,8 @@
 <!-- Section 1: Contexa Doctor -->
 <section>
   <h2 id="contexa-doctor">Diagnosing with Contexa Doctor</h2>
-  <p>Contexa relies on a combination of a JDK runtime, a Docker daemon, a database, and local/cloud LLMs. If you hit any issues during installation, scan your environment using the doctor command:</p>
-  
+  <p>Contexa always requires a JDK runtime. Database, Docker, and LLM checks depend on the features you selected in the installer. If you hit any issue during installation, scan your environment using the doctor command:</p>
+
   <div class="code-block">
     <div class="code-block-header">
       <span class="code-block-lang">Shell</span>
@@ -29,32 +29,29 @@
     <pre><code class="language-bash">contexa doctor</code></pre>
   </div>
 
-  <p>The diagnostic utility will analyze your system and provide clear action steps (labeled <code>[FIX]</code>) for any failing component. You can also run <code>contexa init --check</code> to perform a pre-flight environment test before running the full setup process.</p>
+  <p>Diagnostics check only what the selected installation path needs. Run <code>contexa init --check</code> to perform preflight checks and exit without changing the project, or use <code>contexa doctor</code> for a separate status report.</p>
 </section>
 
 <!-- Section 2: Error Catalog -->
 <section>
   <h2 id="error-catalog">Common Issues and Fixes</h2>
-  
+
   <h3>① Permission Denied</h3>
   <p>Occurs when the installer script does not have write access to system binary directories (such as <code>/usr/local/bin</code>).</p>
   <div class="callout callout-warning">
     <p><strong>Error snippet</strong>: <code>Permission denied to write /usr/local/bin/contexa</code></p>
   </div>
-  <p><strong>Resolution</strong>:</p>
-  <ul>
-    <li>
-      <strong>Elevated Privilege</strong>: Run the installer using <code>sudo</code>:
-      <pre><code>curl -fsSL https://install.ctxa.ai | sudo sh</code></pre>
-    </li>
-    <li>
-      <strong>User-local Installation</strong>: Avoid sudo by installing to a personal home bin path:
-      <pre><code>curl -fsSL https://install.ctxa.ai | sh -s -- --prefix ~/.local/bin</code></pre>
-    </li>
-  </ul>
+  <p><strong>Resolution</strong>: the installer automatically falls back to <code>~/.local/bin</code> when <code>/usr/local/bin</code> is not writable. Set only <code>CONTEXA_INSTALL_DIR</code> when you need an explicit location. Do not run the installer script itself with <code>sudo</code>.</p>
+  <pre><code>installer="$(mktemp)"
+curl -fsSL --connect-timeout 5 --max-time 30 https://install.ctxa.ai/install.sh -o "$installer"
+CONTEXA_INSTALL_DIR="$HOME/.local/bin" sh "$installer"
+status=$?
+rm -f "$installer"
+test $status -eq 0</code></pre>
+  <p>If <code>~/.local/bin</code> is not on <code>PATH</code>, add it to your shell profile, open a new terminal, and run <code>contexa --version</code>.</p>
 
   <h3>② Docker not running</h3>
-  <p>Occurs when the CLI tries to deploy local database containers but the Docker service is inactive.</p>
+  <p>Occurs only when you selected local Docker-managed infrastructure, simulation, or distributed mode and the Docker service is inactive.</p>
   <div class="callout callout-warning">
     <p><strong>Error snippet</strong>: <code>Docker daemon is not running or unreachable.</code></p>
   </div>
@@ -73,14 +70,14 @@
   </div>
   <p><strong>Resolution</strong>:</p>
   <ul>
-    <li><strong>Automatic Reuse (Default)</strong>: Contexa CLI detects the bound port, skips creating a duplicate Postgres container, and configures the application to connect to the pre-existing host instance automatically.</li>
+    <li><strong>Inspect the existing service</strong>: Verify that the process holding the port is the intended PostgreSQL or Ollama instance. The CLI does not terminate it or rewrite settings arbitrarily; make the reused connection details match the infrastructure path you selected.</li>
     <li><strong>Isolated Simulation Mode</strong>: If you want to spin up isolated containers side-by-side with your existing stack, use the simulation installer. Ports are automatically shifted by <code>+20000</code>:
       <pre><code>contexa init --simulate</code></pre>
     </li>
   </ul>
 
   <h3>④ Ollama Model Missing</h3>
-  <p>The Ollama server is running, but the required chat model files have not yet been pulled into the runtime environment.</p>
+  <p>Occurs only when you selected Ollama as the AI provider and the required model files have not yet been pulled into the runtime environment.</p>
   <div class="callout callout-warning">
     <p><strong>Error snippet</strong>: <code>Model 'qwen2.5:7b' is missing on Ollama server.</code></p>
   </div>
@@ -88,6 +85,14 @@
   <pre><code>docker exec -it contexa-ollama ollama pull qwen2.5:7b
 docker exec -it contexa-ollama ollama pull mxbai-embed-large</code></pre>
   <p>For low-spec or memory-limited environments, you can define the environment variable <code>OLLAMA_CHAT_MODEL</code> as a smaller variant (e.g. <code>qwen2.5:3b</code> or <code>1.5b</code>) and synchronize it with your <code>application.yml</code> configurations.</p>
+  <h3>⑤ No Contexa tables after adding only the Starter</h3>
+  <p>This is expected in dependency-only state without <code>@EnableAISecurity</code>. Adding the Starter alone does not create Contexa filters, authentication providers, or the IAM schema. OSS and Enterprise tables are created and validated by the corresponding activated server runtime.</p>
+
+  <h3>⑥ <code>contexa reset</code> does not revert every change</h3>
+  <p><code>reset</code> reverts only CLI-owned changes recorded in the installation manifest. It does not arbitrarily delete a Starter dependency that the user already owned or overwrite files edited after installation. If a conflict is reported, inspect the file and manifest, then resolve the user-owned change explicitly. Use <code>contexa reset --simulate</code> for a dry run.</p>
+
+  <h3>⑦ Maven cannot resolve an <code>ai.ctxa</code> dependency</h3>
+  <p>Stable <code>0.1.0</code> consumers need only <code>mavenCentral()</code>. Do not add Spring milestone/snapshot or Sonatype snapshot repositories to a normal consumer build. Immediately after publication, wait for Maven Central synchronization, then verify the coordinate is <code>ai.ctxa:spring-boot-starter-contexa:0.1.0</code>.</p>
 </section>
 
 <!-- Navigation Footer -->

@@ -44,17 +44,26 @@
           <!-- Page Header -->
           <div class="docs-page-header">
             <h1>기존 Spring Boot 애플리케이션에 Contexa 통합하기</h1>
-            <p class="lead">이미 Spring Security가 적용된 Spring Boot 애플리케이션이 있습니다. Contexa를 추가해도 기존 보안 설정은 대체되지 않습니다 — 그 위에 감싸집니다. 이 페이지는 무엇이 바뀌고, 무엇이 그대로 유지되며, 어떻게 안전하게 도입하는지 설명합니다.</p>
+            <p class="lead">Contexa의 실행 범위는 설치 여부가 아니라 활성화 모드로 결정됩니다. Starter 의존성만 추가한 상태, 호스트 인증을 유지하는 SANDBOX, Contexa가 인증을 소유하는 FULL을 구분해 적용해야 합니다.</p>
           </div>
 
           <div class="callout callout-warning">
-            <p><strong>Spring Boot 4.x 미지원</strong> — Contexa는 Spring Boot 3.x(3.0.x ~ 3.4.x)까지만 지원하며, <strong>Spring Boot 4.x 환경은 지원하지 않습니다.</strong> 4.x 환경에서 <code>@EnableAISecurity</code>가 선언되면 예외(<code>IllegalStateException</code>)와 함께 구동이 즉시 차단되고 로그가 출력됩니다.</p>
+            <p><strong>현재 검증 기준</strong> — 이 릴리스는 Java 17과 Spring Boot 3.5.4를 기준으로 검증합니다. Spring Boot 3.x가 대상이며 <strong>4.x는 지원하지 않습니다.</strong> 4.x 환경에서 <code>@EnableAISecurity</code>를 선언하면 구동을 차단합니다.</p>
+          </div>
+
+          <div class="callout callout-info">
+            <p><strong>세 가지 실행 상태</strong></p>
+            <ul>
+              <li><strong>Starter만 추가</strong>: <code>@EnableAISecurity</code>가 없으면 Contexa AI 보안, 필터, 인증 Provider, IAM 스키마를 활성화하지 않습니다.</li>
+              <li><strong>SANDBOX (기본)</strong>: <code>HOST_OWNED</code> 계약입니다. 호스트가 인증과 <code>SecurityContext</code>를 소유하고, Contexa는 브리지로 인증 주체를 받아 선택된 리소스의 정책만 독립적으로 평가합니다.</li>
+              <li><strong>FULL</strong>: <code>CONTEXA_OWNED</code> 계약입니다. Contexa를 전역 인증·인가 플랫폼으로 사용할 신규 애플리케이션에서만 명시적으로 선택합니다.</li>
+            </ul>
           </div>
 
           <!-- Section 1: What Happens Under the Hood -->
           <section class="section-sm">
             <h2 id="what-happens-under-the-hood">내부에서 일어나는 일</h2>
-            <p>애플리케이션 클래스에 <code>@EnableAISecurity</code>를 추가하면, 4계층 파이프라인이 선언적 설정을 Spring Security 필터 체인으로 변환합니다.</p>
+            <p><code>@EnableAISecurity</code>를 추가하면 선택한 모드가 먼저 소유권 경계를 결정합니다. 아래 인증 DSL과 필터 체인 생성 과정은 <strong>FULL / CONTEXA_OWNED</strong> 구성에 해당합니다.</p>
 
             <div class="steps">
               <div class="step">
@@ -87,17 +96,17 @@
               </div>
             </div>
 
-            <p>기본 <code>PlatformConfig</code>는 <strong>Form Login + OTT</strong> MFA 흐름, <strong>세션 관리</strong>, 그리고 AI 신뢰 점수를 위한 <strong><code>AISessionSecurityContextRepository</code></strong>를 제공합니다 — 설정 클래스를 하나도 작성하지 않아도 됩니다.</p>
+            <p>FULL 모드의 기본 <code>PlatformConfig</code>는 Form Login, OTT MFA, 세션 관리와 <code>AISessionSecurityContextRepository</code>를 구성합니다. SANDBOX에서는 이 구성을 호스트 인증 소유권을 넘기는 근거로 사용하면 안 됩니다.</p>
 
             <div class="callout callout-info">
-              <p><strong>마법이 아닙니다.</strong> 내부적으로 Contexa는 여러분이 직접 호출하는 것과 동일한 Spring Security 메서드를 사용합니다. 선언적 DSL로 추상화하고 Zero Trust 필터를 추가한 것뿐입니다. 언제든 <code>rawHttp()</code>로 DSL을 우회할 수 있습니다.</p>
+              <p><strong>FULL 모드 내부 동작</strong> — Contexa는 표준 Spring Security DSL을 구성합니다. 이 동작은 명시적으로 FULL을 선택한 경우에만 호스트 인증 구성을 소유합니다.</p>
             </div>
           </section>
 
           <!-- Section 2: Your Existing Security Stays Intact -->
           <section class="section-sm">
-            <h2 id="existing-security-stays-intact">기존 보안 설정은 그대로 유지됩니다</h2>
-            <p>새로운 보안 프레임워크를 도입할 때 가장 흔한 우려: <em>"기존 설정이 깨지지 않을까?"</em></p>
+            <h2 id="existing-security-stays-intact">SANDBOX에서는 호스트 보안 소유권을 유지합니다</h2>
+            <p>SANDBOX의 기준은 단순한 빈 공존이 아니라 <code>HOST_OWNED</code> 경계입니다. 호스트가 로그인, 세션, 인증 Provider와 <code>SecurityContext</code>를 계속 소유합니다.</p>
 
             <!-- Before / After Comparison -->
             <div class="sb-compare">
@@ -111,16 +120,16 @@
                 </div>
               </div>
               <div class="sb-side sb-side--after">
-                <div class="sb-side-title">Contexa 추가 후</div>
+                <div class="sb-side-title">SANDBOX 활성화 후</div>
                 <div class="sb-side-items">
                   <div class="sb-item">기존 SecurityFilterChain <strong>(변경 없음)</strong></div>
                   <div class="sb-item">기존 UserDetailsService <strong>(변경 없음)</strong></div>
                   <div class="sb-item">기존 AuthenticationProvider <strong>(변경 없음)</strong></div>
                   <div class="sb-item">spring.security.* 속성 <strong>(변경 없음)</strong></div>
                   <div class="sb-divider"></div>
-                  <div class="sb-item">+ Contexa SecurityFilterChain <strong>(별도 추가)</strong></div>
-                  <div class="sb-item">+ Zero Trust 필터 <strong>(별도 추가)</strong></div>
-                  <div class="sb-item">+ AI 세션 컨텍스트 <strong>(별도 추가)</strong></div>
+                  <div class="sb-item">+ 선택된 Contexa 리소스 평가 <strong>(독립 실행)</strong></div>
+                  <div class="sb-item">+ 호스트 인증 주체 브리지 <strong>(읽기 전용)</strong></div>
+                  <div class="sb-item">+ DB 정책 결정 <strong>(호스트 IAM과 분리)</strong></div>
                 </div>
               </div>
             </div>
@@ -137,23 +146,23 @@
               <tbody>
                 <tr>
                   <td><code>SecurityFilterChain</code></td>
-                  <td>변경 없음 — Contexa 체인이 별도로 추가됨</td>
-                  <td><code>BeanDefinitionRegistry</code> + <code>OrderedSecurityFilterChain</code></td>
+                  <td>SANDBOX에서 대체하거나 소유하지 않음</td>
+                  <td><code>HOST_OWNED</code> 소유권 경계</td>
                 </tr>
                 <tr>
                   <td><code>UserDetailsService</code></td>
-                  <td>변경 없음 — 기존 구현이 우선</td>
-                  <td><code>@ConditionalOnMissingBean</code></td>
+                  <td>변경 없음 — 호스트 구현을 사용</td>
+                  <td>브리지는 인증 주체를 전달받아 읽기만 함</td>
                 </tr>
                 <tr>
                   <td><code>AuthenticationProvider</code></td>
-                  <td>변경 없음 — Contexa가 별도 Provider 추가</td>
-                  <td><code>AuthenticationManager</code> 체인 공존</td>
+                  <td>변경 없음 — SANDBOX가 호스트 인증 Provider를 대체하지 않음</td>
+                  <td><code>HOST_OWNED</code> 인증 경계</td>
                 </tr>
                 <tr>
                   <td>CSRF / CORS 설정</td>
-                  <td>변경 없음 — 필요시 <code>global()</code>로 재정의 가능</td>
-                  <td>기존 설정 기본 유지</td>
+                  <td>변경 없음 — 호스트 설정 유지</td>
+                  <td>Contexa 리소스 평가와 분리</td>
                 </tr>
                 <tr>
                   <td><code>spring.security.*</code></td>
@@ -175,7 +184,7 @@
                 <h3>Shadow Mode</h3>
                 <p>여기서 시작하세요. 기존 동작에 위험 없음.</p>
                 <ul>
-                  <li>AI가 모든 요청을 분석</li>
+                  <li>AI가 선택된 Contexa 리소스 요청을 분석</li>
                   <li>결정은 로그에만 기록</li>
                   <li>사용자 차단이나 MFA 요구 없음</li>
                   <li>실제 트래픽으로 행동 기준선 구축</li>
@@ -186,7 +195,7 @@
                 <h3>Enforce Mode</h3>
                 <p>기준선이 확립되면 전환.</p>
                 <ul>
-                  <li>AI가 모든 요청을 분석</li>
+                  <li>AI가 선택된 Contexa 리소스 요청을 분석</li>
                   <li>결정이 실시간으로 강제됨</li>
                   <li><span class="badge" style="background:var(--zt-allow);color:#fff">ALLOW</span> 정상 통과</li>
                   <li><span class="badge" style="background:var(--zt-challenge);color:#fff">CHALLENGE</span> MFA 요구</li>
@@ -206,13 +215,13 @@
               <pre><code class="language-yaml">contexa:
   security:
     zerotrust:
-      mode: SHADOW   # AI가 모든 요청을 분석하되, 강제하지 않음</code></pre>
+      mode: SHADOW   # 선택된 리소스를 분석하되, 결정을 강제하지 않음</code></pre>
             </div>
 
             <p><code>contexa.security.zerotrust.mode</code> 속성은 <code>SecurityZeroTrustProperties</code>에 바인딩됩니다(값: <code>SHADOW</code>, <code>ENFORCE</code>; 기본값 <code>ENFORCE</code>). <code>SecurityZeroTrustProperties.isEnforcementEnabled()</code>는 <code>mode == ENFORCE</code>일 때만 <code>true</code>를 반환합니다. SHADOW 모드에서는 <code>SecurityDecisionEnforcementHandler</code>가 결정 영속화와 차단 부수 효과를 건너뛰고, <code>AuthorizationManagerMethodInterceptor</code>는 <code>@Protectable(sync = true)</code>의 BLOCK/CHALLENGE/ESCALATE 결정을 관찰 전용으로 처리합니다(<code>ZeroTrustAccessDeniedException</code>을 던지지 않고 메서드가 정상 진행). 이 속성은 <code>@ConfigurationProperties</code>로 바인딩되므로 YAML 값 변경 후에는 애플리케이션 재시작이 필요합니다.</p>
 
             <div class="callout callout-info">
-              <p><strong>프로덕션에서도 안전합니다.</strong> Shadow Mode는 어떤 요청이나 응답도 변경하지 않습니다. AI 분석은 요청 완료 후 비동기로 실행되어 지연 시간이 추가되지 않습니다. <a href="shadow-mode.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Shadow Mode 가이드 &rarr;</a></p>
+              <p><strong>적용 전 확인</strong> — Shadow Mode는 결정을 강제하지 않지만 실제 분석 경로는 실행됩니다. 운영 전 대상 리소스 범위, 로그, 지연 시간과 외부 AI 호출 여부를 자신의 환경에서 확인하세요. <a href="shadow-mode.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Shadow Mode 가이드 &rarr;</a></p>
             </div>
           </section>
 
@@ -270,8 +279,8 @@
 
           <!-- Section 5: When You Need Custom Configuration -->
           <section class="section-sm">
-            <h2 id="custom-configuration">커스텀 설정이 필요할 때</h2>
-            <p>기본 <code>PlatformConfig</code>는 Form Login + OTT MFA + 세션 관리를 포함합니다. 다른 구성이 필요하면 직접 <code>PlatformConfig</code> 빈을 정의하세요:</p>
+            <h2 id="custom-configuration">FULL 모드에서 커스텀 인증 구성이 필요할 때</h2>
+            <p>다음 인증 DSL 예제는 <code>FULL / CONTEXA_OWNED</code> 전용입니다. 레거시 호스트의 SANDBOX 통합에 복사하지 마세요. FULL에서 다른 인증 구성이 필요할 때만 <code>PlatformConfig</code> 빈을 정의합니다.</p>
 
             <h3 id="scenario-rest-only">시나리오 A: REST API 전용</h3>
             <p>애플리케이션이 REST API만 제공하고 Form Login이 필요 없는 경우.</p>
@@ -293,8 +302,8 @@ public PlatformConfig platformConfig(IdentityDslRegistry&lt;HttpSecurity&gt; reg
 }</code></pre>
             </div>
 
-            <h3 id="scenario-existing-form-login">시나리오 B: 기존 Form Login + Zero Trust</h3>
-            <p>기존 인증 흐름을 유지하면서 AI 기반 보안만 추가하는 경우. 핵심: <code>AISessionSecurityContextRepository</code> 등록 필수.</p>
+            <h3 id="scenario-existing-form-login">시나리오 B: FULL 모드의 Form Login + Zero Trust</h3>
+            <p>Contexa가 인증을 소유하는 FULL 모드에서 Form Login과 AI 기반 보안을 함께 구성하는 경우입니다. <code>AISessionSecurityContextRepository</code>도 FULL 소유권 안에서 등록합니다.</p>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">Java</span>
@@ -337,7 +346,7 @@ public PlatformConfig platformConfig(IdentityDslRegistry&lt;HttpSecurity&gt; reg
             <p>Spring Security의 <code>FormLoginConfigurer</code>에 완전히 접근하면서도 Contexa의 Zero Trust 파이프라인은 그대로 유지됩니다.</p>
 
             <div class="callout callout-warning">
-              <p><strong>Zero Trust 필수 조건.</strong> 커스텀 <code>PlatformConfig</code>를 정의할 때 <code>AISessionSecurityContextRepository</code>를 <code>global()</code> 커스터마이저에 반드시 등록하세요. 빠뜨리면 세션에 AI 신뢰 점수가 주입되지 않아 Zero Trust가 작동하지 않습니다.</p>
+              <p><strong>FULL 모드 조건</strong> — 커스텀 <code>PlatformConfig</code>를 정의할 때는 <code>AISessionSecurityContextRepository</code>를 FULL 소유권 안에서 등록해야 합니다. SANDBOX에서 호스트 <code>SecurityContext</code>를 이 저장소로 교체하지 마세요.</p>
             </div>
 
             <p>

@@ -44,17 +44,26 @@
           <!-- Page Header -->
           <div class="docs-page-header">
             <h1>Integrating Contexa into Your Spring Boot Application</h1>
-            <p class="lead">You already have a Spring Boot application with Spring Security. Adding Contexa doesn't replace your security setup — it wraps around it. This page explains exactly what changes, what stays the same, and how to go live safely.</p>
+            <p class="lead">Contexa's runtime scope is determined by the activation mode, not by installation alone. Treat Starter-only, host-owned SANDBOX, and Contexa-owned FULL as three different states.</p>
           </div>
 
           <div class="callout callout-warning">
-            <p><strong>Spring Boot 4.x is NOT supported</strong> — Contexa supports Spring Boot 3.x (3.0.x ~ 3.4.x) only, and <strong>does not support Spring Boot 4.x.</strong> If <code>@EnableAISecurity</code> is declared in a 4.x environment, application startup will be blocked immediately with an <code>IllegalStateException</code> and error log.</p>
+            <p><strong>Current validation baseline</strong> — this release is validated with Java 17 and Spring Boot 3.5.4. Spring Boot 3.x is the target; <strong>4.x is not supported.</strong> Declaring <code>@EnableAISecurity</code> on 4.x blocks startup.</p>
+          </div>
+
+          <div class="callout callout-info">
+            <p><strong>Three runtime states</strong></p>
+            <ul>
+              <li><strong>Starter only</strong>: without <code>@EnableAISecurity</code>, Contexa does not activate AI security, filters, authentication providers, or the IAM schema.</li>
+              <li><strong>SANDBOX (default)</strong>: the <code>HOST_OWNED</code> contract. The host owns authentication and <code>SecurityContext</code>; Contexa receives the principal through the bridge and independently evaluates policies only for selected resources.</li>
+              <li><strong>FULL</strong>: the <code>CONTEXA_OWNED</code> contract. Select it explicitly only for a new application that uses Contexa as the global authentication and authorization platform.</li>
+            </ul>
           </div>
 
           <!-- Section 1: What Happens Under the Hood -->
           <section class="section-sm">
             <h2 id="what-happens-under-the-hood">What Happens Under the Hood</h2>
-            <p>When you add <code>@EnableAISecurity</code> to your application class, a four-layer pipeline transforms your declarative configuration into Spring Security filter chains.</p>
+            <p>Adding <code>@EnableAISecurity</code> first selects the ownership boundary. The authentication DSL and filter-chain creation process below apply to <strong>FULL / CONTEXA_OWNED</strong> configuration.</p>
 
             <div class="steps">
               <div class="step">
@@ -87,17 +96,17 @@
               </div>
             </div>
 
-            <p>The default <code>PlatformConfig</code> gives you <strong>Form Login + OTT</strong> as the MFA flow, <strong>session management</strong>, and <strong><code>AISessionSecurityContextRepository</code></strong> for AI trust scores — all without writing a single configuration class.</p>
+            <p>In FULL mode, the default <code>PlatformConfig</code> configures Form Login, OTT MFA, session management, and <code>AISessionSecurityContextRepository</code>. Do not use this as a reason to transfer host authentication ownership in SANDBOX.</p>
 
             <div class="callout callout-info">
-              <p><strong>This is not magic.</strong> Internally, Contexa calls the same Spring Security methods you would. It abstracts them through a declarative DSL and adds Zero Trust filters on top. You can bypass the DSL anytime via <code>rawHttp()</code>.</p>
+              <p><strong>FULL-mode internals</strong> — Contexa configures the standard Spring Security DSL. It owns host authentication configuration only when FULL is explicitly selected.</p>
             </div>
           </section>
 
           <!-- Section 2: Your Existing Security Stays Intact -->
           <section class="section-sm">
-            <h2 id="existing-security-stays-intact">Your Existing Security Stays Intact</h2>
-            <p>The most common concern when adopting a new security framework: <em>"Will it break what I already have?"</em></p>
+            <h2 id="existing-security-stays-intact">SANDBOX Preserves Host Security Ownership</h2>
+            <p>SANDBOX is defined by the <code>HOST_OWNED</code> boundary, not merely by bean coexistence. The host continues to own login, sessions, authentication providers, and <code>SecurityContext</code>.</p>
 
             <!-- Before / After Comparison -->
             <div class="sb-compare">
@@ -111,16 +120,16 @@
                 </div>
               </div>
               <div class="sb-side sb-side--after">
-                <div class="sb-side-title">After Contexa</div>
+                <div class="sb-side-title">After SANDBOX Activation</div>
                 <div class="sb-side-items">
                   <div class="sb-item">Your SecurityFilterChain <strong>(unchanged)</strong></div>
                   <div class="sb-item">Your UserDetailsService <strong>(unchanged)</strong></div>
                   <div class="sb-item">Your AuthenticationProvider <strong>(unchanged)</strong></div>
                   <div class="sb-item">spring.security.* properties <strong>(unchanged)</strong></div>
                   <div class="sb-divider"></div>
-                  <div class="sb-item">+ Contexa SecurityFilterChains <strong>(added separately)</strong></div>
-                  <div class="sb-item">+ Zero Trust filters <strong>(added separately)</strong></div>
-                  <div class="sb-item">+ AI Session Context <strong>(added separately)</strong></div>
+                  <div class="sb-item">+ Selected Contexa resource evaluation <strong>(independent)</strong></div>
+                  <div class="sb-item">+ Host-principal bridge <strong>(read only)</strong></div>
+                  <div class="sb-item">+ DB policy decision <strong>(separate from host IAM)</strong></div>
                 </div>
               </div>
             </div>
@@ -137,23 +146,23 @@
               <tbody>
                 <tr>
                   <td><code>SecurityFilterChain</code></td>
-                  <td>Unchanged — Contexa chains are added separately</td>
-                  <td><code>BeanDefinitionRegistry</code> + <code>OrderedSecurityFilterChain</code></td>
+                  <td>Not replaced or owned in SANDBOX</td>
+                  <td><code>HOST_OWNED</code> ownership boundary</td>
                 </tr>
                 <tr>
                   <td><code>UserDetailsService</code></td>
-                  <td>Unchanged — yours takes priority</td>
-                  <td><code>@ConditionalOnMissingBean</code></td>
+                  <td>Unchanged — the host implementation is used</td>
+                  <td>The bridge only receives and reads the principal</td>
                 </tr>
                 <tr>
                   <td><code>AuthenticationProvider</code></td>
-                  <td>Unchanged — Contexa adds its own to the chain</td>
-                  <td><code>AuthenticationManager</code> chain coexistence</td>
+                  <td>Unchanged — SANDBOX does not replace host authentication providers</td>
+                  <td><code>HOST_OWNED</code> authentication boundary</td>
                 </tr>
                 <tr>
                   <td>CSRF / CORS settings</td>
-                  <td>Unchanged — override via <code>global()</code> only if needed</td>
-                  <td>Existing config preserved by default</td>
+                  <td>Unchanged — host settings remain in control</td>
+                  <td>Separated from Contexa resource evaluation</td>
                 </tr>
                 <tr>
                   <td><code>spring.security.*</code></td>
@@ -175,7 +184,7 @@
                 <h3>Shadow Mode</h3>
                 <p>Start here. Zero risk to existing behavior.</p>
                 <ul>
-                  <li>AI analyzes every request</li>
+                  <li>AI analyzes requests for selected Contexa resources</li>
                   <li>Decisions are logged only</li>
                   <li>No user is ever blocked or challenged</li>
                   <li>Behavioral baselines are built from real traffic</li>
@@ -186,7 +195,7 @@
                 <h3>Enforce Mode</h3>
                 <p>Switch when baselines are established.</p>
                 <ul>
-                  <li>AI analyzes every request</li>
+                  <li>AI analyzes requests for selected Contexa resources</li>
                   <li>Decisions are enforced in real-time</li>
                   <li><span class="badge" style="background:var(--zt-allow);color:#fff">ALLOW</span> proceeds normally</li>
                   <li><span class="badge" style="background:var(--zt-challenge);color:#fff">CHALLENGE</span> triggers MFA</li>
@@ -206,13 +215,13 @@
               <pre><code class="language-yaml">contexa:
   security:
     zerotrust:
-      mode: SHADOW   # AI analyzes every request, enforces nothing</code></pre>
+      mode: SHADOW   # Analyze selected resources without enforcement</code></pre>
             </div>
 
             <p>The <code>contexa.security.zerotrust.mode</code> property is bound to <code>SecurityZeroTrustProperties</code> (values: <code>SHADOW</code>, <code>ENFORCE</code>; default <code>ENFORCE</code>). <code>SecurityZeroTrustProperties.isEnforcementEnabled()</code> returns <code>true</code> only when <code>mode == ENFORCE</code>. In SHADOW mode, <code>SecurityDecisionEnforcementHandler</code> skips decision persistence and blocking side-effects, and <code>AuthorizationManagerMethodInterceptor</code> treats <code>@Protectable(sync = true)</code> BLOCK/CHALLENGE/ESCALATE decisions as observation-only (the method proceeds instead of throwing <code>ZeroTrustAccessDeniedException</code>). Because the property is bound via <code>@ConfigurationProperties</code>, a restart is required after changing the YAML value.</p>
 
             <div class="callout callout-info">
-              <p><strong>Safe for production.</strong> Shadow Mode does not alter any request or response. AI analysis runs asynchronously after the request completes, adding no latency. <a href="shadow-mode.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Shadow Mode Guide &rarr;</a></p>
+              <p><strong>Validate before production</strong> — Shadow Mode does not enforce decisions, but it runs the actual analysis path. Validate resource scope, logs, latency, and external AI calls in your environment. <a href="shadow-mode.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Shadow Mode Guide &rarr;</a></p>
             </div>
           </section>
 
@@ -270,8 +279,8 @@
 
           <!-- Section 5: When You Need Custom Configuration -->
           <section class="section-sm">
-            <h2 id="custom-configuration">When You Need Custom Configuration</h2>
-            <p>The default <code>PlatformConfig</code> includes Form Login + OTT MFA + Session management. Define your own <code>PlatformConfig</code> bean when you need a different setup:</p>
+            <h2 id="custom-configuration">Custom Authentication Configuration in FULL Mode</h2>
+            <p>The following authentication DSL examples are for <code>FULL / CONTEXA_OWNED</code> only. Do not copy them into a legacy host's SANDBOX integration. Define a <code>PlatformConfig</code> bean only when FULL needs a different authentication setup.</p>
 
             <h3 id="scenario-rest-only">Scenario A: REST API Only</h3>
             <p>Your application exposes only REST APIs — no Form Login needed.</p>
@@ -293,8 +302,8 @@ public PlatformConfig platformConfig(IdentityDslRegistry&lt;HttpSecurity&gt; reg
 }</code></pre>
             </div>
 
-            <h3 id="scenario-existing-form-login">Scenario B: Existing Form Login + Zero Trust</h3>
-            <p>Keep your existing authentication and add AI-driven security on top. The critical step: register <code>AISessionSecurityContextRepository</code>.</p>
+            <h3 id="scenario-existing-form-login">Scenario B: Form Login + Zero Trust in FULL Mode</h3>
+            <p>Use this when Contexa owns authentication in FULL mode and configures Form Login with AI-driven security. Register <code>AISessionSecurityContextRepository</code> within that FULL ownership boundary.</p>
             <div class="code-block">
               <div class="code-block-header">
                 <span class="code-block-lang">Java</span>
@@ -337,7 +346,7 @@ public PlatformConfig platformConfig(IdentityDslRegistry&lt;HttpSecurity&gt; reg
             <p>This gives you full access to Spring Security's <code>FormLoginConfigurer</code> while still benefiting from Contexa's Zero Trust pipeline.</p>
 
             <div class="callout callout-warning">
-              <p><strong>Required for Zero Trust.</strong> When defining a custom <code>PlatformConfig</code>, you must register <code>AISessionSecurityContextRepository</code> in the <code>global()</code> customizer. Without it, AI trust scores are not injected into sessions and Zero Trust will not function.</p>
+              <p><strong>FULL-mode condition</strong> — a custom <code>PlatformConfig</code> must register <code>AISessionSecurityContextRepository</code> inside the FULL ownership boundary. Do not replace the host <code>SecurityContext</code> repository with it in SANDBOX.</p>
             </div>
 
             <p>
