@@ -113,6 +113,10 @@ public class MyApplication {
 public List&lt;Customer&gt; getCustomers() { ... }</code></pre>
           </div>
 
+          <div class="callout callout-info">
+            <p><strong>기본 모드</strong> — 속성 없이 선언한 <code>@EnableAISecurity</code>는 <code>SANDBOX</code> 모드이며 <code>HOST_OWNED</code>로 동작합니다. 이 경우 Contexa는 인증용 <code>SecurityFilterChain</code>을 만들지 않으므로 애플리케이션의 Spring Security 설정이 인증과 인가를 담당하고, <code>@Protectable</code> 메서드는 호출 시점에 Spring <code>Authentication</code>이 있어야 합니다. Contexa가 로그인과 인증 체인을 구성하게 하려면 <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>을 사용하세요. 자체 인증 시스템이 있다면 아래 <a href="#legacy-integration">레거시 시스템 연동</a>을 참고하세요.</p>
+          </div>
+
           <h3>4단계 — 애플리케이션 시작</h3>
           <div class="code-block">
             <div class="code-block-header">
@@ -133,7 +137,7 @@ public List&lt;Customer&gt; getCustomers() { ... }</code></pre>
         <!-- Section 2: Legacy System Integration -->
         <section>
           <h2 id="legacy-integration">레거시 시스템 연동 (SANDBOX 모드)</h2>
-          <p>프로젝트에 이미 자체 인증 시스템이 있다면 SANDBOX 모드를 사용하세요. 기존 로그인을 수정하지 않고 AI 보안을 추가합니다.</p>
+          <p>프로젝트에 이미 자체 인증 시스템이 있다면 SANDBOX 모드를 사용하세요. 기존 로그인을 수정하지 않고 AI 보안을 추가합니다. SANDBOX 모드는 기본적으로 <code>HOST_OWNED</code>로 동작하므로, 인증과 인가는 애플리케이션의 Spring Security 설정이 계속 담당합니다.</p>
 
           <div class="code-block">
             <div class="code-block-header">
@@ -153,7 +157,37 @@ public class LegacyApplication { }</code></pre>
           </div>
 
           <div class="callout callout-info">
-            <p><strong>사이드 이펙트 제로</strong> — SANDBOX 모드는 기존 보안에 간섭하지 않습니다. 로그인 페이지, 세션 관리, 접근 제어가 그대로 유지됩니다. Contexa는 <code>@Protectable</code> 엔드포인트에서만 동작합니다.</p>
+            <p><strong>기존 보안 동작 유지</strong> — 애플리케이션이 자신의 Spring Security 설정(<code>SecurityFilterChain</code>)을 선언해 두면, <code>HOST_OWNED</code>(SANDBOX 모드의 기본값)에서 Contexa는 로그인 페이지, 세션 관리, 접근 규칙을 바꾸지 않습니다. Contexa의 브리지 필터는 호스트 <code>Authentication</code>이 있는 모든 요청을 관찰하고, <code>@Protectable</code> 분석은 어노테이션이 붙은 메서드에서 수행됩니다.</p>
+          </div>
+
+          <div class="callout callout-warning">
+            <p><strong>Spring Security를 사용하지 않던 애플리케이션</strong> — SANDBOX 모드(<code>HOST_OWNED</code>)에서 Contexa는 인증용 <code>SecurityFilterChain</code>을 만들지 않습니다. 애플리케이션에 <code>SecurityFilterChain</code> 빈이 없으면 Spring Boot 기본 보안이 적용되어 모든 요청에 인증이 필요해지고 기본 폼 로그인과 HTTP Basic 로그인이 생성됩니다. Contexa는 이 상황을 기동 시 error 로그로 알립니다. 기존 동작을 유지하려면 아래처럼 자신의 <code>SecurityFilterChain</code>을 선언하고, 페이지 보호는 기존 레거시 필터에 그대로 맡기세요.</p>
+          </div>
+
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-block-lang">Java</span>
+              <button class="code-copy-btn" type="button" aria-label="Copy code">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                <span>Copy</span>
+              </button>
+            </div>
+            <pre><code class="language-java">@Configuration
+public class HostSecurityConfig {
+
+    @Bean
+    public SecurityFilterChain hostSecurityFilterChain(HttpSecurity http) throws Exception {
+        // 페이지 보호는 기존 레거시 필터가 계속 담당합니다
+        http.authorizeHttpRequests(auth -&gt; auth.anyRequest().permitAll());
+        return http.build();
+    }
+}</code></pre>
+          </div>
+
+          <p>이 체인에도 Spring Security의 기본 설정(CSRF 보호, 보안 응답 헤더 등)은 적용되므로, 기존 동작과 다른 부분은 애플리케이션 요구에 맞게 조정하세요.</p>
+
+          <div class="callout callout-info">
+            <p><strong><code>@Protectable</code>을 사용하려면</strong> — <code>@Protectable</code> 메서드는 호출 시점에 Spring <code>Authentication</code>이 필요합니다. 없거나 익명이면 호출이 거부되며, 응답은 호스트의 Spring Security 예외 처리가 결정합니다. 세션에만 저장된 레거시 사용자 객체(위 예의 <code>loginUser</code>)는 그것만으로 인증 증거가 되지 않으며, 세션·요청 속성·헤더는 인가·위임 증거로 읽힙니다. 레거시 방식으로 인증한 사용자를 호스트가 직접 Spring <code>SecurityContext</code>에 넣거나(예: 위 체인에 추가한 필터), Contexa가 인증을 소유하도록 <code>CONTEXA_OWNED</code>(예: <code>mode = SecurityMode.FULL</code>)를 사용하세요.</p>
           </div>
         </section>
 

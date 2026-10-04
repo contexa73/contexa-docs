@@ -112,6 +112,10 @@ public class MyApplication {
 public List&lt;Customer&gt; getCustomers() { ... }</code></pre>
           </div>
 
+          <div class="callout callout-info">
+            <p><strong>Default mode</strong> &mdash; <code>@EnableAISecurity</code> without attributes uses <code>SANDBOX</code> mode, which runs as <code>HOST_OWNED</code>. Contexa then does not build an authentication <code>SecurityFilterChain</code>: your application's Spring Security configuration owns authentication and authorization, and <code>@Protectable</code> methods require a Spring <code>Authentication</code> at invocation time. To let Contexa build the login and authentication chain, use <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>. If you already have your own authentication system, see <a href="#legacy-integration">Legacy System Integration</a> below.</p>
+          </div>
+
           <h3>Step 4 - Start your application</h3>
           <div class="code-block">
             <div class="code-block-header">
@@ -132,7 +136,7 @@ public List&lt;Customer&gt; getCustomers() { ... }</code></pre>
         <!-- Section 2: Legacy System Integration -->
         <section>
           <h2 id="legacy-integration">Legacy System Integration (SANDBOX Mode)</h2>
-          <p>If your project already has its own authentication system, use SANDBOX mode. Contexa adds AI security on top of your existing login &mdash; without modifying it.</p>
+          <p>If your project already has its own authentication system, use SANDBOX mode. Contexa adds AI security on top of your existing login &mdash; without modifying it. SANDBOX mode runs as <code>HOST_OWNED</code> by default, so your application's Spring Security configuration keeps owning authentication and authorization.</p>
 
           <div class="code-block">
             <div class="code-block-header">
@@ -152,7 +156,37 @@ public class LegacyApplication { }</code></pre>
           </div>
 
           <div class="callout callout-info">
-            <p><strong>Zero side effects</strong> &mdash;SANDBOX mode does not interfere with your existing security. Your login pages, session management, and access control remain untouched. Contexa only activates on <code>@Protectable</code> endpoints.</p>
+            <p><strong>Your existing security behavior stays in place</strong> &mdash; As long as your application declares its own Spring Security configuration (<code>SecurityFilterChain</code>), Contexa in <code>HOST_OWNED</code> (the SANDBOX default) does not change your login pages, session management, or access rules. Contexa's bridge filter observes every request that carries a host <code>Authentication</code>, and <code>@Protectable</code> analysis happens at the annotated methods.</p>
+          </div>
+
+          <div class="callout callout-warning">
+            <p><strong>Applications that did not use Spring Security</strong> &mdash; In SANDBOX mode (<code>HOST_OWNED</code>), Contexa does not build an authentication <code>SecurityFilterChain</code>. If your application has no <code>SecurityFilterChain</code> bean, Spring Boot's default security applies: every request requires authentication, and a generated form login and HTTP Basic login are added. Contexa reports this situation with an error log at startup. To keep your existing behavior, declare your own <code>SecurityFilterChain</code> as shown below and let your legacy filter keep protecting your pages.</p>
+          </div>
+
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-block-lang">Java</span>
+              <button class="code-copy-btn" type="button" aria-label="Copy code">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                <span>Copy</span>
+              </button>
+            </div>
+            <pre><code class="language-java">@Configuration
+public class HostSecurityConfig {
+
+    @Bean
+    public SecurityFilterChain hostSecurityFilterChain(HttpSecurity http) throws Exception {
+        // Your legacy filter keeps protecting pages
+        http.authorizeHttpRequests(auth -&gt; auth.anyRequest().permitAll());
+        return http.build();
+    }
+}</code></pre>
+          </div>
+
+          <p>Spring Security's defaults (such as CSRF protection and security response headers) still apply to this chain, so adjust anything that differs from your existing behavior to fit your application.</p>
+
+          <div class="callout callout-info">
+            <p><strong>To use <code>@Protectable</code></strong> &mdash; <code>@Protectable</code> methods require a Spring <code>Authentication</code> at invocation time. Without one, or with an anonymous one, the call is rejected and the response is determined by the host's Spring Security exception handling. A legacy user object stored only in the session (<code>loginUser</code> in the example above) does not by itself become authentication evidence; session, request attributes, and headers are read as authorization and delegation evidence. Either place the user authenticated by your legacy mechanism into the Spring <code>SecurityContext</code> yourself (for example with a filter added to the chain above), or use <code>CONTEXA_OWNED</code> (for example <code>mode = SecurityMode.FULL</code>) so that Contexa owns authentication.</p>
           </div>
         </section>
 

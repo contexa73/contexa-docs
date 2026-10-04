@@ -50,7 +50,7 @@ public class LegacyApplication {
         <td><code>mode</code></td>
         <td><code>SecurityMode</code></td>
         <td><code>SecurityMode.SANDBOX</code></td>
-        <td>Determines the operational enforcement mode of the AI security framework.</td>
+        <td>Determines the operational enforcement mode of the AI security framework. Unless <code>contexa.bridge.ownership</code> is set explicitly, this value also selects the authentication ownership (<code>SANDBOX</code> &rarr; <code>HOST_OWNED</code>, <code>FULL</code> &rarr; <code>CONTEXA_OWNED</code>).</td>
       </tr>
       <tr>
         <td><code>authObjectLocation</code></td>
@@ -62,7 +62,7 @@ public class LegacyApplication {
         <td><code>authObjectAttribute</code></td>
         <td><code>String</code></td>
         <td><code>""</code></td>
-        <td>The session or request attribute key used for authentication handoff.</td>
+        <td>The session or request attribute key used to read the legacy authentication object.</td>
       </tr>
       <tr>
         <td><code>authObjectType</code></td>
@@ -78,8 +78,18 @@ public class LegacyApplication {
   <h2>SecurityMode Operation</h2>
   <p>To support incremental migration and safe canary deployments, Contexa supports two distinct enforcement modes:</p>
   <ul>
-    <li><strong><code>SANDBOX</code> (Sandbox Mode)</strong>: The default mode for legacy integration. Rather than directly enforcing actions like block redirection or MFA challenges on client requests, it logs decisions to audit records. Internally, <code>AiSecurityConfiguration</code> binds the filter chain with <code>anyRequest().permitAll()</code> for all general client paths (excluding the <code>/contexa/admin/**</code> admin console path), running background threat detection safely without impacting the host application's existing authentication or authorization logic.</li>
-    <li><strong><code>FULL</code> (Full Protection Mode)</strong>: Activates active Zero Trust enforcement. <code>AiSecurityConfiguration</code> enforces <code>anyRequest().access(customDynamicAuthorizationManager)</code> for all incoming requests. Any detected anomaly or security violation immediately triggers real-time response actions, such as immediate redirection to blocked status pages or enforcing strong MFA verification step-ups (Step-up MFA) at runtime.</li>
+    <li><strong><code>SANDBOX</code> (Sandbox Mode)</strong>: The default mode for legacy integration. SANDBOX and FULL decide who owns authentication; whether AI decisions (BLOCK, CHALLENGE, and so on) are enforced or only observed is controlled separately by the Zero Trust mode (<code>SHADOW</code>/<code>ENFORCE</code>). Unless <code>contexa.bridge.ownership</code> is set explicitly, this mode runs as <code>HOST_OWNED</code>: Contexa does not build an authentication <code>SecurityFilterChain</code>, and the host application's own Spring Security configuration owns authentication and authorization (see <a href="#host-owned">HOST_OWNED behavior and requirements</a> below).</li>
+    <li><strong><code>FULL</code> (Full Protection Mode)</strong>: Activates active Zero Trust enforcement. Unless <code>contexa.bridge.ownership</code> is set explicitly, this mode runs as <code>CONTEXA_OWNED</code> and Contexa builds the authentication <code>SecurityFilterChain</code>. <code>AiSecurityConfiguration</code> enforces <code>anyRequest().access(customDynamicAuthorizationManager)</code> for all incoming requests. Any detected anomaly or security violation immediately triggers real-time response actions, such as immediate redirection to blocked status pages or enforcing strong MFA verification step-ups (Step-up MFA) at runtime.</li>
+  </ul>
+  <p>An explicitly configured <code>contexa.bridge.ownership</code> always wins. The SANDBOX chain defined by Contexa (<code>/contexa/admin/login</code> permitted, <code>/contexa/admin/**</code> authenticated, every other request permitted, CSRF, CORS and security headers disabled) is created only when the application explicitly sets <code>contexa.bridge.ownership=CONTEXA_OWNED</code> together with SANDBOX mode.</p>
+
+  <h3 id="host-owned">HOST_OWNED Behavior and Requirements</h3>
+  <ul>
+    <li><strong>Host security configuration</strong>: In HOST_OWNED, Contexa registers neither an authentication chain nor a placeholder chain. If the host has no <code>SecurityFilterChain</code> bean, Spring Boot's default security applies: every request requires authentication, and a generated form login and HTTP Basic login are added. An application that did not use Spring Security before adding Contexa must therefore declare its own <code>SecurityFilterChain</code> to keep its existing behavior (see the <a href="../../../docs/install/installation-guide.html#legacy-integration">installation guide example</a>). When only Spring Boot's default chain is present, Contexa reports this situation with an error log at startup.</li>
+    <li><strong>What stays unchanged</strong>: As long as the host declares its own Spring Security configuration, Contexa does not change the host's login pages, session management, or access rules.</li>
+    <li><strong>Bridge evidence</strong>: The bridge resolution filter is registered as a servlet filter and runs after the host's Spring Security filter chain on each request. It resolves evidence only when the current <code>SecurityContext</code> holds an authenticated, non-anonymous <code>Authentication</code>, reading the principal, authorities, and token claims (JWT claims, OAuth2 user attributes) from that <code>Authentication</code>. Requests without such an <code>Authentication</code> produce no bridge evidence.</li>
+    <li><strong>Handoff</strong>: In HOST_OWNED, <code>ContexaAuthBridge.handoff(...)</code> does not populate or persist the Spring <code>SecurityContext</code>. It records the bridge evidence for the current request and synchronizes the bridge user mirror. When the same request also carries a host <code>Authentication</code> for the same principal, the explicit handoff result is kept. <code>contexa.bridge.populate-security-context</code> only has an effect in CONTEXA_OWNED.</li>
+    <li><strong><code>@Protectable</code></strong>: A Spring <code>Authentication</code> is required at invocation time. Without one, or with an anonymous one, the call is rejected and the response is determined by the host's Spring Security exception handling. A host that authenticates users with its own legacy mechanism must place the authenticated user into the Spring <code>SecurityContext</code> (a host responsibility, for example a filter in its own chain), or use <code>CONTEXA_OWNED</code> so that Contexa owns authentication.</li>
   </ul>
 </section>
 
@@ -89,15 +99,15 @@ public class LegacyApplication {
   <p>When the Spring application starts, the container parses the <code>@Import(AiSecurityImportSelector.class)</code> metadata on <code>@EnableAISecurity</code>. The selector performs the following steps:</p>
   <ol>
     <li>Reads annotation attributes (such as <code>mode</code>, <code>authObjectLocation</code>) from the target configuration class.</li>
-    <li>Maps and binds these values to **System Properties** as shown in the table below, distributing them across the runtime context.</li>
+    <li>Publishes these values, as the properties shown in the table below, into the application <code>Environment</code> as its highest-priority property source. They are not set as JVM system properties.</li>
     <li>Returns the class name of the target configuration in <code>contexa-autoconfigure</code>: <code>io.contexa.autoconfigure.ai.AiSecurityConfiguration</code>, triggering dynamic bean provisioning.</li>
   </ol>
 
-  <h3>System Properties Bindings</h3>
+  <h3>Published Environment Properties</h3>
   <div class="table-scroll"><table class="api-table">
     <thead>
       <tr>
-        <th>System Property Key</th>
+        <th>Property Key</th>
         <th>Source Attribute</th>
         <th>Description</th>
       </tr>
@@ -116,12 +126,17 @@ public class LegacyApplication {
       <tr>
         <td><code>contexa.ai.security.auth-object.attribute</code></td>
         <td><code>authObjectAttribute</code></td>
-        <td>Name of the specific attribute key used in the handoff.</td>
+        <td>Session or request attribute name used to read the legacy authentication object.</td>
       </tr>
       <tr>
         <td><code>contexa.ai.security.auth-object.type</code></td>
         <td><code>authObjectType</code></td>
         <td>Fully qualified class name of the target extraction type.</td>
+      </tr>
+      <tr>
+        <td><code>contexa.bridge.ownership</code></td>
+        <td><code>mode</code></td>
+        <td>Authentication ownership. Published as <code>HOST_OWNED</code> for <code>SANDBOX</code> and as <code>CONTEXA_OWNED</code> for <code>FULL</code>. Not published when the application sets this property explicitly; the configured value always wins.</td>
       </tr>
     </tbody>
   </table></div>
@@ -136,4 +151,7 @@ public class LegacyApplication {
     <li><strong><code>REQUEST_ATTRIBUTE</code></strong>: Retrieves details directly from the <code>HttpServletRequest</code> attributes.</li>
     <li><strong><code>HEADER</code></strong>: Extracts values from specific incoming HTTP headers.</li>
   </ul>
+  <div class="callout callout-info">
+    <p><strong>Where authentication evidence comes from</strong> &mdash; Authentication evidence comes from the Spring <code>Authentication</code> first. A legacy user object stored only in the HTTP session or in a request attribute does not by itself become authentication evidence. Session, request attributes, and headers are still read as authorization and delegation evidence. Header evidence is accepted only from configured trusted proxies and only when it matches the host principal.</p>
+  </div>
 </section>
