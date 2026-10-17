@@ -1,0 +1,399 @@
+<!-- Breadcrumb -->
+          <nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">레퍼런스</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">프롬프트 검수</span>
+          </nav>
+
+          <!-- Page Header -->
+          <div class="docs-page-header">
+            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
+              <span class="badge">contexa-core</span>
+              <span class="badge">contexa-iam</span>
+              <span class="badge">contexa-autoconfigure</span>
+            </div>
+            <h1>프롬프트 검수와 번들 버전</h1>
+            <p class="lead">보안 판단 프롬프트는 버전이 붙은 <strong>프롬프트 번들</strong>로 실행됩니다. 이 문서는 번들을 무엇으로 식별하는지, 요청마다 번들을 어떻게 고르는지, 번들 버전이 릴리스 게이트를 거쳐 레지스트리 상태를 어떻게 옮겨 가는지, 섀도 실행·카나리·롤백이 어떻게 동작하는지, 그리고 <strong>프롬프트 검수기</strong>가 봉인된 프롬프트를 어떻게 검사하는지 설명합니다. 프롬프트 자체는 <a href="../../../docs/reference/architecture/prompt-engineering.html">보안 판단 프롬프트 파이프라인</a>을 참고하세요.</p>
+          </div>
+
+
+          <!-- Section 1: 번들 -->
+          <section>
+            <h2 id="bundles">프롬프트 번들</h2>
+            <p>번들은 거버넌스 디스크립터(프롬프트 키, 템플릿 키, 프롬프트 버전, 계약 버전, 릴리스 상태, 롤백 버전 등)와 그 코드가 그리는 사용자 프롬프트 레이아웃을 묶은 것입니다. 프롬프트 버전이 곧 번들 버전이며, 클래스패스의 매니페스트 <code>prompt-bundles/manifests/&lt;promptKey&gt;/&lt;version&gt;.json</code> 을 가리킵니다. 한 빌드는 <code>cortex.security-decision</code> 번들을 정확히 두 개 실행합니다. 빌드 기본(v19 섹션)과 v20 번들(사전 블록)입니다. 이전 매니페스트는 지난 번들의 기록으로 남을 뿐 실행할 수 없습니다.</p>
+
+            <div class="builder-grid">
+              <div class="builder-tile builder-tile--system">
+                <span class="builder-tile-tag builder-tile-tag--sys">B1</span>
+                <div class="builder-tile-name">시스템 글</div>
+                <div class="builder-tile-desc">L1·L2 예산 프로파일로 그린 시스템 글</div>
+              </div>
+              <div class="builder-tile builder-tile--system">
+                <span class="builder-tile-tag builder-tile-tag--sys">B2</span>
+                <div class="builder-tile-name">사전</div>
+                <div class="builder-tile-desc">모든 사전 항목과 그 필드</div>
+              </div>
+              <div class="builder-tile builder-tile--system">
+                <span class="builder-tile-tag builder-tile-tag--sys">B3</span>
+                <div class="builder-tile-name">골든 렌더</div>
+                <div class="builder-tile-desc">골든 입력을 그린 결과의 다이제스트</div>
+              </div>
+              <div class="builder-tile builder-tile--system">
+                <span class="builder-tile-tag builder-tile-tag--sys">B4</span>
+                <div class="builder-tile-name">출력 형식</div>
+                <div class="builder-tile-desc">형식 지시와 응답 필드</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B5</span>
+                <div class="builder-tile-name">최소 대응 규칙</div>
+                <div class="builder-tile-desc">규칙 원천과 기본 설정</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B6</span>
+                <div class="builder-tile-name">응답 검사기</div>
+                <div class="builder-tile-desc">응답 검사기 정의 원천</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B7</span>
+                <div class="builder-tile-name">검색</div>
+                <div class="builder-tile-desc">검색 건수·임계값·대기·문서 잘림 기본값</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B8</span>
+                <div class="builder-tile-name">예산</div>
+                <div class="builder-tile-desc">모든 프롬프트 예산 프로파일</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B9</span>
+                <div class="builder-tile-name">검사기 계약</div>
+                <div class="builder-tile-desc">ABSENT 표지: 프롬프트에 속하지 않음</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B10</span>
+                <div class="builder-tile-name">어휘</div>
+                <div class="builder-tile-desc">어휘 버전과 그 분류기 원천</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B11</span>
+                <div class="builder-tile-name">2차 분석</div>
+                <div class="builder-tile-desc">INCLUDED: B3 안에서 그림</div>
+              </div>
+            </div>
+
+            <ul class="calib-list">
+              <li><strong>요소 상태</strong> — <code>PRESENT</code> 는 요소 내용을 해시하고, <code>ABSENT</code>·<code>UNVERSIONED</code>·<code>INCLUDED</code> 는 고정 표지를 해시하므로 상태 자체가 식별의 일부가 됩니다. 번들 해시는 모든 요소를 덮습니다. 예를 들어 v19 번들은 B2(사전 없음)와 B5(최소 대응 규칙 없음)를 ABSENT 로 둡니다.</li>
+              <li><strong>읽을 때 검증</strong> — 번들 해시가 요소와 맞지 않는 매니페스트나, 이름은 같고 해시가 다른 매니페스트 두 개가 있으면 바로 실패합니다.</li>
+              <li><strong>매니페스트 필드</strong> — 요소 말고도 골든 입력, 부모 버전, 어휘 버전과 호환 어휘 버전, 롤백 대상, 선언한 모델 프로파일을 적습니다.</li>
+            </ul>
+          </section>
+
+
+          <!-- Section 2: 선택 -->
+          <section>
+            <h2 id="selection">요청의 번들 고르기</h2>
+            <p>요청마다 실행할 번들은 선택기 하나가 고르며, 선택기는 <code>contexa.security.tiered.prompt-bundle.selector</code> 로 정합니다. 이벤트의 첫 프롬프트가 이벤트에 번들을 고정하고, 뒤 프롬프트(Layer2 나 2차 분석)는 같은 번들을 씁니다. 이 빌드가 실행하지 않는 번들 버전을 고르면 빌드 기본 번들로 돌아가며, 버전마다 한 번 기록합니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>선택 출처</th><th>언제</th></tr></thead>
+              <tbody>
+                <tr><td><code>BUILD_DEFAULT</code></td><td>아무것도 고르지 않았거나, 선택기가 실패했거나, 고른 버전을 이 빌드가 실행하지 않을 때.</td></tr>
+                <tr><td><code>CONFIGURATION</code></td><td><code>selector=configuration</code>(기본): <code>contexa.security.tiered.prompt-bundle.active</code> 의 버전을 모든 요청에 똑같이 씁니다.</td></tr>
+                <tr><td><code>REGISTRY</code></td><td><code>selector=registry</code>: 요청 범위의 최신 ACTIVE 릴리스, 범위에 없으면 <code>PLATFORM_GLOBAL</code> 의 것.</td></tr>
+                <tr><td><code>CANARY</code></td><td><code>selector=registry</code>: 비율과 대상 안에 드는 요청에 범위의 CANARY 릴리스.</td></tr>
+                <tr><td><code>SHADOW</code></td><td>범위의 SHADOW 릴리스. 판정과 떨어진 표본 복사본에서 실행합니다(<a href="#shadow-canary">섀도 실행</a> 참고).</td></tr>
+              </tbody>
+            </table></div>
+
+            <div class="callout-info">
+              <strong>레지스트리 읽기.</strong> 레지스트리 선택기는 범위의 릴리스를 최대 60 초 캐시하고 5 초마다 무효화를 확인합니다. 상태 전환이나 롤백이 무효화를 알립니다. 레지스트리를 읽지 못하는 동안에는 빌드 기본 번들이 실행됩니다.
+            </div>
+          </section>
+
+
+          <!-- Section 3: 레지스트리 상태 -->
+          <section>
+            <h2 id="states">레지스트리 상태</h2>
+            <p><code>PromptBundleState</code> 가 레지스트리의 단일 수명 주기 어휘입니다. 예전에 저장된 값도 이것으로 읽으므로 게이트·조회·화면이 릴리스를 같은 방식으로 분류합니다. 런타임에 집행되는 상태는 ACTIVE 와 CANARY 뿐입니다.</p>
+
+            <div class="pipeline-six">
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">1</span>
+                <div class="pipeline-stage-name">AVAILABLE</div>
+                <div class="pipeline-stage-pkg">DRAFT</div>
+                <div class="pipeline-stage-desc">검증된 매니페스트로 빌드에 있음. 실행하지 않음</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">2</span>
+                <div class="pipeline-stage-name">SHADOW</div>
+                <div class="pipeline-stage-pkg">EVAL_ONLY</div>
+                <div class="pipeline-stage-desc">표본 요청에서 실행하고 기록만 함</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">3</span>
+                <div class="pipeline-stage-name">CANARY</div>
+                <div class="pipeline-stage-pkg">CANARY</div>
+                <div class="pipeline-stage-desc">범위의 비율 안에서 집행</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">4</span>
+                <div class="pipeline-stage-name">ACTIVE</div>
+                <div class="pipeline-stage-pkg">PRODUCTION</div>
+                <div class="pipeline-stage-desc">기본으로 집행</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">5</span>
+                <div class="pipeline-stage-name">DEPRECATED</div>
+                <div class="pipeline-stage-pkg">ROLLED_BACK</div>
+                <div class="pipeline-stage-desc">더는 고를 수 없음. 롤백 대상이자 기록</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">6</span>
+                <div class="pipeline-stage-name">RETIRED</div>
+                <div class="pipeline-stage-pkg">RETIRED</div>
+                <div class="pipeline-stage-desc">빌드에서 빠짐. 기록만 남음</div>
+              </div>
+            </div>
+            <p>상태 아래의 작은 글자는 예전 릴리스 상태 이름입니다. 전환 API 는 두 이름을 모두 받아 <code>PromptBundleState</code> 로 읽고, 영수증과 화면은 위의 정본 이름으로 적습니다.</p>
+            <p>릴리스를 ACTIVE 로 옮기면 같은 범위·프롬프트 키·템플릿의 다른 ACTIVE 릴리스가 DEPRECATED 가 되어 활성 릴리스는 하나만 남습니다. DEPRECATED 로는 같은 범위에 다른 활성 릴리스가 있을 때만 옮길 수 있습니다(<code>NO_OTHER_ACTIVE_RELEASE</code>).</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>현재 상태</th><th>옮길 수 있는 상태</th></tr></thead>
+              <tbody>
+                <tr><td><code>AVAILABLE</code></td><td><code>SHADOW</code>, <code>RETIRED</code></td></tr>
+                <tr><td><code>SHADOW</code></td><td><code>CANARY</code>, <code>RETIRED</code></td></tr>
+                <tr><td><code>CANARY</code></td><td><code>ACTIVE</code>, <code>DEPRECATED</code>, <code>RETIRED</code></td></tr>
+                <tr><td><code>ACTIVE</code></td><td><code>CANARY</code>, <code>DEPRECATED</code>, <code>RETIRED</code></td></tr>
+                <tr><td><code>DEPRECATED</code></td><td><code>CANARY</code>, <code>RETIRED</code></td></tr>
+                <tr><td><code>RETIRED</code></td><td>없음</td></tr>
+              </tbody>
+            </table></div>
+
+            <div class="callout-info">
+              <strong>기동 시 등록.</strong> 기동할 때 빌드의 번들을 <code>PLATFORM_GLOBAL</code> 범위에 등록합니다. 새 행은 디스크립터의 상태로 시작하므로 v19 번들은 ACTIVE, v20 초안은 AVAILABLE 로 시작합니다. 다만 ACTIVE 로 선언된 새 행은 같은 범위에 이 빌드가 실행하는 번들의 ACTIVE 릴리스가 이미 있으면 AVAILABLE 로 시작합니다. 코드 동기화가 게이트가 활성화한 릴리스의 기본 선택을 빼앗지 않게 하려는 것이며, 이 빌드가 더는 실행하지 않는 번들의 ACTIVE 행은 새 빌드 기본값을 막지 않습니다. 이후의 동기화는 없는 행을 만들고 코드가 소유한 내용을 갱신할 뿐, 운영 필드는 바꾸지 않습니다.
+            </div>
+          </section>
+
+
+          <!-- Section 4: 릴리스 게이트 -->
+          <section>
+            <h2 id="release-gate">릴리스 게이트</h2>
+            <p>모든 상태 전환은 <code>PromptGovernanceReleaseGateService</code> 를 거칩니다. 현재 상태에서 허용되지 않는 전환은 <code>ILLEGAL_STATE_TRANSITION</code> 으로 막히고, 그 밖에는 목표 상태에 필요한 증거를 확인합니다. 막힌 전환은 아무것도 바꾸지 않고 차단 사유와 함께 기록되며, 적용된 전환은 레지스트리 상태를 바꾸고 승인·롤백 상태를 기록한 뒤 런타임 캐시에 알립니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>목표</th><th>막히는 경우</th></tr></thead>
+              <tbody>
+                <tr><td><code>SHADOW</code></td><td><code>CHANGE_LEDGER_MISSING</code> — 변경 기록이 없음</td></tr>
+                <tr><td><code>CANARY</code></td><td><code>EVALUATION_NOT_FOR_BUNDLE_HASH</code>, <code>CHANGE_LEDGER_MISSING</code>, <code>MODEL_COMPATIBILITY_MISSING</code>, <code>BUDGET_PROFILE_MISSING</code>, <code>ROLLBACK_TARGET_MISSING</code></td></tr>
+                <tr><td><code>ACTIVE</code></td><td>CANARY 의 차단 사유에 더해 <code>PROMPT_INJECTION_GATE_FAILED</code>, <code>NON_FUNCTIONAL_GATE_FAILED</code>(지연·비용), <code>EMPIRICAL_EVAL_MISSING</code>, <code>TEVV_GATE_NOT_READY</code>(평가가 번들 매니페스트의 <code>evaluationScenarioFamilies</code>가 밝힌 시나리오 묶음을, 밝히지 않았으면 기본 묶음 <code>PROMPT_INJECTION</code>·<code>TOOL_MISUSE</code>·<code>MEMORY_POISONING</code>을 덮어야 함), <code>TOKEN_COUNTING_POLICY_MISSING</code>, <code>CACHE_POLICY_MISSING</code>, <code>COMPACTION_POLICY_MISSING</code></td></tr>
+                <tr><td><code>DEPRECATED</code></td><td><code>ROLLBACK_TARGET_MISSING</code></td></tr>
+              </tbody>
+            </table></div>
+            <p><code>EVALUATION_NOT_FOR_BUNDLE_HASH</code> 는 기록된 평가가 이 번들의 해시로 한 것이 아니라는 뜻입니다. 번들의 증거는 그 번들로 한 평가뿐입니다.</p>
+
+            <pre><code class="language-http">POST /contexa/admin/api/prompt-quality/releases/transition
+Content-Type: application/json
+
+{
+  "registryScope": "PLATFORM_GLOBAL",
+  "promptKey": "cortex.security-decision",
+  "promptVersion": "&lt;bundle version&gt;",
+  "targetReleaseStatus": "EVAL_ONLY",
+  "rationale": "Open the shadow run of the candidate bundle"
+}</code></pre>
+            <p>응답은 전환 영수증입니다. 적용되면 <code>200</code>, 막히면 차단 사유와 함께 <code>422</code> 입니다. <code>registryScope</code> 를 비우면 <code>PLATFORM_GLOBAL</code> 입니다.</p>
+          </section>
+
+
+          <!-- Section 5: 섀도·카나리 -->
+          <section>
+            <h2 id="shadow-canary">섀도 실행과 카나리</h2>
+
+            <h3>섀도 실행</h3>
+            <p>섀도 실행은 후보 번들을 실제 요청에 돌려 보되 아무것도 결정하지 않게 합니다. 판정 번들을 어느 선택기가 고르든 레지스트리의 SHADOW 릴리스를 읽으므로, 설정 번들을 쓰는 호스트도 후보를 시험할 수 있습니다.</p>
+            <ul class="calib-list">
+              <li><strong>표본</strong> — 이벤트 ID 의 고정 해시가 <code>contexa.security.tiered.prompt-bundle.shadow.sample-percent</code>(0~100, 기본 <code>0</code> 은 실행 안 함)보다 작은 요청이 표본입니다. 섀도 실행기는 이 속성을 설정했을 때만 생깁니다.</li>
+              <li><strong>일일 상한</strong> — UTC 하루에 <code>shadow.daily-call-cap</code>(기본 <code>100</code>)회까지 실행하며, 한 번에 모델 호출 하나입니다.</li>
+              <li><strong>판정과 분리</strong> — 판정 전에 이벤트를 복사하고, 판정 뒤에 별도 실행기에서 분석해 <code>SHADOW</code> 단계로 봉인합니다. 복사본은 집행 처리기에 닿지 않으므로 아무것도 집행·학습되지 않고, 세션 컨텍스트에도 아무것도 더하지 않습니다.</li>
+              <li><strong>실행 가능한 번들만</strong> — 이 빌드가 실행하지 않는 버전의 SHADOW 릴리스는 건너뜁니다.</li>
+            </ul>
+
+            <h3 style="margin-top:var(--space-8)">카나리</h3>
+            <p><code>selector=registry</code> 일 때 CANARY 릴리스는 비율 안의 요청에 실행되고, 나머지는 최신 ACTIVE 릴리스를 씁니다. 비율은 레지스트리 행의 <code>canary_percent</code>(0~100, 값이 없으면 범위 전체)이며, 요청자(사용자, 없으면 세션, 없으면 이벤트)의 고정 해시에 적용합니다. 선택 항목인 <code>canary_tenants</code> 와 <code>canary_resource_families</code> 는 카나리를 그 테넌트와, 자원 주소가 목록의 계열로 시작하거나 자원 ID 가 같은 요청으로 좁힙니다.</p>
+          </section>
+
+
+          <!-- Section 6: 롤백 -->
+          <section>
+            <h2 id="rollback">롤백</h2>
+            <p><code>PromptBundleRollbackService</code> 는 범위에서 실행 중인 번들을 그 매니페스트가 선언한 롤백 대상으로 즉시 바꿉니다. 원래 번들은 DEPRECATED, 대상은 ACTIVE 가 되고, 런타임 캐시에 알린 뒤 확인한 조건과 함께 실행을 기록합니다. 거부된 롤백은 사유와 함께 기록되며 아무것도 바꾸지 않습니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>거부 사유</th><th>조건</th></tr></thead>
+              <tbody>
+                <tr><td><code>SOURCE_NOT_EXECUTING</code></td><td>원래 버전이 범위에서 ACTIVE 나 CANARY 가 아님</td></tr>
+                <tr><td><code>TARGET_NOT_IN_BUILD</code></td><td>대상 매니페스트가 이 빌드에 없음</td></tr>
+                <tr><td><code>TARGET_NOT_DECLARED</code></td><td>원래 매니페스트의 <code>rollbackTargets</code> 에 대상이 없음</td></tr>
+                <tr><td><code>VOCABULARY_INCOMPATIBLE</code></td><td>대상 매니페스트가 지금 어휘 버전을 읽지 못함</td></tr>
+                <tr><td><code>TARGET_NOT_REGISTERED</code></td><td>대상이 범위에 레지스트리 행이 없음</td></tr>
+                <tr><td><code>POLICY_SET_MISSING</code></td><td>대상의 정책 세트가 없음(정책 세트가 없는 호스트는 <code>NOT_APPLICABLE</code> 로 기록)</td></tr>
+              </tbody>
+            </table></div>
+
+            <pre><code class="language-http">POST /contexa/admin/api/prompt-quality/releases/rollback
+Content-Type: application/json
+
+{
+  "registryScope": "PLATFORM_GLOBAL",
+  "promptKey": "cortex.security-decision",
+  "fromVersion": "&lt;executing version&gt;",
+  "toVersion": "&lt;rollback target&gt;",
+  "reason": "Decision quality dropped after the release",
+  "emergency": false
+}</code></pre>
+            <p>결과에는 실행 키(<code>RBX-...</code>), 상태, 확인한 조건이 담깁니다. 상태는 <code>EXECUTED</code> 이거나 HTTP <code>422</code> 와 함께 <code>REFUSED</code> 입니다. 긴급 중지(<code>"emergency": true</code>)도 같은 방식으로 실행되고 <code>AWAITING_APPROVAL</code> 로 끝나며, 다른 관리자가 <code>POST .../rollback/{executionKey}/approve</code> 로 승인합니다. 실행한 운영자는 승인할 수 없습니다.</p>
+          </section>
+
+
+          <!-- Section 7: 프롬프트 검수기 -->
+          <section>
+            <h2 id="inspector">프롬프트 검수기</h2>
+            <p><code>PromptInspector</code> 는 봉인 증거 묶음에서 모델이 받은 사용자 프롬프트를 읽고, 검사마다 일치한 것·일치하지 않은 것·확인할 수 없는 것을 셉니다. 사람이 검토할 문제를 가리킬 뿐 프롬프트·판정·규칙은 바꾸지 않습니다. 자동 검수는 스케줄러 스레드에서 인스턴스 전체에 걸친 잠금 하나로 돌며, 아직 검수하지 않은 가장 오래된 묶음을 배치 크기만큼 검수합니다. 판정 스레드는 이를 실행하지 않습니다.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>검사</th><th>레이아웃</th><th>대조하는 것</th></tr></thead>
+              <tbody>
+                <tr><td><code>SEAL_INTEGRITY</code></td><td>전체</td><td>묶음 해시가 봉인 필드를 모두 덮는지, 시스템·사용자 프롬프트가 수집되어 해시와 맞는지, 그린 프롬프트와의 차이가 기록되었는지, 요청·상관 ID 가 있는지.</td></tr>
+                <tr><td><code>BUNDLE_TRACE</code></td><td>전체</td><td>봉인된 디스크립터가 레지스트리 릴리스를 가리키고, 계약 버전·아티팩트 해시·승인이 그 릴리스의 것인지. 릴리스 레지스트리가 없으면 모두 확인 불가입니다.</td></tr>
+                <tr><td><code>DICTIONARY_CONTRACT</code></td><td>v20</td><td>줄바꿈, 사전 순서의 블록 머리, 블록에 속한 항목 줄만 순서대로, 항목 형식이나 결측 문구의 값, 상한까지의 번호 줄, 그린 순서의 사실 ID.</td></tr>
+                <tr><td><code>DECISION_FACT_MATCH</code></td><td>v20</td><td>사전이 그리는 봉인 판정 사실마다 줄이 있고, 값이 글자 그대로 같고, 함께 봉인된 사실 ID 가 붙었는지.</td></tr>
+                <tr><td><code>FACT_ACCURACY</code></td><td>v20</td><td>프롬프트가 그린 사실을 봉인 원천과 필드 단위로 대조합니다(프롬프트를 다시 그리지 않음). REQUEST 블록에서는 주체, 시각, 역할, 권한, 행동, 대상, 크기, 등급, 네트워크, 기기를 봅니다. 원천이 봉인되지 않은 줄은 확인 불가로 셉니다.</td></tr>
+                <tr><td><code>UNKNOWN_DECLARED</code></td><td>v20</td><td>엔진이 확정하지 못한 사실이 모두 종류와 함께 UNKNOWN 줄에 있고, 거기 적힌 사실이 다른 곳에 값으로 그려지지 않았는지. 값이 없을 때는 사전의 결측 표기대로 그렸는지도 봅니다. 결측 문구를 그리는 항목은 자기 줄에 그 문구를 그려야 합니다(세션이 없을 때처럼 렌더 규칙이 스스로 모름으로 정한 경우는 예외). 사전이 줄을 빼는 항목은 호출자가 표시하지 않았다면 UNKNOWN 줄에 이름이 없어야 합니다(과거 기록은 봉인된 검색이 가져오지 못했을 때만). 나머지 항목은 자기 줄이나 UNKNOWN 줄의 이름 가운데 하나가 있어야 합니다.</td></tr>
+                <tr><td><code>PAST_RECORD_NOTATION</code></td><td>v20</td><td>PAST RECORDS 상태 줄이 그린 기록 수를 세는지, 기록 줄마다 12 칸이 있는지, 같은 대상 먼저·최신 먼저 순서인지.</td></tr>
+                <tr><td><code>SOURCE_TRUTH</code></td><td>v20</td><td>호스트의 <code>PromptFactSourceVerifier</code> 가 돌려준 호스트 자체 기록과 사실을 대조합니다. 없으면 호스트 원천이 연동되지 않았다고 기록합니다.</td></tr>
+                <tr><td><code>SAME_FACT</code></td><td>v20</td><td>프롬프트가 두 번 말하는 한 사실이 하나의 값인지.</td></tr>
+                <tr><td><code>REASON_MATCH</code></td><td>v20</td><td>봉인된 판정의 근거 코드마다 프롬프트 줄의 ID 를 인용하는지, 그 줄이 코드가 인용하는 줄인지, 코드의 조건이 봉인 컨텍스트에서 성립하는지.</td></tr>
+              </tbody>
+            </table></div>
+
+            <ul class="calib-list">
+              <li><strong>레이아웃</strong> — v20 검사는 <code>v20-dictionary-blocks</code> 로 그린 묶음에서만 돕니다. 다른 번들의 사전이나 렌더로 그린 v20 묶음은 그 검사들에서 확인 불가로 셉니다.</li>
+              <li><strong>판정</strong> — <code>PASS</code>(모두 일치), <code>FAIL</code>(불일치 하나 이상), <code>INCOMPLETE</code>(불일치는 없고 확인 불가가 있음), <code>NOT_APPLICABLE</code>(사전 프롬프트가 아니어서 레이아웃과 무관한 검사만 돔), <code>ERROR</code>(검수할 수 없음).</li>
+              <li><strong>발견</strong> — <code>MISMATCH</code> 또는 <code>UNVERIFIABLE</code>. 확인 불가는 통과로 세지 않습니다.</li>
+              <li><strong>버전</strong> — 결과마다 검수기 버전(<code>prompt-inspector/N</code>)과 사전 버전(<code>v20@</code> 와 사전 다이제스트 앞부분)을 남깁니다. 검수기 버전이 바뀌면 묶음을 다시 검수합니다.</li>
+            </ul>
+          </section>
+
+
+          <!-- Section 8: 봉인 -->
+          <section>
+            <h2 id="sealing">봉인 증거 표본과 보관</h2>
+            <p>OSS 설치(<code>contexa.enterprise.enabled</code> 가 <code>true</code> 가 아님)에서 수집이 켜져 있으면(<code>contexa.pqa.oss.sealed-evidence.capture-enabled</code>, 기본 <code>true</code>) 판정을 증거 묶음으로 봉인합니다. 묶음에는 보낸 그대로의 시스템·사용자 프롬프트, 표준 컨텍스트, 실행 메타데이터가 들어갑니다. 엔터프라이즈는 봉인 묶음을 자체 스키마에 두므로, 엔터프라이즈가 켜져 있으면 OSS 검수기 빈은 만들어지지 않습니다.</p>
+            <ul class="calib-list">
+              <li><strong>변경 뒤 구간</strong> — 기동 뒤, 또는 실행 중 번들이 바뀐 뒤 첫 <code>full-capture-after-change</code>(기본 <code>1000</code>)건의 판정은 모두 봉인합니다.</li>
+              <li><strong>표본</strong> — 그 구간이 지나면 상관 ID 의 고정 해시로 요청의 <code>sample-percent</code>(기본 <code>1</code>, 1~100)를 봉인합니다.</li>
+              <li><strong>보관</strong> — 묶음은 <code>retention.period</code>(기본 90 일) 동안 보관합니다. 마지막 검수에서 문제가 없었던 묶음은 <code>retention.clean-period</code>(기본 30 일)가 지나면 지웁니다. 검수에서 무언가 찾은 묶음은 기본 보관 기간을 따릅니다.</li>
+              <li><strong>검수 표본</strong> — 묶음 ID 의 고정 해시로 봉인 묶음의 <code>contexa.prompt-inspection.sample-percent</code>(기본 <code>100</code>)를 검수합니다.</li>
+            </ul>
+          </section>
+
+
+          <!-- Section 9: 콘솔·API -->
+          <section>
+            <h2 id="console-api">콘솔과 API</h2>
+            <p>모든 화면과 엔드포인트는 <code>ADMIN</code> 역할이 필요합니다.</p>
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>메서드</th><th>경로</th><th>용도</th></tr></thead>
+              <tbody>
+                <tr><td>GET</td><td><code>/contexa/admin/prompt-inspection</code></td><td>검수 개요 화면(<code>/packages</code>, <code>/packages/{packageId}</code> 도 있음)</td></tr>
+                <tr><td>GET</td><td><code>/contexa/admin/api/prompt-inspection/overview</code></td><td>기간별 집계(<code>from</code>, <code>to</code>. 기본은 최근 7 일)</td></tr>
+                <tr><td>GET</td><td><code>/contexa/admin/api/prompt-inspection/packages</code></td><td>검수한 묶음 목록. 판정·검사 코드·블록·항목으로 거름</td></tr>
+                <tr><td>GET</td><td><code>/contexa/admin/api/prompt-inspection/packages/{packageId}</code></td><td>묶음 하나와 그 발견</td></tr>
+                <tr><td>POST</td><td><code>/contexa/admin/api/prompt-inspection/packages/{packageId}/reinspect</code></td><td>묶음 하나 재검수</td></tr>
+                <tr><td>POST / GET</td><td><code>/contexa/admin/api/prompt-inspection/reinspections</code></td><td>수집 기간 재검수를 자동 검수에 요청하고, 진행 상황을 읽음</td></tr>
+                <tr><td>GET</td><td><code>/contexa/admin/api/prompt-quality/releases</code></td><td>레지스트리 릴리스(<code>registryScope</code> 선택)</td></tr>
+                <tr><td>POST</td><td><code>/contexa/admin/api/prompt-quality/releases/transition</code></td><td>릴리스 게이트를 거치는 상태 전환</td></tr>
+                <tr><td>POST</td><td><code>/contexa/admin/api/prompt-quality/releases/rollback</code></td><td>롤백 또는 긴급 중지</td></tr>
+                <tr><td>POST</td><td><code>/contexa/admin/api/prompt-quality/releases/rollback/{executionKey}/approve</code></td><td>긴급 중지의 두 번째 승인</td></tr>
+              </tbody>
+            </table></div>
+          </section>
+
+
+          <!-- Section 10: 설정 -->
+          <section>
+            <h2 id="configuration">설정</h2>
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr></thead>
+              <tbody>
+                <tr><td><code>contexa.security.tiered.prompt-bundle.active</code></td><td>String</td><td>(비움)</td><td>설정 선택기가 실행할 번들 버전. 비우면 빌드 기본 번들.</td></tr>
+                <tr><td><code>contexa.security.tiered.prompt-bundle.selector</code></td><td>Enum</td><td><code>CONFIGURATION</code></td><td><code>CONFIGURATION</code> 또는 <code>REGISTRY</code>.</td></tr>
+                <tr><td><code>contexa.security.tiered.prompt-bundle.shadow.sample-percent</code></td><td>int</td><td><code>0</code></td><td>섀도 릴리스를 실행할 요청 비율(0~100).</td></tr>
+                <tr><td><code>contexa.security.tiered.prompt-bundle.shadow.daily-call-cap</code></td><td>int</td><td><code>100</code></td><td>UTC 하루에 허용하는 섀도 실행 수.</td></tr>
+                <tr><td><code>contexa.prompt.governance.enabled</code></td><td>boolean</td><td><code>true</code></td><td>레지스트리·릴리스 게이트·롤백·릴리스 API 를 함께 켜고 끔.</td></tr>
+                <tr><td><code>contexa.prompt-inspection.enabled</code></td><td>boolean</td><td><code>true</code></td><td>검수기, 자동 검수, 재검수, 콘솔(OSS 전용).</td></tr>
+                <tr><td><code>contexa.prompt-inspection.interval</code></td><td>Duration</td><td><code>PT30S</code></td><td>자동 검수 사이 간격.</td></tr>
+                <tr><td><code>contexa.prompt-inspection.initial-delay</code></td><td>Duration</td><td><code>PT30S</code></td><td>첫 검수 전 대기.</td></tr>
+                <tr><td><code>contexa.prompt-inspection.batch-size</code></td><td>int</td><td><code>50</code></td><td>한 번에 검수할 묶음 수(1 이상).</td></tr>
+                <tr><td><code>contexa.prompt-inspection.sample-percent</code></td><td>int</td><td><code>100</code></td><td>검수할 봉인 묶음 비율(1~100).</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.capture-enabled</code></td><td>boolean</td><td><code>true</code></td><td>판정을 증거 묶음으로 봉인(OSS 전용).</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.sample-percent</code></td><td>int</td><td><code>1</code></td><td>변경 뒤 구간이 지난 뒤 봉인할 요청 비율(1~100).</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.full-capture-after-change</code></td><td>int</td><td><code>1000</code></td><td>기동이나 번들 변경 뒤 모두 봉인할 판정 수.</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.enabled</code></td><td>boolean</td><td><code>true</code></td><td>보관 작업 실행.</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.period</code></td><td>Duration</td><td><code>90d</code></td><td>봉인 묶음 보관 기간.</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.clean-period</code></td><td>Duration</td><td><code>30d</code></td><td>마지막 검수에서 문제가 없던 묶음의 보관 기간.</td></tr>
+              </tbody>
+            </table></div>
+
+            <pre><code class="language-yaml">contexa:
+  security:
+    tiered:
+      prompt-bundle:
+        selector: registry
+        shadow:
+          sample-percent: 5
+          daily-call-cap: 100
+  prompt-inspection:
+    batch-size: 50
+    sample-percent: 100
+  pqa:
+    oss:
+      sealed-evidence:
+        sample-percent: 1
+        full-capture-after-change: 1000</code></pre>
+            <p>최소 대응 규칙과 프롬프트 예산 설정은 <a href="../../../docs/install/configuration/ai.html#prompt-bundles">AI 엔진 구성</a>에 있습니다.</p>
+          </section>
+
+
+          <!-- 관련 문서 -->
+          <section>
+            <h2 id="related">관련 문서</h2>
+            <div class="related-links-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--space-3);margin:var(--space-4) 0">
+              <a href="../../../docs/reference/architecture/prompt-engineering.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">보안 판단 프롬프트 파이프라인</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">v19 섹션, v20 사전 블록, 출력 계약</span>
+              </a>
+              <a href="../../../docs/install/configuration/ai.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">AI 엔진 구성</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">계층형 전략과 프롬프트 설정</span>
+              </a>
+              <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Zero Trust 흐름</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">결정 집행과 권한 교체</span>
+              </a>
+            </div>
+          </section>
+
+
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/architecture/prompt-engineering.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">보안 판단 프롬프트 파이프라인</span>
+            </a>
+            <a href="../../../docs/reference/common/overview.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">공통 계약</span>
+            </a>
+          </div>

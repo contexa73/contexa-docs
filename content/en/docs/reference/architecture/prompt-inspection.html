@@ -1,0 +1,399 @@
+<!-- Breadcrumb -->
+          <nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Prompt Inspection</span>
+          </nav>
+
+          <!-- Page Header -->
+          <div class="docs-page-header">
+            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
+              <span class="badge">contexa-core</span>
+              <span class="badge">contexa-iam</span>
+              <span class="badge">contexa-autoconfigure</span>
+            </div>
+            <h1>Prompt Inspection &amp; Bundle Versions</h1>
+            <p class="lead">A security decision prompt runs as a versioned <strong>prompt bundle</strong>. This page covers how a bundle is identified, how the bundle of a request is chosen, how a bundle version moves through the registry states behind the release gate, how shadow runs, canaries and rollbacks work, and how the <strong>prompt inspector</strong> checks the sealed prompts. For the prompt itself, see <a href="../../../docs/reference/architecture/prompt-engineering.html">Security Decision Prompt Pipeline</a>.</p>
+          </div>
+
+
+          <!-- Section 1: Bundles -->
+          <section>
+            <h2 id="bundles">Prompt bundles</h2>
+            <p>A bundle is a governance descriptor (its prompt key, template key, prompt version, contract version, release status and rollback version, among others) together with the user prompt layout its code draws. Its prompt version is the bundle version and names its manifest on the classpath: <code>prompt-bundles/manifests/&lt;promptKey&gt;/&lt;version&gt;.json</code>. A build runs exactly two bundles of <code>cortex.security-decision</code>: the build default (v19 sections) and the v20 bundle (dictionary blocks). Older manifests stay as records of earlier bundles; they cannot be run.</p>
+
+            <div class="builder-grid">
+              <div class="builder-tile builder-tile--system">
+                <span class="builder-tile-tag builder-tile-tag--sys">B1</span>
+                <div class="builder-tile-name">System text</div>
+                <div class="builder-tile-desc">Rendered system text of the L1 and L2 budget profiles</div>
+              </div>
+              <div class="builder-tile builder-tile--system">
+                <span class="builder-tile-tag builder-tile-tag--sys">B2</span>
+                <div class="builder-tile-name">Dictionary</div>
+                <div class="builder-tile-desc">Every dictionary entry with all its fields</div>
+              </div>
+              <div class="builder-tile builder-tile--system">
+                <span class="builder-tile-tag builder-tile-tag--sys">B3</span>
+                <div class="builder-tile-name">Golden render</div>
+                <div class="builder-tile-desc">Digest of the renders of the golden inputs</div>
+              </div>
+              <div class="builder-tile builder-tile--system">
+                <span class="builder-tile-tag builder-tile-tag--sys">B4</span>
+                <div class="builder-tile-name">Output format</div>
+                <div class="builder-tile-desc">Format instructions and the response fields</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B5</span>
+                <div class="builder-tile-name">Minimum action rules</div>
+                <div class="builder-tile-desc">The rule source and the default settings</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B6</span>
+                <div class="builder-tile-name">Response inspector</div>
+                <div class="builder-tile-desc">The response inspector definition source</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B7</span>
+                <div class="builder-tile-name">Retrieval</div>
+                <div class="builder-tile-desc">Retrieval counts, thresholds, waits, truncation</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B8</span>
+                <div class="builder-tile-name">Budgets</div>
+                <div class="builder-tile-desc">All prompt budget profiles</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B9</span>
+                <div class="builder-tile-name">Verifier contracts</div>
+                <div class="builder-tile-desc">Marked ABSENT: not part of the prompt</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B10</span>
+                <div class="builder-tile-name">Vocabulary</div>
+                <div class="builder-tile-desc">The vocabulary version and its classifier sources</div>
+              </div>
+              <div class="builder-tile">
+                <span class="builder-tile-tag builder-tile-tag--usr">B11</span>
+                <div class="builder-tile-name">Second analysis</div>
+                <div class="builder-tile-desc">INCLUDED: rendered inside B3</div>
+              </div>
+            </div>
+
+            <ul class="calib-list">
+              <li><strong>Element states</strong> &mdash; <code>PRESENT</code> hashes the element content; <code>ABSENT</code>, <code>UNVERSIONED</code> and <code>INCLUDED</code> hash a fixed marker, so the state itself is part of the identity. The bundle hash covers every element. The v19 bundle, for example, marks B2 (no dictionary) and B5 (no minimum action rules) ABSENT.</li>
+              <li><strong>Checked on read</strong> &mdash; a manifest whose bundle hash does not match its elements, or two manifests of one name with different hashes, fail fast.</li>
+              <li><strong>Manifest fields</strong> &mdash; besides the elements a manifest names its golden inputs, parent version, vocabulary version and compatible vocabulary versions, its rollback targets and its declared model profiles.</li>
+            </ul>
+          </section>
+
+
+          <!-- Section 2: Selection -->
+          <section>
+            <h2 id="selection">Choosing the bundle of a request</h2>
+            <p>One selector chooses the bundle each request runs, picked by <code>contexa.security.tiered.prompt-bundle.selector</code>. The first prompt of an event fixes the bundle on the event, and its later prompts (Layer2 or a second pass) reuse it. A bundle version this build does not run falls back to the build default, reported once per version.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>Selection source</th><th>When</th></tr></thead>
+              <tbody>
+                <tr><td><code>BUILD_DEFAULT</code></td><td>Nothing chose a bundle, the selector failed, or the chosen version is not one this build runs.</td></tr>
+                <tr><td><code>CONFIGURATION</code></td><td><code>selector=configuration</code> (default): the version in <code>contexa.security.tiered.prompt-bundle.active</code>, the same for every request.</td></tr>
+                <tr><td><code>REGISTRY</code></td><td><code>selector=registry</code>: the latest ACTIVE release of the request's scope, or of <code>PLATFORM_GLOBAL</code> when the scope has none.</td></tr>
+                <tr><td><code>CANARY</code></td><td><code>selector=registry</code>: the scope's CANARY release, for a request inside its share and targets.</td></tr>
+                <tr><td><code>SHADOW</code></td><td>The scope's SHADOW release, run on sampled copies apart from the decision (see <a href="#shadow-canary">shadow runs</a>).</td></tr>
+              </tbody>
+            </table></div>
+
+            <div class="callout-info">
+              <strong>Registry reads.</strong> The registry selector caches the releases of a scope for up to 60 seconds and polls for invalidations every 5 seconds; a transition or a rollback publishes one. When the registry cannot be read, the build default bundle runs until it can.
+            </div>
+          </section>
+
+
+          <!-- Section 3: Registry states -->
+          <section>
+            <h2 id="states">Registry states</h2>
+            <p><code>PromptBundleState</code> is the one lifecycle vocabulary of the registry. Older stored values are read through it, so gates, queries and screens classify a release the same way. Only ACTIVE and CANARY are enforced at runtime.</p>
+
+            <div class="pipeline-six">
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">1</span>
+                <div class="pipeline-stage-name">AVAILABLE</div>
+                <div class="pipeline-stage-pkg">DRAFT</div>
+                <div class="pipeline-stage-desc">In the build with a verified manifest; not executed</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">2</span>
+                <div class="pipeline-stage-name">SHADOW</div>
+                <div class="pipeline-stage-pkg">EVAL_ONLY</div>
+                <div class="pipeline-stage-desc">Executed on sampled requests and only recorded</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">3</span>
+                <div class="pipeline-stage-name">CANARY</div>
+                <div class="pipeline-stage-pkg">CANARY</div>
+                <div class="pipeline-stage-desc">Enforced inside a scope's share</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">4</span>
+                <div class="pipeline-stage-name">ACTIVE</div>
+                <div class="pipeline-stage-pkg">PRODUCTION</div>
+                <div class="pipeline-stage-desc">Enforced by default</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">5</span>
+                <div class="pipeline-stage-name">DEPRECATED</div>
+                <div class="pipeline-stage-pkg">ROLLED_BACK</div>
+                <div class="pipeline-stage-desc">No longer selectable; a rollback target and a record</div>
+              </div>
+              <div class="pipeline-stage">
+                <span class="pipeline-stage-num">6</span>
+                <div class="pipeline-stage-name">RETIRED</div>
+                <div class="pipeline-stage-pkg">RETIRED</div>
+                <div class="pipeline-stage-desc">Removed from the build; only the record is kept</div>
+              </div>
+            </div>
+            <p>The small label under each state is the older release status name. The transition API takes either name and reads it through <code>PromptBundleState</code>; its receipt and the screens name the state canonically.</p>
+            <p>Moving a release to ACTIVE deprecates the other ACTIVE releases of its scope, prompt key and template, so one release is active. A release moves to DEPRECATED only while another release of its scope is active (<code>NO_OTHER_ACTIVE_RELEASE</code>).</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>Current state</th><th>Allowed next states</th></tr></thead>
+              <tbody>
+                <tr><td><code>AVAILABLE</code></td><td><code>SHADOW</code>, <code>RETIRED</code></td></tr>
+                <tr><td><code>SHADOW</code></td><td><code>CANARY</code>, <code>RETIRED</code></td></tr>
+                <tr><td><code>CANARY</code></td><td><code>ACTIVE</code>, <code>DEPRECATED</code>, <code>RETIRED</code></td></tr>
+                <tr><td><code>ACTIVE</code></td><td><code>CANARY</code>, <code>DEPRECATED</code>, <code>RETIRED</code></td></tr>
+                <tr><td><code>DEPRECATED</code></td><td><code>CANARY</code>, <code>RETIRED</code></td></tr>
+                <tr><td><code>RETIRED</code></td><td>None</td></tr>
+              </tbody>
+            </table></div>
+
+            <div class="callout-info">
+              <strong>Start-up registration.</strong> At start the build's bundles are registered in the <code>PLATFORM_GLOBAL</code> scope. A new row takes its descriptor's status, so the v19 bundle starts ACTIVE and the v20 draft starts AVAILABLE. A row declared ACTIVE starts AVAILABLE instead when the scope already has an ACTIVE release of a bundle this build runs, so a code sync never takes the default selection from a release the gate activated; an ACTIVE row of a bundle this build no longer runs does not hold the new build default back. Later syncs create missing rows and refresh code-owned content, never the operational fields.
+            </div>
+          </section>
+
+
+          <!-- Section 4: Release gate -->
+          <section>
+            <h2 id="release-gate">Release gate</h2>
+            <p>Every transition goes through <code>PromptGovernanceReleaseGateService</code>. A transition that is not allowed from the current state is blocked with <code>ILLEGAL_STATE_TRANSITION</code>; otherwise the gate checks the evidence the target state needs. A blocked transition changes nothing and is recorded with its blockers; an applied one sets the registry status, records the approval and rollback state, and tells the runtime caches.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>Target</th><th>Blocked when</th></tr></thead>
+              <tbody>
+                <tr><td><code>SHADOW</code></td><td><code>CHANGE_LEDGER_MISSING</code> &mdash; no change record exists</td></tr>
+                <tr><td><code>CANARY</code></td><td><code>EVALUATION_NOT_FOR_BUNDLE_HASH</code>, <code>CHANGE_LEDGER_MISSING</code>, <code>MODEL_COMPATIBILITY_MISSING</code>, <code>BUDGET_PROFILE_MISSING</code>, <code>ROLLBACK_TARGET_MISSING</code></td></tr>
+                <tr><td><code>ACTIVE</code></td><td>The CANARY blockers, plus <code>PROMPT_INJECTION_GATE_FAILED</code>, <code>NON_FUNCTIONAL_GATE_FAILED</code> (latency or cost), <code>EMPIRICAL_EVAL_MISSING</code>, <code>TEVV_GATE_NOT_READY</code> (the evaluation covers the scenario families the bundle manifest declares in <code>evaluationScenarioFamilies</code>, or by default <code>PROMPT_INJECTION</code>, <code>TOOL_MISUSE</code> and <code>MEMORY_POISONING</code>), <code>TOKEN_COUNTING_POLICY_MISSING</code>, <code>CACHE_POLICY_MISSING</code>, <code>COMPACTION_POLICY_MISSING</code></td></tr>
+                <tr><td><code>DEPRECATED</code></td><td><code>ROLLBACK_TARGET_MISSING</code></td></tr>
+              </tbody>
+            </table></div>
+            <p><code>EVALUATION_NOT_FOR_BUNDLE_HASH</code> means the evaluation on record was not made with this bundle's hash: the evidence of a bundle is the evaluation of that bundle.</p>
+
+            <pre><code class="language-http">POST /contexa/admin/api/prompt-quality/releases/transition
+Content-Type: application/json
+
+{
+  "registryScope": "PLATFORM_GLOBAL",
+  "promptKey": "cortex.security-decision",
+  "promptVersion": "&lt;bundle version&gt;",
+  "targetReleaseStatus": "EVAL_ONLY",
+  "rationale": "Open the shadow run of the candidate bundle"
+}</code></pre>
+            <p>The response is the transition receipt: <code>200</code> when applied, <code>422</code> with the blockers when blocked. A blank <code>registryScope</code> means <code>PLATFORM_GLOBAL</code>.</p>
+          </section>
+
+
+          <!-- Section 5: Shadow and canary -->
+          <section>
+            <h2 id="shadow-canary">Shadow runs and canaries</h2>
+
+            <h3>Shadow run</h3>
+            <p>A shadow run tries a candidate bundle on real requests without letting it decide anything. It is read from the registry's SHADOW release whichever selector chooses the decision's bundle, so a host that runs its configured bundle can still try a candidate.</p>
+            <ul class="calib-list">
+              <li><strong>Sampling</strong> &mdash; a request is in the sample by a stable hash of its event ID below <code>contexa.security.tiered.prompt-bundle.shadow.sample-percent</code> (0 to 100; <code>0</code>, the default, runs none). The shadow runner exists only when this property is set.</li>
+              <li><strong>Daily cap</strong> &mdash; at most <code>shadow.daily-call-cap</code> runs (default <code>100</code>) per UTC day, one model call each.</li>
+              <li><strong>Apart from the decision</strong> &mdash; the event is copied before the decision, analysed after it on its own executor, and sealed as the <code>SHADOW</code> stage. The copy never reaches the enforcement handler, so nothing is enforced or learned, and it adds nothing to the session context.</li>
+              <li><strong>Only runnable bundles</strong> &mdash; a SHADOW release of a version this build does not run is skipped.</li>
+            </ul>
+
+            <h3 style="margin-top:var(--space-8)">Canary</h3>
+            <p>With <code>selector=registry</code>, a CANARY release runs for the requests inside its share; the others run the latest ACTIVE release. The share is the registry row's <code>canary_percent</code> (0 to 100; no value means the whole scope), applied to a stable hash of the requester (the user, else the session, else the event). Optional <code>canary_tenants</code> and <code>canary_resource_families</code> narrow the canary to those tenants and to requests whose resource address starts with, or whose resource ID equals, a listed family.</p>
+          </section>
+
+
+          <!-- Section 6: Rollback -->
+          <section>
+            <h2 id="rollback">Rollback</h2>
+            <p><code>PromptBundleRollbackService</code> switches the executing bundle of a scope at once to a rollback target its manifest declares. The source becomes DEPRECATED, the target ACTIVE, the runtime caches are told, and the execution is recorded with the conditions it was checked against. A refused rollback is recorded with its reasons and changes nothing.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>Refusal</th><th>Condition</th></tr></thead>
+              <tbody>
+                <tr><td><code>SOURCE_NOT_EXECUTING</code></td><td>The source version is not ACTIVE or CANARY in the scope</td></tr>
+                <tr><td><code>TARGET_NOT_IN_BUILD</code></td><td>The target's manifest is not in this build</td></tr>
+                <tr><td><code>TARGET_NOT_DECLARED</code></td><td>The source manifest does not list the target in <code>rollbackTargets</code></td></tr>
+                <tr><td><code>VOCABULARY_INCOMPATIBLE</code></td><td>The target's manifest does not read the current vocabulary version</td></tr>
+                <tr><td><code>TARGET_NOT_REGISTERED</code></td><td>The target has no registry row in the scope</td></tr>
+                <tr><td><code>POLICY_SET_MISSING</code></td><td>The target's policy set is missing (a host without policy sets records <code>NOT_APPLICABLE</code>)</td></tr>
+              </tbody>
+            </table></div>
+
+            <pre><code class="language-http">POST /contexa/admin/api/prompt-quality/releases/rollback
+Content-Type: application/json
+
+{
+  "registryScope": "PLATFORM_GLOBAL",
+  "promptKey": "cortex.security-decision",
+  "fromVersion": "&lt;executing version&gt;",
+  "toVersion": "&lt;rollback target&gt;",
+  "reason": "Decision quality dropped after the release",
+  "emergency": false
+}</code></pre>
+            <p>The result carries an execution key (<code>RBX-...</code>), its status and the checked conditions: <code>EXECUTED</code>, or <code>REFUSED</code> with HTTP <code>422</code>. An emergency stop (<code>"emergency": true</code>) runs the same way and ends <code>AWAITING_APPROVAL</code>; another administrator then approves it with <code>POST .../rollback/{executionKey}/approve</code>. The operator who ran it cannot approve it.</p>
+          </section>
+
+
+          <!-- Section 7: Prompt inspector -->
+          <section>
+            <h2 id="inspector">Prompt inspector</h2>
+            <p><code>PromptInspector</code> reads the user prompt the model got from a sealed evidence package and runs each check over it, counting what matched, what did not and what could not be checked. It points at problems for a person to review; it never changes a prompt, a decision or a rule. The automatic round runs on the scheduler's thread under one lock across instances, inspecting the oldest uninspected packages up to the batch size; no decision thread runs it.</p>
+
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>Check</th><th>Layouts</th><th>What it compares</th></tr></thead>
+              <tbody>
+                <tr><td><code>SEAL_INTEGRITY</code></td><td>All</td><td>The package hash covers every sealed field, the system and user prompts were captured and match their hashes, a difference from the rendered prompt is recorded, and the request and correlation IDs are there.</td></tr>
+                <tr><td><code>BUNDLE_TRACE</code></td><td>All</td><td>The sealed descriptor names a registry release, and its contract version, artifact hash and approval are that release's. Without a release registry every trace is unverifiable.</td></tr>
+                <tr><td><code>DICTIONARY_CONTRACT</code></td><td>v20</td><td>Line feeds, block headers in dictionary order, only entry lines of their block in order, values in the entry's form or missing text, numbered lines up to the cap, and fact IDs in drawn order.</td></tr>
+                <tr><td><code>DECISION_FACT_MATCH</code></td><td>v20</td><td>Every sealed decision fact the dictionary draws has its line, its value letter for letter and the fact ID sealed with it.</td></tr>
+                <tr><td><code>FACT_ACCURACY</code></td><td>v20</td><td>The facts the prompt draws against their sealed source, field by field and not by rendering the prompt again: in the REQUEST block the subject, time, roles, permissions, action, target, size, class, network and device. A line whose source was not sealed is counted as unverifiable.</td></tr>
+                <tr><td><code>UNKNOWN_DECLARED</code></td><td>v20</td><td>Every fact the engine could not establish is on the UNKNOWN line with its kind, and no fact named there is drawn with a value elsewhere. A missing value is drawn the way the dictionary notes it: an entry with a rendered missing text draws it on its own line (unless the render&rsquo;s own rule names the fact unknown, for example without a session); an entry the dictionary leaves out is not named on the UNKNOWN line unless the caller marked it so (past records only when the sealed search did not retrieve them); any other entry has its line or its name on the UNKNOWN line.</td></tr>
+                <tr><td><code>PAST_RECORD_NOTATION</code></td><td>v20</td><td>The PAST RECORDS state line counts the records drawn, each record line has its twelve fields, and the order is same target first, then the latest first.</td></tr>
+                <tr><td><code>SOURCE_TRUTH</code></td><td>v20</td><td>The facts against the host's own records, given by a host <code>PromptFactSourceVerifier</code>. Without one the check records that no host source is integrated.</td></tr>
+                <tr><td><code>SAME_FACT</code></td><td>v20</td><td>One fact the prompt states twice has one value.</td></tr>
+                <tr><td><code>REASON_MATCH</code></td><td>v20</td><td>Each reason code of the sealed decision cites an ID on a line of the prompt, that line is one the code cites, and the code's condition holds on the sealed context.</td></tr>
+              </tbody>
+            </table></div>
+
+            <ul class="calib-list">
+              <li><strong>Layouts</strong> &mdash; the v20 checks run only on packages drawn as <code>v20-dictionary-blocks</code>; a v20 package drawn with another bundle's dictionary or render is counted as unverifiable for those checks.</li>
+              <li><strong>Verdicts</strong> &mdash; <code>PASS</code> (every item matched), <code>FAIL</code> (at least one mismatch), <code>INCOMPLETE</code> (no mismatch, some items unverifiable), <code>NOT_APPLICABLE</code> (not a dictionary prompt; only the layout-free checks ran), <code>ERROR</code> (the package could not be inspected).</li>
+              <li><strong>Findings</strong> &mdash; <code>MISMATCH</code> or <code>UNVERIFIABLE</code>; an unverifiable item never counts as passing.</li>
+              <li><strong>Versions</strong> &mdash; every result names the inspector version (<code>prompt-inspector/N</code>) and the dictionary version (<code>v20@</code> and the head of the dictionary digest). A new inspector version inspects the packages again.</li>
+            </ul>
+          </section>
+
+
+          <!-- Section 8: Sealing -->
+          <section>
+            <h2 id="sealing">Sealed evidence sampling and retention</h2>
+            <p>In an OSS installation (<code>contexa.enterprise.enabled</code> not <code>true</code>) with capture on (<code>contexa.pqa.oss.sealed-evidence.capture-enabled</code>, default <code>true</code>), decisions are sealed into evidence packages: the system and user prompts as sent, the canonical context and the execution metadata. Enterprise keeps sealed packages in its own schema, so the OSS inspector beans are not created while Enterprise is enabled.</p>
+            <ul class="calib-list">
+              <li><strong>Window after a change</strong> &mdash; the first <code>full-capture-after-change</code> decisions (default <code>1000</code>) after a start, or after the active bundle changes, are all sealed.</li>
+              <li><strong>Sample</strong> &mdash; after the window, <code>sample-percent</code> (default <code>1</code>, 1 to 100) of the requests are sealed, by a stable hash of the correlation ID.</li>
+              <li><strong>Retention</strong> &mdash; a package is kept for <code>retention.period</code> (default 90 days); one whose latest inspection found nothing wrong is removed after <code>retention.clean-period</code> (default 30 days). A package whose inspection found something keeps the default retention.</li>
+              <li><strong>Inspection sample</strong> &mdash; <code>contexa.prompt-inspection.sample-percent</code> (default <code>100</code>) of the sealed packages are inspected, by a stable hash of the package ID.</li>
+            </ul>
+          </section>
+
+
+          <!-- Section 9: Console and API -->
+          <section>
+            <h2 id="console-api">Console and API</h2>
+            <p>Every screen and endpoint requires the <code>ADMIN</code> role.</p>
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td>GET</td><td><code>/contexa/admin/prompt-inspection</code></td><td>Inspection overview screen (also <code>/packages</code> and <code>/packages/{packageId}</code>)</td></tr>
+                <tr><td>GET</td><td><code>/contexa/admin/api/prompt-inspection/overview</code></td><td>Counts of a period (<code>from</code>, <code>to</code>; the last 7 days by default)</td></tr>
+                <tr><td>GET</td><td><code>/contexa/admin/api/prompt-inspection/packages</code></td><td>Inspected packages, filtered by verdict, check code, block and entry</td></tr>
+                <tr><td>GET</td><td><code>/contexa/admin/api/prompt-inspection/packages/{packageId}</code></td><td>One package with its findings</td></tr>
+                <tr><td>POST</td><td><code>/contexa/admin/api/prompt-inspection/packages/{packageId}/reinspect</code></td><td>Inspect one package again</td></tr>
+                <tr><td>POST / GET</td><td><code>/contexa/admin/api/prompt-inspection/reinspections</code></td><td>Ask the automatic round to inspect a capture period again, and read its progress</td></tr>
+                <tr><td>GET</td><td><code>/contexa/admin/api/prompt-quality/releases</code></td><td>Registry releases (<code>registryScope</code> optional)</td></tr>
+                <tr><td>POST</td><td><code>/contexa/admin/api/prompt-quality/releases/transition</code></td><td>A state transition through the release gate</td></tr>
+                <tr><td>POST</td><td><code>/contexa/admin/api/prompt-quality/releases/rollback</code></td><td>A rollback or emergency stop</td></tr>
+                <tr><td>POST</td><td><code>/contexa/admin/api/prompt-quality/releases/rollback/{executionKey}/approve</code></td><td>The second approval of an emergency stop</td></tr>
+              </tbody>
+            </table></div>
+          </section>
+
+
+          <!-- Section 10: Configuration -->
+          <section>
+            <h2 id="configuration">Configuration</h2>
+            <div class="table-scroll"><table class="api-table">
+              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+              <tbody>
+                <tr><td><code>contexa.security.tiered.prompt-bundle.active</code></td><td>String</td><td>(blank)</td><td>The bundle version the configuration selector runs; blank runs the build default.</td></tr>
+                <tr><td><code>contexa.security.tiered.prompt-bundle.selector</code></td><td>Enum</td><td><code>CONFIGURATION</code></td><td><code>CONFIGURATION</code> or <code>REGISTRY</code>.</td></tr>
+                <tr><td><code>contexa.security.tiered.prompt-bundle.shadow.sample-percent</code></td><td>int</td><td><code>0</code></td><td>Share of requests a shadow release runs on, 0 to 100.</td></tr>
+                <tr><td><code>contexa.security.tiered.prompt-bundle.shadow.daily-call-cap</code></td><td>int</td><td><code>100</code></td><td>Shadow runs allowed per UTC day.</td></tr>
+                <tr><td><code>contexa.prompt.governance.enabled</code></td><td>boolean</td><td><code>true</code></td><td>Registry, release gate, rollback and release API on or off together.</td></tr>
+                <tr><td><code>contexa.prompt-inspection.enabled</code></td><td>boolean</td><td><code>true</code></td><td>The inspector, its round, re-inspection and console (OSS only).</td></tr>
+                <tr><td><code>contexa.prompt-inspection.interval</code></td><td>Duration</td><td><code>PT30S</code></td><td>Delay between automatic rounds.</td></tr>
+                <tr><td><code>contexa.prompt-inspection.initial-delay</code></td><td>Duration</td><td><code>PT30S</code></td><td>Delay before the first round.</td></tr>
+                <tr><td><code>contexa.prompt-inspection.batch-size</code></td><td>int</td><td><code>50</code></td><td>Packages per round (at least 1).</td></tr>
+                <tr><td><code>contexa.prompt-inspection.sample-percent</code></td><td>int</td><td><code>100</code></td><td>Share of sealed packages inspected, 1 to 100.</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.capture-enabled</code></td><td>boolean</td><td><code>true</code></td><td>Seal decisions into evidence packages (OSS only).</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.sample-percent</code></td><td>int</td><td><code>1</code></td><td>Share of requests sealed after the change window, 1 to 100.</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.full-capture-after-change</code></td><td>int</td><td><code>1000</code></td><td>Decisions sealed in full after a start or a bundle change.</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.enabled</code></td><td>boolean</td><td><code>true</code></td><td>Run the retention jobs.</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.period</code></td><td>Duration</td><td><code>90d</code></td><td>How long a sealed package is kept.</td></tr>
+                <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.clean-period</code></td><td>Duration</td><td><code>30d</code></td><td>How long a package whose latest inspection found nothing wrong is kept.</td></tr>
+              </tbody>
+            </table></div>
+
+            <pre><code class="language-yaml">contexa:
+  security:
+    tiered:
+      prompt-bundle:
+        selector: registry
+        shadow:
+          sample-percent: 5
+          daily-call-cap: 100
+  prompt-inspection:
+    batch-size: 50
+    sample-percent: 100
+  pqa:
+    oss:
+      sealed-evidence:
+        sample-percent: 1
+        full-capture-after-change: 1000</code></pre>
+            <p>The minimum action rule and prompt budget settings are listed in <a href="../../../docs/install/configuration/ai.html#prompt-bundles">AI Engine Configuration</a>.</p>
+          </section>
+
+
+          <!-- Related documents -->
+          <section>
+            <h2 id="related">Related documentation</h2>
+            <div class="related-links-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--space-3);margin:var(--space-4) 0">
+              <a href="../../../docs/reference/architecture/prompt-engineering.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Security Decision Prompt Pipeline</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">v19 sections, v20 dictionary blocks, output contract</span>
+              </a>
+              <a href="../../../docs/install/configuration/ai.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">AI Engine Configuration</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Tiered strategy and prompt settings</span>
+              </a>
+              <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
+                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Zero Trust Flow</strong>
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Enforcement and authority swap</span>
+              </a>
+            </div>
+          </section>
+
+
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="../../../docs/reference/architecture/prompt-engineering.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Security Decision Prompt Pipeline</span>
+            </a>
+            <a href="../../../docs/reference/common/overview.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Common Contracts</span>
+            </a>
+          </div>
