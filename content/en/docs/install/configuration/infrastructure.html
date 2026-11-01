@@ -1,988 +1,300 @@
-<!-- Breadcrumb -->
-          <nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">Home</a>
             <span class="breadcrumb-separator">/</span>
-            <a href="../../../docs/install/configuration.html">Configuration</a>
+            <a href="../../../docs/install/configuration.html">Configuration Guide</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Infrastructure</span>
+            <span class="breadcrumb-current">First Start and Deployment</span>
           </nav>
 
-          <!-- Page Header -->
           <div class="docs-page-header">
-            <h1>Infrastructure Configuration</h1>
-            <p class="lead">Detailed property reference for Contexa's infrastructure layer — caching, Redis pub/sub and streams, Kafka event topics, and OpenTelemetry observability. These properties control how Contexa communicates with external systems in a distributed deployment.</p>
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-autoconfigure</span>
+              <span class="badge badge-secondary">Configuration</span>
+            </div>
+            <h1>First Start and Deployment (Standalone · Distributed)</h1>
+            <p class="lead">The settings you need to add Contexa to an application and start it (the dedicated database · capability checks · turning features on and off), and the settings for moving from standalone mode on one machine to distributed mode where several machines share state (Redis · Kafka). Cache, scheduled-job locking and tracing are here too.</p>
           </div>
 
-          <!-- Distributed deployment notice -->
-          <div class="callout callout-info">
-            <p><strong>Quick uses Standalone; Distributed is explicit.</strong> Quick configures PostgreSQL and the selected Ollama service. To use PostgreSQL, Redis, ZooKeeper, and Kafka together, select Distributed in Custom or run <code>contexa init --distributed</code>. When selected, the CLI will:</p>
-            <ol>
-              <li><strong>Dependencies</strong> — automatically add <code>spring-kafka</code> and <code>redisson</code> to your build file.</li>
-              <li><strong>Infrastructure</strong> — define PostgreSQL, Redis, ZooKeeper, and Kafka in Compose, adding Ollama only when it is selected.</li>
-              <li><strong>Configuration</strong> — preserve the host <code>application.yml</code> and write <code>contexa.infrastructure.mode: DISTRIBUTED</code> plus Redis and Kafka connections to <code>application-contexa.yml</code>.</li>
+          <h2 id="overview">At a glance</h2>
+          <p>Turning Contexa on goes in the order below. After steps 1–3 it starts; from step 4 on you do what you need.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Order of turning on and deploying</strong>With only the starter dependency, Contexa stays off.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">Dependency and <code>@EnableAISecurity</code></span><span class="dg-node-desc">Contexa's auto-configuration turns on only with the annotation (<a href="#enable">Turning it on</a>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node dg-store"><span class="dg-node-title">Dedicated Contexa database</span><span class="dg-node-desc"><code>contexa.datasource.url</code> is required (<a href="#database">Dedicated database</a>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node dg-model"><span class="dg-node-title">Connect AI models</span><span class="dg-node-desc">Chat and embedding models and the vector store (<a href="ai.html">Connecting AI Models</a>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">Check the start-up log</span><span class="dg-node-desc">Capability checks tell you which parts are missing (<a href="#capability">Capability checks</a>, <a href="#check">Checking</a>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">Choose standalone or distributed</span><span class="dg-node-desc">Distributed to run several machines or to keep learning state across restarts (<a href="#modes">Standalone and distributed</a>)</span></div></li>
             </ol>
-            <p>The properties on this page apply once distributed mode is enabled. For production, use Kubernetes + Helm.</p>
+          </figure>
+
+          <h2 id="enable">Turning it on</h2>
+          <p>The dependency is one starter, <code>ai.ctxa:spring-boot-starter-contexa</code>. What it brings and what it leaves to the application:</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Part</th><th>Contents</th></tr></thead>
+            <tbody>
+              <tr><td>The starter brings</td><td>The five Contexa modules (common · core · identity · iam · autoconfigure), Spring Security, the OAuth2 resource server · client · authorization server, the Spring AI 1.1.8 BOM</td></tr>
+              <tr><td>The application adds</td><td>A chat model starter (one or more of OpenAI · Anthropic · Ollama), the pgvector vector store starter (<code>spring-ai-starter-vector-store-pgvector</code>). For distributed mode, Redis · Redisson · Kafka (<a href="#distributed">Distributed mode</a>)</td></tr>
+              <tr><td>Spring Boot</td><td>3.x. Contexa is built on 3.5.4 and refuses to start on 4.x.</td></tr>
+            </tbody>
+          </table></div>
+          <p>Contexa turns on when you put <code>@EnableAISecurity</code> on the main class. Without it, all of Contexa's auto-configuration is left out and it does not touch the application. With it, <code>contexa.enabled: false</code> makes the annotation import nothing, so everything is off again.</p>
+          <pre><code class="language-java">@SpringBootApplication
+@EnableAISecurity                       // default mode = SecurityMode.SANDBOX
+public class MyApplication { }</code></pre>
+          <p>The annotation's <code>mode</code> sets the default for who owns login. The default <code>SANDBOX</code> leaves login to the application (<code>HOST_OWNED</code>); <code>FULL</code> gives it to Contexa (<code>CONTEXA_OWNED</code>). <code>FULL</code> also turns on <a href="#database-owned">Contexa taking over the application's database</a> below. The difference between the two is in <a href="../spring-boot.html">Adding Contexa to a Spring Boot Application</a>; the hint attributes for finding the login object are in <a href="../../reference/common/bridge.html">Connecting Your Existing Login</a>.</p>
+
+          <h2 id="database">Dedicated Contexa database (required)</h2>
+          <p>Contexa keeps its own data, such as policies, decision records and evidence, in a PostgreSQL database separate from the application's. If <code>contexa.datasource.url</code> is empty, start-up stops with an <code>IllegalStateException</code> ("contexa.datasource.url must be configured for @EnableAISecurity").</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.datasource.url</code></td><td>none</td><td>JDBC URL of the dedicated Contexa database (required)</td><td>Always set it</td></tr>
+              <tr><td><code>contexa.datasource.username</code></td><td>none</td><td>Database account</td><td>Always set it</td></tr>
+              <tr><td><code>contexa.datasource.password</code></td><td>none</td><td>Database password</td><td>Pass it through an environment variable</td></tr>
+              <tr><td><code>contexa.datasource.driver-class-name</code></td><td>none</td><td>JDBC driver. Left empty, it is derived from the URL</td><td>To choose the driver yourself</td></tr>
+              <tr><td><code>contexa.datasource.isolation.allow-shared-application-datasource</code></td><td><code>false</code></td><td>Allow the same URL as the application database (<code>spring.datasource.url</code>)</td><td>When one database is shared for a trial (both of these needed)</td></tr>
+              <tr><td><code>contexa.datasource.isolation.shared-application-datasource-risk-accepted</code></td><td><code>false</code></td><td>Marks that the risk of the above was accepted</td><td>Same as above</td></tr>
+              <tr><td><code>contexa.datasource.isolation.contexa-owned-application</code></td><td><code>false</code></td><td>Contexa also takes over the application's default database (<code>true</code> automatically with <code>FULL</code>)</td><td>When the application has no database of its own (<a href="#database-owned">below</a>)</td></tr>
+              <tr><td><code>contexa.datasource.hikari.maximum-pool-size</code></td><td><code>48</code></td><td>Maximum connection pool size</td><td>To fit within PostgreSQL's connection limit</td></tr>
+              <tr><td><code>contexa.datasource.hikari.minimum-idle</code></td><td><code>8</code></td><td>Minimum idle connections (cut to the maximum size)</td><td>Same as above</td></tr>
+              <tr><td><code>contexa.datasource.hikari.connection-timeout-ms</code></td><td><code>60000</code></td><td>How long to wait for a connection (ms)</td><td>When the database is far or slow</td></tr>
+              <tr><td><code>contexa.datasource.hikari.validation-timeout-ms</code></td><td><code>5000</code></td><td>Time limit of a connection check (ms)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.datasource.hikari.idle-timeout-ms</code></td><td><code>600000</code></td><td>Until an idle connection is closed (ms)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.datasource.hikari.max-lifetime-ms</code></td><td><code>1800000</code></td><td>Longest life of one connection (ms)</td><td>When the database or a proxy closes connections first</td></tr>
+            </tbody>
+          </table></div>
+          <p>On the first start Contexa creates its tables and default data in this database (<code>contexa.iam.seed.enabled</code>, default <code>true</code>). If only some of the tables exist, start-up stops. Sample accounts are added only with <code>contexa.iam.seed.accounts.enabled: true</code> (<a href="iam.html">Authorization Policies</a>).</p>
+
+          <h3 id="database-shared">Using the same URL as the application database</h3>
+          <p>The default is a separate database. When <code>contexa.datasource.url</code> equals <code>spring.datasource.url</code>, start-up succeeds only if both conditions below hold; if either is missing, start-up stops.</p>
+          <ul>
+            <li><code>allow-shared-application-datasource</code> and <code>shared-application-datasource-risk-accepted</code> are both <code>true</code></li>
+            <li>No active profile is <code>prod</code> · <code>production</code> (sharing is not allowed in production profiles)</li>
+          </ul>
+
+          <h3 id="database-owned">Contexa taking over the application's database</h3>
+          <p><code>contexa-owned-application: true</code> (or <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>) is for the case where Contexa runs the whole application. With it on:</p>
+          <ul>
+            <li>If the application did not create its own <code>DataSource</code> bean, the application's default <code>DataSource</code> becomes the Contexa database. The default <code>JdbcTemplate</code> · <code>TransactionTemplate</code> also use the Contexa database.</li>
+            <li>The sharing check above is skipped even when the URLs are the same.</li>
+            <li>The default behavior of <a href="#capability">capability checks</a> becomes "stop start-up when a required part is missing" (<code>FAIL_FAST</code>).</li>
+          </ul>
+          <div class="callout callout-warning">
+            <strong>Do not turn it on for an existing application with its own database.</strong> The Contexa database may become the application's default database instead of its <code>spring.datasource.*</code>.
           </div>
 
-          <!-- Contexa Core Properties (Summary) -->
-          <section>
-            <h2 id="contexa-core">Contexa Core Properties (Summary)</h2>
-            <p>The top-level <code>ContexaProperties</code> class (prefix <code>contexa</code>) contains the master switches for infrastructure mode, Redis, Kafka, and observability. These properties are fully documented on the <a href="../../../docs/install/configuration.html#contexa-core">Configuration Overview</a> page. Key infrastructure-related entries include:</p>
+          <h3 id="vector-store">Which database the vector store uses</h3>
+          <p>The vector store that holds past decision records is created by Spring AI's pgvector auto-configuration. That auto-configuration uses the application's <strong>default</strong> <code>JdbcTemplate</code>. The dedicated database's <code>contexaJdbcTemplate</code> is not a default candidate, so it is not used there. Therefore:</p>
+          <ul>
+            <li>With <code>contexa-owned-application: true</code>, the default <code>JdbcTemplate</code> is the Contexa database, so the vector table is created in the Contexa database too.</li>
+            <li>Otherwise the vector table is created in the application's default database, which must be able to use pgvector.</li>
+            <li>To leave the application database as it is and keep only the vector table in the Contexa database, declare your own <code>VectorStore</code> bean built on <code>contexaDataSource</code>. When a bean of that type exists, Spring AI's auto-configuration backs off.</li>
+          </ul>
+          <p>The pgvector table name · dimensions · automatic table creation are in <a href="ai.html#vector-store">Connecting AI Models</a>.</p>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr>
-                  <th>Property</th>
-                  <th>Type</th>
-                  <th>Default</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa</code> (master)</td></tr>
-                <tr>
-                  <td><code>contexa.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Top-level master switch for the entire Contexa auto-configuration. When <code>false</code>, every sub-module is disabled.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.infrastructure</code></td></tr>
-                <tr>
-                  <td><code>.mode</code></td>
-                  <td><code>enum</code></td>
-                  <td><code>STANDALONE</code></td>
-                  <td><code>STANDALONE</code> (in-memory) or <code>DISTRIBUTED</code> (Redis/Kafka)</td>
-                </tr>
-                <tr>
-                  <td><code>.redis.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable Redis for distributed caching and pub/sub</td>
-                </tr>
-                <tr>
-                  <td><code>.kafka.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable Kafka for event streaming in distributed mode</td>
-                </tr>
-                <tr>
-                  <td><code>.observability.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable observability infrastructure</td>
-                </tr>
-                <tr>
-                  <td><code>.observability.open-telemetry-enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable OpenTelemetry for distributed tracing</td>
-                </tr>
-              </tbody>
-            </table></div>
+          <h2 id="capability">Capability checks</h2>
+          <p>Capability checks are not switches that turn features on. When start-up finishes, they check that the parts a decision needs (chat model · embedding model · vector store · learning · decision engine · bridge) were all created, and report a missing one as an ERROR log starting with <code>[ContexaCapability] …</code> or stop start-up.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>contexa.capability.mode</code></th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>AUTO</code> (default)</td><td>Behaves as <code>FAIL_FAST</code> when Contexa runs the application (<code>contexa-owned-application: true</code>, or <code>spring.application.name</code> starts with <code>contexa-</code>), and as <code>WARN</code> for any other application.</td></tr>
+              <tr><td><code>WARN</code></td><td>Reports missing required parts only as ERROR logs. Start-up continues.</td></tr>
+              <tr><td><code>FAIL_FAST</code></td><td>Stops start-up when a required part is missing.</td></tr>
+              <tr><td><code>STRICT</code></td><td>Also reports problems of parts that are not required, and stops start-up when a required part is missing.</td></tr>
+              <tr><td><code>OFF</code></td><td>No checks.</td></tr>
+            </tbody>
+          </table></div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.capability.mode</code></td><td><code>AUTO</code></td><td>Table above</td><td><code>FAIL_FAST</code> to stop a production start with missing parts</td></tr>
+              <tr><td><code>contexa.capability.required.&lt;capability&gt;</code></td><td>none</td><td>Overrides whether one capability is required. Capability names: <code>llm-runtime</code> · <code>embedding-runtime</code> · <code>rag-vector</code> · <code>security-learning</code> · <code>autonomous-decision</code> · <code>bridge</code></td><td>To silence a capability you do not use, or to make one you need required</td></tr>
+              <tr><td><code>contexa.capability.expose-diagnostics-endpoint</code></td><td><code>true</code></td><td>With Actuator, creates the diagnostics endpoint (<code>contexacapabilities</code>)</td><td><code>false</code> to leave the endpoint out</td></tr>
+            </tbody>
+          </table></div>
+          <p>With Actuator, <code>GET /actuator/contexacapabilities</code> shows the same result. Whether it is exposed over the web is decided by Spring Boot's <code>management.endpoints.web.exposure.include</code>.</p>
 
-            <p>See the <a href="../../../docs/install/configuration.html">Configuration Overview</a> for the complete <code>ContexaProperties</code> reference.</p>
-          </section>
+          <h2 id="switches">Turning features on and off</h2>
+          <p>All keys below default to <code>true</code>; set to <code>false</code>, the whole auto-configuration group of that feature is left out. The keys further down do not appear in IDE completion (settings metadata), but the code reads them. The detailed settings of each feature are on its own page (<a href="ai.html">Connecting AI Models</a> · <a href="identity.html">When Contexa Owns Login</a> · <a href="iam.html">Authorization Policies</a>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Left out when false</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.enabled</code></td><td><code>true</code></td><td>All of Contexa (<code>@EnableAISecurity</code> imports nothing)</td></tr>
+              <tr><td><code>contexa.llm.enabled</code></td><td><code>true</code></td><td>AI model connection (choosing the default chat · embedding model, the model call layer)</td></tr>
+              <tr><td><code>contexa.rag.enabled</code></td><td><code>true</code></td><td>Past record search (RAG)</td></tr>
+              <tr><td><code>contexa.autonomous.enabled</code></td><td><code>true</code></td><td>The whole asynchronous decision engine (analysis · storing decisions · learning, stopping agents)</td></tr>
+              <tr><td><code>contexa.prompt-inspection.enabled</code></td><td><code>true</code></td><td>Inspection of sealed prompts (<a href="../../reference/architecture/prompt-inspection.html">Prompt inspection</a>)</td></tr>
+              <tr><td><code>contexa.cache.enabled</code></td><td><code>true</code></td><td>Contexa cache (<a href="#cache">Cache</a>)</td></tr>
+              <tr><td><code>contexa.advisor.enabled</code></td><td><code>true</code></td><td>Registry of AI call advisors</td></tr>
+              <tr><td><code>contexa.std.enabled</code></td><td><code>true</code></td><td>Standard AI pipeline parts (prompt generation · context retrieval and so on)</td></tr>
+              <tr><td><code>contexa.streaming.enabled</code></td><td><code>true</code></td><td>Standard streaming service</td></tr>
+              <tr><td><code>contexa.core.security.enabled</code></td><td><code>true</code></td><td>Authority resolver · unified user lookup</td></tr>
+              <tr><td><code>contexa.identity.security-core.enabled</code></td><td><code>true</code></td><td>The core authentication setup that creates the request-time filters and the agent request gate</td></tr>
+              <tr><td><code>contexa.identity.mfa.enabled</code></td><td><code>true</code></td><td>MFA setup</td></tr>
+              <tr><td><code>contexa.identity.statemachine.enabled</code></td><td><code>true</code></td><td>MFA state machine</td></tr>
+              <tr><td><code>contexa.identity.service.enabled</code></td><td><code>true</code></td><td>Authentication services</td></tr>
+              <tr><td><code>contexa.identity.handler.enabled</code></td><td><code>true</code></td><td>Authentication success · failure handlers (created only with <code>CONTEXA_OWNED</code>)</td></tr>
+              <tr><td><code>contexa.iam.seed.enabled</code></td><td><code>true</code></td><td>Creating tables · default data on the first start</td></tr>
+              <tr><td><code>contexa.iam.websocket.enabled</code></td><td><code>true</code></td><td>Admin console WebSocket</td></tr>
+              <tr><td><code>contexa.jpa.repositories.enabled</code></td><td><code>true</code></td><td>Registering Contexa JPA repositories</td></tr>
+              <tr><td><code>contexa.security.async.enabled</code></td><td><code>true</code></td><td>Passing the security context to asynchronous work</td></tr>
+              <tr><td><code>contexa.prompt.governance.enabled</code></td><td><code>true</code></td><td>Prompt bundle governance</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-info">
+            <strong>Do not turn on <code>contexa.enterprise.enabled</code> (default <code>false</code>) in the OSS.</strong> It is for when the enterprise module is present. Set to <code>true</code> in the OSS, it does not turn on enterprise features; instead the OSS prompt inspection and sealed evidence parts are not created.
+          </div>
 
-          <!-- Cache Properties -->
-          <section>
-            <h2 id="cache">Cache Properties</h2>
-            <p>Properties under <code>contexa.cache</code>, bound to <code>ContexaCacheProperties</code>. Controls the multi-tier caching subsystem used throughout Contexa for identity, policy, and behavioral data. Supports local (Caffeine), Redis, and hybrid caching strategies with optional pub/sub-based cache invalidation.</p>
-
-            <h3>General Settings</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr>
-                  <th>Property</th>
-                  <th>Type</th>
-                  <th>Default</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.cache</code></td></tr>
-                <tr>
-                  <td><code>.type</code></td>
-                  <td><code>CacheType</code></td>
-                  <td><code>REDIS</code></td>
-                  <td><code>LOCAL</code>, <code>REDIS</code>, or <code>HYBRID</code> (L1 local + L2 Redis)</td>
-                </tr>
-                <tr>
-                  <td><code>.local.max-size</code></td>
-                  <td><code>int</code></td>
-                  <td><code>1000</code></td>
-                  <td>Max entries in the local (L1) cache</td>
-                </tr>
-                <tr>
-                  <td><code>.local.default-ttl-seconds</code></td>
-                  <td><code>int</code></td>
-                  <td><code>60</code></td>
-                  <td>Default TTL (seconds) for local cache entries</td>
-                </tr>
-                <tr>
-                  <td><code>.redis.default-ttl-seconds</code></td>
-                  <td><code>int</code></td>
-                  <td><code>300</code></td>
-                  <td>Default TTL (seconds) for Redis cache entries</td>
-                </tr>
-                <tr>
-                  <td><code>.redis.key-prefix</code></td>
-                  <td><code>String</code></td>
-                  <td><code>contexa:cache:</code></td>
-                  <td>Prefix for all Redis cache keys (namespace isolation)</td>
-                </tr>
-                <tr>
-                  <td><code>.pubsub.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable pub/sub cache invalidation across cluster nodes</td>
-                </tr>
-                <tr>
-                  <td><code>.pubsub.channel</code></td>
-                  <td><code>String</code></td>
-                  <td><code>contexa:cache:invalidation</code></td>
-                  <td>Pub/sub channel for cache invalidation broadcasts</td>
-                </tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="cache-domains">Domain-Specific TTL</h3>
-            <p>Each cache domain can have independent TTL values for local and Redis tiers. This allows fine-grained control — for example, frequently changing policy data can use shorter TTLs while stable HCAD baseline data uses longer ones.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr>
-                  <th>Property</th>
-                  <th>Type</th>
-                  <th>Default</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.cache.domains</code></td></tr>
-                <tr>
-                  <td><code>.users</code></td>
-                  <td><code>TtlConfig</code></td>
-                  <td><code>local: 3600 / redis: 3600</code></td>
-                  <td>User identity and profile data</td>
-                </tr>
-                <tr>
-                  <td><code>.roles</code></td>
-                  <td><code>TtlConfig</code></td>
-                  <td><code>local: 14400 / redis: 14400</code></td>
-                  <td>Role definitions and permission mappings</td>
-                </tr>
-                <tr>
-                  <td><code>.permissions</code></td>
-                  <td><code>TtlConfig</code></td>
-                  <td><code>local: 28800 / redis: 28800</code></td>
-                  <td>Permission grants and access control entries</td>
-                </tr>
-                <tr>
-                  <td><code>.groups</code></td>
-                  <td><code>TtlConfig</code></td>
-                  <td><code>local: 14400 / redis: 14400</code></td>
-                  <td>Group membership and hierarchy data</td>
-                </tr>
-                <tr>
-                  <td><code>.policies</code></td>
-                  <td><code>TtlConfig</code></td>
-                  <td><code>local: 30 / redis: 300</code></td>
-                  <td>XACML/ABAC policy definitions (short local TTL)</td>
-                </tr>
-                <tr>
-                  <td><code>.soar</code></td>
-                  <td><code>TtlConfig</code></td>
-                  <td><code>local: 900 / redis: 900</code></td>
-                  <td>SOAR playbook and automated response data</td>
-                </tr>
-                <tr>
-                  <td><code>.hcad</code></td>
-                  <td><code>TtlConfig</code></td>
-                  <td><code>local: 86400 / redis: 86400</code></td>
-                  <td>HCAD behavioral baselines (long-lived profiles)</td>
-                </tr>
-              </tbody>
-            </table></div>
-            <p>Each domain entry is a <code>TtlConfig</code> object with <code>local-ttl-seconds</code> and <code>redis-ttl-seconds</code> fields. Override any domain independently:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  cache:
-    type: HYBRID
-    local:
-      max-size: 5000
-      default-ttl-seconds: 120
-    redis:
-      default-ttl-seconds: 600
-      key-prefix: "myapp:contexa:cache:"
-    pubsub:
-      enabled: true
-      channel: "contexa:cache:invalidation"
-    domains:
-      users:
-        local-ttl-seconds: 1800
-        redis-ttl-seconds: 3600
-      policies:
-        local-ttl-seconds: 15
-        redis-ttl-seconds: 60
-      hcad:
-        local-ttl-seconds: 43200
-        redis-ttl-seconds: 86400</code></pre>
+          <h2 id="modes">Choosing standalone or distributed</h2>
+          <p>The infrastructure mode (<code>contexa.infrastructure.mode</code>) decides where decision and learning state is kept. Either mode needs the <a href="#database">dedicated database</a>.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Standalone and distributed</strong>The values are <code>standalone</code> (default) · <code>distributed</code>.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side"><p class="dg-side-title">Standalone (default)</p><ul><li>Decisions · baselines · context are kept in this JVM's memory</li><li>Learning state is lost on restart (one WARN line at start-up)</li><li>No Redis · Kafka needed</li><li>For development and single-machine operation</li></ul></div>
+              <div class="dg-side dg-store"><p class="dg-side-title">Distributed</p><ul><li>Decisions · baselines · context are kept in Redis</li><li>Events to analyze are spread through Kafka</li><li>Several machines see the same decisions</li><li>The application adds Redis · Kafka · Redisson</li></ul></div>
             </div>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What</th><th>Standalone</th><th>Distributed</th></tr></thead>
+            <tbody>
+              <tr><td>User decision store</td><td>Memory (with a user count limit)</td><td>Redis</td></tr>
+              <tr><td>Behavioral baseline · decision context · threat score · re-entry records · distributed lock</td><td>Memory</td><td>Redis (needs a Redis template bean)</td></tr>
+              <tr><td>Passing events to analyze</td><td>Handed over directly inside the same JVM</td><td>Kafka (when Spring Kafka and a <code>KafkaTemplate</code> bean are present)</td></tr>
+              <tr><td>Telling in-flight responses about a BLOCK</td><td>Inside the same JVM</td><td>Across nodes when Redisson is present</td></tr>
+              <tr><td>MFA session</td><td>HTTP session (even if the application has Redis)</td><td>Redis (when a string Redis template is present)</td></tr>
+              <tr><td>Contexa cache</td><td>Local cache (<code>contexa.cache.type</code> is always <code>LOCAL</code>)</td><td>Redis cache (<a href="#cache">Cache</a>)</td></tr>
+              <tr><td>Login MFA state machine (when Contexa owns login)</td><td>Memory</td><td>Redis (when a Redisson bean and <code>spring-statemachine-data-redis</code> are present)</td></tr>
+              <tr><td>Redis · Kafka auto-configuration</td><td>Contexa's are left out. The application's Redis · Kafka auto-configuration is also left out unless the application writes its connection address (<code>spring.data.redis.host</code> · <code>spring.kafka.bootstrap-servers</code> and so on) itself</td><td>All kept</td></tr>
+            </tbody>
+          </table></div>
+          <p>If the application declares store beans itself (<code>ZeroTrustActionRepository</code>, <code>BaselineDataStore</code>, <code>SecurityContextDataStore</code> and so on), those implementations are used instead of memory even in standalone mode. When the application provides both the baseline store and the context store (<code>SecurityContextDataStore</code>), the standalone WARN does not appear either.</p>
 
-            <!-- removed: broken link to docs/reference/core/caching.html (page does not exist in the current Reference/Core set; the caching architecture is documented in pipeline/strategy overviews) -->
-          </section>
+          <h3 id="standalone-limits">Memory limits in standalone mode</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.standalone.max-decision-users</code></td><td><code>0</code></td><td>How many users the in-memory decision store keeps. 0 or less derives it from the maximum heap (a twentieth of it at 2 KiB a user, 1,000–1,000,000 users). Past it, users whose decision was written longest ago go first, but never a user with a restricting decision (BLOCK · a CHALLENGE or ESCALATE in force)</td><td>When there are so many users that memory runs short, or memory is left over</td></tr>
+              <tr><td><code>contexa.security.zerotrust.standalone.max-held-learning-bytes</code></td><td><code>0</code></td><td>Total size (bytes) of requests held in memory while waiting for verification · promotion learning. 0 or less is a tenth of the heap (16 MiB–1 GiB). Past it, the requests held longest are released first (no decision changes; only that learning is lost)</td><td>Same as above</td></tr>
+            </tbody>
+          </table></div>
 
-<section>
-            <h2 id="bridge">Bridge Properties</h2>
-            <p><code>BridgeProperties</code> is bound to <code>contexa.bridge</code>. It controls the bridge layer that maps user, authority, delegation, and session information bidirectionally between an external (legacy) authentication system and Contexa. The properties define SecurityContext extraction keys, session attribute candidates, request-attribute keys, HTTP header names, sync policy, and the trusted-proxy list.</p>
-            <p>In <code>HOST_OWNED</code> (the default for <code>SANDBOX</code> mode), the bridge resolution filter is registered as a servlet filter and runs after the host's Spring Security filter chain on each request. It resolves evidence only when the current <code>SecurityContext</code> holds an authenticated, non-anonymous <code>Authentication</code>. Authentication evidence comes from that <code>Authentication</code> first: its principal, authorities, and token claims (JWT claims, OAuth2 user attributes). A legacy user object stored only in the HTTP session or in a request attribute does not by itself become authentication evidence; session, request attributes, and headers are still read as authorization and delegation evidence. Header evidence is accepted only from configured trusted proxies and only when it matches the host principal.</p>
-
-            <h3 id="bridge-core">Bridge Core Toggles</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Master switch for the entire bridge layer.</td></tr>
-                <tr><td><code>contexa.bridge.ownership</code></td><td><code>SecurityOwnershipMode</code></td><td><code>HOST_OWNED</code> (<code>FULL</code> mode: <code>CONTEXA_OWNED</code>)</td><td>Authentication ownership. In <code>HOST_OWNED</code>, the host application's Spring Security configuration owns authentication and authorization, and Contexa does not build an authentication <code>SecurityFilterChain</code>. In <code>CONTEXA_OWNED</code>, Contexa owns authentication. When unset, <code>@EnableAISecurity</code> <code>SANDBOX</code> mode resolves to <code>HOST_OWNED</code> and <code>FULL</code> mode to <code>CONTEXA_OWNED</code>; an explicitly configured value always wins.</td></tr>
-                <tr><td><code>contexa.bridge.populate-security-context</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether to populate the Spring SecurityContext from the bridge-resolved principal. Only has an effect in <code>CONTEXA_OWNED</code>; in <code>HOST_OWNED</code>, Contexa neither populates nor persists the SecurityContext.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="bridge-sync">Synchronization (Sync)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.sync.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables periodic synchronization of external user information.</td></tr>
-                <tr><td><code>contexa.bridge.sync.min-refresh-interval-seconds</code></td><td><code>long</code></td><td><code>60</code></td><td>Minimum seconds between sync calls for the same principal — acts as a throttle.</td></tr>
-                <tr><td><code>contexa.bridge.sync.synthetic-email-domain</code></td><td><code>String</code></td><td><code>shadow.contexa.local</code></td><td>Domain suffix used to synthesize an email address when none is provided externally.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="bridge-network">Trusted Proxies (Network)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.network.trusted-proxy-validation-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether to validate the reverse-proxy origin before trusting <code>X-Forwarded-*</code> headers.</td></tr>
-                <tr><td><code>contexa.bridge.network.trusted-proxies</code></td><td><code>List&lt;String&gt;</code></td><td><code>[] (empty list)</code></td><td>Trusted reverse-proxy IPs or CIDR ranges. When empty, headers are not trusted even if validation is enabled.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="bridge-authentication-security-context">Authentication SecurityContext Keys</h3>
-            <p>Properties under <code>contexa.bridge.authentication.security-context</code>, bound to <code>Authentication.SecurityContext</code>. Defines the candidate keys used to extract display name, principal type, authentication method, assurance level, MFA state, authentication time, and additional attributes from the external token's claims/attributes. The first matching key wins.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authentication.security-context.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables SecurityContext extraction.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.security-context.display-name-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[displayName, name, fullName, userName, username, preferred_username]</code></td><td>Candidate keys used to extract the display name.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.security-context.principal-type-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[principalType, userType, actorType, token_use]</code></td><td>Candidate keys used to extract the principal type (user / service / agent, etc.).</td></tr>
-                <tr><td><code>contexa.bridge.authentication.security-context.authentication-type-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authenticationType, authMethod, loginMethod, method, factorType]</code></td><td>Candidate keys used to extract the authentication method.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.security-context.authentication-assurance-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authenticationAssurance, authLevel, loa, acr]</code></td><td>Candidate keys used to extract the authentication assurance level (LoA/ACR).</td></tr>
-                <tr><td><code>contexa.bridge.authentication.security-context.mfa-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[mfa, mfaVerified, mfaCompleted, secondFactorVerified, amr]</code></td><td>Candidate keys used to extract MFA-completion state.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.security-context.auth-time-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authenticationTime, authenticatedAt, loginTime, issuedAt, auth_time, iat]</code></td><td>Candidate keys used to extract the authentication time.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.security-context.attribute-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[organizationId, orgId, tenantId, department, team, email, loginIp, authenticationType, authenticationAssurance, mfaVerified, mfaCompleted, authenticatedAt, loginTime, iss, aud, azp, scope, scp, amr, acr]</code></td><td>Additional attribute keys preserved in the SecurityContext (20 entries by default).</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="bridge-authentication-session">Authentication Session Keys</h3>
-            <p>Properties under <code>contexa.bridge.authentication.session</code>, bound to the shared <code>Bridge.Session</code> class. When an external system stores the authenticated user object as an HTTP session attribute, these keys define which attribute names to try and which keys to use to extract principal id, display name, authorities, authentication method, MFA state, authentication time, and additional attributes from that object.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authentication.session.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables HTTP-session-based user extraction.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.attribute</code></td><td><code>String</code></td><td><code>"" (empty)</code></td><td>Explicit session-attribute name where the user object is stored. When empty and <code>auto-discover</code> is true, the candidate list is tried.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.attribute-candidates</code></td><td><code>List&lt;String&gt;</code></td><td><code>[currentUser, authenticatedUser, sessionUser, userSession, principal, user, securityUser, authenticatedPrincipal]</code></td><td>Candidate attribute names tried in auto-discover mode.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.auto-discover</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether to walk the candidate-attribute list automatically.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.object-type-name</code></td><td><code>String</code></td><td><code>"" (empty)</code></td><td>Optional fully-qualified class name the discovered object must match.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.principal-id-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[userId, username, id, loginId, email]</code></td><td>Candidate keys used to extract the principal identifier from the session object.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.display-name-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[displayName, name, fullName, userName, preferred_username]</code></td><td>Candidate keys used to extract the display name.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.authorities-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[roles, authorities, permissions, scopes]</code></td><td>Candidate keys used to extract authorities, roles, or scopes.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.authentication-type-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authenticationType, authMethod, loginMethod]</code></td><td>Candidate keys used to extract the authentication method.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.authentication-assurance-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authenticationAssurance, authLevel, loa]</code></td><td>Candidate keys used to extract the authentication assurance level.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.mfa-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[mfa, mfaVerified, mfa_verified]</code></td><td>Candidate keys used to extract MFA-completion state.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.auth-time-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authenticationTime, authenticatedAt, loginTime]</code></td><td>Candidate keys used to extract the authentication time.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.session.attribute-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[department, organizationId, orgId, authMethod, loginIp, loginTime]</code></td><td>Additional attribute keys preserved in the SecurityContext.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="bridge-authentication-request-attributes">Authentication RequestAttributes Keys</h3>
-            <p>Properties under <code>contexa.bridge.authentication.request-attributes</code>, bound to the shared <code>Bridge.RequestAttributes</code> class. Defines which attribute candidates to try when an external filter stores the user object on <code>HttpServletRequest</code>, which keys to read from that object, and which flat key names Contexa uses when re-exposing values back as request attributes.</p>
-
-            <h4>Discovery / Extraction (13 shared)</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables request-attribute-based user extraction.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.attribute</code></td><td><code>String</code></td><td><code>"" (empty)</code></td><td>Explicit request-attribute name where the user object is stored.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.attribute-candidates</code></td><td><code>List&lt;String&gt;</code></td><td><code>[currentUser, authenticatedUser, requestUser, principal, user, authenticatedPrincipal, authUser]</code></td><td>Candidate attribute names tried in auto-discover mode.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.auto-discover</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether to walk the candidate-attribute list automatically.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.object-type-name</code></td><td><code>String</code></td><td><code>"" (empty)</code></td><td>Optional fully-qualified class name the discovered object must match.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.principal-id-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[userId, username, id, loginId, email]</code></td><td>Candidate keys used to extract the principal identifier.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.display-name-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[displayName, name, fullName, userName, preferred_username]</code></td><td>Candidate keys used to extract the display name.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.authorities-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[roles, authorities, permissions, scopes]</code></td><td>Candidate keys used to extract authorities, roles, or scopes.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.authentication-type-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authenticationType, authMethod, loginMethod]</code></td><td>Candidate keys used to extract the authentication method.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.authentication-assurance-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authenticationAssurance, authLevel, loa]</code></td><td>Candidate keys used to extract the authentication assurance level.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.mfa-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[mfa, mfaVerified, mfa_verified]</code></td><td>Candidate keys used to extract MFA-completion state.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.auth-time-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authenticationTime, authenticatedAt, loginTime]</code></td><td>Candidate keys used to extract the authentication time.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.attribute-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[department, organizationId, orgId, authMethod, loginIp, loginTime]</code></td><td>Additional attribute keys preserved in the SecurityContext.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>Flat authentication attribute keys (flat-*, 8)</h4>
-            <p>Single key names Contexa uses when flattening values back onto request attributes so downstream components can read them directly.</p>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.flat-principal-id</code></td><td><code>ctxa.auth.principalId</code></td><td>Principal identifier.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.flat-display-name</code></td><td><code>ctxa.auth.displayName</code></td><td>Display name.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.flat-authenticated</code></td><td><code>ctxa.auth.authenticated</code></td><td>Authenticated boolean.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.flat-authorities</code></td><td><code>ctxa.auth.authorities</code></td><td>Authorities collection.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.flat-authentication-type</code></td><td><code>ctxa.auth.type</code></td><td>Authentication method.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.flat-authentication-assurance</code></td><td><code>ctxa.auth.assurance</code></td><td>Authentication assurance level.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.flat-mfa-completed</code></td><td><code>ctxa.auth.mfaCompleted</code></td><td>MFA completion state.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.flat-authentication-time</code></td><td><code>ctxa.auth.time</code></td><td>Authentication time.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>Authorization mapping keys (7)</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.authorization-effect</code></td><td><code>ctxa.authz.effect</code></td><td>Authorization decision effect (ALLOW/DENY).</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.privileged</code></td><td><code>ctxa.authz.privileged</code></td><td>Whether this is a privileged flow.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.policy-id</code></td><td><code>ctxa.authz.policyId</code></td><td>ID of the matching policy.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.policy-version</code></td><td><code>ctxa.authz.policyVersion</code></td><td>Policy version.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.scope-tags</code></td><td><code>ctxa.authz.scopeTags</code></td><td>Scope tags.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.effective-roles</code></td><td><code>ctxa.authz.roles</code></td><td>Effective role set.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.effective-authorities</code></td><td><code>ctxa.authz.authorities</code></td><td>Effective authority set.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>Delegation mapping keys (11)</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.delegated</code></td><td><code>ctxa.delegation.enabled</code></td><td>Whether delegation is active.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.agent-id</code></td><td><code>ctxa.delegation.agentId</code></td><td>Delegated agent ID.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.objective-id</code></td><td><code>ctxa.delegation.objectiveId</code></td><td>Delegation objective ID.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.objective-family</code></td><td><code>ctxa.delegation.objectiveFamily</code></td><td>Objective family / type.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.objective-summary</code></td><td><code>ctxa.delegation.objectiveSummary</code></td><td>Objective summary.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.allowed-operations</code></td><td><code>ctxa.delegation.allowedOperations</code></td><td>Permitted operations list.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.allowed-resources</code></td><td><code>ctxa.delegation.allowedResources</code></td><td>Permitted resources list.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.approval-required</code></td><td><code>ctxa.delegation.approvalRequired</code></td><td>Whether approval is required.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.privileged-export-allowed</code></td><td><code>ctxa.delegation.privilegedExportAllowed</code></td><td>Whether privileged export is allowed.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.containment-only</code></td><td><code>ctxa.delegation.containmentOnly</code></td><td>Containment-only restriction flag.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.request-attributes.expires-at</code></td><td><code>ctxa.delegation.expiresAt</code></td><td>Delegation expiry instant.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="bridge-authentication-headers">Authentication HTTP Header Names</h3>
-            <p>Properties under <code>contexa.bridge.authentication.headers</code>, bound to the shared <code>Bridge.Headers</code> class. Defines which header names Contexa reads from (and emits onto) HTTP traffic when a reverse proxy or gateway propagates authentication, authorization, or delegation context. All header names are configurable.</p>
-
-            <h4>Toggle</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authentication.headers.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables HTTP-header-based extraction and emission.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>Authentication headers (8)</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authentication.headers.principal-id</code></td><td><code>X-Contexa-Principal-Id</code></td><td>Principal-identifier header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.display-name</code></td><td><code>X-Contexa-Principal-Name</code></td><td>Display-name header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.authenticated</code></td><td><code>X-Contexa-Authenticated</code></td><td>Authenticated boolean header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.authorities</code></td><td><code>X-Contexa-Authorities</code></td><td>Authorities collection header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.authentication-type</code></td><td><code>X-Contexa-Authentication-Type</code></td><td>Authentication-method header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.authentication-assurance</code></td><td><code>X-Contexa-Authentication-Assurance</code></td><td>Authentication-assurance header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.mfa-completed</code></td><td><code>X-Contexa-Mfa-Completed</code></td><td>MFA-completion header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.authentication-time</code></td><td><code>X-Contexa-Authenticated-At</code></td><td>Authentication-time header.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>Authorization headers (7)</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authentication.headers.authorization-effect</code></td><td><code>X-Contexa-Authz-Effect</code></td><td>Authorization-effect header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.privileged</code></td><td><code>X-Contexa-Authz-Privileged</code></td><td>Privileged-flow boolean header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.policy-id</code></td><td><code>X-Contexa-Authz-Policy</code></td><td>Matching-policy ID header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.policy-version</code></td><td><code>X-Contexa-Authz-Policy-Version</code></td><td>Policy-version header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.scope-tags</code></td><td><code>X-Contexa-Authz-Scope</code></td><td>Scope-tag header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.effective-roles</code></td><td><code>X-Contexa-Authz-Roles</code></td><td>Effective-roles header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.effective-authorities</code></td><td><code>X-Contexa-Authz-Authorities</code></td><td>Effective-authorities header.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>Delegation headers (11)</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authentication.headers.delegated</code></td><td><code>X-Contexa-Delegated</code></td><td>Delegation-active header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.agent-id</code></td><td><code>X-Contexa-Agent-Id</code></td><td>Delegated-agent ID header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.objective-id</code></td><td><code>X-Contexa-Objective-Id</code></td><td>Objective ID header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.objective-family</code></td><td><code>X-Contexa-Objective-Family</code></td><td>Objective family / type header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.objective-summary</code></td><td><code>X-Contexa-Objective-Summary</code></td><td>Objective summary header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.allowed-operations</code></td><td><code>X-Contexa-Allowed-Operations</code></td><td>Permitted-operations header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.allowed-resources</code></td><td><code>X-Contexa-Allowed-Resources</code></td><td>Permitted-resources header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.approval-required</code></td><td><code>X-Contexa-Approval-Required</code></td><td>Approval-required header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.privileged-export-allowed</code></td><td><code>X-Contexa-Privileged-Export-Allowed</code></td><td>Privileged-export-allowed header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.containment-only</code></td><td><code>X-Contexa-Containment-Only</code></td><td>Containment-only header.</td></tr>
-                <tr><td><code>contexa.bridge.authentication.headers.expires-at</code></td><td><code>X-Contexa-Delegation-Expires-At</code></td><td>Delegation-expiry header.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="bridge-authorization-security-context">Authorization SecurityContext Keys</h3>
-            <p>Properties under <code>contexa.bridge.authorization.security-context</code>, bound to <code>Authorization.SecurityContext</code>. When an external system stores authorization decisions (effect, policy ID, authorities, etc.) as attributes on the Spring SecurityContext <code>Authentication</code>, these keys define which candidate names Contexa tries to read that information. The first matching key wins.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authorization.security-context.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables SecurityContext-based authorization extraction.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.security-context.authorization-effect-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authorizationEffect, effect, decision, decisionEffect]</code></td><td>Candidate keys used to extract the authorization effect (ALLOW/DENY).</td></tr>
-                <tr><td><code>contexa.bridge.authorization.security-context.privileged-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[privileged, isPrivileged, privilegedFlow]</code></td><td>Candidate keys used to extract the privileged-flow boolean.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.security-context.policy-id-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[policyId, policy, decisionPolicy]</code></td><td>Candidate keys used to extract the matching policy ID.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.security-context.policy-version-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[policyVersion, version]</code></td><td>Candidate keys used to extract the policy version.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.security-context.scope-tag-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[scopeTags, scopes, scope, permissionScopes, scp]</code></td><td>Candidate keys used to extract scope tags.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.security-context.role-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[effectiveRoles, roles, roleSet, groups]</code></td><td>Candidate keys used to extract the effective role set.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.security-context.authority-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[effectiveAuthorities, authorities, permissions, grantedAuthorities, scope, scp]</code></td><td>Candidate keys used to extract the effective authority set.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.security-context.attribute-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authorizationEffect, effect, privileged, policyId, policyVersion, scopeTags, scopes, scope, scp, roles, effectiveRoles, permissions, effectiveAuthorities]</code></td><td>Additional attribute keys preserved in the authorization context (13 defaults).</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="bridge-authorization-session">Authorization Session Keys</h3>
-            <p>Properties under <code>contexa.bridge.authorization.session</code>, bound to <code>Authorization.Session</code>. When an external system stores authorization decisions on a session-scoped user object, these keys define which attribute candidates to try and which keys to read for effect, policy, scope, role, and authority extraction.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.authorization.session.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables session-based authorization extraction.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.attribute</code></td><td><code>String</code></td><td><code>"" (empty)</code></td><td>Explicit session attribute name carrying the user object.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.attribute-candidates</code></td><td><code>List&lt;String&gt;</code></td><td><code>[currentUser, authenticatedUser, sessionUser, userSession, principal, user, securityUser, authenticatedPrincipal]</code></td><td>Candidate attribute names tried in auto-discover mode.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.auto-discover</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether to walk the candidate-attribute list automatically.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.object-type-name</code></td><td><code>String</code></td><td><code>"" (empty)</code></td><td>Optional fully-qualified class name the discovered object must match.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.principal-id-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[userId, username, id, loginId, email]</code></td><td>Candidate keys used to extract the principal identifier.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.authorization-effect-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authorizationEffect, effect, decision, decisionEffect]</code></td><td>Candidate keys used to extract the authorization effect.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.privileged-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[privileged, isPrivileged, privilegedFlow]</code></td><td>Candidate keys used to extract the privileged flag.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.policy-id-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[policyId, policy, decisionPolicy]</code></td><td>Candidate keys used to extract the policy ID.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.policy-version-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[policyVersion, version]</code></td><td>Candidate keys used to extract the policy version.</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.scope-tag-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[scopeTags, scopes, scope, permissionScopes]</code></td><td>Candidate keys used to extract scope tags (note: <code>scp</code> is not included here, unlike Authorization.SecurityContext).</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.role-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[effectiveRoles, roles, roleSet]</code></td><td>Candidate keys used to extract the effective role set (no <code>groups</code>).</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.authority-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[effectiveAuthorities, authorities, permissions, grantedAuthorities]</code></td><td>Candidate keys used to extract the effective authority set (no <code>scope, scp</code>).</td></tr>
-                <tr><td><code>contexa.bridge.authorization.session.attribute-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[authorizationEffect, effect, privileged, policyId, policyVersion, scopeTags, scopes, roles, effectiveRoles, permissions, effectiveAuthorities, organizationId, orgId, tenantId, department, team]</code></td><td>Additional attribute keys preserved in the authorization context (16 defaults).</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="bridge-authorization-shared">Authorization RequestAttributes / Headers</h3>
-            <p>Authorization reuses the same shared <code>Bridge.RequestAttributes</code> / <code>Bridge.Headers</code> classes. Key structure and defaults are identical to the <a href="#bridge-authentication-request-attributes">Authentication RequestAttributes Keys</a> and <a href="#bridge-authentication-headers">Authentication HTTP Header Names</a> tables — only the prefix differs:</p>
-            <ul>
-              <li><code>contexa.bridge.authorization.request-attributes.*</code> — 39 fields, same table</li>
-              <li><code>contexa.bridge.authorization.headers.*</code> — 27 fields, same table</li>
-            </ul>
-            <p>The tables are not duplicated because <code>BridgeProperties.java</code> references a single class from three locations — keeping the documentation single-sourced.</p>
-
-            <h3 id="bridge-delegation-session">Delegation Session Keys</h3>
-            <p>Properties under <code>contexa.bridge.delegation.session</code>, bound to <code>Delegation.Session</code>. When an external system stores agent-delegation context — agent ID, objective, allowed operations/resources, approval requirement, expiry — on a session-scoped user object, these keys define which attribute candidates to try and which keys to read.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.bridge.delegation.session.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables session-based delegation extraction.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.attribute</code></td><td><code>String</code></td><td><code>"" (empty)</code></td><td>Explicit session attribute name carrying the user object.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.attribute-candidates</code></td><td><code>List&lt;String&gt;</code></td><td><code>[currentUser, authenticatedUser, sessionUser, userSession, principal, user, securityUser, authenticatedPrincipal]</code></td><td>Candidate attribute names tried in auto-discover mode.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.auto-discover</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether to walk the candidate list automatically. (Note: Delegation.Session does not expose an <code>object-type-name</code> field.)</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.principal-id-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[userId, username, id, loginId, email]</code></td><td>Candidate keys used to extract the principal identifier.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.delegated-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[delegated, delegationEnabled, agentDelegated]</code></td><td>Candidate keys used to extract the delegation-active flag.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.agent-id-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[agentId, delegateAgentId]</code></td><td>Candidate keys used to extract the agent ID.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.objective-id-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[objectiveId, taskPurpose, delegationObjectiveId]</code></td><td>Candidate keys used to extract the delegation objective ID.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.objective-family-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[objectiveFamily, objectiveType, delegationObjectiveFamily]</code></td><td>Candidate keys used to extract the objective family / type.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.objective-summary-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[objectiveSummary, taskSummary, delegationObjectiveSummary]</code></td><td>Candidate keys used to extract the objective summary.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.allowed-operations-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[allowedOperations, delegatedOperations, permittedOperations]</code></td><td>Candidate keys used to extract the permitted operations list.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.allowed-resources-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[allowedResources, delegatedResources, permittedResources]</code></td><td>Candidate keys used to extract the permitted resources list.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.approval-required-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[approvalRequired, requiresApproval]</code></td><td>Candidate keys used to extract the approval-required flag.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.privileged-export-allowed-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[privilegedExportAllowed, allowPrivilegedExport]</code></td><td>Candidate keys used to extract the privileged-export-allowed flag.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.containment-only-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[containmentOnly, restrictedContainment]</code></td><td>Candidate keys used to extract the containment-only flag.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.expires-at-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[expiresAt, delegationExpiresAt]</code></td><td>Candidate keys used to extract the delegation expiry instant.</td></tr>
-                <tr><td><code>contexa.bridge.delegation.session.attribute-keys</code></td><td><code>List&lt;String&gt;</code></td><td><code>[delegated, agentId, objectiveId, objectiveFamily, objectiveSummary, allowedOperations, allowedResources, approvalRequired, privilegedExportAllowed, containmentOnly, expiresAt, organizationId, orgId, tenantId, department, team]</code></td><td>Additional attribute keys preserved in the delegation context (16 defaults).</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="bridge-delegation-shared">Delegation RequestAttributes / Headers</h3>
-            <p>Delegation reuses the same shared <code>Bridge.RequestAttributes</code> / <code>Bridge.Headers</code> classes. Key structure and defaults match the <a href="#bridge-authentication-request-attributes">Authentication RequestAttributes Keys</a> and <a href="#bridge-authentication-headers">Authentication HTTP Header Names</a> tables — only the prefix differs:</p>
-            <ul>
-              <li><code>contexa.bridge.delegation.request-attributes.*</code> — 39 fields, same table</li>
-              <li><code>contexa.bridge.delegation.headers.*</code> — 27 fields, same table</li>
-            </ul>
-          </section>
-
-          <!-- Security Kafka Properties -->
-          <section>
-            <h2 id="security-kafka">Security Kafka Properties</h2>
-            <p>Properties under <code>contexa.security.kafka</code>, bound to <code>SecurityKafkaProperties</code>. Configures Kafka topic names for Contexa's security event pipeline.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr>
-                  <th>Property</th>
-                  <th>Type</th>
-                  <th>Default</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.kafka.topic</code> (TopicSettings)</td></tr>
-                <tr><td><code>.authorization</code></td><td><code>String</code></td><td><code>security-authorization-events</code></td><td>Authorization-decision event topic.</td></tr>
-                <tr><td><code>.authentication</code></td><td><code>String</code></td><td><code>auth-events</code></td><td>Authentication event topic.</td></tr>
-                <tr><td><code>.incident</code></td><td><code>String</code></td><td><code>security-incident-events</code></td><td>Security-incident event topic.</td></tr>
-                <tr><td><code>.threat</code></td><td><code>String</code></td><td><code>threat-indicators</code></td><td>Threat-indicators topic.</td></tr>
-                <tr><td><code>.audit</code></td><td><code>String</code></td><td><code>security-audit-events</code></td><td>Audit-event topic.</td></tr>
-                <tr><td><code>.general</code></td><td><code>String</code></td><td><code>security-events</code></td><td>General security-event topic.</td></tr>
-                <tr><td><code>.dlq</code></td><td><code>String</code></td><td><code>security-events-dlq</code></td><td>Dead-letter queue topic for failed event processing.</td></tr>
-                <tr><td><code>.soar-action</code></td><td><code>String</code></td><td><code>soar-action-events</code></td><td>SOAR action event topic.</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.kafka.dlq</code> (DlqSettings)</td></tr>
-                <tr><td><code>.max-retries</code></td><td><code>int</code></td><td><code>3</code></td><td>Maximum DLQ processing retries.</td></tr>
-                <tr><td><code>.retry-delay-ms</code></td><td><code>int</code></td><td><code>5000</code></td><td>Delay between retries in milliseconds.</td></tr>
-                <tr><td><code>.alert-threshold</code></td><td><code>int</code></td><td><code>10</code></td><td>Alerting threshold for the number of DLQ messages.</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">security:
-  kafka:
-    topic:
-      authorization: security-authorization-events
-      authentication: auth-events
-      incident: security-incident-events
-      threat: threat-indicators
-      audit: security-audit-events
-      general: security-events
-      dlq: security-events-dlq
-      soar-action: soar-action-events
-    dlq:
-      max-retries: 3
-      retry-delay-ms: 5000
-      alert-threshold: 10</code></pre>
-            </div>
-
-            <p>Related: <a href="../../../docs/reference/architecture/zero-trust-flow.html">Zero Trust Security Reference</a> | <a href="../../../docs/reference/soar/index.html">SOAR Automation Reference</a></p>
-          </section>
-
-          <!-- OpenTelemetry Properties -->
-          <section>
-            <h2 id="opentelemetry">OpenTelemetry Properties</h2>
-            <p>Properties under <code>contexa.opentelemetry</code>, bound to <code>OpenTelemetryProperties</code>. Configures the OpenTelemetry integration for distributed tracing, metrics export, and observability.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr>
-                  <th>Property</th>
-                  <th>Type</th>
-                  <th>Default</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.opentelemetry</code></td></tr>
-                <tr>
-                  <td><code>.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable OpenTelemetry trace and metric export</td>
-                </tr>
-                <tr>
-                  <td><code>.service-name</code></td>
-                  <td><code>String</code></td>
-                  <td><code>contexa-core</code></td>
-                  <td>Service name in trace spans and metric labels</td>
-                </tr>
-                <tr>
-                  <td><code>.exporter-endpoint</code></td>
-                  <td><code>String</code></td>
-                  <td><code>http://localhost:4317</code></td>
-                  <td>OTLP exporter endpoint (gRPC; 4318 for HTTP)</td>
-                </tr>
-                <tr>
-                  <td><code>.sampling-probability</code></td>
-                  <td><code>double</code></td>
-                  <td><code>1.0</code></td>
-                  <td>Sampling probability (0.0–1.0); lower in production</td>
-                </tr>
-              </tbody>
-            </table></div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  opentelemetry:
-    enabled: true
-    service-name: "my-application"
-    exporter-endpoint: "http://otel-collector.monitoring:4317"
-    sampling-probability: 0.1</code></pre>
-            </div>
-
-            <!-- removed: broken link to docs/reference/core/observability.html (no dedicated observability reference page currently exists; see pipeline/overview references instead) -->
-          </section>
-
-<section>
-            <h2 id="plane">Security Plane Properties</h2>
-            <p>Properties under <code>contexa.security.plane</code>, bound to <code>SecurityPlaneProperties</code>. The class configures the distributed security-plane agent, Kafka topics, Redis relay settings, monitoring batches, deduplication windows, and the LLM executor pool used by asynchronous security analysis.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr>
-                  <th>Property</th>
-                  <th>Type</th>
-                  <th>Default</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.plane.agent</code></td></tr>
-                <tr><td><code>.name</code></td><td><code>String</code></td><td><code>SecurityPlaneAgent-1</code></td><td>Agent instance name</td></tr>
-                <tr><td><code>.auto-start</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Auto-starts the agent on boot</td></tr>
-                <tr><td><code>.organization-id</code></td><td><code>String</code></td><td><code>default-org</code></td><td>Organization identifier for distributed deployments</td></tr>
-                <tr><td><code>.execution-mode</code></td><td><code>String</code></td><td><code>ASYNC</code></td><td>Agent execution mode</td></tr>
-                <tr><td><code>.auto-approve-low-risk</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Automatically approves low-risk decisions when enabled</td></tr>
-                <tr><td><code>.event-timeout-ms</code></td><td><code>long</code></td><td><code>30000</code></td><td>Per-event processing timeout</td></tr>
-                <tr><td><code>.max-deferred-retries</code></td><td><code>int</code></td><td><code>3</code></td><td>Deferred retry limit for agent processing</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.plane.kafka</code></td></tr>
-                <tr><td><code>.bootstrap-servers</code></td><td><code>String</code></td><td><code>localhost:9092</code></td><td>Kafka bootstrap servers</td></tr>
-                <tr><td><code>.group-id</code></td><td><code>String</code></td><td><code>security-plane-consumer</code></td><td>Kafka consumer group id</td></tr>
-                <tr><td><code>.topics.contexa-security-events</code></td><td><code>String</code></td><td><code>contexa-security-events</code></td><td>Security event topic</td></tr>
-                <tr><td><code>.topics.threat-indicators</code></td><td><code>String</code></td><td><code>threat-indicators</code></td><td>Threat indicator topic</td></tr>
-                <tr><td><code>.topics.network-events</code></td><td><code>String</code></td><td><code>network-events</code></td><td>Network event topic</td></tr>
-                <tr><td><code>.topics.auth-events</code></td><td><code>String</code></td><td><code>auth-events</code></td><td>Authentication event topic</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.plane.monitor</code></td></tr>
-                <tr><td><code>.queue-size</code></td><td><code>int</code></td><td><code>10000</code></td><td>Event queue capacity</td></tr>
-                <tr><td><code>.batch-size</code></td><td><code>int</code></td><td><code>8</code></td><td>Monitoring batch size</td></tr>
-                <tr><td><code>.flush-interval-ms</code></td><td><code>long</code></td><td><code>500</code></td><td>Batch flush interval</td></tr>
-                <tr><td><code>.correlation-window-minutes</code></td><td><code>int</code></td><td><code>10</code></td><td>Correlation window size</td></tr>
-                <tr><td><code>.dedup-window-minutes</code></td><td><code>int</code></td><td><code>5</code></td><td>Deduplication time window</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.plane.notifier</code></td></tr>
-                <tr><td><code>.batch-size</code></td><td><code>int</code></td><td><code>10</code></td><td>Notification batch size</td></tr>
-                <tr><td><code>.async-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enable async notification dispatch</td></tr>
-                <tr><td><code>.critical-threshold</code></td><td><code>double</code></td><td><code>0.8</code></td><td>Critical alert threshold</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.plane.redis</code></td></tr>
-                <tr><td><code>.batch-size</code></td><td><code>int</code></td><td><code>50</code></td><td>Redis publish batch size</td></tr>
-                <tr><td><code>.cache.ttl-minutes</code></td><td><code>int</code></td><td><code>60</code></td><td>Redis relay cache TTL</td></tr>
-                <tr><td><code>.channel.contexa-security-events</code></td><td><code>String</code></td><td><code>security:events</code></td><td>Redis security event channel</td></tr>
-                <tr><td><code>.channel.threat-alerts</code></td><td><code>String</code></td><td><code>security:threats</code></td><td>Redis threat alert channel</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.plane.llm-executor</code></td></tr>
-                <tr><td><code>.core-pool-size</code></td><td><code>int</code></td><td><code>2</code></td><td>Core thread pool size for LLM analysis</td></tr>
-                <tr><td><code>.max-pool-size</code></td><td><code>int</code></td><td><code>2</code></td><td>Maximum thread pool size for LLM analysis</td></tr>
-                <tr><td><code>.queue-capacity</code></td><td><code>int</code></td><td><code>50</code></td><td>Queue capacity for pending LLM work</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.plane.deduplication</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Deduplication toggle</td></tr>
-                <tr><td><code>.window-minutes</code></td><td><code>int</code></td><td><code>5</code></td><td>Deduplication window size</td></tr>
-                <tr><td><code>.cache-size</code></td><td><code>int</code></td><td><code>10000</code></td><td>Deduplication cache size</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">security:
-  plane:
-    agent:
-      name: SecurityPlaneAgent-1
-      auto-start: true
-      organization-id: default-org
-      execution-mode: ASYNC
-      auto-approve-low-risk: false
-      event-timeout-ms: 30000
-      max-deferred-retries: 3
-    llm-executor:
-      core-pool-size: 2
-      max-pool-size: 2
-      queue-capacity: 50
-    deduplication:
-      enabled: true
-      window-minutes: 5
-      cache-size: 10000</code></pre>
-            </div>
-
-            <p><strong>Related:</strong> <a href="../../../docs/reference/architecture/zero-trust-flow.html">Zero Trust Flow</a>, <a href="../../../docs/reference/soar/index.html">SOAR Reference</a></p>
-          </section>
-
-<section>
-            <h2 id="router">Router Properties</h2>
-            <p>Properties under <code>contexa.security.router</code>, bound to <code>SecurityRouterProperties</code>. Defines the score thresholds used when routing security events (SOAR automation / block / analysis confidence / pass-through).</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.router.threshold</code></td></tr>
-                <tr><td><code>.soar</code></td><td><code>double</code></td><td><code>0.9</code></td><td>SOAR automated response threshold</td></tr>
-                <tr><td><code>.block</code></td><td><code>double</code></td><td><code>0.8</code></td><td>Block decision threshold</td></tr>
-                <tr><td><code>.analysis-confidence</code></td><td><code>double</code></td><td><code>0.6</code></td><td>Analysis result acceptance confidence</td></tr>
-                <tr><td><code>.pass-through</code></td><td><code>double</code></td><td><code>0.6</code></td><td>Pass-through allowance threshold</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-<section>
-            <h2 id="event">Event Properties</h2>
-            <p>Properties under <code>contexa.security.event</code>, bound to <code>SecurityEventProperties</code>. Configures event publishing gates, the asynchronous executor pool, per-tier latency budgets, and the deduplication cache.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.event.publishing</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enable event publishing</td></tr>
-                <tr><td><code>.exclude-uris</code></td><td><code>String</code></td><td><code>/actuator,/health,/metrics</code></td><td>Comma-separated URI prefixes excluded from publishing</td></tr>
-                <tr><td><code>.anonymous.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enable event publishing for anonymous users</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.event.executor</code></td></tr>
-                <tr><td><code>.core-pool-size</code></td><td><code>int</code></td><td><code>cores × 2</code></td><td>Core thread pool size for event processing</td></tr>
-                <tr><td><code>.max-pool-size</code></td><td><code>int</code></td><td><code>cores × 4</code></td><td>Maximum thread pool size</td></tr>
-                <tr><td><code>.queue-capacity</code></td><td><code>int</code></td><td><code>10000</code></td><td>Pending event queue capacity</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.event.tier</code></td></tr>
-                <tr><td><code>.critical.max-latency-ms</code></td><td><code>int</code></td><td><code>100</code></td><td>Latency budget for critical events (ms)</td></tr>
-                <tr><td><code>.contextual.max-latency-ms</code></td><td><code>int</code></td><td><code>1000</code></td><td>Latency budget for contextual events (ms)</td></tr>
-                <tr><td><code>.general.max-latency-ms</code></td><td><code>int</code></td><td><code>10000</code></td><td>Latency budget for general events (ms)</td></tr>
-                <tr><td><code>.general.sampling-rate</code></td><td><code>double</code></td><td><code>0.1</code></td><td>General event sampling rate</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.event.deduplication</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enable deduplication</td></tr>
-                <tr><td><code>.window-minutes</code></td><td><code>int</code></td><td><code>5</code></td><td>Deduplication window (minutes)</td></tr>
-                <tr><td><code>.cache-size</code></td><td><code>int</code></td><td><code>10000</code></td><td>Deduplication cache size</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-<section>
-            <h2 id="coldpath">Cold-Path Properties</h2>
-            <p>Properties under <code>contexa.security.coldpath</code>, bound to <code>SecurityColdPathProperties</code>. Defines per-layer baseline confidence values for the asynchronous LLM analysis path.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.coldpath.confidence</code></td></tr>
-                <tr><td><code>.layer1-base</code></td><td><code>double</code></td><td><code>0.5</code></td><td>Base confidence for layer-1 analysis</td></tr>
-                <tr><td><code>.layer2-base</code></td><td><code>double</code></td><td><code>0.7</code></td><td>Base confidence for layer-2 analysis</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-<section>
-            <h2 id="pipeline">Pipeline Properties</h2>
-            <p>Properties under <code>contexa.security.pipeline</code>, bound to <code>SecurityPipelineProperties</code>. Configures the Redis · Kafka transport channels of the security event pipeline.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.pipeline.kafka</code></td></tr>
-                <tr><td><code>.topic</code></td><td><code>String</code></td><td><code>contexa-security-events</code></td><td>Kafka topic the pipeline publishes to</td></tr>
-              </tbody>
-            </table></div>
-
-            <p><strong>Note:</strong> <code>contexa.security.pipeline.redis</code> is an empty marker group. Actual Redis behavior is configured under <code>contexa.security.plane.redis</code> and <code>security.zerotrust.redis</code>.</p>
-          </section>
-
-          <!-- Security Redis Properties -->
-          <section>
-            <h2 id="security-redis">Security Redis Properties</h2>
-            <p>Properties under <code>contexa.security.redis</code>, bound to <code>SecurityRedisProperties</code>. Configures Redis pub/sub channel names, Redis stream keys, TTL, and memory thresholds for Contexa's security events.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.redis.channel</code> (ChannelSettings)</td></tr>
-                <tr><td><code>.authorization</code></td><td><code>String</code></td><td><code>security:authorization:events</code></td><td>Authorization-event pub/sub channel.</td></tr>
-                <tr><td><code>.authentication</code></td><td><code>String</code></td><td><code>security:events</code></td><td>Authentication-event pub/sub channel.</td></tr>
-                <tr><td><code>.incident</code></td><td><code>String</code></td><td><code>security:incidents</code></td><td>Incident pub/sub channel.</td></tr>
-                <tr><td><code>.threat</code></td><td><code>String</code></td><td><code>security:threats</code></td><td>Threat pub/sub channel.</td></tr>
-                <tr><td><code>.audit</code></td><td><code>String</code></td><td><code>security:audit:events</code></td><td>Audit pub/sub channel.</td></tr>
-                <tr><td><code>.general</code></td><td><code>String</code></td><td><code>security:events</code></td><td>General pub/sub channel.</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.redis.stream</code> (StreamSettings)</td></tr>
-                <tr><td><code>.authorization</code></td><td><code>String</code></td><td><code>security:stream:authorization</code></td><td>Authorization Redis stream key.</td></tr>
-                <tr><td><code>.incident</code></td><td><code>String</code></td><td><code>security:stream:incident</code></td><td>Incident Redis stream key.</td></tr>
-                <tr><td><code>.threat</code></td><td><code>String</code></td><td><code>security:stream:threat</code></td><td>Threat Redis stream key.</td></tr>
-                <tr><td><code>.audit</code></td><td><code>String</code></td><td><code>security:stream:audit</code></td><td>Audit Redis stream key.</td></tr>
-                <tr><td><code>.general</code></td><td><code>String</code></td><td><code>security:stream:general</code></td><td>General Redis stream key.</td></tr>
-                <tr><td><code>.authentication</code></td><td><code>String</code></td><td><code>security:stream:authentication</code></td><td>Authentication Redis stream key.</td></tr>
-                <tr><td><code>.maxlen</code></td><td><code>int</code></td><td><code>10000</code></td><td>Maximum entries per Redis stream (XADD MAXLEN).</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.redis.ttl</code> (TtlSettings)</td></tr>
-                <tr><td><code>.minutes</code></td><td><code>int</code></td><td><code>60</code></td><td>Default Redis TTL for event data (minutes).</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.redis.memory</code> (MemorySettings)</td></tr>
-                <tr><td><code>.max-mb</code></td><td><code>int</code></td><td><code>1024</code></td><td>Memory cap (MB) Contexa security events may consume in Redis.</td></tr>
-                <tr><td><code>.warning-threshold</code></td><td><code>double</code></td><td><code>0.8</code></td><td>Warning threshold for memory usage (0.0-1.0).</td></tr>
-                <tr><td><code>.critical-threshold</code></td><td><code>double</code></td><td><code>0.9</code></td><td>Critical threshold for memory usage (0.0-1.0).</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- Scheduler Lock Properties -->
-          <section>
-            <h2 id="scheduler-lock">Scheduler Lock Properties</h2>
-            <p>Properties under <code>contexa.scheduler.lock</code>, bound to <code>ContexaSchedulerLockProperties</code> (record). Controls the ShedLock auto-configuration that ensures single execution of <code>@Scheduled</code> + <code>@SchedulerLock</code> methods across multiple JVMs. Single-instance deployments may keep the defaults — locks always succeed and the overhead is negligible.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.scheduler.lock</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether the ShedLock auto-configuration registers a <code>LockProvider</code> bean. Setting this to <code>false</code> disables every <code>@SchedulerLock</code>; each <code>@Scheduled</code> method then reverts to single-JVM-only exclusivity.</td></tr>
-                <tr><td><code>.default-lock-at-most-for</code></td><td><code>Duration</code></td><td><code>5m</code></td><td>Fallback upper bound applied when a specific scheduler omits <code>lockAtMostFor</code>. Prevents stuck locks from surviving indefinitely after a JVM crash.</td></tr>
-                <tr><td><code>.use-database-time</code></td><td><code>boolean</code></td><td><code>true</code></td><td>When <code>true</code>, the <code>JdbcTemplateLockProvider</code> uses <code>now()</code> from the database engine so every instance sees the same clock. When <code>false</code>, it falls back to the JVM clock (useful for local H2 tests with a misaligned timezone).</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- DataSource Properties -->
-          <section>
-            <h2 id="datasource">DataSource Properties</h2>
-            <p>Properties under <code>contexa.datasource</code>, bound to <code>ContexaDataSourceProperties</code>. Defines the database connection Contexa uses for its own metadata (policies, users, audit log, etc.). Can be isolated from the host application's <code>spring.datasource</code>.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.datasource</code></td></tr>
-                <tr><td><code>.url</code></td><td><code>String</code></td><td><code>null</code></td><td>JDBC URL. When empty, the host application's <code>spring.datasource.url</code> may be reused depending on the isolation policy.</td></tr>
-                <tr><td><code>.username</code></td><td><code>String</code></td><td><code>null</code></td><td>Database username.</td></tr>
-                <tr><td><code>.password</code></td><td><code>String</code></td><td><code>null</code></td><td>Database password.</td></tr>
-                <tr><td><code>.driver-class-name</code></td><td><code>String</code></td><td><code>null</code></td><td>JDBC driver class name. When empty, derived from the URL automatically.</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.datasource.isolation</code> (Isolation)</td></tr>
-                <tr><td><code>.allow-shared-application-datasource</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Allows reusing the host application's datasource. Default is isolation (separate connection pool).</td></tr>
-                <tr><td><code>.shared-application-datasource-risk-accepted</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Operator's explicit acknowledgment of the risk of using a shared datasource.</td></tr>
-                <tr><td><code>.contexa-owned-application</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Indicates that the application itself is operated by Contexa (bypasses isolation validation).</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- Full Configuration Example -->
-          <section>
-            <h2 id="full-example">Full Configuration Example</h2>
-            <p>A production-ready <code>application.yml</code> combining all infrastructure properties for a distributed deployment with Redis, Kafka, and an external OpenTelemetry collector.</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml"># Infrastructure configuration for Contexa distributed deployment
-contexa:
-  enabled: true
+          <h2 id="distributed">Moving to distributed mode</h2>
+          <p>The Contexa starter does not bring Redis · Redisson · Kafka, so the application adds them.</p>
+          <pre><code class="language-groovy">dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'   // Lettuce
+    implementation 'org.redisson:redisson:3.48.0'                              // the version Contexa is built with
+    implementation 'org.springframework.kafka:spring-kafka'
+}</code></pre>
+          <pre><code class="language-yaml">contexa:
   infrastructure:
-    mode: DISTRIBUTED
-    redis:
-      enabled: true
-    kafka:
-      enabled: true
-    observability:
-      enabled: true
-      open-telemetry-enabled: true
-
-  # Multi-tier caching
-  cache:
-    type: HYBRID
-    local:
-      max-size: 5000
-      default-ttl-seconds: 120
-    redis:
-      default-ttl-seconds: 600
-      key-prefix: "contexa:cache:"
-    pubsub:
-      enabled: true
-      channel: "contexa:cache:invalidation"
-    domains:
-      users:
-        local-ttl-seconds: 1800
-        redis-ttl-seconds: 3600
-      roles:
-        local-ttl-seconds: 7200
-        redis-ttl-seconds: 14400
-      permissions:
-        local-ttl-seconds: 14400
-        redis-ttl-seconds: 28800
-      groups:
-        local-ttl-seconds: 7200
-        redis-ttl-seconds: 14400
-      policies:
-        local-ttl-seconds: 15
-        redis-ttl-seconds: 120
-      soar:
-        local-ttl-seconds: 900
-        redis-ttl-seconds: 900
-      hcad:
-        local-ttl-seconds: 86400
-        redis-ttl-seconds: 86400
-
-  # OpenTelemetry
-  opentelemetry:
-    enabled: true
-    service-name: "contexa-production"
-    exporter-endpoint: "http://otel-collector.monitoring:4317"
-    sampling-probability: 0.1
-
-  # Security Infrastructure
+    mode: distributed
+  datasource:
+    url: jdbc:postgresql://db.internal:5432/contexa
+    username: contexa
+    password: ${CONTEXA_DB_PASSWORD}
   security:
-    kafka:
-      topic:
-        dlq: "security-events-dlq"
-    redis:
-      ttl:
-        minutes: 60
-      memory:
-        max-mb: 1024
-    plane:
-      agent:
-        organization-id: "default-org"
-        execution-mode: "ASYNC"
-      llm-executor:
-        core-pool-size: 2
-        max-pool-size: 2
-      deduplication:
-        enabled: true
-        window-minutes: 5
-        cache-size: 10000</code></pre>
-            </div>
-          </section>
+    zerotrust:
+      redis:
+        timeout: 5000          # milliseconds
 
+spring:
+  data:
+    redis:
+      host: redis.internal
+      port: 6379
+  kafka:
+    bootstrap-servers: kafka.internal:9092</code></pre>
+          <ul>
+            <li><strong>Contexa creates the Redis connection.</strong> In distributed mode Contexa builds a single-server Redis connection itself from <code>spring.data.redis.host</code> · <code>port</code> · <code>password</code>, and this connection becomes the application's default Redis connection. It uses <code>contexa.security.zerotrust.redis.timeout</code>, in <strong>milliseconds</strong>, as the connect · command · pool-wait time limit.</li>
+            <li><strong>Redisson.</strong> If the application declares no <code>RedissonClient</code> bean, Contexa builds a single-server client from <code>spring.data.redis.host</code> · <code>port</code>. That client uses no password and no database number (database 0). For a Redis with a password, declare your own <code>RedissonClient</code> bean.</li>
+            <li><strong>The Kafka connection</strong> uses Spring's <code>spring.kafka.*</code>. Events to analyze go to the topic <code>security.events.&lt;category&gt;.&lt;type&gt;</code> (for example <code>security.events.authorization.method</code>), and events that could not be handled go to the DLQ topic. A failed event is retried 3 times, 1 second apart.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.infrastructure.mode</code></td><td><code>STANDALONE</code></td><td><code>standalone</code> or <code>distributed</code> (case does not matter)</td><td>To run several machines</td></tr>
+              <tr><td><code>contexa.security.zerotrust.redis.timeout</code></td><td><code>5000</code></td><td>Connect · command · pool-wait time limit of the Redis connection in distributed mode (<strong>milliseconds</strong>). Writing <code>5</code> means 5 milliseconds</td><td>When Redis is far or slow</td></tr>
+              <tr><td><code>contexa.security.kafka.topic.dlq</code></td><td><code>security-events-dlq</code></td><td>Topic for events that could not be handled</td><td>When you have topic naming rules</td></tr>
+              <tr><td><code>security.plane.kafka.group-id</code></td><td><code>security-plane-consumer</code></td><td>Group of the Kafka listener that receives events. The name does not start with <code>contexa</code></td><td>When the same Kafka is shared with another Contexa group</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-info">
+            <strong>Writing <code>security.plane.kafka.group-id</code> leaves one ERROR line in the start-up log.</strong> It is the log Contexa writes when it treats <code>security.plane.</code> as a legacy prefix and creates an alias. The value is used for the listener group as written. <code>contexa.security.plane.kafka.group-id</code> is read by nothing and has no effect.
+          </div>
+          <p>Decision engine throughput, such as the analysis queue · thread counts · time limits, is in <a href="security.html#throughput">Enforcement Modes and Decision Tuning</a>.</p>
+
+          <h2 id="cache">Cache</h2>
+          <p>The Contexa cache is used when policy decisions look up user information (the <code>users</code> domain) and policies (the <code>policies</code> domain). Standalone mode always uses a local cache inside this JVM; the Redis and invalidation settings below matter only in distributed mode.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.cache.type</code></td><td><code>REDIS</code></td><td><code>LOCAL</code> · <code>REDIS</code> · <code>HYBRID</code>. In standalone mode it is <code>LOCAL</code> whatever you write. In distributed mode <code>HYBRID</code> tells other nodes when an entry is removed</td><td><code>HYBRID</code> so that every node sees a changed policy at once in distributed mode</td></tr>
+              <tr><td><code>contexa.cache.local.max-size</code></td><td><code>1000</code></td><td>Maximum entries of the local cache</td><td>When there are many users · policies</td></tr>
+              <tr><td><code>contexa.cache.local.default-ttl-seconds</code></td><td><code>60</code></td><td>Local lifetime (seconds) of an entry with no domain</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.cache.redis.default-ttl-seconds</code></td><td><code>60</code></td><td>Redis lifetime (seconds) of an entry with no domain</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.cache.redis.key-prefix</code></td><td><code>contexa:cache:</code></td><td>Prefix of Redis keys</td><td>When the same Redis is shared with another application</td></tr>
+              <tr><td><code>contexa.cache.pubsub.enabled</code></td><td><code>true</code></td><td>Send invalidation notices with <code>HYBRID</code></td><td>To turn the notices off</td></tr>
+              <tr><td><code>contexa.cache.pubsub.channel</code></td><td><code>contexa:cache:invalidation</code></td><td>Invalidation notice channel</td><td>When you have channel naming rules</td></tr>
+              <tr><td><code>contexa.cache.domains.users.local-ttl-seconds</code></td><td><code>3600</code></td><td>Local lifetime (seconds) of user information. The Redis side is <code>redis-ttl-seconds</code> (same default)</td><td>Lower it to see authority changes sooner</td></tr>
+              <tr><td><code>contexa.cache.domains.policies.local-ttl-seconds</code></td><td><code>30</code></td><td>Local lifetime (seconds) of policies. The Redis side <code>redis-ttl-seconds</code> is also 30, so both modes see a changed policy after the same time</td><td>You may raise it if policies rarely change</td></tr>
+            </tbody>
+          </table></div>
+          <p>Values for <code>contexa.cache.domains.roles</code> · <code>permissions</code> · <code>groups</code> · <code>soar</code> exist too, but no OSS code calls the Contexa cache with those domains today (Spring caches such as <code>@Cacheable("roles")</code> are separate).</p>
+
+          <h2 id="scheduler-lock">Scheduled jobs across instances</h2>
+          <p>So that scheduled jobs, such as deleting records past their retention, run only once across instances, Contexa locks them with the <code>shedlock</code> table in the Contexa database (ShedLock). It does no harm with one instance. Contexa brings ShedLock itself; locking turns on when the Contexa database is present.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.scheduler.lock.enabled</code></td><td><code>true</code></td><td>Turn scheduled-job locking on. The longest a lock is held is fixed at 5 minutes</td><td>To turn it off briefly during a database migration</td></tr>
+              <tr><td><code>contexa.scheduler.lock.use-database-time</code></td><td><code>true</code></td><td>Use the database clock for lock times (<code>false</code> uses the JVM clock)</td><td>Test environments where the database and JVM time zones differ</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="opentelemetry">Tracing (OpenTelemetry)</h2>
+          <p>Contexa creates an OpenTelemetry SDK that exports traces (spans) over OTLP gRPC and registers it globally. There is no metrics export. <strong>It is on by default</strong>, so it tries to send to <code>localhost:4317</code> even when there is no collector. Turn it off if you run no collector.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.opentelemetry.enabled</code></td><td><code>true</code></td><td><code>false</code> gives an empty SDK that exports nothing</td><td>When there is no collector</td></tr>
+              <tr><td><code>contexa.opentelemetry.service-name</code></td><td><code>contexa-core</code></td><td>Service name attached to traces</td><td>To tell applications apart</td></tr>
+              <tr><td><code>contexa.opentelemetry.exporter-endpoint</code></td><td><code>http://localhost:4317</code></td><td>OTLP <strong>gRPC</strong> collector address (HTTP on 4318 does not fit)</td><td>Collector address</td></tr>
+              <tr><td><code>contexa.opentelemetry.sampling-probability</code></td><td><code>1.0</code></td><td>Share of traces kept (0–1)</td><td>To reduce it under heavy traffic</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="check">Checking that it is connected</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Start-up log · screen</th><th>Meaning and what to do</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.datasource.url must be configured for @EnableAISecurity</code></td><td>The dedicated database URL is missing. Set the <a href="#database">dedicated database</a>.</td></tr>
+              <tr><td><code>contexa.datasource must not share …</code></td><td>The URL equals the application database. See <a href="#database-shared">the conditions for sharing</a>.</td></tr>
+              <tr><td><code>[ContexaCapability] …</code> (ERROR)</td><td>A part a decision needs is missing. Add the part the log names (chat model · vector store and so on).</td></tr>
+              <tr><td><code>[Contexa] contexa.infrastructure.mode is standalone …</code> (WARN)</td><td>A notice that learning state is in memory in standalone mode. Fine to leave as it is during development.</td></tr>
+              <tr><td><code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared …</code> (ERROR)</td><td>The application owns login but declares no <code>SecurityFilterChain</code>, so Spring Boot's default security is on (<a href="../spring-boot.html">Adding Contexa to a Spring Boot Application</a>).</td></tr>
+              <tr><td><code>Contexa legacy property prefix '…*' detected</code> (ERROR)</td><td>A setting with a legacy prefix exists (<a href="../configuration.html#legacy-prefixes">Legacy prefixes</a>).</td></tr>
+              <tr><td><code>GET /actuator/contexacapabilities</code></td><td>Capability check results (with Actuator).</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="elsewhere">Settings on other pages</h2>
+          <ul>
+            <li>How Contexa reads the application's login, authority and delegation facts when the application owns login: <a href="../../reference/common/bridge.html#settings">Connecting Your Existing Login</a></li>
+            <li>Agent registration · agent tokens: <a href="../../reference/agent/overview.html#settings">Agents as Security Subjects</a></li>
+            <li>Delegation records · objective contracts: <a href="../../reference/agent/delegation.html#settings">Delegation and Objective Contracts</a></li>
+            <li>Call limits · confirmation by the accountable person · scope narrowing: <a href="../../reference/agent/controls.html#settings">Stop, Confirm, Limit</a></li>
+            <li>Enforcement mode and decision engine throughput: <a href="security.html">Enforcement Modes and Decision Tuning</a></li>
+            <li>Settings that have no effect (<code>contexa.infrastructure.redis.enabled</code> and others): <a href="../configuration.html#unused-keys">Configuration Guide</a></li>
+          </ul>
           <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/install/configuration.html" class="docs-nav-link prev">
+            <a href="../configuration.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Configuration Overview</span>
+              <span class="docs-nav-title">Configuration Guide</span>
             </a>
-            <a href="../../../docs/install/configuration/security.html" class="docs-nav-link next">
+            <a href="ai.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Security Configuration</span>
+              <span class="docs-nav-title">Connecting AI Models</span>
             </a>
           </div>

@@ -5,518 +5,229 @@
             <span class="breadcrumb-separator">/</span>
             <span class="breadcrumb-current">Resource Scanner</span>
           </nav>
+
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-warning">contexa-iam</span>
+              <span class="badge badge-secondary">Authorization</span>
             </div>
             <h1>Resource Scanner</h1>
-            <p class="lead">Automatic resource discovery that scans <code>@Protectable</code> methods and MVC endpoints at application startup, registering them as <code>ManagedResource</code> entities for policy assignment.</p>
+            <p class="lead">This page shows how the application's controller URLs and <code>@Protectable</code> methods are collected into the admin console's list of protectable resources, and how permissions and policies are attached to them. A scan runs only when an administrator presses "Load Resources", and it looks only inside the packages set in the system settings.</p>
           </div>
 
-          <!-- Overview -->
-          <section>
-            <h2 id="overview">Overview</h2>
-            <p>Contexa provides two complementary resource scanners that detect different types of protectable resources in the application:</p>
-            <ul>
-              <li><strong>MethodResourceScanner</strong> &mdash;Discovers non-controller methods annotated with <code>@Protectable</code></li>
-              <li><strong>MvcResourceScanner</strong> &mdash;Discovers Spring MVC controller endpoints via <code>RequestMappingHandlerMapping</code></li>
-            </ul>
-            <p>Both scanners implement the <code>ResourceScanner</code> interface and produce <code>ManagedResource</code> entities with an initial status of <code>NEEDS_DEFINITION</code>.</p>
+          <div class="callout callout-warning">
+            <strong>Set the scan packages to your application's packages first.</strong> The default scan package is <code>io.contexa.contexaiam.</code> (Contexa's own admin screens). Left as it is, none of your controllers or <code>@Protectable</code> methods are registered. Enter your package (for example <code>com.example.shop</code>) in the admin console under "IAM → System Settings → Resource Scan Settings → Controller base packages". There is no automatic scan at application startup.
+          </div>
 
-            <h3>End-to-End Pipeline</h3>
-            <p>Resource scanning is the first stage of a four-step resource management pipeline: <strong>Scan &mdash;Define &mdash;Policy &mdash;Dynamic Authorization</strong>. At application startup, <code>ResourceScanner</code> implementations discover all <code>@RequestMapping</code> endpoints and <code>@Protectable</code> methods, storing them as <code>ManagedResource</code> entities in the database. The AI engine then generates human-readable friendly names for discovered resources in batch.</p>
-            <p>The scanners synchronize discovered resources into <code>ManagedResourceRepository</code>. In the current OSS operator flow, review, permission definition, and policy creation are centered in the integrated Policy Center resources/create experience. The legacy <code>/admin/workbench/resources</code> controller path still exists in server code and continues to expose the underlying define, exclude, restore, and management endpoints.</p>
-
-            <div class="diagram-container">
-              <div class="diagram-title">Resource Scanning Pipeline</div>
-              <div class="diagram-flow-vertical">
-                <div class="diagram-box diagram-highlight">
-                  <span class="diagram-box-name">Application Start</span>
-                  <span class="diagram-box-desc">WorkbenchInitializer triggers resource scanning</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-grid diagram-grid-2">
-                  <div class="diagram-box diagram-accent">
-                    <span class="diagram-box-name">MethodResourceScanner.scan()</span>
-                    <span class="diagram-box-desc">Scan beans in io.contexa.contexaiam -- Skip @Controller / @RestController -- Find public methods with @Protectable -- Register as ManagedResource (METHOD)</span>
-                  </div>
-                  <div class="diagram-box diagram-accent">
-                    <span class="diagram-box-name">MvcResourceScanner.scan()</span>
-                    <span class="diagram-box-desc">Get RequestMappingHandlerMapping -- Iterate handler methods -- Extract URL patterns and HTTP methods -- Register as ManagedResource (URL)</span>
-                  </div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-box">
-                  <span class="diagram-box-name">ManagedResource Entities</span>
-                  <span class="diagram-box-desc">status: NEEDS_DEFINITION</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-box">
-                  <span class="diagram-box-name">Admin Assigns Permission</span>
-                  <span class="diagram-box-desc">status: PERMISSION_CREATED</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-box diagram-success">
-                  <span class="diagram-box-name">Policy Connected</span>
-                  <span class="diagram-box-desc">status: POLICY_CONNECTED</span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- ResourceScanner Interface -->
-          <section>
-            <h2 id="interface">ResourceScanner Interface</h2>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public interface ResourceScanner {
-    List&lt;ManagedResource&gt; scan();
-}</code></pre>
-            </div>
-          </section>
-
-          <!-- MethodResourceScanner -->
-          <section>
-            <h2 id="method-scanner">MethodResourceScanner</h2>
-            <p>Scans all Spring beans in the <code>io.contexa.contexaiam</code> package for public methods annotated with <code>@Protectable</code>. Controller classes are explicitly excluded since they are handled by <code>MvcResourceScanner</code>.</p>
-
-            <h3>Scan Logic</h3>
-            <ol>
-              <li>Iterate all bean definitions in the <code>ApplicationContext</code></li>
-              <li>Resolve the target class (unwrapping AOP proxies via <code>AopUtils.getTargetClass()</code>)</li>
-              <li>Skip classes outside the <code>io.contexa.contexaiam</code> package</li>
-              <li>Skip classes annotated with <code>@Controller</code> or <code>@RestController</code></li>
-              <li>For each public method with <code>@Protectable</code>, create a <code>ManagedResource</code></li>
+          <h2 id="overview">At a glance</h2>
+          <p>A resource is one place that can be protected: a URL resource is one controller path, a method resource is one service method with <code>@Protectable</code>. Once a resource has a permission and a policy, that policy decides its requests.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>From code to enforcement</strong>Each resource shows its state in the Policy Center list.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node dg-host"><span class="dg-node-title">Write the code</span><span class="dg-node-desc">Controller methods, <code>@Protectable</code> service methods</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title">Set the scan packages</span><span class="dg-node-desc">"Controller base packages" in the system settings</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Load Resources</span><span class="dg-node-desc">New resources are registered and named by AI. State "Unset"</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">Create the permission</span><span class="dg-node-desc">An automatic permission per resource. State "Awaiting Policy"</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">Connect a policy</span><span class="dg-node-desc">Create a policy with Quick Mode or AI Mode. State "Protected"</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">6</span><div class="dg-node dg-request"><span class="dg-node-title">Requests are enforced</span><span class="dg-node-desc">The policies reload on save and decide the requests</span></div></li>
             </ol>
+          </figure>
 
-            <h3>Resource Identifier Format</h3>
-            <p>Method resources use a fully qualified method signature as the identifier:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Text</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code>io.contexa.contexaiam.service.AccountService.updateAccount(Long,AccountDto)</code></pre>
-            </div>
+          <h2 id="packages">Choosing the packages to scan</h2>
+          <p>Both scanners (URL and method) use the same package list. Enter it in the admin console under "IAM → System Settings (<code>/contexa/admin/system-settings</code>) → Resource Scan Settings → Controller base packages".</p>
+          <pre><code class="language-text">com.example.shop
+com.example.billing</code></pre>
+          <ul>
+            <li>One package per line, or separated with commas. The trailing dot (<code>.</code>) is added automatically.</li>
+            <li>The package itself and every package below it are scanned; <code>com.example.shop</code> includes <code>com.example.shop.api</code>.</li>
+            <li>The value is stored in the <code>system_settings</code> table of the Contexa database. The default seed puts <code>io.contexa.contexaiam.</code> there, and an empty value falls back to it. Keep that value in the list if you also want Contexa's admin controllers listed.</li>
+            <li>A changed value is used from the next "Load Resources".</li>
+          </ul>
 
-            <h3>ManagedResource Fields (METHOD type)</h3>
-            <table>
-              <thead>
-                <tr><th>Field</th><th>Value Source</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>resourceIdentifier</code></td><td>Fully qualified method signature with parameter types</td></tr>
-                <tr><td><code>resourceType</code></td><td><code>METHOD</code></td></tr>
-                <tr><td><code>serviceOwner</code></td><td>Simple class name of the declaring class</td></tr>
-                <tr><td><code>parameterTypes</code></td><td>JSON array of fully qualified parameter type names</td></tr>
-                <tr><td><code>returnType</code></td><td>Fully qualified return type name</td></tr>
-                <tr><td><code>sourceCodeLocation</code></td><td>Derived from class name: <code>io/contexa/.../ClassName.java</code></td></tr>
-                <tr><td><code>status</code></td><td><code>NEEDS_DEFINITION</code></td></tr>
-              </tbody>
-            </table>
-          </section>
+          <h2 id="scan">Running a scan</h2>
+          <p>Press "Load Resources" in the "Policy Creation" tab of Policy Center (<code>/contexa/admin/policy-center</code>), which calls <code>POST /contexa/admin/policy-center/refresh-resources</code>. Press it again after deploying or adding endpoints. The old path <code>POST /contexa/admin/workbench/resources/refresh</code> also scans, but in step 6 it only moves "Protected → Awaiting Policy", and it skips step 7.</p>
+          <ol>
+            <li>Every scanner collects resources.</li>
+            <li>When an identifier appears more than once, only the first one is used.</li>
+            <li>Only resources not yet in the list are registered. AI names and describes them 100 at a time, and they are saved as "Unset" (<code>NEEDS_DEFINITION</code>) (<a href="#naming">Naming</a>). Names and descriptions of existing resources are not changed.</li>
+            <li>Resources that disappeared from the code are not deleted; the error log shows how many and one example.</li>
+            <li>With <code>contexa.iam.admin.condition-templates.enabled: true</code>, condition templates are generated by AI (<a href="policy.html#condition-templates">Condition templates</a>).</li>
+            <li>Resource states are aligned with the policies: a "Protected" resource with no policy targeting it becomes "Awaiting Policy", and an "Awaiting Policy" resource that a policy targets becomes "Protected".</li>
+            <li>Policies with an empty readable description get one.</li>
+          </ol>
 
-          <!-- MvcResourceScanner -->
-          <section>
-            <h2 id="mvc-scanner">MvcResourceScanner</h2>
-            <p>Scans Spring MVC <code>@Controller</code> and <code>@RestController</code> classes for URL-mapped endpoints using <code>RequestMappingHandlerMapping</code>.</p>
+          <h2 id="url-resources">URL resources</h2>
+          <p>Every handler method registered in Spring MVC's <code>RequestMappingHandlerMapping</code> (bean name <code>requestMappingHandlerMapping</code>) is looked at. All mapping annotations count, such as <code>@GetMapping</code> and <code>@PostMapping</code>.</p>
+          <ul>
+            <li>The handler class must be inside a scan package and carry <code>@Controller</code> or <code>@RestController</code>. No security annotation is needed.</li>
+            <li>With several paths in one mapping only the first is used; with several HTTP methods only the first. No method means <code>ANY</code>.</li>
+            <li><strong>The identifier is the URL pattern only.</strong> So <code>GET</code> and <code>POST</code> on the same path become one resource that keeps the HTTP method found first. A policy created from that resource targets that one method, so the other methods on the path do not match it. To cover them, add a target with HTTP method <code>ANY</code> through "Configure Resource Permissions", or add targets in Manual Mode.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Field</th><th>Value</th><th>Example (<code>InvoiceController.listInvoices</code>)</th></tr></thead>
+            <tbody>
+              <tr><td><code>resourceIdentifier</code></td><td>URL pattern</td><td><code>/api/v1/invoices</code></td></tr>
+              <tr><td><code>resourceType</code></td><td><code>URL</code></td><td><code>URL</code></td></tr>
+              <tr><td><code>httpMethod</code></td><td><code>GET</code> · <code>POST</code> · <code>PUT</code> · <code>DELETE</code> · <code>PATCH</code> · <code>ANY</code></td><td><code>GET</code></td></tr>
+              <tr><td><code>friendlyName</code></td><td>Handler method name (replaced by the AI name)</td><td><code>listInvoices</code></td></tr>
+              <tr><td><code>description</code></td><td><code>URL: [METHOD] path</code> (replaced by the AI description)</td><td><code>URL: [GET] /api/v1/invoices</code></td></tr>
+              <tr><td><code>serviceOwner</code></td><td>Simple name of the controller class</td><td>InvoiceController</td></tr>
+              <tr><td><code>apiDocsUrl</code></td><td><code>{rest-docs-path}#{controller name without "controller", lower case}_{method name, lower case}</code></td><td><code>/docs/index.html#invoice_listinvoices</code></td></tr>
+              <tr><td><code>status</code></td><td><code>NEEDS_DEFINITION</code></td><td><code>NEEDS_DEFINITION</code></td></tr>
+            </tbody>
+          </table></div>
 
-            <h3>Scan Logic</h3>
-            <ol>
-              <li>Retrieve the <code>requestMappingHandlerMapping</code> bean</li>
-              <li>Iterate all registered handler methods</li>
-              <li>Skip classes outside the <code>io.contexa.contexaiam</code> package</li>
-              <li>Skip classes not annotated with <code>@Controller</code> or <code>@RestController</code></li>
-              <li>Extract URL patterns from <code>PathPatternsRequestCondition</code></li>
-              <li>Extract HTTP method (defaulting to <code>ANY</code>)</li>
-              <li>Generate API docs URL using <code>IamAdminProperties.restDocsPath</code></li>
-            </ol>
+          <h2 id="method-resources">Method resources</h2>
+          <p>Each bean in the application context is taken out and its real class (behind any proxy, <code>AopUtils.getTargetClass()</code>) is looked at.</p>
+          <ul>
+            <li>The class must be inside a scan package; <code>@Controller</code> and <code>@RestController</code> classes are skipped (controllers are URL resources).</li>
+            <li>Each <code>public</code> method declared in that class with <code>@Protectable</code> becomes one resource. The scanner does not look at <code>@Protectable</code> placed only on the class, so those methods are intercepted when called but are not listed.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Field</th><th>Value</th><th>Example (<code>DocumentService.getDocument(Long)</code>)</th></tr></thead>
+            <tbody>
+              <tr><td><code>resourceIdentifier</code></td><td><code>fully.qualified.Class.method(SimpleParameterTypes)</code></td><td><code>com.example.docs.DocumentService.getDocument(Long)</code></td></tr>
+              <tr><td><code>resourceType</code></td><td><code>METHOD</code></td><td><code>METHOD</code></td></tr>
+              <tr><td><code>serviceOwner</code></td><td>Simple name of the class</td><td>DocumentService</td></tr>
+              <tr><td><code>parameterTypes</code></td><td>JSON array of full parameter type names (<code>[]</code> when none)</td><td><code>["java.lang.Long"]</code></td></tr>
+              <tr><td><code>returnType</code></td><td>Full return type name</td><td><code>com.example.docs.Document</code></td></tr>
+              <tr><td><code>sourceCodeLocation</code></td><td>Class path</td><td><code>com/example/docs/DocumentService.java</code></td></tr>
+              <tr><td><code>status</code></td><td><code>NEEDS_DEFINITION</code></td><td><code>NEEDS_DEFINITION</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>Method policies find their method by an identifier of the same shape, so a policy created from the resource applies to that method as it is (<a href="policy.html#structure">What a policy is made of</a>).</p>
 
-            <h3>ManagedResource Fields (URL type)</h3>
-            <table>
-              <thead>
-                <tr><th>Field</th><th>Value Source</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>resourceIdentifier</code></td><td>URL pattern string (e.g., <code>/admin/users/{id}</code>)</td></tr>
-                <tr><td><code>resourceType</code></td><td><code>URL</code></td></tr>
-                <tr><td><code>httpMethod</code></td><td><code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>DELETE</code>, <code>PATCH</code>, or <code>ANY</code></td></tr>
-                <tr><td><code>friendlyName</code></td><td>Handler method name</td></tr>
-                <tr><td><code>description</code></td><td><code>URL: [HTTP_METHOD] /path/pattern</code></td></tr>
-                <tr><td><code>serviceOwner</code></td><td>Simple class name of the controller</td></tr>
-                <tr><td><code>apiDocsUrl</code></td><td><code>{restDocsPath}#{controller}_{method}</code></td></tr>
-                <tr><td><code>status</code></td><td><code>NEEDS_DEFINITION</code></td></tr>
-              </tbody>
-            </table>
-          </section>
+          <h2 id="naming">Naming</h2>
+          <p>An identifier alone rarely says what a feature does, so AI gives each newly registered resource a readable name and description. For example:</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Identifier</th><th>Name given by AI (example)</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET /api/users</code></td><td>List All Users</td></tr>
+              <tr><td><code>PUT /api/users/{id}</code></td><td>Update User Profile</td></tr>
+              <tr><td><code>DELETE /admin/roles/{id}</code></td><td>Delete Role</td></tr>
+              <tr><td><code>AccountService.updateAccount(Long,AccountDto)</code></td><td>Update Account Details</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>Only new resources are named, 100 per request. The identifier, service owner, type, HTTP method, the scanner's name and description, parameters, return type, API docs link and source location are sent along.</li>
+            <li>The request is handled by the AI engine's <code>ResourceNamingLab</code> (template and diagnosis type name <code>"ResourceNaming"</code>); there is no separate naming service.</li>
+            <li>Resources the AI does not answer for are not asked again; they are saved with fallback values. A name or description the scanner set is kept (the handler method name for URL resources); an empty name becomes the end of the identifier followed by <code>Feature</code>, and an empty description becomes <code>AI suggestion unavailable</code>.</li>
+            <li>An AI model connection is needed. Without a model, or when it fails, the scan still finishes with fallback values.</li>
+          </ul>
 
-          <!-- ManagedResource Entity -->
-          <section>
-            <h2 id="managed-resource">ManagedResource Entity</h2>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Entity
-@Table(name = "MANAGED_RESOURCE")
-public class ManagedResource {
-    private Long id;
-    private String resourceIdentifier;    // URL pattern or method signature
-    private ResourceType resourceType;    // URL or METHOD
-    private HttpMethod httpMethod;        // GET, POST, PUT, DELETE, PATCH, ANY
-    private String friendlyName;
-    private String description;
-    private String serviceOwner;
-    private String parameterTypes;        // JSON array (METHOD only)
-    private String returnType;            // Fully qualified type (METHOD only)
-    private String apiDocsUrl;            // Link to API documentation
-    private String sourceCodeLocation;    // Source file path (METHOD only)
-    private String availableContextVariables;
-    private Status status;                // NEEDS_DEFINITION, PERMISSION_CREATED,
-                                          // POLICY_CONNECTED, EXCLUDED
-    private Permission permission;        // OneToOne mapping
-    private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
+          <h2 id="review">Browsing and filtering</h2>
+          <p>The resource list in the "Policy Creation" tab filters by service owner, status, and keyword (identifier, name, description). There is no filter by resource type (URL or METHOD). Without a status filter, "Excluded" resources are hidden.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Status (screen name)</th><th>Code value</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td>Unset</td><td><code>NEEDS_DEFINITION</code></td><td>Found, no permission defined yet</td></tr>
+              <tr><td>Awaiting Policy</td><td><code>PERMISSION_CREATED</code></td><td>Permission created, waiting for a policy</td></tr>
+              <tr><td>Protected</td><td><code>POLICY_CONNECTED</code></td><td>A policy targets this resource</td></tr>
+              <tr><td>Excluded</td><td><code>EXCLUDED</code></td><td>Taken out of the management list (<a href="#exclude">what exclusion really does</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The dashboard's "Policy Center" card (Policy Awaiting · Policy Connected · Policy Incomplete) and <code>GET /contexa/admin/policy-center/api/stats</code> (counts per status) show the overall picture.</p>
 
-    public enum ResourceType { URL, METHOD }
-    public enum HttpMethod { GET, POST, PUT, DELETE, PATCH, ANY }
-    public enum Status {
-        NEEDS_DEFINITION,
-        PERMISSION_CREATED,
-        POLICY_CONNECTED,
-        EXCLUDED
+          <h2 id="define">Defining a permission</h2>
+          <ol>
+            <li>Press "Create Permission &amp; Policy" on the resource row.</li>
+            <li>Contexa moves the resource to "Awaiting Policy" and creates its automatic permission (<code>POST /contexa/admin/workbench/resources/{id}/define</code>, with the name and description).</li>
+            <li>In the "Select Policy Setup Method" window, choose Quick Mode or the AI Policy Wizard (<a href="#connect">Connecting a policy</a>).</li>
+          </ol>
+          <p>The automatic permission's name is built from the resource type and identifier: characters other than letters and digits become <code>_</code>, in upper case.</p>
+          <pre><code class="language-text">/api/v1/invoices/{id}                             → URL_API_V1_INVOICES_ID
+com.example.docs.DocumentService.getDocument(Long) → METHOD_DOCUMENTSERVICE_GETDOCUMENT</code></pre>
+          <ul>
+            <li>The automatic permission is marked as auto-created; its action type is the HTTP method for URLs and <code>EXECUTE</code> for methods.</li>
+            <li>It only links the resource to policy targets and never goes into a policy condition (<a href="policy.html#quick">Quick Mode</a>).</li>
+            <li>Check several resources to define them at once (<code>POST /contexa/admin/workbench/resources/define-batch</code>). Resources that already have a permission are skipped.</li>
+          </ul>
+
+          <h2 id="connect">Connecting a policy</h2>
+          <p>The "Select Policy Setup Method" window offers two choices. Manual Mode is not opened from this window; use its card in the "Policy Creation" tab.</p>
+          <ul>
+            <li><strong>Quick Mode:</strong> pick roles and permissions and create an ALLOW or DENY policy at once. With several resources selected, the policies are created in one batch.</li>
+            <li><strong>AI Policy Wizard:</strong> takes one resource only. The AI draft is saved as pending and applies after approval.</li>
+          </ul>
+          <p>Saving the policy moves the resource to "Protected", and the policies reload so the next request is decided by it. URL policies are evaluated only when the request passes <code>CustomDynamicAuthorizationManager</code>, so in the default <code>HOST_OWNED</code> mode it has to be connected in the application's chain (<a href="end-to-end-workflow.html#prepare">Preparation</a>). Each mode is described in <a href="policy.html#create">Policy Management</a>.</p>
+
+          <h2 id="exclude">Exclude, restore and reset</h2>
+          <ul>
+            <li><strong>Exclude:</strong> only "Unset" resources can be excluded (<code>POST /contexa/admin/workbench/resources/{id}/exclude</code>). "Awaiting Policy" rows show the button too, but the server refuses.</li>
+            <li><strong>What exclusion really does:</strong> it hides the resource from the resource list and the permission list; authorization decisions do not change. A URL without a policy follows the "decision when no policy applies" (default <code>PERMIT</code>). Open public paths (such as <code>/actuator/health</code>) with a policy or with <code>permitAll</code> in the application's chain.</li>
+            <li><strong>Restore:</strong> brings an excluded resource back to "Unset" (<code>POST /contexa/admin/workbench/resources/{id}/restore</code>).</li>
+            <li><strong>Release Policy Link:</strong> for the chosen resources that are "Awaiting Policy" only, deletes the linked permission and goes back to "Unset" (<code>POST /contexa/admin/policy-center/api/reset-policy-status</code>).</li>
+            <li><strong>Deleting a policy:</strong> resources it targeted that no other policy uses go back to "Unset", and their automatic permissions are deleted.</li>
+          </ul>
+
+          <h2 id="lifecycle">When the state changes</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Now</th><th>Next</th><th>When</th></tr></thead>
+            <tbody>
+              <tr><td>(none)</td><td><code>NEEDS_DEFINITION</code></td><td>Found by Load Resources</td></tr>
+              <tr><td><code>NEEDS_DEFINITION</code></td><td><code>PERMISSION_CREATED</code></td><td>Permission created (<code>define</code> · <code>define-batch</code>)</td></tr>
+              <tr><td><code>PERMISSION_CREATED</code></td><td><code>POLICY_CONNECTED</code></td><td>A policy is created through Quick, AI or batch creation, or Load Resources finds a policy targeting the resource</td></tr>
+              <tr><td><code>POLICY_CONNECTED</code></td><td><code>PERMISSION_CREATED</code></td><td>Load Resources finds no policy targeting the resource</td></tr>
+              <tr><td><code>PERMISSION_CREATED</code></td><td><code>NEEDS_DEFINITION</code></td><td>Release Policy Link (permission deleted)</td></tr>
+              <tr><td><code>PERMISSION_CREATED</code> · <code>POLICY_CONNECTED</code></td><td><code>NEEDS_DEFINITION</code></td><td>The last policy targeting the resource is deleted (automatic permission deleted)</td></tr>
+              <tr><td><code>NEEDS_DEFINITION</code></td><td><code>EXCLUDED</code></td><td>Exclude</td></tr>
+              <tr><td><code>EXCLUDED</code></td><td><code>NEEDS_DEFINITION</code></td><td>Restore</td></tr>
+            </tbody>
+          </table></div>
+          <p>Policy targets and resources are matched as "type:identifier" (for example <code>URL:/api/v1/invoices</code>); the HTTP method is not compared.</p>
+
+          <h2 id="settings">Settings</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td>System setting "Controller base packages"</td><td><code>io.contexa.contexaiam.</code></td><td>Packages both scanners look at (a database value)</td><td>Always at installation (to your packages)</td></tr>
+              <tr><td><code>contexa.iam.admin.rest-docs-path</code></td><td><code>/docs/index.html</code></td><td>Start of the API docs link of URL resources (<code>apiDocsUrl</code>)</td><td>When your API docs live elsewhere</td></tr>
+              <tr><td><code>contexa.iam.admin.condition-templates.enabled</code></td><td><code>false</code></td><td>Also generate condition templates with AI when loading resources</td><td>When AI Mode drafts should use condition templates</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+  iam:
+    admin:
+      rest-docs-path: /api-docs/index.html
+      condition-templates:
+        enabled: true</code></pre>
+
+          <h2 id="extension">Extension points</h2>
+          <p>A scanner is one <code>ResourceScanner</code> interface. A bean of that type is used together with the default scanners when resources are loaded. To replace a default scanner, declare a bean of type <code>MvcResourceScanner</code> or <code>MethodResourceScanner</code> yourself (the auto-configuration backs off). The package setting does not apply to your own scanner, so choose inside it.</p>
+          <pre><code class="language-java">import io.contexa.contexacommon.entity.ManagedResource;
+import io.contexa.contexaiam.resource.scanner.ResourceScanner;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+
+@Component
+public class ReportEndpointScanner implements ResourceScanner {
+
+    @Override
+    public List&lt;ManagedResource&gt; scan() {
+        return List.of(ManagedResource.builder()
+                .resourceIdentifier("/reports/export")
+                .resourceType(ManagedResource.ResourceType.URL)
+                .httpMethod(ManagedResource.HttpMethod.GET)
+                .friendlyName("exportReport")
+                .serviceOwner("ReportRouter")
+                .status(ManagedResource.Status.NEEDS_DEFINITION)
+                .build());
     }
 }</code></pre>
-            </div>
+          <p>The resource entity <code>ManagedResource</code> lives in the <code>contexa-common</code> module (<code>io.contexa.contexacommon.entity</code>). Its fields are identifier, type, HTTP method, name, description, service owner, parameter types, return type, API docs link, source location, available context variables (<code>availableContextVariables</code>), status, linked permission, created and updated times. The name cannot be empty. <code>ResourceRegistryService</code>, which ties scanning, defining and excluding together, can also be replaced with a bean of the same type.</p>
 
-            <h3>Resource Lifecycle</h3>
-            <table>
-              <thead>
-                <tr><th>Status</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>NEEDS_DEFINITION</code></td><td>Discovered by scanner; no permission assigned yet</td></tr>
-                <tr><td><code>PERMISSION_CREATED</code></td><td>A <code>Permission</code> entity has been linked to this resource</td></tr>
-                <tr><td><code>POLICY_CONNECTED</code></td><td>A policy references this resource through its targets</td></tr>
-                <tr><td><code>EXCLUDED</code></td><td>Explicitly excluded from authorization (e.g., public endpoints)</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-          <!-- ManagedResource Lifecycle -->
-          <section>
-            <h2 id="lifecycle">ManagedResource Lifecycle</h2>
-
-            <h3>Status Transitions</h3>
-            <div class="diagram-container">
-              <div class="diagram-title">ManagedResource Status Transitions</div>
-              <div class="diagram-flow-vertical">
-                <div class="diagram-box diagram-warning">
-                  <span class="diagram-box-name">NEEDS_DEFINITION</span>
-                  <span class="diagram-box-desc">Resource discovered by scanner, not yet configured</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-grid diagram-grid-2">
-                  <div class="diagram-group">
-                    <div class="diagram-box diagram-accent">
-                      <span class="diagram-box-name">PERMISSION_CREATED</span>
-                      <span class="diagram-box-desc">defineResourceAsPermission() called</span>
-                    </div>
-                    <div class="diagram-arrow-down"></div>
-                    <div class="diagram-box diagram-success">
-                      <span class="diagram-box-name">POLICY_CONNECTED</span>
-                      <span class="diagram-box-desc">Policy created and linked</span>
-                    </div>
-                  </div>
-                  <div class="diagram-box diagram-muted">
-                    <span class="diagram-box-name">EXCLUDED</span>
-                    <span class="diagram-box-desc">Resource excluded from active management (public endpoints, static assets)</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <table>
-              <thead>
-                <tr><th>Status</th><th>Description</th><th>Transition Trigger</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>NEEDS_DEFINITION</code></td><td>Resource discovered by scanner, not yet configured</td><td>Initial scan</td></tr>
-                <tr><td><code>PERMISSION_CREATED</code></td><td><code>defineResourceAsPermission()</code> called, <code>Permission</code> entity created</td><td>Admin action in the Policy Center resources flow or legacy workbench route</td></tr>
-                <tr><td><code>POLICY_CONNECTED</code></td><td>Policy created and linked to this resource</td><td>Policy Center / legacy policy screens</td></tr>
-                <tr><td><code>EXCLUDED</code></td><td>Resource excluded from authorization management</td><td>Exclude flow updates the managed resource status</td></tr>
-              </tbody>
-            </table>
-
-            <h3>ManagedResource Entity Fields</h3>
-            <table>
-              <thead>
-                <tr><th>Field</th><th>Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>resourceIdentifier</code></td><td><code>String</code></td><td>Unique ID (URL pattern + method, or qualified method signature)</td></tr>
-                <tr><td><code>resourceType</code></td><td><code>ResourceType</code></td><td><code>URL</code> or <code>METHOD</code></td></tr>
-                <tr><td><code>friendlyName</code></td><td><code>String</code></td><td>AI-suggested human-readable name, or a fallback name when AI suggestions are unavailable</td></tr>
-                <tr><td><code>status</code></td><td><code>ManagedResource.Status</code></td><td><code>NEEDS_DEFINITION</code>, <code>PERMISSION_CREATED</code>, <code>POLICY_CONNECTED</code>, <code>EXCLUDED</code></td></tr>
-              </tbody>
-            </table>
-          </section>
-
-          <!-- Resource Workbench -->
-          <section>
-            <h2 id="workbench">Resource Workbench</h2>
-            <p>The legacy <code>/admin/workbench/resources</code> route is still implemented in server code. In the current OSS UI bundle, day-to-day review and policy authoring are centered in Policy Center, which uses the same managed-resource registry and related admin endpoints.</p>
-
-            <h3>Discovering Resources</h3>
-            <ul>
-              <li>View all scanned resources with status-based filtering</li>
-              <li>Refresh scan results on demand</li>
-              <li>Search and filter by resource type, status, or name</li>
-            </ul>
-
-            <h3>Defining Resources as Permissions</h3>
-            <p>Click <strong>"Define as Permission"</strong> on a <code>NEEDS_DEFINITION</code> resource to:</p>
-            <ol>
-              <li>Create a corresponding <code>Permission</code> entity</li>
-              <li>Update the resource status to <code>PERMISSION_CREATED</code></li>
-              <li>Make the resource available for policy creation</li>
-            </ol>
-
-            <h3>Two Paths from Workbench</h3>
-            <p>After defining a resource as a permission, two policy creation options are available:</p>
-            <table>
-              <thead>
-                <tr><th>Path</th><th>Action</th><th>Use Case</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><strong>Quick Grant</strong></td><td>Policy Center quick-create flow with selected roles, permissions, or stored SpEL shortcuts</td><td>Simple role-to-permission assignment</td></tr>
-                <tr><td><strong>Advanced Policy</strong></td><td>Policy Center manual / AI-assisted create flow with resource context</td><td>Complex conditions, AI expressions, multi-rule policies</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-          <!-- End-to-End Workflow -->
-          <section>
-            <h2 id="e2e-workflow">End-to-End Workflow</h2>
-            <div class="diagram-container">
-              <div class="diagram-title">End-to-End Resource Management Pipeline</div>
-              <div class="diagram-flow">
-                <div class="diagram-group">
-                  <div class="diagram-group-title">Step 1: SCAN</div>
-                  <div class="diagram-box diagram-highlight">
-                    <span class="diagram-box-name">MvcResourceScanner + MethodResourceScanner</span>
-                    <span class="diagram-box-desc">ManagedResource (NEEDS_DEFINITION)</span>
-                  </div>
-                </div>
-                <div class="diagram-arrow diagram-arrow-long"></div>
-                <div class="diagram-group">
-                  <div class="diagram-group-title">Step 2: DEFINE</div>
-                  <div class="diagram-box diagram-accent">
-                    <span class="diagram-box-name">Policy Center Resources Flow</span>
-                    <span class="diagram-box-desc">Integrated review/define flow backed by managed-resource endpoints (PERMISSION_CREATED)</span>
-                  </div>
-                </div>
-                <div class="diagram-arrow diagram-arrow-long"></div>
-                <div class="diagram-group">
-                  <div class="diagram-group-title">Step 3: POLICY</div>
-                  <div class="diagram-box diagram-accent">
-                    <span class="diagram-box-name">Policy Center / authoring flow</span>
-                    <span class="diagram-box-desc">/admin/policy-center?tab=create -- from-resource-aware policy creation (POLICY_CONNECTED)</span>
-                  </div>
-                </div>
-                <div class="diagram-arrow diagram-arrow-long"></div>
-                <div class="diagram-group">
-                  <div class="diagram-group-title">Step 4: ENFORCE</div>
-                  <div class="diagram-box diagram-success">
-                    <span class="diagram-box-name">CustomDynamicAuthorizationManager</span>
-                    <span class="diagram-box-desc">reload() -- .anyRequest().access(dynamic)</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <h3>Step 1: Scan</h3>
-            <p>Automatic at application startup via <code>WorkbenchInitializer</code>. <code>MvcResourceScanner</code> scans all <code>@Controller</code> and <code>@RestController</code> classes. <code>MethodResourceScanner</code> scans all <code>@Protectable</code> methods. Friendly names and descriptions are then filled from AI suggestions when available, with fallback values used if AI suggestions are unavailable.</p>
-
-            <h3>Step 2: Review &amp; Define</h3>
-            <p>Review <code>NEEDS_DEFINITION</code> resources through the current Policy Center integrated resources area or the legacy workbench-backed endpoints. Define relevant resources as permissions, and exclude resources that do not need authorization (static assets, public endpoints).</p>
-
-            <h3>Step 3: Create Policy</h3>
-            <p>From the current Policy Center resources flow, or the legacy <code>/admin/policy-builder/from-resource</code> route, continue into policy authoring with the selected resource context. Compatible condition templates are filtered for the chosen resource, and the same managed-resource lifecycle stays in sync as the policy is created.</p>
-
-            <h3>Step 4: Dynamic Authorization</h3>
-            <p>When the policy is saved, <code>reloadAuthorizationSystem()</code> triggers <code>CustomDynamicAuthorizationManager.reload()</code>. The policy takes effect immediately. With <code>.anyRequest().access(customDynamicAuthorizationManager)</code> in your security configuration, no static authorization rules are needed.</p>
-          </section>
-
-          <!-- Resource Workbench Operations Guide -->
-          <section>
-            <h2 id="workbench-operations">Resource Workbench: Operations Guide</h2>
-            <p>The managed-resource lifecycle is still backed by the legacy <code>/admin/workbench/resources</code> controller, but the current OSS UI centers operators in Policy Center. This section describes the shared operational workflows behind both surfaces.</p>
-
-            <h3>Filtering Resources</h3>
-            <p>The current resource review flow provides multiple filtering options to find resources quickly, whether operators use the integrated Policy Center surface or the legacy workbench-backed endpoints:</p>
-            <table>
-              <thead>
-                <tr><th>Filter</th><th>Options</th><th>Use Case</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><strong>By Status</strong></td><td><code>NEEDS_DEFINITION</code>, <code>PERMISSION_CREATED</code>, <code>POLICY_CONNECTED</code>, <code>EXCLUDED</code></td><td>Find resources at a specific lifecycle stage</td></tr>
-                <tr><td><strong>By Service Owner</strong></td><td>Controller or service class name</td><td>Filter resources belonging to a specific module</td></tr>
-                <tr><td><strong>By Keyword</strong></td><td>Free text search</td><td>Search by resource identifier, friendly name, or description</td></tr>
-                <tr><td><strong>By Resource Type</strong></td><td><code>URL</code> or <code>METHOD</code></td><td>Filter by endpoint type vs. method-level resource</td></tr>
-              </tbody>
-            </table>
-
-            <h3>Defining a Resource</h3>
-            <p>When you define a resource, the following happens in sequence:</p>
-            <ol>
-              <li>Click <strong>"Define as Permission"</strong> on a <code>NEEDS_DEFINITION</code> resource</li>
-              <li>Enter a friendly name for the permission (or accept the AI-suggested name)</li>
-              <li>A <code>Permission</code> entity is automatically created and linked to the resource</li>
-              <li>The resource status changes to <code>PERMISSION_CREATED</code></li>
-              <li>The resource is now ready for policy assignment</li>
-            </ol>
-
-            <h3>Policy Setup from Workbench</h3>
-            <p>After defining a resource, a modal appears offering two policy creation paths:</p>
-            <div class="diagram-container">
-              <div class="diagram-compare">
-                <div class="diagram-compare-side">
-                  <h4>Quick Grant (Wizard)</h4>
-                  <p>Use the Policy Center quick-create flow to open a simplified grant path with the selected resource context.</p>
-                  <ul>
-                    <li>Pre-selects the resource permission</li>
-                    <li>Choose target roles and confirm</li>
-                    <li>Creates a simple ALLOW policy</li>
-                  </ul>
-                </div>
-                <div class="diagram-compare-vs">VS</div>
-                <div class="diagram-compare-side">
-                  <h4>Advanced (Manual / builder-compatible flow)</h4>
-                  <p>Use the Policy Center manual create flow to open the full policy authoring experience with the selected resource context. The legacy builder controller path still exists in server code, but the current OSS template bundle centers this flow in Policy Center.</p>
-                  <ul>
-                    <li>Target is pre-filled (from-resource mode)</li>
-                    <li>Full condition template selection</li>
-                    <li>Supports complex rules and AI conditions</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-
-            <h3>Excluding and Restoring Resources</h3>
-            <p>Resources that do not require authorization (public endpoints, static assets, health checks) can be excluded:</p>
-            <ul>
-              <li><strong>Excluding:</strong> Click <strong>"Exclude"</strong> on a <code>NEEDS_DEFINITION</code> resource. The status changes to <code>EXCLUDED</code>, and the resource is removed from authorization management.</li>
-              <li><strong>Restoring:</strong> Excluded resources can be restored by clicking <strong>"Restore"</strong>. The status reverts to <code>NEEDS_DEFINITION</code>, and the resource re-enters the management lifecycle.</li>
-            </ul>
-            <p><strong>When to exclude:</strong> Public API endpoints, static asset paths, health check endpoints (<code>/actuator/health</code>), documentation paths.</p>
-            <p><strong>When to restore:</strong> Previously public endpoints that now require authorization, or resources excluded by mistake.</p>
-
-            <h3>Status Transition Diagram</h3>
-            <div class="diagram-container">
-              <div class="diagram-title">Resource Workbench Status Flow</div>
-              <div class="diagram-flow-vertical">
-                <div class="diagram-box diagram-warning">
-                  <span class="diagram-box-name">NEEDS_DEFINITION</span>
-                  <span class="diagram-box-desc">Discovered by scanner at startup</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-grid diagram-grid-2">
-                  <div class="diagram-group">
-                    <div class="diagram-box diagram-accent">
-                      <span class="diagram-box-name">PERMISSION_CREATED</span>
-                      <span class="diagram-box-desc">"Define as Permission" clicked -- Permission entity linked</span>
-                    </div>
-                    <div class="diagram-arrow-down"></div>
-                    <div class="diagram-box diagram-success">
-                      <span class="diagram-box-name">POLICY_CONNECTED</span>
-                      <span class="diagram-box-desc">Policy created via Policy Center quick or manual flow -- Resource fully managed</span>
-                    </div>
-                  </div>
-                  <div class="diagram-group">
-                    <div class="diagram-box diagram-muted">
-                      <span class="diagram-box-name">EXCLUDED</span>
-                      <span class="diagram-box-desc">"Exclude" clicked -- Not managed -- Can be restored</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- AI Auto-Naming -->
-          <section>
-            <h2 id="ai-naming">AI Auto-Naming</h2>
-            <p>When resources are discovered by the scanner, their technical identifiers (URL patterns or method signatures) are not user-friendly. The AI auto-naming system generates human-readable names and descriptions automatically.</p>
-
-            <h3>How It Works</h3>
-            <p><code>ResourceRegistryServiceImpl</code> calls the AI <code>ResourceNaming</code> service after scanning is complete. The AI analyzes each technical identifier and generates:</p>
-            <ul>
-              <li><strong>Friendly name:</strong> A concise, business-oriented name (e.g., "Update User Profile" for <code>PUT /api/users/{id}</code>)</li>
-              <li><strong>Description:</strong> A longer explanation of what the resource does</li>
-            </ul>
-
-            <h3>Batch Processing</h3>
-            <p>To optimize AI API usage, auto-naming processes resources in batches of <strong>10 items per batch</strong>. This approach:</p>
-            <ul>
-              <li>Reduces the number of AI API calls</li>
-              <li>Provides contextual awareness across related resources in the same batch</li>
-              <li>Handles failures gracefully by retrying individual batches</li>
-            </ul>
-
-            <h3>Name Generation Strategy</h3>
-            <div class="diagram-container">
-              <div class="diagram-title">AI Auto-Naming Pipeline</div>
-              <div class="diagram-flow">
-                <div class="diagram-box diagram-highlight">
-                  <span class="diagram-box-name">Technical Identifiers</span>
-                  <span class="diagram-box-desc">URL patterns + method signatures</span>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-accent">
-                  <span class="diagram-box-name">AI ResourceNaming</span>
-                  <span class="diagram-box-desc">Batch of 10 items analyzed</span>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-success">
-                  <span class="diagram-box-name">Friendly Names</span>
-                  <span class="diagram-box-desc">Business-readable names + descriptions</span>
-                </div>
-              </div>
-            </div>
-
-            <table>
-              <thead>
-                <tr><th>Technical Identifier</th><th>AI-Generated Friendly Name</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>GET /api/users</code></td><td>List All Users</td></tr>
-                <tr><td><code>PUT /api/users/{id}</code></td><td>Update User Profile</td></tr>
-                <tr><td><code>DELETE /admin/roles/{id}</code></td><td>Delete Role</td></tr>
-                <tr><td><code>AccountService.updateAccount(Long,AccountDto)</code></td><td>Update Account Details</td></tr>
-              </tbody>
-            </table>
-          </section>
-
+          <h2 id="legacy">Old paths</h2>
+          <p><code>/contexa/admin/workbench/resources</code> is the old resource screen path. Its screen file is gone, so <code>GET</code> does not open, but Policy Center keeps using this controller's API: <code>POST /refresh</code> · <code>/{id}/define</code> · <code>/define-batch</code> · <code>/{id}/exclude</code> · <code>/{id}/restore</code> · <code>/{id}/manage</code>.</p>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/iam/policy.html" class="docs-nav-prev">
+            <a href="policy.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
               <span class="docs-nav-title">Policy Management</span>
             </a>
-            <a href="../../../docs/reference/iam/admin.html" class="docs-nav-next">
+            <a href="admin.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
               <span class="docs-nav-title">Admin Console</span>
             </a>

@@ -1,0 +1,210 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">레퍼런스</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">기존 로그인과 연결하기</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-common</span>
+            </div>
+            <h1>기존 로그인과 연결하기(인증 브리지)</h1>
+            <p class="lead">앱이 이미 가진 로그인 · 권한 · 위임 정보를 Contexa가 요청마다 읽어 판정의 사실로 쓰게 하는 방법입니다. 앱이 무엇을 해 두어야 하는지, Contexa가 어디서 어떤 순서로 읽는지, MFA를 어떻게 알려 주는지, 게이트웨이 헤더와 직접 넘기기, 확장점을 설명합니다.</p>
+          </div>
+
+          <h2 id="overview">한눈에 보기</h2>
+          <p>Contexa를 기본 모드(<code>@EnableAISecurity</code>, 앱이 로그인을 소유하는 <code>HOST_OWNED</code>)로 켜면 로그인은 앱의 Spring Security가 그대로 맡습니다. Contexa는 요청마다 <strong>인증 브리지</strong>(<code>BridgeResolutionFilter</code>)로 그 결과를 읽어 세 장의 <strong>도장</strong>을 만들고, 이 도장이 판정 프롬프트의 사실이 됩니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>로그인 정보가 판정 사실이 되기까지</strong>브리지는 읽기만 합니다. 앱의 로그인 · 세션 · 응답을 바꾸지 않습니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">요청</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">앱</span><span class="dg-node-title">Spring Security가 로그인 사용자를 <code>SecurityContext</code>에 둠</span><span class="dg-node-desc">앱이 원래 하던 인증</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">인증 브리지가 도장 세 장을 만듦</span><span class="dg-node-desc">인증 도장 · 인가 도장 · 위임 도장 + 완성도 보고서. 요청 속성 <code>ctxa.bridge.*</code>에 둠</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-title">판정 프롬프트의 사실</span><span class="dg-node-desc">로그인 방식 · MFA 여부 · 권한 · 위임 범위 · 정보의 출처</span></li>
+            </ol>
+          </figure>
+
+          <h2 id="host-tasks">앱이 해 두어야 할 일</h2>
+          <ol>
+            <li><strong>Spring Security와 자기 <code>SecurityFilterChain</code>을 둡니다.</strong> 앱의 체인이 없으면 Spring Boot 기본 보안(모든 요청 인증)이 걸리고, Contexa가 시작할 때 오류 로그로 알려 줍니다.</li>
+            <li><strong>로그인한 사용자를 <code>SecurityContext</code>에 인증된 <code>Authentication</code>으로 넣습니다.</strong> 브리지는 인증된(익명이 아닌) <code>Authentication</code>이 있을 때만 도장을 만듭니다. 없으면 아무것도 만들지 않고, 보호 메서드(<code>@Protectable</code>)는 거부됩니다.</li>
+            <li><strong>MFA와 로그인 방식을 알려 줍니다.</strong> <code>Authentication</code>의 details나 principal에 <code>mfaVerified</code> 같은 값을 두거나, OAuth2 · OIDC라면 토큰의 <code>amr</code> 클레임으로 충분합니다(<a href="#mfa">MFA 알려 주기</a>).</li>
+            <li><strong>세션 객체에 역할 · 위임 정보가 있으면 키 이름만 맞춥니다.</strong> 브리지가 세션 속성을 훑어 사용자 객체를 찾습니다(<a href="#session-object">세션 · 요청 속성에서 사용자 찾기</a>).</li>
+          </ol>
+          <div class="callout callout-info">
+            <strong>Spring Security가 없는 레거시 앱.</strong> Spring Security 의존성을 넣고, 기존 접근 규칙을 그대로 두는 체인(예: <code>anyRequest().permitAll()</code>)을 선언한 뒤, 기존 로그인이 확인한 사용자를 그 체인 안의 필터에서 <code>SecurityContext</code>에 넣어 주면 됩니다. <a href="#handoff">직접 넘기기</a>만 부르는 방법은 그 요청의 증거만 남기고 <code>SecurityContext</code>를 채우지 않으므로 <code>@Protectable</code>을 쓰려면 부족합니다.
+          </div>
+
+          <h2 id="does-not">브리지가 하지 않는 일</h2>
+          <ul>
+            <li>앱이 로그인을 소유할 때(<code>HOST_OWNED</code>) 앱의 인증 · 인가 · 세션에 끼어들지 않습니다. 세션에 저장하지 않고, 헤더를 쓰지 않습니다.</li>
+            <li>앱이 로그인을 소유할 때 브리지 필터는 순서를 정하지 않은 서블릿 필터로 등록되어 <strong>앱의 Spring Security 체인이 끝난 뒤</strong>에 돕니다. 그래서 컨트롤러 · <code>@Protectable</code> 메서드에서는 도장을 읽을 수 있지만, 앱 체인 안의 URL 인가 단계에서는 아직 도장이 없습니다(Spring Boot 필터 순서에 따른 동작). 로그인을 Contexa가 소유할 때(<code>CONTEXA_OWNED</code>)는 Contexa 체인 안(세션 흐름은 <code>SecurityContextHolderFilter</code> 다음, 토큰 흐름은 <code>BearerTokenAuthenticationFilter</code> 다음)에 들어갑니다.</li>
+            <li>예외: <a href="#mirror">사용자 거울</a>은 앱이 소유할 때도 Contexa DB에 사용자 행을 씁니다.</li>
+          </ul>
+
+          <h2 id="order">어디서 어떤 순서로 읽나</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>도장</th><th>읽는 곳(순서)</th><th>여러 곳에서 나오면</th></tr></thead>
+            <tbody>
+              <tr><td>인증 도장<br>(누구인가, 어떻게 로그인했나)</td><td><code>SecurityContext</code> → 세션 → 요청 속성 → 헤더</td><td>사용자 ID가 있는 <strong>첫 결과</strong>를 씁니다.</td></tr>
+              <tr><td>인가 도장<br>(무엇을 할 수 있나)</td><td><code>SecurityContext</code> · 세션 · 요청 속성 · 헤더 모두</td><td><strong>모두 모아 합칩니다.</strong> 허용(ALLOW)과 거부(DENY)가 함께 나오면 거부로 정합니다. 아무 데도 없으면 인증 도장의 권한에서 만듭니다.</td></tr>
+              <tr><td>위임 도장<br>(누가 무엇을 맡겼나)</td><td>접근 토큰 → 세션 → 요청 속성 → 헤더 → 에이전트 자기 계정</td><td><strong>첫 결과</strong>를 씁니다.</td></tr>
+            </tbody>
+          </table></div>
+          <p><code>@EnableAISecurity(authObjectLocation = ...)</code>는 인증 도장의 세션 · 요청 속성 · 헤더 시도 순서만 바꿉니다(다른 곳을 끄지 않습니다). 도장마다 출처(<code>SECURITY_CONTEXT</code>, <code>SESSION</code>, <code>REQUEST_ATTRIBUTE</code>, <code>HEADER</code>, <code>EXPLICIT_HANDOFF</code> 등)가 함께 기록되어, 프롬프트에 "이 사실은 어디서 왔는가"가 실립니다.</p>
+
+          <h2 id="session-object">세션 · 요청 속성에서 사용자 찾기</h2>
+          <p>SecurityContext에서 사용자를 찾지 못하면 브리지는 세션, 그다음 요청 속성에서 사용자 객체를 찾습니다. 찾는 순서는 셋입니다.</p>
+          <ol>
+            <li><strong>지정한 이름.</strong> <code>contexa.bridge.authentication.session.attribute</code>(요청 속성은 <code>contexa.bridge.authentication.request-attributes.attribute</code>)에 이름을 주면 그 속성을 먼저 봅니다. 사용자 ID가 있으면 바로 씁니다.</li>
+            <li><strong>후보 이름.</strong> 세션은 <code>currentUser</code> · <code>authenticatedUser</code> · <code>sessionUser</code> · <code>userSession</code> · <code>principal</code> · <code>user</code> · <code>securityUser</code> · <code>authenticatedPrincipal</code>, 요청 속성은 <code>currentUser</code> · <code>authenticatedUser</code> · <code>requestUser</code> · <code>principal</code> · <code>user</code> · <code>authenticatedPrincipal</code> · <code>authUser</code>를 봅니다.</li>
+            <li><strong>자동 탐색.</strong> <code>auto-discover</code>(기본 켬)이면 나머지 속성도 모두 훑습니다.</li>
+          </ol>
+          <p>2 · 3단계에서는 사용자 ID(<code>userId</code> · <code>username</code> · <code>id</code> · <code>loginId</code> · <code>email</code>)가 있는 객체만 후보가 되고, 아래 점수가 가장 높은 객체를 씁니다. 세션에 사용자처럼 보이는 객체가 여럿이면 1단계 이름이나 <code>object-type-name</code>(클래스의 전체 이름 또는 짧은 이름)을 알려 주는 것이 안전합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>객체에 있는 것</th><th>점수</th></tr></thead>
+            <tbody>
+              <tr><td>사용자 ID</td><td>10(없으면 후보가 아님)</td></tr>
+              <tr><td><code>object-type-name</code>과 같은 클래스</td><td>+8</td></tr>
+              <tr><td>권한(<code>roles</code> · <code>authorities</code> · <code>permissions</code> · <code>scopes</code>)</td><td>+4</td></tr>
+              <tr><td>표시 이름, 로그인 방식</td><td>각 +2</td></tr>
+              <tr><td>보증 수준, MFA 여부, 인증 시각, 추가 속성(<code>department</code> · <code>tenantId</code> 등)</td><td>각 +1</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="flat-attributes">요청 속성에 값을 하나씩 넣기</h3>
+          <p>사용자 객체 대신 값을 하나씩 요청 속성에 넣어도 됩니다. 인증 도장은 요청 속성에서 사용자 객체를 찾지 못했을 때 이 이름을 읽고, 인가 · 위임 도장은 늘 이 이름으로 읽습니다. 앱의 필터에서 넣으면 됩니다.</p>
+<pre><code class="language-java">request.setAttribute("ctxa.auth.principalId", user.getId());
+request.setAttribute("ctxa.auth.authenticated", true);
+request.setAttribute("ctxa.auth.authorities", "ROLE_USER,ROLE_FINANCE");
+request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>도장</th><th>요청 속성 이름</th></tr></thead>
+            <tbody>
+              <tr><td>인증</td><td><code>ctxa.auth.principalId</code>(필수) · <code>displayName</code> · <code>authenticated</code> · <code>authorities</code> · <code>tenantId</code> · <code>organizationId</code> · <code>orgId</code> · <code>type</code> · <code>assurance</code> · <code>mfaCompleted</code> · <code>time</code></td></tr>
+              <tr><td>인가</td><td><code>ctxa.authz.effect</code> · <code>privileged</code> · <code>policyId</code> · <code>policyVersion</code> · <code>scopeTags</code> · <code>roles</code> · <code>authorities</code></td></tr>
+              <tr><td>위임</td><td><code>ctxa.delegation.enabled</code> · <code>agentId</code> · <code>objectiveId</code> · <code>objectiveFamily</code> · <code>objectiveSummary</code> · <code>allowedOperations</code> · <code>allowedResources</code> · <code>approvalRequired</code> · <code>privilegedExportAllowed</code> · <code>containmentOnly</code> · <code>expiresAt</code></td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><code>ctxa.auth.authenticated</code>를 넣었는데 참이 아니면 사용자로 보지 않습니다.</li>
+            <li>권한처럼 값이 여럿이면 쉼표로 이은 글로 넣습니다.</li>
+            <li>이름은 설정으로 바꿀 수 있습니다(예: <code>contexa.bridge.authentication.request-attributes.flat-principal-id</code>). 전체는 <a href="../../install/configuration/index-all.html#contexa-bridge">설정 색인</a>에 있습니다.</li>
+          </ul>
+
+          <h2 id="mfa">MFA와 로그인 방식 알려 주기</h2>
+          <p><code>SecurityContext</code>의 <code>Authentication</code>에서는 details를 먼저, 다음에 principal을 봅니다. 객체에 <code>claims</code> · <code>attributes</code> 맵이 있으면(JWT 클레임, OAuth2 사용자 속성) 그 맵에서 찾습니다.</p>
+          <ol>
+            <li><strong>앱이 직접 준 값이 먼저입니다.</strong> MFA 완료는 <code>mfa</code> · <code>mfaVerified</code> · <code>mfaCompleted</code> · <code>secondFactorVerified</code>, 로그인 방식은 <code>authenticationType</code> · <code>authMethod</code> · <code>loginMethod</code> 등에서 읽습니다.</li>
+            <li><strong>없으면 <code>amr</code> 클레임(RFC 8176)에서 계산합니다.</strong> 출처는 <code>DERIVED_FROM_AMR</code>로 표시됩니다.</li>
+          </ol>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>amr</code> 값</th><th>로그인 방식</th></tr></thead>
+            <tbody>
+              <tr><td><code>pwd</code></td><td>PASSWORD</td></tr>
+              <tr><td><code>otp</code>, <code>sms</code>, <code>tel</code></td><td>ONE_TIME_CODE</td></tr>
+              <tr><td><code>pop</code>, <code>hwk</code>, <code>swk</code></td><td>PASSKEY</td></tr>
+              <tr><td><code>face</code>, <code>fpt</code>, <code>iris</code>, <code>retina</code>, <code>vbm</code></td><td>BIOMETRIC</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>MFA 완료 규칙:</strong> <code>amr</code>에 <code>mfa</code>가 있거나, 서로 다른 방식이 2개 이상이면 완료입니다. 예: <code>["pwd","otp"]</code> → MFA 완료, 방식 <code>PASSWORD+ONE_TIME_CODE</code>. <code>["otp","sms"]</code> → 같은 방식 하나라 MFA 아님.</li>
+            <li><strong>인증 시각</strong>은 <code>authenticationTime</code> · <code>authenticatedAt</code> · <code>loginTime</code> · <code>auth_time</code>에서 읽습니다. 토큰 발급 시각(<code>iat</code>)은 다시 발급될 때 바뀌므로 일부러 쓰지 않습니다.</li>
+            <li><strong>보증 수준</strong>은 <code>authenticationAssurance</code> · <code>authLevel</code> · <code>loa</code> · <code>acr</code>에 값이 있을 때만 씁니다(<code>amr</code>로 계산하지 않음).</li>
+            <li>세션 · 요청 속성 · 헤더에서는 <code>amr</code>을 해석하지 않고 MFA 플래그(<code>mfaVerified</code>, <code>ctxa.auth.mfaCompleted</code>, <code>X-Contexa-Mfa-Completed</code>)만 읽습니다.</li>
+          </ul>
+
+          <h2 id="headers">게이트웨이 헤더로 넘기기</h2>
+          <p>API 게이트웨이가 사용자 정보를 <code>X-Contexa-*</code> 헤더로 붙여 주는 구성이라면 헤더 읽기를 켭니다. 위조를 막기 위해 <strong>기본으로 꺼져 있고</strong>, 켜도 아래 조건을 모두 만족할 때만 믿습니다.</p>
+          <ul>
+            <li>요청이 신뢰 프록시(<code>contexa.bridge.network.trusted-proxies</code>, IP · CIDR)에서 왔다. 목록이 비거나 신뢰 프록시 검사(<code>contexa.bridge.network.trusted-proxy-validation-enabled</code>)를 끄면 헤더는 늘 거부됩니다.</li>
+            <li>헤더의 사용자 ID가 앱이 인증한 사용자(<code>SecurityContext</code>)와 같고, 테넌트 · 조직 값도 맞다.</li>
+          </ul>
+          <pre><code class="language-yaml">contexa:
+  bridge:
+    network:
+      trusted-proxies: [10.0.0.0/8]
+    authentication:
+      headers:
+        enabled: true      # X-Contexa-Principal-Id, X-Contexa-Mfa-Completed, ...
+    authorization:
+      headers:
+        enabled: true      # X-Contexa-Authz-Effect, X-Contexa-Authz-Roles, ...
+    delegation:
+      headers:
+        enabled: true      # X-Contexa-Delegated, X-Contexa-Agent-Id, ...</code></pre>
+          <p>Contexa는 이 헤더를 읽기만 하고 응답에 쓰지 않습니다.</p>
+
+          <h2 id="handoff">직접 넘기기(handoff)</h2>
+          <p>앱의 로그인 코드에서 Contexa에 사용자를 직접 알려 줄 수 있습니다.</p>
+          <pre><code class="language-java">ContexaAuthBridge.handoff(request, response,
+        ContexaAuthHandoff.of(user, authorities, Map.of("department", "R&amp;D"))
+                .withAuthenticationType("PASSWORD+ONE_TIME_CODE")
+                .withMfaVerified(true));</code></pre>
+          <ul>
+            <li>그 요청의 인증 증거를 기록합니다(출처 <code>EXPLICIT_HANDOFF</code>). 같은 요청에서 브리지 필터가 다른 사용자를 찾으면 충돌로 표시합니다.</li>
+            <li>앱이 로그인을 소유할 때(<code>HOST_OWNED</code>)는 <code>SecurityContext</code>를 채우지 않습니다. Contexa가 소유할 때(<code>CONTEXA_OWNED</code>)만 <code>SecurityContext</code>를 채우고 세션에 저장합니다.</li>
+            <li><code>@EnableAISecurity</code>가 켜져 있지 않으면 <code>IllegalStateException</code>, 사용자 ID를 정할 수 없으면 <code>IllegalArgumentException</code>이 납니다.</li>
+          </ul>
+
+          <h2 id="coverage">완성도: 브리지가 얼마나 알았나</h2>
+          <p>브리지는 요청마다 얻은 정보의 완성도를 계산해 프롬프트에 함께 실습니다(<code>bridge &lt;수준&gt;</code>). 모델은 이것으로 "모르는 것"을 알고 판단합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>수준</th><th>점수</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>NONE</code></td><td>0</td><td>인증된 사용자를 찾지 못함</td></tr>
+              <tr><td><code>AUTHENTICATION_ONLY</code></td><td>40</td><td>누구인지만 앎</td></tr>
+              <tr><td><code>AUTHORIZATION_CONTEXT</code></td><td>75(빠진 것마다 감점)</td><td>권한 · 인가 결과까지 앎</td></tr>
+              <tr><td><code>DELEGATION_CONTEXT</code></td><td>90</td><td>위임 정보까지 앎</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="mirror">사용자 거울</h2>
+          <p>브리지는 외부에서 로그인한 사용자를 Contexa DB의 사용자 표에 거울 행으로 남깁니다(관리 콘솔 · 정책에서 그 사용자를 다루기 위해). 키는 <code>brg_</code> + SHA-256(인증 출처 · 조직 · 사용자 ID)이고, 무작위 비밀번호로 만들어져 직접 로그인에 쓸 수 없습니다. 같은 사용자가 60초(<code>contexa.bridge.sync.min-refresh-interval-seconds</code>) 안에 다시 오고 정보가 바뀌지 않았으면 다시 쓰지 않습니다. 이메일은 인증 속성의 <code>email</code> · <code>mail</code> · <code>userEmail</code>에서 읽고, 없으면 <code>&lt;키&gt;@shadow.contexa.local</code>(<code>contexa.bridge.sync.synthetic-email-domain</code>)을 씁니다. 끄려면 <code>contexa.bridge.sync.enabled=false</code>.</p>
+
+          <h2 id="settings">자주 바꾸는 설정</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.bridge.enabled</code></td><td><code>true</code></td><td>브리지 필터 켜기(끄면 직접 넘기기만 동작)</td><td>브리지를 끌 때(판정 사실이 줄어듦)</td></tr>
+              <tr><td><code>contexa.bridge.ownership</code></td><td><code>HOST_OWNED</code>(<code>mode=FULL</code>이면 <code>CONTEXA_OWNED</code>)</td><td>로그인을 누가 소유하나. 이 값을 적으면 어노테이션보다 우선</td><td>Contexa가 로그인까지 맡게 할 때 <code>CONTEXA_OWNED</code></td></tr>
+              <tr><td><code>contexa.bridge.populate-security-context</code></td><td><code>true</code></td><td><code>CONTEXA_OWNED</code>일 때 SecurityContext가 비어 있으면 브리지가 찾은 사용자로 채움(<code>HOST_OWNED</code>에서는 채우지 않음)</td><td>Contexa가 소유하면서도 SecurityContext는 앱이 채울 때 <code>false</code></td></tr>
+              <tr><td><code>contexa.bridge.authentication.session.object-type-name</code></td><td>없음</td><td>세션 사용자 객체의 클래스 이름(점수 +8)</td><td>세션에 사용자처럼 보이는 객체가 여럿일 때</td></tr>
+              <tr><td><code>contexa.bridge.authentication.session.auto-discover</code></td><td><code>true</code></td><td>후보 이름 밖의 세션 속성까지 훑기</td><td>지정한 이름 · 후보 이름만 보게 할 때 <code>false</code></td></tr>
+              <tr><td><code>contexa.bridge.authentication.prefer-security-context</code></td><td><code>true</code></td><td><code>false</code>면 <code>SecurityContext</code> 대신 세션 · 요청 속성 · 헤더의 사용자 객체로 인증 도장을 만듦</td><td>세션 · 헤더의 값을 먼저 읽게 할 때</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.mfa-keys</code></td><td><code>mfa, mfaVerified, mfaCompleted, secondFactorVerified</code></td><td>MFA 완료 플래그를 찾을 이름</td><td>앱이 MFA 완료를 다른 이름으로 둘 때</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.amr-keys</code></td><td><code>amr</code></td><td>MFA · 로그인 방식을 계산할 RFC 8176 값의 이름</td><td>토큰이 다른 클레임에 <code>amr</code>을 둘 때</td></tr>
+              <tr><td><code>contexa.bridge.authentication.session.attribute</code></td><td>없음</td><td>사용자 객체가 든 세션 속성 이름(없으면 후보 이름 → 자동 탐색)</td><td>세션의 사용자 객체 이름을 알려 줄 때</td></tr>
+              <tr><td><code>contexa.bridge.authentication.headers.enabled</code></td><td><code>false</code></td><td>게이트웨이 헤더 읽기</td><td>게이트웨이가 헤더로 사용자를 넘길 때(신뢰 프록시와 함께)</td></tr>
+              <tr><td><code>contexa.bridge.network.trusted-proxies</code></td><td>없음</td><td>헤더 · <code>X-Forwarded-For</code>를 믿을 프록시</td><td>헤더를 켤 때 반드시</td></tr>
+              <tr><td><code>contexa.bridge.network.trusted-proxy-validation-enabled</code></td><td><code>true</code></td><td>신뢰 프록시 검사. 끄면 헤더 읽기는 늘 거부되고, 클라이언트 IP는 누가 보냈든 <code>X-Forwarded-For</code>를 믿는 옛 방식으로 정해짐</td><td>바꾸지 않습니다(끄면 IP를 위조할 수 있음)</td></tr>
+              <tr><td><code>contexa.bridge.sync.synthetic-email-domain</code></td><td><code>shadow.contexa.local</code></td><td>이메일이 없는 거울 사용자에게 붙이는 이메일 도메인</td><td>회사 이메일 규칙에 맞출 때</td></tr>
+              <tr><td><code>contexa.bridge.sync.enabled</code></td><td><code>true</code></td><td>사용자 거울 동기화</td><td>사용자 거울 동기화를 끌 때</td></tr>
+            </tbody>
+          </table></div>
+          <p><code>contexa.bridge.*</code> 설정 전체(310개)는 <a href="../../install/configuration/index-all.html#contexa-bridge">설정 색인</a>에 있습니다.</p>
+
+          <h2 id="extension">확장점</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>확장점</th><th>쓰는 때</th></tr></thead>
+            <tbody>
+              <tr><td><code>AuthBridge</code></td><td>앱만의 방법으로 요청에서 사용자를 꺼낼 때. 빈 하나를 선언하면 기본 세션 · 요청 속성 · 헤더 브리지를 대신합니다.</td></tr>
+              <tr><td><code>AuthenticationStampResolver</code> · <code>AuthorizationStampResolver</code> · <code>DelegationStampResolver</code></td><td>도장을 만드는 곳을 더하거나 바꿀 때(<code>@Order</code>로 순서 지정)</td></tr>
+              <tr><td><code>ContexaAuthBridgeHandler</code></td><td>직접 넘기기 처리 자체를 바꿀 때</td></tr>
+              <tr><td><code>BridgeUserMirrorSyncService</code></td><td>사용자 거울을 다르게 남길 때</td></tr>
+              <tr><td><code>AgentClientDirectory</code></td><td>어떤 클라이언트 · 계정이 승인된 에이전트인지 알려 줄 때(<a href="../agent/overview.html">에이전트 보안</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="overview.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">공통 계약: 앱 코드에 쓰는 Contexa 타입</span>
+            </a>
+            <a href="../autoconfigure/overview.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">자동설정: 무엇이 켜지고 어떻게 끄나</span>
+            </a>
+          </div>

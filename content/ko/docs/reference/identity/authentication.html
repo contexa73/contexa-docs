@@ -3,350 +3,256 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">레퍼런스</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">인증</span>
+            <span class="breadcrumb-current">로그인 방법</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-info">contexa-identity</span>
             </div>
-            <h1>인증</h1>
-            <p class="lead">각 인증 방법에 대한 DSL 옵션 및 코드 예제입니다. <a href="dsl.html">Identity DSL</a>에서 <code>.form()</code>, <code>.rest()</code>, <code>.ott()</code>, <code>.passkey()</code>를 통해 설정하는 인증 방법에 대한 상세 레퍼런스입니다.</p>
+            <h1>로그인 방법</h1>
+            <p class="lead">Contexa가 로그인을 맡을 때 쓰는 단일 로그인 방법 네 가지(폼 · REST · 일회용 코드 · 패스키)를 켜고, 주소를 바꾸고, 결과를 확인하는 방법을 설명합니다. 로그인 성공 · 실패를 누가 처리하는지와 로그인 정보를 어디에 저장하는지도 다룹니다.</p>
           </div>
 
-          <!-- Overview -->
-          <section class="docs-section">
-            <h2 id="overview">개요</h2>
-            <p>Contexa Identity는 4가지 인증 방법을 제공합니다. 각 방법은 독립적인 <code>SecurityFilterChain</code>을 생성하며, 우선순위는 <code>order()</code>를 통해 제어됩니다.</p>
+          <div class="callout callout-info">
+            <strong>Contexa가 로그인을 맡을 때(<code>CONTEXA_OWNED</code>)의 기능입니다.</strong> 기본값 <code>HOST_OWNED</code>에서는 앱의 Spring Security가 로그인을 맡고 이 페이지의 흐름은 만들어지지 않습니다. 앱의 기존 로그인을 그대로 쓰려면 <a href="../common/bridge.html">기존 로그인과 연결하기</a>를 보세요. 흐름을 적는 방법과 공통 옵션은 <a href="dsl.html">인증 DSL</a>에 있습니다.
+          </div>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>인증 방법</th><th>DSL 메서드</th><th>기본 Order</th><th>용도</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Form Login</td><td><code>.form()</code></td><td>100</td><td>기존 웹 폼 로그인 (서버 렌더링)</td></tr>
-                <tr><td>REST API</td><td><code>.rest()</code></td><td>200</td><td>JSON 기반 API 인증 (SPA, 모바일)</td></tr>
-                <tr><td>One-Time Token</td><td><code>.ott()</code></td><td>300</td><td>매직 링크 / 이메일 인증</td></tr>
-                <tr><td>WebAuthn / Passkey</td><td><code>.passkey()</code></td><td>400</td><td>생체 인증 / 하드웨어 키</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="choose">어떤 방법을 언제 쓰나</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>방법</th><th>쓰는 곳</th><th>기본 order</th><th>로그인 처리 기본 주소</th></tr></thead>
+            <tbody>
+              <tr><td>폼 <code>.form()</code></td><td>서버가 그리는 로그인 화면</td><td>100</td><td><code>POST /login</code></td></tr>
+              <tr><td>REST <code>.rest()</code></td><td>SPA · 모바일 앱 · API 클라이언트(JSON)</td><td>200</td><td><code>POST /api/login</code></td></tr>
+              <tr><td>일회용 코드 <code>.ott()</code></td><td>메일로 받은 코드로 로그인</td><td>300</td><td>발급 <code>POST /ott/generate</code>, 로그인 <code>POST /login/ott</code></td></tr>
+              <tr><td>패스키 <code>.passkey()</code></td><td>비밀번호 없는 로그인(WebAuthn)</td><td>400</td><td><code>POST /login/webauthn</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>각 방법은 자기 체인 하나가 되고, order가 낮은 체인이 먼저 요청을 비교합니다. <code>order</code> · <code>rawHttp</code> · <code>disableCsrf</code> 같은 공통 옵션은 <a href="dsl.html#flow-options">흐름 옵션</a>에 있습니다.</p>
+          <h3 id="single-vs-mfa">단일 로그인과 MFA 안의 요소</h3>
+          <p>같은 방법을 MFA 흐름 안에서 2차 요소로 쓰면 주소 · 구현 · 진행 관리가 달라집니다. MFA는 <a href="mfa.html">적응형 MFA</a>를 보세요. 패스키를 예로 들면:</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>항목</th><th>단일 패스키</th><th>MFA 안의 패스키</th></tr></thead>
+            <tbody>
+              <tr><td>DSL</td><td><code>.passkey(...)</code></td><td><code>.mfa(mfa -&gt; mfa.passkey(...))</code></td></tr>
+              <tr><td>로그인 처리 주소</td><td><code>/login/webauthn</code></td><td><code>/login/mfa-webauthn</code></td></tr>
+              <tr><td>구현</td><td><code>PasskeyAuthenticationAdapter</code>, Spring 내장 필터</td><td><code>MfaPasskeyAuthenticationAdapter</code>, Spring 필터 + Contexa 처리기</td></tr>
+              <tr><td>진행 관리</td><td>로그인 저장소(<code>SecurityContextRepository</code>)</td><td>MFA 상태 기계와 MFA 세션</td></tr>
+            </tbody>
+          </table></div>
 
-            <p>모든 인증 방법은 <a href="dsl.html#rawhttp">rawHttp()</a>를 통해 전체 Spring Security API에 접근할 수 있으며, <a href="dsl.html#common-options">공통 옵션</a>(order, CSRF, CORS, 헤더, 로그아웃 등)을 지원합니다.</p>
+          <h2 id="form">폼 로그인</h2>
+          <pre><code class="language-java">registry
+        .form(form -&gt; form.defaultSuccessUrl("/home"))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <p><code>loginPage</code>를 주지 않으면 Spring 기본 로그인 화면이 <code>GET /login</code>에 생기고, 그 화면이 <code>POST /login</code>으로 보냅니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>옵션</th><th>기본값</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>loginPage(String)</code></td><td>없음(Spring 기본 화면 <code>/login</code>)</td><td>앱이 만든 로그인 화면을 쓸 때. 처리 주소는 바뀌지 않습니다</td></tr>
+              <tr><td><code>loginProcessingUrl(String)</code></td><td><code>/login</code></td><td>화면이 다른 주소로 보낼 때, 체인 범위가 <code>/login</code>을 포함하지 않을 때</td></tr>
+              <tr><td><code>usernameParameter(String)</code> · <code>passwordParameter(String)</code></td><td><code>username</code> · <code>password</code></td><td>화면의 입력 이름이 다를 때</td></tr>
+              <tr><td><code>defaultSuccessUrl(String)</code>, <code>defaultSuccessUrl(String, boolean)</code></td><td>없음</td><td>로그인 뒤 이동할 주소. <code>true</code>면 원래 가려던 주소 대신 늘 이 주소로</td></tr>
+              <tr><td><code>failureUrl(String)</code></td><td>없음(Spring 기본 <code>/login?error</code>)</td><td>실패 뒤 이동할 주소</td></tr>
+              <tr><td><code>permitAll()</code></td><td>꺼짐</td><td>로그인 화면 · 처리 주소를 인증 없이 열어야 할 때</td></tr>
+              <tr><td><code>rawFormLogin(...)</code></td><td>없음</td><td>Spring <code>FormLoginConfigurer</code>를 직접 만질 때. 여러 번 부르면 마지막 것만 남습니다</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>로그인 화면만 바꾸면 처리 주소는 그대로 <code>/login</code>입니다.</strong> Spring Security에서는 <code>loginPage</code>가 처리 주소도 정하지만, Contexa 폼 흐름은 처리 주소를 <code>contexa.auth.urls.single.form-login-processing</code>(기본 <code>/login</code>)으로 먼저 정합니다. 체인 범위를 좁혔다면 <code>loginProcessingUrl</code>도 함께 바꾸세요.
+          </div>
+          <pre><code class="language-java">registry
+        .form(form -&gt; form
+                .loginPage("/admin/login")
+                .loginProcessingUrl("/admin/login")
+                .permitAll()
+                .rawHttp(http -&gt; http.securityMatcher("/admin/**"))
+                .rawFormLogin(login -&gt; login.usernameParameter("email")))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <p>여기서 <code>/admin/login</code> 화면은 앱이 만들어야 합니다. 응답을 직접 만들려면 <code>successHandler(...)</code> · <code>failureHandler(...)</code>를 줍니다(<a href="#handlers">성공 · 실패 처리</a>).</p>
+          <h3 id="form-verify">확인하기</h3>
+          <ul>
+            <li>보호된 주소를 열면 로그인 화면으로 이동합니다.</li>
+            <li>로그인에 성공하면 <code>defaultSuccessUrl</code>(또는 원래 가려던 주소)로, 실패하면 <code>/login?error</code>로 갑니다.</li>
+          </ul>
 
-            <div class="callout callout-info">
-              이러한 인증 방법을 <strong>MFA (Multi-Factor Authentication)</strong>와 함께 사용하는 방법은 <a href="mfa.html">적응형 MFA</a> 문서를 참조하세요. URL, 어댑터 및 상태 관리는 단일 인증과 MFA 플로우에서 다르게 동작합니다.
-            </div>
-          </section>
+          <h2 id="rest">REST 로그인</h2>
+          <p>JSON 본문으로 로그인합니다. 토큰 상태와 함께 쓰는 경우가 많지만 세션 상태도 됩니다.</p>
+          <pre><code class="language-java">registry
+        .rest(rest -&gt; rest.defaultSuccessUrl("/app"))
+        .oauth2(Customizer.withDefaults())
+        .build();</code></pre>
+          <pre><code class="language-http">POST /api/login
+Content-Type: application/json
 
-          <!-- Form Login -->
-          <section class="docs-section">
-            <h2 id="form-login">Form Login</h2>
-            <p>기존 웹 폼 기반 로그인입니다. DSL을 통해 Spring Security의 <code>formLogin()</code>을 설정합니다. 기본 order는 <strong>100</strong>입니다.</p>
+{"username": "alice", "password": "s3cret"}</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>상태</th><th>성공 응답(200, JSON)</th></tr></thead>
+            <tbody>
+              <tr><td><code>.oauth2()</code>, <code>HEADER</code> 전송(기본)</td><td><code>accessToken</code>, <code>tokenType</code>(<code>Bearer</code>), <code>expiresIn</code>, <code>refreshToken</code>, <code>refreshExpiresIn</code>, <code>tokenTransportMethod</code>, <code>authenticated</code>, <code>redirectUrl</code>, <code>message</code>, <code>username</code></td></tr>
+              <tr><td><code>.session()</code></td><td><code>authenticated</code>, <code>redirectUrl</code>, <code>message</code>, <code>username</code>, <code>stateType</code>(<code>SESSION</code>) + 세션 쿠키</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>로그인 처리 주소는 <code>POST</code>만 받습니다. 같은 주소의 <code>GET /api/login</code>에는 기본 로그인 화면이 나옵니다.</li>
+            <li>실패하면 401 JSON을 돌려주며, 실패 응답은 최소 <code>contexa.auth.mfa.minimum-delay-ms</code>(기본 500ms)가 지난 뒤 나갑니다. 비밀번호 추측의 속도를 늦추기 위해서입니다.</li>
+            <li><code>.oauth2()</code>가 이미 상태 없음(<code>STATELESS</code>)으로 구성하므로 <code>rawHttp</code>로 따로 지정할 필요가 없습니다. <code>.oauth2()</code>를 쓰면 <code>contexa.auth.oauth2.client-secret</code>이 꼭 있어야 합니다(<a href="state-management.html#oauth2-required">토큰 상태에 꼭 필요한 설정</a>).</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>옵션</th><th>기본값</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>loginProcessingUrl(String)</code></td><td><code>/api/login</code></td><td>API 경로 규칙이 다를 때</td></tr>
+              <tr><td><code>defaultSuccessUrl(...)</code> · <code>failureUrl(String)</code></td><td>없음</td><td>응답의 <code>redirectUrl</code> · 실패 뒤 이동 주소</td></tr>
+              <tr><td><code>securityContextRepository(...)</code></td><td>없음</td><td>REST 흐름은 이 옵션을 지정했을 때만 로그인 저장소를 바꿉니다</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="rest-verify">확인하기</h3>
+          <pre><code class="language-http">GET /api/orders
+Authorization: Bearer &lt;accessToken&gt;</code></pre>
+          <p>받은 <code>accessToken</code>을 실으면 보호된 API가 응답하고, 빼면 401이 옵니다.</p>
 
-            <h3 id="form-options">전체 옵션</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>메서드</th><th>타입</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>loginPage(String)</code></td><td>String</td><td>단일 인증에서는 미설정, MFA 빌더에서는 기본 1차 로그인 페이지 적용</td><td>로그인 페이지 URL</td></tr>
-                <tr><td><code>usernameParameter(String)</code></td><td>String</td><td><code>"username"</code></td><td>사용자명 파라미터 이름</td></tr>
-                <tr><td><code>passwordParameter(String)</code></td><td>String</td><td><code>"password"</code></td><td>비밀번호 파라미터 이름</td></tr>
-                <tr><td><code>loginProcessingUrl(String)</code></td><td>String</td><td><code>AuthUrlProvider.getSingleFormLoginProcessing()</code></td><td>로그인 처리 URL</td></tr>
-                <tr><td><code>defaultSuccessUrl(String)</code></td><td>String</td><td>-</td><td>로그인 성공 후 리다이렉트 URL</td></tr>
-                <tr><td><code>defaultSuccessUrl(String, boolean)</code></td><td>String, boolean</td><td>-</td><td>성공 URL + alwaysUse 플래그</td></tr>
-                <tr><td><code>failureUrl(String)</code></td><td>String</td><td>-</td><td>로그인 실패 시 리다이렉트 URL</td></tr>
-                <tr><td><code>permitAll()</code></td><td>-</td><td><code>false</code></td><td>로그인 페이지에 대한 미인증 접근 허용</td></tr>
-                <tr><td><code>successHandler(PlatformAuthenticationSuccessHandler)</code></td><td>Handler</td><td>자동 선택</td><td>커스텀 성공 핸들러</td></tr>
-                <tr><td><code>failureHandler(PlatformAuthenticationFailureHandler)</code></td><td>Handler</td><td>자동 선택</td><td>커스텀 실패 핸들러</td></tr>
-                <tr><td><code>securityContextRepository(SecurityContextRepository)</code></td><td>Repository</td><td>상태 유형에 따라 자동 선택</td><td>보안 컨텍스트 리포지토리</td></tr>
-                <tr><td><code>rawFormLogin(SafeHttpFormLoginCustomizer)</code></td><td>Customizer</td><td>-</td><td><code>formLogin()</code> 내부 직접 커스터마이제이션</td></tr>
-                <tr><td><code>rawHttp(SafeHttpCustomizer&lt;HttpSecurity&gt;)</code></td><td>Customizer</td><td>-</td><td>전체 Spring Security API 접근 (누적)</td></tr>
-                <tr><td><code>order(int)</code></td><td>int</td><td>100</td><td>Filter Chain 우선순위</td></tr>
-                <tr><td><code>asep(Customizer&lt;FormAsepAttributes&gt;)</code></td><td>Customizer</td><td>-</td><td>ASEP 어노테이션 속성 설정</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="ott">일회용 코드(OTT)</h2>
+          <p>사용자 이름을 받아 일회용 코드를 메일로 보내고, 그 코드로 로그인합니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>일회용 코드 로그인</strong>코드는 Contexa DB에 두고 메일로 보냅니다. 문자 메시지(SMS) 발송 구현은 없습니다.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor dg-request">브라우저</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /ott/generate</code>, <code>username</code>(필수) · <code>email</code>(선택)</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-host">메일</span><span class="dg-msg-text">코드를 사용자 메일 주소로 보냄</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">브라우저</span><span class="dg-msg-text">코드를 보냈다는 안내 주소로 이동(<code>contexa.auth.urls.factors.ott.code-sent</code>)</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">브라우저</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /login/ott</code>, <code>username</code> · <code>token</code> → 로그인</span></li>
+            </ol>
+          </figure>
+          <pre><code class="language-java">registry
+        .ott(Customizer.withDefaults())
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <ul>
+            <li><strong>발송 서비스:</strong> 기본 <code>OneTimeTokenService</code> 빈은 <code>EmailOneTimeTokenService</code>입니다. 코드를 Contexa DB의 <code>one_time_tokens</code> 표에 두고 Spring 메일(<code>spring.mail.*</code>)로 보냅니다.</li>
+            <li><strong>받는 주소:</strong> 사용자 표(<code>users</code>)의 메일 주소입니다. 주소가 없으면 사용자 이름을 주소로 씁니다. 요청의 <code>email</code>이 등록된 주소와 다르면 거부합니다.</li>
+            <li><strong>메일을 보내지 못하면:</strong> <code>contexa.auth.ott.fail-on-email-error</code>(기본 <code>true</code>)이면 발급이 실패합니다. <code>false</code>면 코드는 만들고 경고 로그만 남깁니다.</li>
+            <li><strong>유효 시간:</strong> 코드는 만든 뒤 5분 동안 유효합니다(Spring 기본값). <code>contexa.auth.mfa.otp-token-validity-seconds</code>(기본 300)는 메일 안내 문구의 분 수에만 쓰입니다.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>옵션</th><th>기본값</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>tokenGeneratingUrl(String)</code></td><td><code>/ott/generate</code></td><td>코드 발급 주소를 바꿀 때</td></tr>
+              <tr><td><code>defaultSubmitPageUrl(String)</code></td><td><code>/login/ott/verify</code></td><td>코드 입력 화면 주소를 바꿀 때</td></tr>
+              <tr><td><code>showDefaultSubmitPage(boolean)</code></td><td><code>true</code></td><td>코드 입력 화면을 앱이 직접 만들 때 <code>false</code></td></tr>
+              <tr><td><code>loginProcessingUrl(String)</code></td><td><code>/login/ott</code></td><td>코드 확인 주소를 바꿀 때</td></tr>
+              <tr><td><code>tokenGenerationSuccessHandler(...)</code></td><td><code>oneTimeTokenCreationSuccessHandler</code> 빈</td><td>코드를 만든 뒤 응답을 바꿀 때. 기본 처리기는 <code>contexa.auth.urls.factors.ott.code-sent</code>(기본 <code>/mfa/ott/code-sent</code>) 주소로 이동시킵니다</td></tr>
+              <tr><td><code>tokenService(...)</code></td><td><code>OneTimeTokenService</code> 빈</td><td>아래 주의를 보세요</td></tr>
+            </tbody>
+          </table></div>
+          <p>요청 파라미터 이름은 <code>username</code> · <code>token</code>으로 정해져 있습니다.</p>
+          <div class="callout callout-warning">
+            <strong>발송 서비스를 바꾸려면 옵션이 아니라 빈으로 등록하세요.</strong> DSL의 <code>tokenService(...)</code>는 코드 발급에만 쓰이고, 코드 확인은 <code>OneTimeTokenService</code> 빈으로 합니다. 옵션으로 다른 서비스를 주면 확인이 실패합니다. 빈을 등록하면 발급과 확인 모두 그 빈을 씁니다.
+          </div>
+          <pre><code class="language-java">@Bean
+public OneTimeTokenService oneTimeTokenService() {
+    // 예: 시험용 메모리 저장. 이 서비스는 메일을 보내지 않으므로 코드 전달은 앱이 맡습니다.
+    return new InMemoryOneTimeTokenService();
+}</code></pre>
 
-            <h3 id="form-basic">기본 설정</h3>
-<pre><code class="language-java">registry
-    .form(form -&gt; form
-        .loginPage("/login")
-        .defaultSuccessUrl("/home")
-        .failureUrl("/login?error")
-        .permitAll()
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
+          <h2 id="passkey">패스키</h2>
+          <p>WebAuthn 패스키로 비밀번호 없이 로그인합니다. 패스키는 브라우저가 서비스 이름(<code>rpId</code>)과 접속한 출처(origin)를 확인하므로, 이 두 값을 운영 주소에 맞춰야 합니다.</p>
+          <pre><code class="language-java">registry
+        .passkey(Customizer.withDefaults())
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <pre><code class="language-yaml">contexa:
+  auth:
+    urls:
+      factors:
+        passkey:
+          rp-id: example.com
+          rp-name: Example
+          allowed-origins: https://app.example.com</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>옵션</th><th>기본값</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>rpId(String)</code></td><td><code>localhost</code></td><td>운영 도메인으로. 설정 <code>contexa.auth.urls.factors.passkey.rp-id</code>가 기본값의 출처</td></tr>
+              <tr><td><code>rpName(String)</code></td><td><code>contexa-identity</code></td><td>사용자에게 보이는 서비스 이름</td></tr>
+              <tr><td><code>allowedOrigins(...)</code></td><td><code>http://localhost:</code> + <code>server.port</code>(없으면 8080)</td><td>브라우저가 접속하는 출처. 설정 <code>allowed-origins</code>(쉼표로 여러 개)가 있으면 그 값</td></tr>
+              <tr><td><code>assertionOptionsEndpoint(String)</code> · <code>loginProcessingUrl(String)</code></td><td><code>/webauthn/authenticate/options</code> · <code>/login/webauthn</code></td><td>단일 패스키 흐름에서는 반영되지 않고 Spring 기본 주소를 씁니다</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>패스키 흐름에서는 <code>successHandler</code> · <code>failureHandler</code> 옵션이 쓰이지 않습니다(<a href="#handlers">성공 · 실패 처리</a>).</li>
+            <li><code>rpId</code>가 비어 있으면 시작할 때 검사기가 오류 로그를 남기지만 시작은 막지 않습니다.</li>
+            <li>Contexa DB가 있으면(<code>contexaJdbcTemplate</code> 빈) 패스키 정보를 저장하는 Spring JDBC 저장소(<code>JdbcUserCredentialRepository</code>, <code>JdbcPublicKeyCredentialUserEntityRepository</code>)가 자동 등록됩니다.</li>
+          </ul>
+          <h3 id="passkey-register">패스키 등록</h3>
+          <p>로그인한 사용자가 패스키를 등록합니다. 등록 화면 <code>GET /webauthn/register</code>는 Contexa 화면으로 바뀌어 있습니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>등록 세 단계</strong>성공하면 200과 JSON 본문을 돌려줍니다.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor dg-request">브라우저</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /webauthn/register/options</code> → 등록 옵션</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">브라우저</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-host">인증기</span><span class="dg-msg-text"><code>navigator.credentials.create()</code>로 키 만들기</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">브라우저</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /webauthn/register</code> → 200, 저장</span></li>
+            </ol>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>주소</th><th>하는 일</th></tr></thead>
+            <tbody>
+              <tr><td><code>POST /webauthn/register/options</code></td><td>등록 옵션 만들기</td></tr>
+              <tr><td><code>POST /webauthn/register</code></td><td>패스키 등록(200)</td></tr>
+              <tr><td><code>POST /webauthn/authenticate/options</code></td><td>로그인 옵션 만들기</td></tr>
+              <tr><td><code>POST /login/webauthn</code></td><td>패스키 로그인</td></tr>
+              <tr><td><code>DELETE /webauthn/register/{id}</code></td><td>등록한 패스키 지우기(204)</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3 id="form-custom">커스텀 핸들러</h3>
-<pre><code class="language-java">registry
-    .form(form -&gt; form
-        .loginPage("/login")
-        .usernameParameter("email")
-        .passwordParameter("passwd")
-        .successHandler(customSuccessHandler)
-        .failureHandler(customFailureHandler)
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
+          <h2 id="handlers">성공 · 실패 처리</h2>
+          <p><code>successHandler</code> · <code>failureHandler</code>를 주지 않으면 Contexa가 흐름 종류와 상태에 맞는 처리기를 고릅니다. 여기서 <strong>단일</strong>은 MFA가 아닌 흐름, <strong>MFA 1차</strong>는 MFA의 첫 로그인, <strong>MFA 2차 요소</strong>는 그 뒤의 일회용 코드 · 패스키입니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>흐름</th><th>상태</th><th>성공</th><th>실패</th></tr></thead>
+            <tbody>
+              <tr><td>단일 폼 · 일회용 코드</td><td>세션</td><td>Spring 기본(<code>defaultSuccessUrl</code>로 이동)</td><td>Spring 기본(<code>failureUrl</code>로 이동)</td></tr>
+              <tr><td>단일 REST</td><td>세션</td><td><code>SessionSingleAuthSuccessHandler</code></td><td><code>SessionSingleAuthFailureHandler</code></td></tr>
+              <tr><td>단일 패스키</td><td>세션</td><td>Spring 기본 JSON 응답(로그인 기록 포함)</td><td>Spring 기본</td></tr>
+              <tr><td>단일 모든 방법</td><td>토큰</td><td><code>OAuth2SingleAuthSuccessHandler</code>(토큰 발급)</td><td><code>OAuth2SingleAuthFailureHandler</code></td></tr>
+              <tr><td>MFA 1차</td><td>모두</td><td><code>PrimaryAuthenticationSuccessHandler</code></td><td><code>UnifiedAuthenticationFailureHandler</code></td></tr>
+              <tr><td>MFA 2차 요소</td><td>모두</td><td><code>MfaFactorProcessingSuccessHandler</code></td><td><code>UnifiedAuthenticationFailureHandler</code></td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>Contexa 처리기는 요청이 <code>Accept</code> · <code>Content-Type</code>에 JSON을 담았거나 경로에 <code>/api/</code>가 있으면 JSON으로, 아니면 이동(redirect)으로 답합니다.</li>
+            <li><strong>폼 · REST 흐름</strong>에 <code>successHandler</code>를 주면 자동 처리기 대신 그 처리기가 바로 붙습니다. 토큰 상태라도 Contexa가 토큰을 발급하지 않으므로 응답은 그 처리기가 책임집니다.</li>
+            <li><strong>일회용 코드 흐름</strong>은 자동 처리기가 있으면 그것이 우선입니다. 토큰 상태에서는 준 처리기가 토큰 발급 뒤에 먼저 불리고, 그 처리기가 응답을 쓰지 않으면 Contexa가 씁니다.</li>
+            <li>MFA의 결과 처리는 <a href="mfa.html#results">MFA 결과 처리</a>를 보세요.</li>
+          </ul>
 
-            <h3 id="form-advanced">고급 설정 (rawHttp + rawFormLogin)</h3>
-<pre><code class="language-java">registry
-    .form(form -&gt; form
-        .order(20)
-        .loginPage("/admin/login")
-        .rawFormLogin(formLogin -&gt; formLogin
-            .usernameParameter("admin_user")
-            .passwordParameter("admin_pass"))
-        .rawHttp(http -&gt; http
-            .securityMatcher("/admin/**")
-            .sessionManagement(session -&gt; session
-                .maximumSessions(1)
-                .maxSessionsPreventsLogin(true)))
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
+          <h2 id="context-storage">로그인 정보 저장</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>상태</th><th>저장소</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td>세션</td><td><code>AISessionSecurityContextRepository</code>(<code>@EnableAISecurity</code>에서 늘 있음). 없으면 옵션으로 준 저장소, 그것도 없으면 <code>HttpSessionSecurityContextRepository</code></td><td>HTTP 세션에 저장합니다. Contexa 저장소는 꺼낼 때 판정을 적용합니다</td></tr>
+              <tr><td>토큰</td><td><code>RequestAttributeSecurityContextRepository</code>. 폼 흐름은 옵션으로 준 저장소가 있으면 그것</td><td>그 요청 안에서만 둡니다. 다음 요청은 토큰으로 다시 인증합니다</td></tr>
+            </tbody>
+          </table></div>
+          <p>MFA 1차 로그인도 같습니다. 세션 상태면 세션에, 토큰 상태면 요청 안에만 두고, MFA 도중에는 1차 로그인 증명을 MFA 세션에서 다시 꺼냅니다.</p>
 
-            <div class="callout callout-info">
-              <strong>rawFormLogin() vs rawHttp()</strong><br>
-              <code>rawFormLogin()</code>은 <code>HttpSecurity.formLogin()</code>의 내부만 커스터마이즈합니다. <code>rawHttp()</code>는 전체 Spring Security API(<code>sessionManagement</code>, <code>securityMatcher</code>, 커스텀 필터 등록 등)에 대한 접근을 제공합니다. 두 메서드 모두 누적 호출을 지원합니다.
-            </div>
-          </section>
-
-          <!-- REST API Authentication -->
-          <section class="docs-section">
-            <h2 id="rest-api">REST API 인증</h2>
-            <p>JSON 기반 REST API 인증입니다. SPA와 모바일 앱 같은 프론트엔드 클라이언트에서 JSON 페이로드로 인증합니다. 기본 order는 <strong>200</strong>입니다.</p>
-
-            <h3 id="rest-options">전체 옵션</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>메서드</th><th>타입</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>loginProcessingUrl(String)</code></td><td>String</td><td><code>AuthUrlProvider.getSingleRestLoginProcessing()</code></td><td>REST 로그인 처리 URL</td></tr>
-                <tr><td><code>defaultSuccessUrl(String)</code></td><td>String</td><td>-</td><td>성공 후 리다이렉트 URL</td></tr>
-                <tr><td><code>defaultSuccessUrl(String, boolean)</code></td><td>String, boolean</td><td>-</td><td>성공 URL + alwaysUse 플래그</td></tr>
-                <tr><td><code>failureUrl(String)</code></td><td>String</td><td>-</td><td>실패 시 리다이렉트 URL</td></tr>
-                <tr><td><code>successHandler(PlatformAuthenticationSuccessHandler)</code></td><td>Handler</td><td>자동 선택</td><td>커스텀 성공 핸들러</td></tr>
-                <tr><td><code>failureHandler(PlatformAuthenticationFailureHandler)</code></td><td>Handler</td><td>자동 선택</td><td>커스텀 실패 핸들러</td></tr>
-                <tr><td><code>securityContextRepository(SecurityContextRepository)</code></td><td>Repository</td><td>상태 유형에 따라 자동 선택</td><td>보안 컨텍스트 리포지토리</td></tr>
-                <tr><td><code>rawHttp(SafeHttpCustomizer&lt;HttpSecurity&gt;)</code></td><td>Customizer</td><td>-</td><td>전체 Spring Security API 접근 (누적)</td></tr>
-                <tr><td><code>order(int)</code></td><td>int</td><td>200</td><td>Filter Chain 우선순위</td></tr>
-                <tr><td><code>asep(Customizer&lt;RestAsepAttributes&gt;)</code></td><td>Customizer</td><td>-</td><td>ASEP 어노테이션 속성 설정</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="rest-basic">기본 설정</h3>
-<pre><code class="language-java">registry
-    .rest(rest -&gt; rest
-        .loginProcessingUrl("/api/auth/login")
-    )
-    .oauth2(Customizer.withDefaults())
-    .build();</code></pre>
-
-            <h3 id="rest-stateless">Stateless API 설정 (rawHttp)</h3>
-<pre><code class="language-java">registry
-    .rest(rest -&gt; rest
-        .order(50)
-        .loginProcessingUrl("/api/auth")
-        .rawHttp(http -&gt; http
-            .securityMatcher("/api/**")
-            .sessionManagement(session -&gt;
-                session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)))
-    )
-    .oauth2(Customizer.withDefaults())
-    .build();</code></pre>
-
-            <div class="callout callout-info">
-              <strong>REST + OAuth2 조합</strong><br>
-              REST API 인증은 일반적으로 Stateless JWT 기반 운영을 위해 <code>.oauth2()</code>와 결합됩니다. <code>.session()</code>과도 결합할 수 있지만, API 서버에는 OAuth2를 권장합니다.
-            </div>
-          </section>
-
-          <!-- One-Time Token -->
-          <section class="docs-section">
-            <h2 id="ott">One-Time Token (매직 링크)</h2>
-            <p>이메일 또는 SMS로 전송되는 일회용 토큰을 통한 인증입니다. 매직 링크 방식의 비밀번호 없는 인증입니다. 기본 order는 <strong>300</strong>입니다.</p>
-
-            <h3 id="ott-options">전체 옵션</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>메서드</th><th>타입</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>tokenGeneratingUrl(String)</code></td><td>String</td><td>-</td><td>토큰 생성 요청 URL</td></tr>
-                <tr><td><code>defaultSubmitPageUrl(String)</code></td><td>String</td><td>-</td><td>토큰 입력 페이지 URL</td></tr>
-                <tr><td><code>parameter names</code></td><td>String</td><td><code>"username"</code> / <code>"token"</code></td><td>현재 공개 OTT DSL은 기본 파라미터 이름을 사용합니다. 다른 이름이 필요하면 하위 옵션 커스터마이징이 필요합니다.</td></tr>
-                <tr><td><code>showDefaultSubmitPage(boolean)</code></td><td>boolean</td><td><code>true</code></td><td>기본 토큰 제출 페이지 표시 여부</td></tr>
-                <tr><td><code>tokenService(OneTimeTokenService)</code></td><td>Service</td><td>애플리케이션 컨텍스트의 Bean</td><td>토큰 생성/검증 서비스 구현 (필수)</td></tr>
-                <tr><td><code>tokenGenerationSuccessHandler(OneTimeTokenGenerationSuccessHandler)</code></td><td>Handler</td><td>-</td><td>토큰 생성 성공 핸들러 (예: 이메일 발송)</td></tr>
-                <tr><td><code>loginProcessingUrl(String)</code></td><td>String</td><td><code>AuthUrlProvider.getSingleOttLoginProcessing()</code></td><td>토큰 검증 처리 URL</td></tr>
-                <tr><td><code>successHandler(PlatformAuthenticationSuccessHandler)</code></td><td>Handler</td><td>자동 선택</td><td>인증 성공 핸들러</td></tr>
-                <tr><td><code>failureHandler(PlatformAuthenticationFailureHandler)</code></td><td>Handler</td><td>자동 선택</td><td>인증 실패 핸들러</td></tr>
-                <tr><td><code>rawHttp(SafeHttpCustomizer&lt;HttpSecurity&gt;)</code></td><td>Customizer</td><td>-</td><td>전체 Spring Security API 접근 (누적)</td></tr>
-                <tr><td><code>order(int)</code></td><td>int</td><td>300</td><td>Filter Chain 우선순위</td></tr>
-                <tr><td><code>asep(Customizer&lt;OttAsepAttributes&gt;)</code></td><td>Customizer</td><td>-</td><td>ASEP 어노테이션 속성 설정</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="ott-basic">기본 설정</h3>
-<pre><code class="language-java">registry
-    .ott(ott -&gt; ott
-        .tokenService(customTokenService)
-        .tokenGenerationSuccessHandler(emailSendingHandler)
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
-
-            <h3 id="ott-custom">커스텀 페이지 + 이메일 발송 핸들러</h3>
-<pre><code class="language-java">registry
-    .ott(ott -&gt; ott
-        .tokenGeneratingUrl("/auth/magic-link/request")
-        .defaultSubmitPageUrl("/auth/magic-link/verify")
-        // 현재 공개 OTT DSL은 기본 token 파라미터 이름("token")을 사용합니다.
-        .showDefaultSubmitPage(false)
-        .tokenService(jpaOneTimeTokenService)
-        .tokenGenerationSuccessHandler((request, response, token) -&gt; {
-            String email = request.getParameter("username");
-            emailService.sendMagicLink(email, token.getTokenValue());
-            response.sendRedirect("/auth/magic-link/sent");
-        })
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
-          </section>
-
-          <!-- WebAuthn / Passkey -->
-          <section class="docs-section">
-            <h2 id="passkey">WebAuthn / Passkey</h2>
-            <p>FIDO2 WebAuthn 기반 생체 인증 및 하드웨어 보안 키 인증입니다. 가장 안전한 비밀번호 없는 인증 방식입니다. 기본 order는 <strong>400</strong>입니다.</p>
-
-            <h3 id="passkey-options">전체 옵션</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>메서드</th><th>타입</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>rpName(String)</code></td><td>String</td><td><code>"contexa-identity"</code></td><td>Relying Party 이름 (사용자에게 표시)</td></tr>
-                <tr><td><code>rpId(String)</code></td><td>String</td><td><code>"localhost"</code></td><td>Relying Party ID (도메인)</td></tr>
-                <tr><td><code>allowedOrigins(Set&lt;String&gt;)</code></td><td>Set&lt;String&gt;</td><td><code>["http://localhost:${server.port}"]</code> (명시적 설정이 없을 때의 fallback)</td><td>허용 오리진 목록</td></tr>
-                <tr><td><code>allowedOrigins(String...)</code></td><td>String...</td><td>-</td><td>허용 오리진 (varargs)</td></tr>
-                <tr><td><code>assertionOptionsEndpoint(String)</code></td><td>String</td><td><code>AuthUrlProvider.getSinglePasskeyAssertionOptions()</code></td><td>Assertion 옵션 엔드포인트</td></tr>
-                <tr><td><code>loginProcessingUrl(String)</code></td><td>String</td><td><code>AuthUrlProvider.getSinglePasskeyLoginProcessing()</code></td><td>인증 처리 URL</td></tr>
-                <tr><td><code>successHandler(PlatformAuthenticationSuccessHandler)</code></td><td>Handler</td><td>자동 선택</td><td>인증 성공 핸들러</td></tr>
-                <tr><td><code>failureHandler(PlatformAuthenticationFailureHandler)</code></td><td>Handler</td><td>자동 선택</td><td>인증 실패 핸들러</td></tr>
-                <tr><td><code>rawHttp(SafeHttpCustomizer&lt;HttpSecurity&gt;)</code></td><td>Customizer</td><td>-</td><td>전체 Spring Security API 접근 (누적)</td></tr>
-                <tr><td><code>order(int)</code></td><td>int</td><td>400</td><td>Filter Chain 우선순위</td></tr>
-                <tr><td><code>asep(Customizer&lt;PasskeyAsepAttributes&gt;)</code></td><td>Customizer</td><td>-</td><td>ASEP 어노테이션 속성 설정</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="passkey-basic">기본 설정</h3>
-<pre><code class="language-java">registry
-    .passkey(passkey -&gt; passkey
-        .rpName("My Application")
-        .rpId("example.com")
-        .allowedOrigins("https://example.com")
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
-
-            <h3 id="passkey-registration">Passkey 등록 플로우</h3>
-            <p>Passkey 등록은 3단계로 진행됩니다. 서버는 Spring Security의 <code>UserCredentialRepository</code>를 통해 자격 증명을 저장합니다.</p>
-
-<pre class="arch-diagram"><code>
-  Client                         Server
-    |                               |
-    |  1. POST /webauthn/register   |
-    |        /options               |
-    |  ---------------------------&gt; |
-    |                               | PublicKeyCredentialCreationOptions
-    |  &lt;--------------------------- | (rpId, rpName, userId, challenge)
-    |                               |
-    |  2. navigator.credentials     |
-    |        .create(options)       |
-    |  [Browser WebAuthn API]       |
-    |                               |
-    |  3. POST /webauthn/register   |
-    |  ---------------------------&gt; |
-    |  (AuthenticatorAttestation    | Verify + Store in
-    |   Response)                   | UserCredentialRepository
-    |                               |
-    |  &lt;--- 201 Created ----------- |
-</code></pre>
-
-            <h3 id="passkey-management-api">Passkey 관리 REST API</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>메서드</th><th>URL</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>POST</code></td><td><code>/webauthn/register/options</code></td><td>등록 옵션 생성 (PublicKeyCredentialCreationOptions)</td></tr>
-                <tr><td><code>POST</code></td><td><code>/webauthn/register</code></td><td>자격 증명 등록 (AuthenticatorAttestationResponse 검증)</td></tr>
-                <tr><td><code>POST</code></td><td><code>/webauthn/authenticate/options</code></td><td>인증 챌린지 생성 (assertionOptionsEndpoint)</td></tr>
-                <tr><td><code>DELETE</code></td><td><code>/webauthn/register/{id}</code></td><td>자격 증명 삭제</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="passkey-single-vs-mfa">단일 인증 vs MFA 2차 요소</h3>
-            <p>Passkey는 단일 인증과 MFA 2차 요소 인증에서 완전히 다른 URL, 어댑터 및 상태 관리를 사용합니다.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>측면</th><th>단일 인증</th><th>MFA 2차 요소</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>인증 URL</td><td><code>/login/webauthn</code></td><td><code>/login/mfa-webauthn</code></td></tr>
-                <tr><td>어댑터</td><td><code>PasskeyAuthenticationAdapter</code></td><td><code>MfaPasskeyAuthenticationAdapter</code></td></tr>
-                <tr><td>필터</td><td>Spring Security 내장</td><td>Spring Security WebAuthn 필터 + <code>MfaPasskeyAuthenticationAdapter</code></td></tr>
-                <tr><td>상태 관리</td><td>SecurityContextRepository</td><td>MFA 상태 머신</td></tr>
-                <tr><td>DSL 설정</td><td><code>.passkey()</code></td><td><code>.mfa(m -&gt; m.passkey())</code></td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- Handler Resolution -->
-          <section class="docs-section">
-            <h2 id="handler-resolution">자동 핸들러 선택</h2>
-            <p>인증 방법에 커스텀 핸들러가 지정되지 않으면, 인증 플로우와 상태 유형에 따라 적절한 핸들러가 자동으로 선택됩니다.</p>
-
-            <h3>성공 / 실패 핸들러 선택 규칙</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>플로우</th><th>상태 유형</th><th>성공 핸들러</th><th>실패 핸들러</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>단일 인증</td><td>Session</td><td>Spring Security 기본값</td><td>Spring Security 기본값</td></tr>
-                <tr><td>단일 인증</td><td>OAuth2</td><td><code>OAuth2SingleAuthSuccessHandler</code></td><td><code>OAuth2SingleAuthFailureHandler</code></td></tr>
-                <tr><td>MFA 1차</td><td>모두</td><td><code>PrimaryAuthenticationSuccessHandler</code></td><td><code>UnifiedAuthenticationFailureHandler</code></td></tr>
-                <tr><td>MFA 후속</td><td>모두</td><td><code>MfaFactorProcessingSuccessHandler</code></td><td><code>UnifiedAuthenticationFailureHandler</code></td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>SecurityContextRepository 선택 규칙</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>플로우</th><th>단계</th><th>리포지토리</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>단일 인증</td><td>Session</td><td><code>HttpSessionSecurityContextRepository</code></td></tr>
-                <tr><td>단일 인증</td><td>OAuth2</td><td><code>NullSecurityContextRepository</code></td></tr>
-                <tr><td>MFA</td><td>1차 (최종 아님)</td><td><code>NullSecurityContextRepository</code></td></tr>
-                <tr><td>MFA</td><td>최종 단계</td><td>상태 유형에 따라 자동 선택</td></tr>
-                <tr><td>MFA</td><td>중간 단계</td><td><code>NullSecurityContextRepository</code></td></tr>
-              </tbody>
-            </table></div>
-
-            <p>커스텀 핸들러 구현에 대해서는 <a href="mfa.html">적응형 MFA</a> 문서의 확장 포인트 섹션을 참조하세요.</p>
-          </section>
-
+          <h2 id="settings">자주 바꾸는 설정</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻 · 언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.urls.single.form-login-processing</code></td><td><code>/login</code></td><td>단일 폼 로그인 처리 주소</td></tr>
+              <tr><td><code>contexa.auth.urls.single.rest-login-processing</code></td><td><code>/api/login</code></td><td>단일 REST 로그인 처리 주소</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.rp-id</code></td><td><code>localhost</code></td><td>패스키 서비스 이름. 운영 도메인으로 바꿉니다</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.allowed-origins</code></td><td>없음</td><td>패스키를 받을 출처(쉼표로 여러 개). 없으면 <code>http://localhost:</code> + 서버 포트</td></tr>
+              <tr><td><code>contexa.auth.ott.fail-on-email-error</code></td><td><code>true</code></td><td>메일을 보내지 못하면 코드 발급을 실패시킬지</td></tr>
+            </tbody>
+          </table></div>
+          <p>로그인 관련 설정 전체(<code>contexa.auth.urls.*</code> 포함)는 <a href="../../install/configuration/identity.html">Contexa가 로그인을 맡을 때의 설정</a>에 있습니다.</p>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/identity/dsl.html" class="docs-nav-link prev">
+            <a href="dsl.html" class="docs-nav-link prev">
               <span class="docs-nav-label">이전</span>
-              <span class="docs-nav-title">Identity DSL</span>
+              <span class="docs-nav-title">인증 DSL</span>
             </a>
-            <a href="../../../docs/reference/identity/mfa.html" class="docs-nav-link next">
+            <a href="mfa.html" class="docs-nav-link next">
               <span class="docs-nav-label">다음</span>
               <span class="docs-nav-title">적응형 MFA</span>
             </a>

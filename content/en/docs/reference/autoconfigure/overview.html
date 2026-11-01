@@ -1,56 +1,259 @@
-﻿<!-- Breadcrumb -->
 <nav class="breadcrumb">
-  <a href="../../index.html">Home</a>
-  <span class="breadcrumb-separator">/</span>
-  <a href="../../docs/reference/index.html">Reference</a>
-  <span class="breadcrumb-separator">/</span>
-  <span class="breadcrumb-current">Autoconfigure</span>
-</nav>
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Auto-configuration</span>
+          </nav>
 
-<div class="docs-page-header">
-  <h1>Autoconfigure Overview</h1>
-  <p class="lead">How Contexa bootstraps the OSS runtime control plane through import selection, default platform configuration, and identity/core wiring.</p>
-</div>
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-autoconfigure</span>
+            </div>
+            <h1>Auto-configuration: What Turns On and How to Turn It Off</h1>
+            <p class="lead">What Contexa turns on and leaves out when your application starts. Check whether Contexa is on, and find how to turn a feature off or replace a default bean with your own.</p>
+          </div>
 
-<section class="docs-section">
-  <h2>Bootstrap Chain</h2>
-  <p>The runtime bootstrap starts with <code>@EnableAISecurity</code>, which imports <code>AiSecurityImportSelector</code>. That selector imports <code>AiSecurityConfiguration</code> from the autoconfigure module.</p>
-</section>
+          <h2 id="overview">At a glance: startup order</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The steps Contexa goes through at startup</strong>They happen top to bottom. If Contexa is off at step 3, no Contexa auto-configuration remains.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">Prepare the environment</span><span class="dg-node-desc">In standalone mode the Contexa cache is fixed to memory (<code>LOCAL</code>); old setting names get aliases under the new names (ERROR log); Spring AI vector store and Actuator defaults are added with the lowest precedence.</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title">Read <code>@EnableAISecurity</code></span><span class="dg-node-desc">The annotation values become setting keys (among them <code>contexa.ai.security.mode</code> is the "on" marker) and the default configuration <code>AiSecurityConfiguration</code> is imported (<a href="ai-security.html#enable">details</a>).</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Filter the auto-configurations</span><span class="dg-node-desc">Without the "on" marker every Contexa auto-configuration is removed. In standalone mode, auto-configurations whose names contain <code>redis</code> or <code>kafka</code> are removed.</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">Default authentication configuration</span><span class="dg-node-desc">If the application declares no <code>PlatformConfig</code> bean, the default for the security mode is made.</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">Evaluate the conditions</span><span class="dg-node-desc">The remaining auto-configurations turn on by their own conditions (setting keys, beans, classes, authentication ownership, infrastructure mode) (<a href="#catalog">list</a>).</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">6</span><div class="dg-node"><span class="dg-node-title">Build the security chain</span><span class="dg-node-desc">The authentication configuration is validated, and the Contexa security chain is built only under <code>CONTEXA_OWNED</code>. Under <code>HOST_OWNED</code> this is skipped.</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">7</span><div class="dg-node"><span class="dg-node-title">Startup diagnostics</span><span class="dg-node-desc">Checks that the required beans exist (<a href="#diagnostics">Startup diagnostics</a>); logs an ERROR under <code>HOST_OWNED</code> without an application chain, and a WARN in standalone mode that learned state is in memory.</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">8</span><div class="dg-node"><span class="dg-node-title">After startup</span><span class="dg-node-desc">If the admin console has a stored enforcement mode, that value is applied (it wins over YAML).</span></div></li>
+            </ol>
+          </figure>
+          <p>The defaults outside <code>contexa.*</code> (Spring AI, Actuator) are visible only while Contexa is on. For example the default of <code>spring.ai.vectorstore.pgvector.initialize-schema</code> becomes <code>true</code>, so the first start creates the vector table. A value for the same key in your application settings wins.</p>
 
-<section class="docs-section">
-  <h2>Default Platform Wiring</h2>
-  <p><code>AiSecurityConfiguration</code> provides a default <code>PlatformConfig</code> through <code>IdentityDslRegistry</code> when the application does not define one explicitly.</p>
-</section>
+          <h2 id="active">Is Contexa on or off</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>State</th><th>What happens</th></tr></thead>
+            <tbody>
+              <tr><td>Starter only (no <code>@EnableAISecurity</code>)</td><td>All 71 Contexa auto-configurations are left out. The one exception, the auto-configuration that makes the Contexa database the application's default DataSource, stays only when both <code>contexa.datasource.url</code> and <code>contexa.datasource.isolation.contexa-owned-application=true</code> are set. Spring Boot's DataSource and JPA auto-configurations stay only when <code>spring.datasource.url</code> is set or an embedded database is on the classpath. Other auto-configurations are untouched.</td></tr>
+              <tr><td><code>@EnableAISecurity</code> present</td><td>On. The auto-configurations below turn on by their own conditions.</td></tr>
+              <tr><td><code>contexa.enabled</code> is <code>false</code></td><td>Even with the annotation, nothing is imported and no "on" marker is put, so it is the same as the starter only.</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>The starter brings Spring Security.</strong> Spring Boot's security auto-configuration is not left out even while Contexa is off, so an application that did not use Spring Security gets Spring Boot's default security (every request needs authentication) unless it declares its own <code>SecurityFilterChain</code>. Declare your chain (<a href="ai-security.html#host-tasks">What your application does</a>).
+          </div>
 
-<section class="docs-section">
-  <h2>Identity/Core Integration</h2>
-  <p><code>IdentitySecurityCoreAutoConfiguration</code> assembles the identity bootstrap, zero trust filters, audit/event wiring, and supporting infrastructure used by the OSS runtime path.</p>
-</section>
+          <h2 id="infrastructure">What changes with the infrastructure mode</h2>
+          <p><code>contexa.infrastructure.mode</code> decides where Contexa keeps its state. The values are <code>standalone</code> (default) and <code>distributed</code>; when unset, standalone is assumed.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Standalone and distributed</strong>Standalone is for development and single servers. A restart loses the learned state.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side"><p class="dg-side-title"><code>standalone</code> (default)</p><ul><li>Decisions, baselines and context in server memory</li><li>Events passed inside the server</li><li>Runs without Redis or Kafka (the dedicated Contexa database is still required)</li><li>A WARN at startup that learned state is in memory</li></ul></div>
+              <div class="dg-side dg-store"><p class="dg-side-title"><code>distributed</code></p><ul><li>Decisions, baselines and context in Redis</li><li>Events passed through Kafka</li><li>Every server sees the same decisions</li><li>Each part is built only when its Redis or Kafka connection bean exists</li></ul></div>
+            </div>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Part</th><th><code>standalone</code></th><th><code>distributed</code></th></tr></thead>
+            <tbody>
+              <tr><td>Decision store (<code>ZeroTrustActionRepository</code>)</td><td>Memory. User limit <code>contexa.security.zerotrust.standalone.max-decision-users</code> (0: derived from the heap size)</td><td>Redis (when a <code>RedisTemplate</code> bean exists)</td></tr>
+              <tr><td>Behavioral baselines, rapid re-entry records</td><td>Memory</td><td>Redis (when a <code>RedisTemplate</code> bean exists)</td></tr>
+              <tr><td>Security event collection and publishing</td><td>Memory</td><td>Kafka (with spring-kafka and a <code>KafkaTemplate</code> bean)</td></tr>
+              <tr><td>Block signal propagation</td><td>Memory</td><td>Redisson (when a <code>RedissonClient</code> bean exists)</td></tr>
+              <tr><td>MFA session storage</td><td>HTTP session</td><td>Redis (with a <code>StringRedisTemplate</code>)</td></tr>
+              <tr><td>Contexa cache</td><td>Memory (<code>contexa.cache.type</code> fixed to <code>LOCAL</code>)</td><td>Redis (when a <code>StringRedisTemplate</code> bean exists). <code>HYBRID</code> invalidates through Redis messages</td></tr>
+              <tr><td>Asynchronous security context</td><td>Memory</td><td>Redis (when a <code>generalRedisTemplate</code> bean exists)</td></tr>
+              <tr><td>Auto-configurations whose names contain <code>redis</code> or <code>kafka</code></td><td>Contexa's are always removed. Others (Spring Boot, Redisson, Spring Kafka) are removed only when the application has not set a connection address (<code>spring.data.redis.host</code>, <code>spring.kafka.bootstrap-servers</code>, ...)</td><td>Not removed</td></tr>
+            </tbody>
+          </table></div>
+          <p>The Redis and Kafka connection settings for distributed mode are in <a href="../../install/configuration/infrastructure.html">First start and deployment</a>.</p>
 
-<section class="docs-section">
-  <h2>Module Auto-Configurations</h2>
-  <p>The <code>contexa-autoconfigure</code> module registers auto-configurations through <code>META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports</code>. The table below lists the primary module entry points; the full import list also includes per-feature configurations such as <code>CoreLLMTieredAutoConfiguration</code>, <code>CoreAdvisorAutoConfiguration</code>, <code>CoreRAGAutoConfiguration</code>, <code>CoreStreamingAutoConfiguration</code>, the IAM XACML chain (<code>IamXacmlPap/Pdp/Pep/Pip/PrpAutoConfiguration</code>), the IAM Admin console configurations, and the Identity StateMachine/MFA/WebAuthn/OAuth2 configurations. <code>AiSecurityConfiguration</code> is not listed in the imports file &mdash; it is pulled in only when <code>@EnableAISecurity</code> activates <code>AiSecurityImportSelector</code>.</p>
-  <div class="table-scroll"><table class="api-table">
-    <thead><tr><th>Auto-Configuration</th><th>Package</th><th>Role</th></tr></thead>
-    <tbody>
-      <tr><td><code>AiSecurityConfiguration</code></td><td><code>io.contexa.autoconfigure.ai</code></td><td>Imported via <code>AiSecurityImportSelector</code>. Provides the default <code>PlatformConfig</code> via <code>platformDslConfig()</code> (<code>@ConditionalOnMissingBean</code>).</td></tr>
-      <tr><td><code>IdentitySecurityCoreAutoConfiguration</code></td><td><code>io.contexa.autoconfigure.identity</code></td><td>Assembles the Identity DSL, zero-trust filter chain, authentication flows, and session integration.</td></tr>
-      <tr><td><code>CoreInfrastructureAutoConfiguration</code></td><td><code>io.contexa.autoconfigure.core.infra</code></td><td>Provisions in-memory or distributed infrastructure beans based on <code>contexa.infrastructure.mode</code> (<code>STANDALONE</code>/<code>DISTRIBUTED</code>).</td></tr>
-      <tr><td><code>CoreLLMAutoConfiguration</code></td><td><code>io.contexa.autoconfigure.core.llm</code></td><td>Wires <code>DynamicModelRegistry</code>, <code>UnifiedLLMOrchestrator</code>, Ollama/OpenAI/Anthropic providers, and the <code>contexa.llm.*</code> runtime.</td></tr>
-      <tr><td><code>CoreHCADAutoConfiguration</code></td><td><code>io.contexa.autoconfigure.core.hcad</code></td><td>Configures Host &amp; Context Anomaly Detection (HCAD) filters, baseline learning, and hot-path thresholds.</td></tr>
-      <tr><td><code>IamInfrastructureAutoConfiguration</code></td><td><code>io.contexa.autoconfigure.iam</code></td><td>Registers <code>AuthorizationManagerMethodInterceptor</code> + <code>ProtectableMethodAuthorizationManager</code> for method-level enforcement. The XACML chain (PAP/PDP/PEP/PIP/PRP) lives in separate <code>IamXacml*AutoConfiguration</code> classes.</td></tr>
-      <tr><td><code>IamSecurityCoreAutoConfiguration</code></td><td><code>io.contexa.autoconfigure.iam</code></td><td>Resolves <code>SessionIdResolver</code> (in-memory or Redis) and the <code>SecuritySessionProperties</code> bindings.</td></tr>
-      <tr><td><code>CoreAutonomousAutoConfiguration</code></td><td><code>io.contexa.autoconfigure.core.autonomous</code></td><td>Starts the asynchronous event pipeline: registers <code>SecurityEventProcessor</code> with the ordered handler chain and <code>SecurityPlaneAgent</code>. Companion <code>CoreAutonomousEventAutoConfiguration</code> registers <code>ColdPathEventProcessor</code>, and <code>CoreAutonomousStrategyAutoConfiguration</code> wires the Layer 1/2 strategies.</td></tr>
-    </tbody>
-  </table></div>
-</section>
+          <h2 id="ownership">What turns on with authentication ownership</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Condition</th><th>What turns on</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.bridge.ownership</code> is <code>CONTEXA_OWNED</code></td><td>The Contexa security chain with its request-time filters and agent request gate, the OAuth2 authorization server (<code>IdentityOAuth2AutoConfiguration</code>), the authentication success and failure handlers (<code>IdentityHandlerAutoConfiguration</code>), <code>@EnableMethodSecurity</code> and the <code>#ai</code> expression handler. The IP access filter covers every request (<code>/*</code>)</td></tr>
+              <tr><td><code>HOST_OWNED</code> (default)</td><td>The diagnostic bean that logs an ERROR when there is no application chain. The IP access filter covers <code>/contexa/*</code> only</td></tr>
+              <tr><td><code>contexa.datasource.isolation.contexa-owned-application</code> is <code>true</code> (the <code>FULL</code> default)</td><td>If the application creates no <code>DataSource</code> bean, the application's default <code>dataSource</code> becomes the Contexa database, and the default <code>JdbcTemplate</code> and <code>TransactionTemplate</code> use it too. The startup diagnostics <code>AUTO</code> becomes <code>FAIL_FAST</code></td></tr>
+            </tbody>
+          </table></div>
 
-<section class="docs-section">
-  <h2>Conditional Activation</h2>
-  <p>Auto-configurations are gated by <code>@ConditionalOnProperty</code> so that standalone and distributed topologies share the same classpath:</p>
-  <ul>
-    <li><code>contexa.infrastructure.mode=standalone</code> (default, <code>matchIfMissing = true</code>) &mdash; activates in-memory <code>ZeroTrustActionRepository</code>, in-memory cache, and local event bus.</li>
-    <li><code>contexa.infrastructure.mode=distributed</code> &mdash; activates Redis-backed action storage, Redis cache, and Kafka event streaming where the distributed variants are defined.</li>
-    <li><code>contexa.enabled=false</code> &mdash; master switch that disables the entire platform and keeps Spring Security at its baseline configuration.</li>
-  </ul>
-</section>
+          <h2 id="catalog">Auto-configurations by area (71)</h2>
+          <p>Everything in the four registration files (<code>contexa-autoconfigure</code> 66, <code>contexa-common</code> 2, <code>contexa-core</code> 1, <code>contexa-identity</code> 2). All of them stay only while Contexa is on, and then the "Condition" below applies. "Condition" is the class-level condition; individual beans have more. Setting the "Turn-off key" to <code>false</code> leaves that auto-configuration out (unset means on). <code>AiSecurityConfiguration</code>, which <code>@EnableAISecurity</code> imports, is outside this list.</p>
+
+          <h3 id="catalog-base">Foundation, data, diagnostics</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Auto-configuration</th><th>What it does</th><th>Condition</th><th>Turn-off key</th></tr></thead>
+            <tbody>
+              <tr><td><code>CoreInfrastructureAutoConfiguration</code></td><td>Imports the common foundation (<code>ApplicationConfig</code>, <code>AsyncConfig</code>, OpenTelemetry), in distributed mode the Redis, Redisson and Kafka configuration; asynchronous security context</td><td>—</td><td><code>contexa.enabled</code></td></tr>
+              <tr><td><code>CoreInfrastructureExtendedAutoConfiguration</code></td><td>Binds settings only (no beans)</td><td>—</td><td><code>contexa.infrastructure.enabled</code></td></tr>
+              <tr><td><code>CoreSchedulerLockAutoConfiguration</code></td><td>ShedLock lock so that a scheduled job runs once across servers</td><td>ShedLock classes, <code>contexaDataSource</code> bean</td><td><code>contexa.scheduler.lock.enabled</code></td></tr>
+              <tr><td><code>JpaAuditingConfig</code></td><td>Turns on JPA created and modified timestamps</td><td>—</td><td>—</td></tr>
+              <tr><td><code>ContexaOwnedDataSourceAutoConfiguration</code></td><td>Makes the application's default <code>dataSource</code> the Contexa database (when the application creates no DataSource)</td><td><code>contexa.datasource.isolation.contexa-owned-application=true</code></td><td>—</td></tr>
+              <tr><td><code>CoreDataAutoConfiguration</code></td><td>Dedicated Contexa DataSource, persistence unit, transactions, <code>JdbcTemplate</code>. <code>contexa.datasource.url</code> is checked here</td><td>JPA classes, <code>PlatformConfig</code> bean</td><td>—</td></tr>
+              <tr><td><code>AiBridgeUserMirrorSyncAutoConfiguration</code></td><td>User mirror synchronization of the authentication bridge</td><td>Spring Security classes, bridge settings and user repository beans</td><td>—</td></tr>
+              <tr><td><code>CoreSessionAutoConfiguration</code></td><td>MFA session store (HTTP session or Redis), session ID generator</td><td>—</td><td>—</td></tr>
+              <tr><td><code>CommonRedisAutoConfiguration</code></td><td>The <code>RedisTemplate</code> and <code>StringRedisTemplate</code> Contexa uses</td><td>Redis classes, <code>RedisConnectionFactory</code> bean (left out in standalone mode)</td><td>—</td></tr>
+              <tr><td><code>ContexaCacheAutoConfiguration</code></td><td>Contexa cache (<code>LOCAL</code>, <code>REDIS</code>, <code>HYBRID</code>)</td><td>—</td><td><code>contexa.cache.enabled</code></td></tr>
+              <tr><td><code>CoreSecurityAutoConfiguration</code></td><td>Authority resolver (<code>AuthorityResolver</code>)</td><td>—</td><td><code>contexa.core.security.enabled</code></td></tr>
+              <tr><td><code>ContexaCapabilityAutoConfiguration</code></td><td>Startup capability diagnostics and the Actuator endpoint</td><td>—</td><td>Checks only: <code>contexa.capability.mode</code> to <code>OFF</code></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="catalog-ai">AI models, general AI engine</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Auto-configuration</th><th>What it does</th><th>Condition</th><th>Turn-off key</th></tr></thead>
+            <tbody>
+              <tr><td><code>OpenAiChatModelOptionsAutoConfiguration</code></td><td>Applies the OpenAI chat model options Contexa needs</td><td>OpenAI chat model class</td><td>—</td></tr>
+              <tr><td><code>AnthropicChatModelOptionsAutoConfiguration</code></td><td>Applies and checks the Anthropic chat model options</td><td>Anthropic chat model class</td><td>—</td></tr>
+              <tr><td><code>OllamaChatModelOptionsAutoConfiguration</code></td><td>Applies the Ollama chat options</td><td>Ollama chat model class</td><td>—</td></tr>
+              <tr><td><code>CoreLLMTieredAutoConfiguration</code></td><td>Model catalog, per-layer model selection, default chat model, central LLM client</td><td>—</td><td><code>contexa.llm.enabled</code></td></tr>
+              <tr><td><code>CoreLLMAutoConfiguration</code></td><td>Imports the pipeline configuration and binds settings (no beans)</td><td>—</td><td><code>contexa.llm.enabled</code></td></tr>
+              <tr><td><code>CoreAdvisorAutoConfiguration</code></td><td>Advisor registry</td><td>—</td><td><code>contexa.advisor.enabled</code></td></tr>
+              <tr><td><code>CoreRAGAutoConfiguration</code></td><td>Vector storage and search services, retention clean-up of past decision records</td><td>—</td><td><code>contexa.rag.enabled</code></td></tr>
+              <tr><td><code>CoreStdComponentsAutoConfiguration</code></td><td>General AI pipeline parts (prompt generation, context retrieval, LLM execution step, executors)</td><td>—</td><td><code>contexa.std.enabled</code></td></tr>
+              <tr><td><code>CoreStreamingAutoConfiguration</code></td><td>Streaming service</td><td>—</td><td><code>contexa.streaming.enabled</code></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="catalog-decision">Decision engine, SaaS connection</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Auto-configuration</th><th>What it does</th><th>Condition</th><th>Turn-off key</th></tr></thead>
+            <tbody>
+              <tr><td><code>CoreAutonomousAutoConfiguration</code></td><td>The decision engine itself: decision store, baseline learning, Layer 1 and Layer 2 analysis, event processor (<code>SecurityPlaneAgent</code>), agent and delegation registries</td><td>—</td><td><code>contexa.autonomous.enabled</code></td></tr>
+              <tr><td><code>CoreAutonomousEventAutoConfiguration</code></td><td>Event collection and publishing (memory or Kafka), block signals, event processing steps (handlers)</td><td>—</td><td><code>contexa.autonomous.enabled</code></td></tr>
+              <tr><td><code>CoreAutonomousStrategyAutoConfiguration</code></td><td>Binds settings only (no beans)</td><td>—</td><td><code>contexa.autonomous.enabled</code></td></tr>
+              <tr><td><code>CoreSaasLearningAutoConfiguration</code></td><td>SaaS learning artifact registry and release records</td><td><code>contexa.saas.enabled=true</code> (off by default)</td><td>—</td></tr>
+              <tr><td><code>CoreSaasForwardingAutoConfiguration</code></td><td>Sends decisions and statistics to Contexa SaaS and receives signals (<a href="../core/saas.html">Contexa SaaS connection</a>)</td><td><code>contexa.saas.enabled=true</code>, OAuth2 client classes</td><td>—</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="catalog-identity">Authentication (identity)</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Auto-configuration</th><th>What it does</th><th>Condition</th><th>Turn-off key</th></tr></thead>
+            <tbody>
+              <tr><td><code>IdentitySecurityCoreAutoConfiguration</code></td><td>Authentication DSL, configuration validation, chain building (<code>PlatformBootstrap</code>), request-time filters (working only inside the Contexa chain)</td><td><code>PlatformConfig</code> bean</td><td><code>contexa.identity.security-core.enabled</code></td></tr>
+              <tr><td><code>IdentityStateMachineAutoConfiguration</code></td><td>MFA progress state machine</td><td><code>PlatformConfig</code> bean</td><td><code>contexa.identity.statemachine.enabled</code></td></tr>
+              <tr><td><code>IdentityMfaAutoConfiguration</code></td><td>MFA policy evaluation, policy providers, MFA pages</td><td><code>PlatformConfig</code> bean</td><td><code>contexa.identity.mfa.enabled</code></td></tr>
+              <tr><td><code>IdentityWebAuthnAutoConfiguration</code></td><td>Passkey stores</td><td><code>PlatformConfig</code> bean</td><td>—</td></tr>
+              <tr><td><code>IdentityServiceAutoConfiguration</code></td><td>Authentication URLs, mail one-time tokens, magic links, MFA settings API</td><td><code>PlatformConfig</code> bean</td><td><code>contexa.identity.service.enabled</code></td></tr>
+              <tr><td><code>IdentityOAuth2AutoConfiguration</code></td><td>Contexa OAuth2 authorization server, token issuing and validation</td><td><strong><code>CONTEXA_OWNED</code></strong>, authorization server classes, <code>PlatformConfig</code>, <code>contexaJdbcTemplate</code> and <code>contexaTransactionTemplate</code> beans</td><td>—</td></tr>
+              <tr><td><code>IdentityHandlerAutoConfiguration</code></td><td>Authentication success and failure handlers</td><td><strong><code>CONTEXA_OWNED</code></strong>, <code>PlatformConfig</code> bean</td><td><code>contexa.identity.handler.enabled</code></td></tr>
+              <tr><td><code>IdentityAsepAutoConfiguration</code></td><td>Security exception handling (ASEP) configuration</td><td><code>PlatformConfig</code> bean, servlet web application</td><td>—</td></tr>
+              <tr><td><code>AsepAutoConfiguration</code></td><td>Security exception handling (ASEP) method registry</td><td>Servlet web application</td><td>—</td></tr>
+              <tr><td><code>ZeroTrustRedisConfig</code></td><td>Redis connection for distributed mode (Lettuce)</td><td><code>contexa.infrastructure.mode=distributed</code>, Redis and Lettuce classes</td><td>—</td></tr>
+            </tbody>
+          </table></div>
+          <p>For the current state of the security exception handling (ASEP) feature, see the <a href="../identity/asep.html">ASEP page</a>.</p>
+
+          <h3 id="catalog-iam">Authorization (IAM)</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Auto-configuration</th><th>What it does</th><th>Condition</th><th>Turn-off key</th></tr></thead>
+            <tbody>
+              <tr><td><code>IamInfrastructureAutoConfiguration</code></td><td><code>@Protectable</code> method interception, rapid re-entry guard, cache manager, password encoder, role hierarchy</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamSecurityAutoConfiguration</code></td><td>Method security expression handler factory. Under <code>CONTEXA_OWNED</code>: <code>@EnableMethodSecurity</code> and the <code>#ai</code> expression handler</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamSecurityCoreAutoConfiguration</code></td><td>Login attempts, login policy, AI security context store, the service that applies stored decisions to requests (memory or Redis), session ID resolver</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamXacmlPrpAutoConfiguration</code></td><td>Policy retrieval point (database)</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamXacmlPipAutoConfiguration</code></td><td>Attribute information point</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamXacmlPdpAutoConfiguration</code></td><td>Policy expression evaluation, permission evaluators</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamXacmlPepAutoConfiguration</code></td><td>Dynamic URL authorization manager, <code>@Protectable</code> method authorization manager, delegator authority check</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamXacmlPapAutoConfiguration</code></td><td>Policy administration, synchronization, validation, versions, change notification</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamResourceAutoConfiguration</code></td><td>Resource registry and the MVC and method resource scanners</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamMiscAutoConfiguration</code></td><td>Integration event bus, user context service</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamSeedDataAutoConfiguration</code></td><td>Seed data and schema management</td><td><code>PlatformConfig</code> and <code>contexaDataSource</code> beans</td><td><code>contexa.iam.seed.enabled</code></td></tr>
+              <tr><td><code>IamWebSocketAutoConfiguration</code></td><td>Admin console WebSocket</td><td>Servlet web application, <code>PlatformConfig</code> bean, no <code>clientInboundChannel</code> bean in the application</td><td><code>contexa.iam.websocket.enabled</code></td></tr>
+              <tr><td><code>AccessEvaluationAutoConfiguration</code></td><td>AuthZEN decision API</td><td><code>contexa.security.zerotrust.authzen.enabled=true</code> (off by default), servlet web application</td><td>—</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="catalog-admin">Admin console, AI-assisted policy authoring</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Auto-configuration</th><th>What it does</th><th>Condition</th><th>Turn-off key</th></tr></thead>
+            <tbody>
+              <tr><td><code>IamAdminAuthAutoConfiguration</code></td><td>Admin login page; user, role, group and permission management</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAdminMetadataAutoConfiguration</code></td><td>Resource, function and permission catalogs</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAdminMonitoringAutoConfiguration</code></td><td>Dashboard, security monitor, AI decision monitor, menus</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAdminCenterAutoConfiguration</code></td><td>Policy Center</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAdminAccessCenterAutoConfiguration</code></td><td>Access Center</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAdminBlacklistAutoConfiguration</code></td><td>Blocked user management</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAgentRegistryAutoConfiguration</code></td><td>Agent registration, delegation, confirmation by the accountable person, call limits, company records (<a href="../agent/overview.html">Agent security</a>)</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAdminPasswordPolicyAutoConfiguration</code></td><td>Password policy, system settings (including the enforcement mode), audit log retention</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAdminSessionAutoConfiguration</code></td><td>Session management</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAdminIpAutoConfiguration</code></td><td>IP access rules (filter coverage depends on authentication ownership)</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamI18nAutoConfiguration</code></td><td>Admin console messages and language</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAiamZeroTrustSseAutoConfiguration</code></td><td>SSE that pushes decision notices to screens</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAiamInfrastructureAutoConfiguration</code></td><td>AI response post-processing, STOMP events</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAiamWebAutoConfiguration</code></td><td>AI API, block page, unblock MFA handling</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAiamServiceStrategyAutoConfiguration</code></td><td>AI-assisted policy generation, condition template and resource naming strategies</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAiamLabsAutoConfiguration</code></td><td>The Labs for those three features</td><td>—</td><td>—</td></tr>
+              <tr><td><code>IamAiamComponentsAutoConfiguration</code></td><td>Prompt templates and context retrievers for those three features</td><td>—</td><td>—</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="catalog-prompt">Prompt quality, sealed evidence</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Auto-configuration</th><th>What it does</th><th>Condition</th><th>Turn-off key</th></tr></thead>
+            <tbody>
+              <tr><td><code>PromptGovernanceAutoConfiguration</code></td><td>Prompt bundle releases, gates, rollback (<a href="../architecture/prompt-inspection.html">Prompt Governance and Inspection</a>)</td><td>—</td><td><code>contexa.prompt.governance.enabled</code></td></tr>
+              <tr><td><code>SealedEvidenceStoreAutoConfiguration</code></td><td>Sealed evidence store</td><td>Store class</td><td>—</td></tr>
+              <tr><td><code>PqaSealedEvidenceAutoConfiguration</code></td><td>Sealing capture, sampling, retention clean-up (<a href="../architecture/evidence.html">Sealed Evidence and Official Verification</a>)</td><td>—</td><td>—</td></tr>
+              <tr><td><code>PqaOfficialInspectionAutoConfiguration</code></td><td>Official verification screens, evidence lookup</td><td>Verification runtime class</td><td>—</td></tr>
+              <tr><td><code>PromptInspectionAutoConfiguration</code></td><td>OSS prompt inspection and replay</td><td>When <code>contexa.enterprise.enabled</code> is <code>false</code> (default)</td><td><code>contexa.prompt-inspection.enabled</code></td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="diagnostics">Checking the startup diagnostics</h2>
+          <p>When startup finishes, Contexa checks for each capability that the beans it needs were created. It is not a switch that turns features on; it reports what is missing or stops startup.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>contexa.capability.mode</code></th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>AUTO</code> (default)</td><td><code>FAIL_FAST</code> for a Contexa-owned application, <code>WARN</code> otherwise. A Contexa-owned application has <code>contexa.datasource.isolation.contexa-owned-application=true</code> or a <code>spring.application.name</code> starting with <code>contexa-</code>.</td></tr>
+              <tr><td><code>WARN</code></td><td>Reports problems of required capabilities as ERROR logs and keeps starting.</td></tr>
+              <tr><td><code>FAIL_FAST</code></td><td>Stops startup with an <code>IllegalStateException</code> when a required capability is missing or failed.</td></tr>
+              <tr><td><code>STRICT</code></td><td>Stops like <code>FAIL_FAST</code>, and also logs problems of capabilities that are not required.</td></tr>
+              <tr><td><code>OFF</code></td><td>No checks.</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>Six capabilities are checked:</strong> <code>LLM_RUNTIME</code> (chat model), <code>EMBEDDING_RUNTIME</code> (embedding model), <code>RAG_VECTOR</code> (vector store), <code>SECURITY_LEARNING</code> (learning), <code>AUTONOMOUS_DECISION</code> (decision engine), <code>BRIDGE</code> (authentication bridge). Whether each is on and required depends on the environment; override it with <code>contexa.capability.required.&lt;capability&gt;</code> (for example <code>rag-vector</code>).</li>
+            <li><strong>Four enterprise capabilities</strong> (<code>PQA_ENGINE</code>, <code>ENTERPRISE_SOAR</code>, <code>ENTERPRISE_MCP</code>, <code>ENTERPRISE_DASHBOARD</code>) have names and on-rules only; the OSS has no checker for them. SOAR, for example, is on only with <code>contexa.enterprise.enabled=true</code> and the enterprise SOAR module (<a href="../soar/index.html">SOAR extension points</a>).</li>
+            <li><strong>Log:</strong> a problem shows as an ERROR line <code>[ContexaCapability] &lt;capability&gt; ...</code>. A <code>CapabilityContributor</code> bean in your application runs its checks as well.</li>
+            <li><strong>Actuator:</strong> the endpoint <code>contexacapabilities</code> shows the effective mode and the problem list. Whether it is exposed on the web follows Spring Boot Actuator's exposure settings.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.capability.mode</code></td><td><code>AUTO</code></td><td>Table above</td><td><code>FAIL_FAST</code> to stop a deployment with missing beans, <code>WARN</code> for logs only</td></tr>
+              <tr><td><code>contexa.capability.required</code></td><td>Empty</td><td>Per-capability override of "required" (keys: <code>llm-runtime</code>, <code>embedding-runtime</code>, <code>rag-vector</code>, <code>security-learning</code>, <code>autonomous-decision</code>, <code>bridge</code>, ...)</td><td>To drop a capability you do not use from "required", or to require one that must be there</td></tr>
+              <tr><td><code>contexa.capability.expose-diagnostics-endpoint</code></td><td><code>true</code></td><td>Registers the Actuator endpoint bean</td><td><code>false</code> when you do not want the diagnostics endpoint</td></tr>
+            </tbody>
+          </table></div>
+          <p>Other startup logs: standalone mode logs one WARN that learned state is in memory (not when you provide the learning store beans), and an old setting name logs one ERROR per prefix (aliases to be removed in v0.3.0; the new names are in the <a href="../../install/configuration.html">configuration guide</a>).</p>
+
+          <h2 id="replace">Replacing beans</h2>
+          <p>When the application declares a bean of the same type (or the same name), the Contexa default steps aside.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Bean the application declares</th><th>When to use it</th></tr></thead>
+            <tbody>
+              <tr><td><code>PlatformConfig</code></td><td>To use your own authentication configuration instead of the security mode's default (it becomes a chain only under <code>CONTEXA_OWNED</code>, <a href="../identity/dsl.html">Identity DSL</a>)</td></tr>
+              <tr><td><code>ZeroTrustActionRepository</code>, <code>BaselineDataStore</code>, <code>SecurityContextDataStore</code>, <code>ProtectableRapidReentryRepository</code></td><td>To keep decisions, baselines, context or re-entry records elsewhere. Standalone mode can then persist them, and providing the learning stores removes the standalone WARN.</td></tr>
+              <tr><td><code>SecurityEventCollector</code>, <code>SecurityEventPublisher</code>, <code>BlockingSignalBroadcaster</code></td><td>To carry events and block signals over another transport</td></tr>
+              <tr><td><code>MfaSessionRepository</code></td><td>To replace the MFA session store</td></tr>
+              <tr><td><code>ContexaCacheService</code></td><td>To replace the Contexa cache</td></tr>
+              <tr><td>The five named data beans</td><td><code>contexaDataSource</code>, <code>contexaEntityManagerFactory</code>, <code>contexaTransactionManager</code>, <code>contexaTransactionTemplate</code>, <code>contexaJdbcTemplate</code>. To build the Contexa data connection yourself. A <code>contexaDataSource</code> of your own skips the <code>contexa.datasource.url</code> check.</td></tr>
+              <tr><td><code>ContexaJpaManagedPackageProvider</code></td><td>To add entity packages to the dedicated Contexa persistence unit</td></tr>
+              <tr><td><code>LockProvider</code></td><td>To replace the ShedLock lock provider</td></tr>
+              <tr><td><code>AuthBridge</code></td><td>To change how the authentication bridge takes the user (<a href="../common/bridge.html#extension">Authentication bridge</a>)</td></tr>
+              <tr><td><code>CapabilityContributor</code></td><td>To add a startup check (runs together with the default checker)</td></tr>
+            </tbody>
+          </table></div>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="../common/bridge.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Connecting Your Existing Login (Authentication Bridge)</span>
+            </a>
+            <a href="ai-security.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Turning Contexa On and Choosing a Security Mode</span>
+            </a>
+          </div>

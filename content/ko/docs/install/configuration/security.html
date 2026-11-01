@@ -1,569 +1,379 @@
 <nav class="breadcrumb">
             <a href="../../../index.html">홈</a>
             <span class="breadcrumb-separator">/</span>
-            <a href="../../../docs/install/configuration.html">구성</a>
+            <a href="../../../docs/install/configuration.html">설정 길잡이</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">보안</span>
+            <span class="breadcrumb-current">집행 모드와 판정 조정</span>
           </nav>
+
           <div class="docs-page-header">
-            <h1>보안 구성</h1>
-            <p class="lead">Zero Trust, HCAD 탐지, SecurityPlane 에이전트 설정을 포함한 Contexa 보안 엔진의 구성 속성입니다.</p>
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-secondary">설정</span>
+            </div>
+            <h1>집행 모드와 판정 조정</h1>
+            <p class="lead">Contexa가 판정을 만들고 적용할지(집행 모드)를 고르고, 요청 시점 집행 · 판정 시간과 처리량 · 판정 프롬프트 · 최소 대응 규칙 · 행위 기준선 학습을 설정으로 조정합니다. 판정이 만들어지고 적용되는 과정 자체는 <a href="../../reference/architecture/decision-engine.html">판정 엔진</a>과 <a href="../../reference/identity/zero-trust-filters.html">요청 시점 집행</a>에 있습니다.</p>
           </div>
 
-          <!-- SecurityZeroTrustProperties -->
-          <section>
-            <h2 id="zero-trust">Zero Trust 속성</h2>
-            <p><code>contexa.security.zerotrust</code> 아래의 속성으로, <code>SecurityZeroTrustProperties</code>에 바인딩됩니다. Zero Trust 결정 모드, 핵심 임계값, hot-path 처리, 캐시 기간, 요청 추적 동작을 제어합니다. HCAD는 별도의 <code>hcad</code> 접두사에서 구성합니다.</p>
+          <h2 id="overview">한눈에 보기</h2>
+          <p>판정 하나가 지나가는 길과, 길목마다 그 자리를 정하는 이 쪽의 절입니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>판정의 길과 설정 절</strong>꼬리표는 이 쪽의 절 이름입니다. 1~2는 요청 시점, 3~7은 응답이 나간 뒤입니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-tag"><a href="#request-time">요청 시점 집행</a></span><span class="dg-node-title">1. 요청에 저장된 판정 적용</span><span class="dg-node-desc">MFA 요구 · 차단 · 검토 보류 응답, 세션 알아보기</span></li>
+              <li class="dg-node"><span class="dg-node-tag"><a href="#mode">집행 모드</a></span><span class="dg-node-title">2. 분석할지 정하기</span><span class="dg-node-desc">끔 · 관찰이면 여기서 끝, 섀도 · 집행이면 분석으로</span></li>
+              <li class="dg-node"><span class="dg-node-tag"><a href="#throughput">처리량</a></span><span class="dg-node-title">3. 분석 대기열과 스레드</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag"><a href="#timeouts">시간 제한</a> · <a href="#prompt">프롬프트</a></span><span class="dg-node-title">4. 1차 분석, 정하지 못하면 2차 분석</span><span class="dg-node-desc">2차도 정하지 못하면 <a href="#escalate">대체 대응</a></span></li>
+              <li class="dg-node"><span class="dg-node-tag"><a href="#minimum-action">최소 대응 규칙</a></span><span class="dg-node-title">5. 모델 답 검사(v19 · v20 묶음)</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-tag"><a href="#mode">집행 모드</a></span><span class="dg-node-title">6. 판정 저장, 다음 요청부터 적용</span><span class="dg-node-desc">섀도 모드는 기록만 하고 저장하지 않음</span></li>
+              <li class="dg-node"><span class="dg-node-tag"><a href="#baseline">행위 기준선 학습</a></span><span class="dg-node-title">7. 학습</span><span class="dg-node-desc">실제로 적용된 허용 판정만</span></li>
+            </ol>
+          </figure>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Zero Trust 엔진 활성화</td></tr>
-                <tr><td><code>.mode</code></td><td><code>SecurityMode</code></td><td><code>ENFORCE</code></td><td>실행 모드: <code>SHADOW</code>(관찰) 또는 <code>ENFORCE</code>(차단)</td></tr>
-                <tr><td><code>.max-block-mfa-attempts</code></td><td><code>int</code></td><td><code>2</code></td><td>차단 우회 MFA 최대 시도 횟수</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.sampling</code></td></tr>
-                <tr><td><code>.rate</code></td><td><code>double</code></td><td><code>1.0</code></td><td>요청 샘플링 비율 (0.0–1.0)</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.hotpath</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>hot-path 빠른 결정 활성화</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.thresholds</code></td></tr>
-                <tr><td><code>.skip</code></td><td><code>double</code></td><td><code>0.3</code></td><td>점검 생략 임계값 (이하)</td></tr>
-                <tr><td><code>.optional</code></td><td><code>double</code></td><td><code>0.5</code></td><td>선택적 인증 임계값</td></tr>
-                <tr><td><code>.required</code></td><td><code>double</code></td><td><code>0.7</code></td><td>필수 인증 임계값</td></tr>
-                <tr><td><code>.strict</code></td><td><code>double</code></td><td><code>0.9</code></td><td>엄격 차단 임계값</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.protectable</code></td></tr>
-                <tr><td><code>.rapid-reentry-window-ms</code></td><td><code>long</code></td><td><code>5000</code></td><td>보호 자원 재진입 윈도우(ms)</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.redis</code></td></tr>
-                <tr><td><code>.timeout</code></td><td><code>int</code></td><td><code>5</code></td><td>Redis 작업 타임아웃(초)</td></tr>
-                <tr><td><code>.update-interval-seconds</code></td><td><code>int</code></td><td><code>30</code></td><td>Redis 상태 업데이트 간격(초)</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.threat</code></td></tr>
-                <tr><td><code>.initial</code></td><td><code>double</code></td><td><code>0.3</code></td><td>초기 위협 점수</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.cache</code></td></tr>
-                <tr><td><code>.ttl-hours</code></td><td><code>int</code></td><td><code>24</code></td><td>결정 캐시 TTL(시간)</td></tr>
-                <tr><td><code>.session-ttl-minutes</code></td><td><code>int</code></td><td><code>30</code></td><td>세션 캐시 TTL(분)</td></tr>
-                <tr><td><code>.invalidated-ttl-minutes</code></td><td><code>int</code></td><td><code>60</code></td><td>무효화 캐시 TTL(분)</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.session</code></td></tr>
-                <tr><td><code>.tracking-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>세션 추적 활성화</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="mode">집행 모드 고르기</h2>
+          <p>집행 모드(<code>contexa.security.zerotrust.mode</code>)는 AI 모델로 판정을 만들지, 만든 판정을 저장해 다음 요청부터 적용할지를 정합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>모드</th><th>AI 분석</th><th>판정 저장 · 적용</th><th>학습</th><th>쓰는 때</th></tr></thead>
+            <tbody>
+              <tr><td><code>DISABLED</code>(끔)</td><td>하지 않음</td><td>하지 않음</td><td>하지 않음</td><td>판정을 쓰지 않을 때</td></tr>
+              <tr><td><code>OBSERVE</code>(관찰)</td><td colspan="3">지금 코드에서는 <code>DISABLED</code>와 같습니다. 관리 화면 모니터의 표시만 다릅니다.</td><td>—</td></tr>
+              <tr><td><code>SHADOW</code>(섀도)</td><td>함</td><td>판정을 관찰 기록 · 감사 기록에만 남기고, 저장 · 차단 · 응답 변경은 하지 않음</td><td>하지 않음</td><td>도입 첫 단계에서 판정을 지켜볼 때</td></tr>
+              <tr><td><code>ENFORCE</code>(집행, 기본)</td><td>함</td><td>판정을 저장하고 같은 사용자의 다음 요청부터 적용</td><td>실제로 적용된 허용 판정만</td><td>운영</td></tr>
+            </tbody>
+          </table></div>
+          <p>정확히는 AI 분석은 <code>enabled</code>가 켜져 있고 모드가 <code>SHADOW</code> · <code>ENFORCE</code>일 때, 판정 저장 · 적용은 <code>enabled</code>가 켜져 있고 모드가 <code>ENFORCE</code>일 때만 일어납니다.</p>
+          <ul>
+            <li><strong>섀도 모드에서도 기다림이 생기는 요청이 있습니다.</strong> 즉시 판정 메서드(<code>@Protectable(sync = true)</code>)와 판정 기록이 없는 에이전트 요청은 그 요청 안에서 분석합니다. 결과가 허용이 아니어도 막지 않고 진행합니다.</li>
+            <li><strong><code>contexa.security.zerotrust.enabled: false</code>는 <code>DISABLED</code>보다 넓게 끕니다.</strong> 분석을 하지 않는 것에 더해, 분석 사건을 받는 수신기와 로그인 맥락에 판정을 적용하는 단계까지 멈춥니다.</li>
+            <li>단계를 올려 가며 도입하는 순서는 <a href="../shadow-mode.html">집행 모드로 안전하게 시작하기</a>에 있습니다.</li>
+          </ul>
+          <pre><code class="language-yaml">contexa:
+  security:
+    zerotrust:
+      mode: SHADOW     # 지켜본 뒤 ENFORCE로</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.enabled</code></td><td><code>true</code></td><td>제로 트러스트 판정 전체 켜기</td><td>Contexa 판정을 통째로 멈출 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td><code>DISABLED</code> · <code>OBSERVE</code> · <code>SHADOW</code> · <code>ENFORCE</code></td><td>도입 단계에 맞춰</td></tr>
+            </tbody>
+          </table></div>
 
-            <p><strong>관련 문서:</strong> <a href="../../../docs/reference/architecture/zero-trust-flow.html">Zero Trust 플로우</a></p>
-          </section>
+          <h3 id="mode-console">관리 화면에서 바꾸기</h3>
+          <p>관리 화면 시스템 설정(<code>/contexa/admin/system-settings</code>)에서도 집행 모드를 바꿀 수 있습니다. 재시작 없이 저장하는 즉시 적용됩니다.</p>
+          <ul>
+            <li>한 번 저장하면 그 뒤로는 <strong>저장한 값이 YAML을 이깁니다.</strong> 기동할 때마다 저장한 값으로 <code>contexa.security.zerotrust.mode</code>를 덮어씁니다. YAML만 바꿔서는 모드가 바뀌지 않으니, 화면에서 바꾸세요.</li>
+            <li>아직 저장한 적이 없으면 화면에는 지금 모드가 미리 채워져 있습니다. 모드 칸을 비워 저장하면 <code>SHADOW</code>가 됩니다.</li>
+          </ul>
+          <div class="callout callout-warning">
+            <strong>모드를 낮춰도 이미 저장된 제한은 남을 수 있습니다.</strong> <code>@Protectable</code> 메서드는 모드를 따릅니다(섀도에서는 저장된 제한을 기록만 하고, 끔 · 관찰에서는 보지 않음). 하지만 Contexa가 로그인을 맡을 때(<code>CONTEXA_OWNED</code>) 요청 시점 필터 두 개(추가 인증 · 접근 제어)는 <code>enabled</code> · <code>mode</code>를 읽지 않으므로, 이미 저장된 BLOCK · CHALLENGE · ESCALATE를 URL 단계에서 계속 적용합니다. 지우려면 관리자가 해제하거나 판정의 유효 시간이 지나야 합니다.
+          </div>
 
-          <!-- HcadProperties -->
-          <section>
-            <h2 id="hcad">HCAD 속성</h2>
-            <p><code>hcad</code> 접두사 아래의 속성으로, <code>HcadProperties</code>에 바인딩됩니다. 계층적 컨텍스트 인식 탐지(HCAD) 필터 파이프라인과 기준선 학습을 구성합니다.</p>
+          <h2 id="request-time">요청 시점 집행 다듬기</h2>
+          <div class="callout callout-info">
+            <strong>이 절의 설정은 Contexa가 로그인을 맡을 때(<code>CONTEXA_OWNED</code>) 동작합니다.</strong> 요청 시점 필터와 로그인 맥락 처리는 Contexa가 만든 보안 체인 안에서만 돌기 때문입니다. 기본(<code>HOST_OWNED</code>)에서는 <a href="#protectable"><code>@Protectable</code> 메서드</a>에서만 집행합니다. 판정별 응답과 해제 방법은 <a href="../../reference/identity/zero-trust-filters.html">요청 시점 집행</a>에 있습니다.
+          </div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.max-block-mfa-attempts</code></td><td><code>2</code></td><td>차단(BLOCK)된 사용자가 해제 요청 전에 거치는 MFA의 시도 한도. 접근 제어 필터 · 해제 API · 안내 화면이 이 값을 씁니다. MFA 실패 처리기는 이 값과 상관없이 실패 2번째에 해제 대기를 지웁니다</td><td>해제 MFA를 더 허용할 때(실패 처리기 쪽 한도는 2로 남음)</td></tr>
+              <tr><td><code>contexa.security.zerotrust.challenge.lock-wait-time</code></td><td><code>0</code></td><td>추가 인증(MFA)을 시작할 때 사용자별 잠금을 기다리는 시간. 0이면 바로 포기</td><td>동시에 들어온 요청이 같은 MFA를 기다리게 할 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.challenge.lock-lease-time</code></td><td><code>30s</code></td><td>그 잠금을 쥐고 있는 최대 시간</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.zerotrust.challenge.busy-retry-after-seconds</code></td><td><code>3</code></td><td>잠금을 못 잡았을 때 <code>503 MFA_BUSY_RETRY</code>에 싣는 <code>Retry-After</code>(초)</td><td>클라이언트 재시도 간격을 맞출 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.threat.initial</code></td><td><code>0.3</code></td><td>위협 점수가 아직 없는 사용자의 위협 점수(신뢰 점수 = 1 − 위협 점수)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.zerotrust.cache.ttl-hours</code></td><td><code>24</code></td><td>강제 로그아웃 등으로 무효화한 세션 · 토큰 기록의 유지 시간(시). 판정 캐시가 아닙니다</td><td>무효화를 더 오래 기억해야 할 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.cache.session-ttl-minutes</code></td><td><code>30</code></td><td>로그아웃을 알아채려고 세션마다 기억하는 "직전 로그인 사용자"의 유지 시간(분, 마지막 접근 기준)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.zerotrust.cache.invalidated-ttl-minutes</code></td><td><code>60</code></td><td>무효화된 세션을 이 JVM에서 기억하는 시간(분)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.zerotrust.session.tracking-enabled</code></td><td><code>true</code></td><td>로그인 맥락을 저장할 때 사용자의 세션을 기록해, 강제 로그아웃이 그 사용자의 모든 세션에 닿게 함</td><td>세션 추적을 하지 않을 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.redis.update-interval-seconds</code></td><td><code>30</code></td><td>같은 세션의 추적 기록을 다시 쓰는 최소 간격(초). 이름과 달리 단독 모드에도 적용</td><td>저장소 쓰기를 줄일 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.session-tracking.max-untimed-sessions-per-user</code></td><td><code>64</code></td><td>만료 시각을 알 수 없는 세션 식별자를 사용자당 몇 개까지 추적할지. 넘으면 가장 오래 안 보인 것부터 추적에서 빠짐. 0 이하는 무제한</td><td>한 사용자가 세션을 아주 많이 쓸 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.analysis.max-age-ms</code></td><td><code>3600000</code></td><td>로그인 MFA 정책이 저장된 분석 결과를 믿는 최대 나이(ms). 더 오래된 분석은 추가 인증으로 봅니다</td><td>로그인 때 더 새로운 분석을 요구할 때</td></tr>
+            </tbody>
+          </table></div>
+          <p>설정이 아닌 고정값도 있습니다: 판정을 읽은 뒤 5초 동안 캐시, 검토 보류(ESCALATE) 응답의 <code>Retry-After</code> 30초, 판정별 유효 시간(허용 15초 · 추가 인증 1,800초 · 검토 보류 300초 · 차단은 해제까지, <a href="../../reference/architecture/decision-engine.html#storage">판정 엔진</a>).</p>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr>
-                  <th>속성</th>
-                  <th>타입</th>
-                  <th>기본값</th>
-                  <th>설명</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad</code></td></tr>
-                <tr>
-                  <td><code>.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>HCAD 필터 파이프라인 활성화 또는 비활성화</td>
-                </tr>
-                <tr>
-                  <td><code>.filter-order</code></td>
-                  <td><code>int</code></td>
-                  <td><code>100</code></td>
-                  <td>서블릿 필터 체인에서의 HCAD 필터 순서</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.resource</code></td></tr>
-                <tr>
-                  <td><code>.sensitive-patterns</code></td>
-                  <td><code>List&lt;String&gt;</code></td>
-                  <td><code>[]</code></td>
-                  <td>강화된 분석이 필요한 민감 리소스 URL 패턴</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.analysis</code></td></tr>
-                <tr>
-                  <td><code>.max-age-ms</code></td>
-                  <td><code>long</code></td>
-                  <td><code>3600000</code></td>
-                  <td>캐시된 분석 결과의 최대 보관 시간(ms)</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.threshold</code></td></tr>
-                <tr>
-                  <td><code>.base</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.7</code></td>
-                  <td>기본 이상 탐지 임계값</td>
-                </tr>
-                <tr>
-                  <td><code>.min</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.3</code></td>
-                  <td>적응 조정 후 최소 임계값</td>
-                </tr>
-                <tr>
-                  <td><code>.max</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.95</code></td>
-                  <td>적응 조정 후 최대 임계값</td>
-                </tr>
-                <tr>
-                  <td><code>.adjustment-rate</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.01</code></td>
-                  <td>피드백 주기당 임계값 적응 속도</td>
-                </tr>
-                <tr>
-                  <td><code>.sensitivity</code></td>
-                  <td><code>double</code></td>
-                  <td><code>1.0</code></td>
-                  <td>탐지 감도 전역 배율</td>
-                </tr>
-                <tr>
-                  <td><code>.warn</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.7</code></td>
-                  <td>차단 전 경고 임계값</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.cache</code></td></tr>
-                <tr>
-                  <td><code>.max-size</code></td>
-                  <td><code>int</code></td>
-                  <td><code>100000</code></td>
-                  <td>캐시된 분석 항목 최대 수</td>
-                </tr>
-                <tr>
-                  <td><code>.ttl-ms</code></td>
-                  <td><code>long</code></td>
-                  <td><code>300000</code></td>
-                  <td>캐시 항목 TTL(밀리초)</td>
-                </tr>
-                <tr>
-                  <td><code>.clear-on-startup</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>false</code></td>
-                  <td>애플리케이션 시작 시 모든 캐시 항목 삭제</td>
-                </tr>
-                <tr>
-                  <td><code>.local.ttl-minutes</code></td>
-                  <td><code>int</code></td>
-                  <td><code>10</code></td>
-                  <td>로컬 캐시 TTL(분)</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.baseline</code></td></tr>
-                <tr>
-                  <td><code>.min-confidence</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.3</code></td>
-                  <td>기준선 데이터 최소 신뢰도</td>
-                </tr>
-                <tr>
-                  <td><code>.update-alpha</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.1</code></td>
-                  <td>기준선 업데이트용 지수이동평균 알파</td>
-                </tr>
-                <tr>
-                  <td><code>.learning.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>실시간 트래픽으로부터의 기준선 학습 활성화</td>
-                </tr>
-                <tr>
-                  <td><code>.learning.alpha</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.1</code></td>
-                  <td>온라인 기준선 적응 학습률</td>
-                </tr>
-                <tr>
-                  <td><code>.bootstrap.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>초기 기준선 구축을 위한 부트스트랩 모드 활성화</td>
-                </tr>
-                <tr>
-                  <td><code>.bootstrap.initial-samples</code></td>
-                  <td><code>int</code></td>
-                  <td><code>10</code></td>
-                  <td>적용 전 필요한 초기 샘플 수</td>
-                </tr>
-                <tr>
-                  <td><code>.bootstrap.max-anomaly-score</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.85</code></td>
-                  <td>부트스트랩 단계 최대 이상 점수</td>
-                </tr>
-                <tr>
-                  <td><code>.statistical.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>통계적 기준선 분석 활성화</td>
-                </tr>
-                <tr>
-                  <td><code>.statistical.min-samples</code></td>
-                  <td><code>int</code></td>
-                  <td><code>20</code></td>
-                  <td>통계 분석 최소 샘플 수</td>
-                </tr>
-                <tr>
-                  <td><code>.statistical.z-score-threshold</code></td>
-                  <td><code>double</code></td>
-                  <td><code>3.0</code></td>
-                  <td>이상치 탐지 Z-점수 임계값</td>
-                </tr>
-                <tr>
-                  <td><code>.redis.ttl-days</code></td>
-                  <td><code>int</code></td>
-                  <td><code>30</code></td>
-                  <td>Redis 기준선 데이터 TTL(일)</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.feedback</code></td></tr>
-                <tr>
-                  <td><code>.learning-rate</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.1</code></td>
-                  <td>임계값 조정을 위한 피드백 루프 학습률</td>
-                </tr>
-                <tr>
-                  <td><code>.retrain-threshold</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.7</code></td>
-                  <td>모델 재학습을 트리거하는 정확도 임계값</td>
-                </tr>
-                <tr>
-                  <td><code>.window-size</code></td>
-                  <td><code>int</code></td>
-                  <td><code>1000</code></td>
-                  <td>피드백 수집 슬라이딩 윈도우 크기</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.orchestrator</code></td></tr>
-                <tr>
-                  <td><code>.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>조율된 분석을 위한 HCAD 오케스트레이터 활성화</td>
-                </tr>
-                <tr>
-                  <td><code>.feedback-interval</code></td>
-                  <td><code>int</code></td>
-                  <td><code>300</code></td>
-                  <td>피드백 처리 간격(초)</td>
-                </tr>
-                <tr>
-                  <td><code>.sync-batch-size</code></td>
-                  <td><code>int</code></td>
-                  <td><code>50</code></td>
-                  <td>기준선 동기화 배치 크기</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.vector</code></td></tr>
-                <tr>
-                  <td><code>.embedding-dimension</code></td>
-                  <td><code>int</code></td>
-                  <td><code>384</code></td>
-                  <td>행동 분석용 임베딩 벡터 차원</td>
-                </tr>
-                <tr>
-                  <td><code>.similarity-threshold</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.85</code></td>
-                  <td>행동 패턴 매칭 유사도 임계값</td>
-                </tr>
-                <tr>
-                  <td><code>.scenario-detection-enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>벡터 기반 시나리오 이상 탐지 활성화</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.session</code></td></tr>
-                <tr>
-                  <td><code>.cookie-name</code></td>
-                  <td><code>String</code></td>
-                  <td><code>JSESSIONID</code></td>
-                  <td>HCAD 추적용 세션 쿠키 이름</td>
-                </tr>
-                <tr>
-                  <td><code>.header-name</code></td>
-                  <td><code>String</code></td>
-                  <td><code>X-Session-Id</code></td>
-                  <td>무상태 모드에서의 세션 ID 헤더 이름</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.signal</code></td></tr>
-                <tr>
-                  <td><code>.chi-square-threshold</code></td>
-                  <td><code>double</code></td>
-                  <td><code>14.07</code></td>
-                  <td>신호 이상 탐지 카이제곱 임계값</td>
-                </tr>
-                <tr>
-                  <td><code>.history-size</code></td>
-                  <td><code>int</code></td>
-                  <td><code>100</code></td>
-                  <td>보관할 과거 신호 수</td>
-                </tr>
-                <tr>
-                  <td><code>.geoip.provider</code></td>
-                  <td><code>String</code></td>
-                  <td><code>api</code></td>
-                  <td>GeoIP 제공자: <code>api</code> 또는 <code>local</code></td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.adaptive</code></td></tr>
-                <tr>
-                  <td><code>.adjustment-rate</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.1</code></td>
-                  <td>적응형 임계값 조정 속도</td>
-                </tr>
-                <tr>
-                  <td><code>.cusum.threshold</code></td>
-                  <td><code>double</code></td>
-                  <td><code>5.0</code></td>
-                  <td>CUSUM 변화점 탐지 임계값</td>
-                </tr>
-                <tr>
-                  <td><code>.cusum.slack</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.5</code></td>
-                  <td>CUSUM 드리프트 허용 슬랙 파라미터</td>
-                </tr>
-                <tr>
-                  <td><code>.baseline.window</code></td>
-                  <td><code>int</code></td>
-                  <td><code>100</code></td>
-                  <td>적응형 기준선 윈도우 크기</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.geoip</code></td></tr>
-                <tr>
-                  <td><code>.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>false</code></td>
-                  <td>GeoIP 기반 위치 분석 활성화</td>
-                </tr>
-                <tr>
-                  <td><code>.db-path</code></td>
-                  <td><code>String</code></td>
-                  <td><code>data/GeoLite2-City.mmdb</code></td>
-                  <td>MaxMind GeoLite2 데이터베이스 파일 경로</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.redis</code></td></tr>
-                <tr>
-                  <td><code>.key-prefix</code></td>
-                  <td><code>String</code></td>
-                  <td><code>hcad:baseline:v2:</code></td>
-                  <td>HCAD 기준선 데이터의 Redis 키 접두사</td>
-                </tr>
-              </tbody>
-            </table></div>
+          <h3 id="protectable"><code>@Protectable</code> 메서드(두 소유 방식 모두)</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.protectable.rapid-reentry-window-ms</code></td><td><code>5000</code></td><td>같은 사용자 · 세션이 이 시간(ms) 안에 다시 들어오면, 일반 메서드는 분석 없이 실행하고 즉시 판정 메서드는 <code>503</code>(분석 중)으로 답함(섀도 모드는 실행)</td><td>짧은 시간에 같은 호출이 몰리는 화면이 있을 때</td></tr>
+            </tbody>
+          </table></div>
+          <p>판정 기록이 없는 에이전트 요청을 어떻게 다룰지(<code>contexa.security.zerotrust.protectable.unrecorded-agent-request</code>)는 <a href="../../reference/agent/controls.html#unrecorded">에이전트 제한</a>에 있습니다.</p>
 
+          <h2 id="session-id">세션을 알아보는 이름</h2>
+          <p>Contexa가 요청의 세션을 알아볼 때는 JWT의 <code>jti</code>, 그다음 HTTP 세션을 먼저 봅니다. 둘 다 없으면 아래 이름으로 쿠키 → 헤더 → Bearer 토큰 순서로 찾습니다. 이 식별자로 무효화된 세션을 거르고 세션을 추적합니다(<code>CONTEXA_OWNED</code>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.session.cookie.name</code></td><td><code>SESSION</code></td><td>세션 ID가 든 쿠키 이름</td><td>세션 쿠키 이름을 바꿨을 때</td></tr>
+              <tr><td><code>contexa.security.session.header.name</code></td><td><code>X-Auth-Token</code></td><td>세션 ID가 든 헤더 이름(<code>Bearer </code>로 시작하면 떼고 읽음)</td><td>헤더 세션을 쓸 때</td></tr>
+              <tr><td><code>contexa.security.session.bearer.enabled</code></td><td><code>true</code></td><td><code>Authorization: Bearer</code>에서도 세션 ID를 찾음</td><td>Bearer를 세션 ID로 쓰지 않을 때</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3>현재 OSS 코드에 추가로 존재하는 HCAD 필드</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>hcad.baseline.statistical.update-interval</code></td><td><code>10</code></td><td>통계 기준선 갱신 간격</td></tr>
-                <tr><td><code>hcad.feedback.baseline.update-threshold</code></td><td><code>0.95</code></td><td>피드백을 기준선에 반영하는 임계값</td></tr>
-                <tr><td><code>hcad.orchestrator.performance-tracking</code></td><td><code>true</code></td><td>오케스트레이터 성능 추적 활성화</td></tr>
-                <tr><td><code>hcad.vector.cache-ttl-hours</code></td><td><code>24</code></td><td>행동 임베딩 캐시 TTL(시간)</td></tr>
-                <tr><td><code>hcad.vector.max-cached-embeddings</code></td><td><code>1000</code></td><td>캐시할 임베딩 최대 수</td></tr>
-                <tr><td><code>hcad.signal.covariance.min-samples</code></td><td><code>30</code></td><td>공분산 분석 최소 샘플 수</td></tr>
-                <tr><td><code>hcad.signal.geoip.api-url</code></td><td><code>https://ipapi.co/{ip}/json/</code></td><td>원격 GeoIP API URL 템플릿</td></tr>
-                <tr><td><code>hcad.signal.timing.bucket-count</code></td><td><code>7</code></td><td>타이밍 버킷 수</td></tr>
-                <tr><td><code>hcad.signal.timing.interval.history-size</code></td><td><code>100</code></td><td>타이밍 구간 이력 크기</td></tr>
-                <tr><td><code>hcad.sampling.random.floor</code></td><td><code>0.01</code></td><td>최소 랜덤 샘플링 비율</td></tr>
-                <tr><td><code>hcad.sampling.random.ceiling</code></td><td><code>0.03</code></td><td>최대 랜덤 샘플링 비율</td></tr>
-                <tr><td><code>hcad.sampling.composite.identifier.enabled</code></td><td><code>true</code></td><td>복합 식별자 샘플링 활성화</td></tr>
-                <tr><td><code>hcad.similarity.hot-path-threshold</code></td><td><code>0.7</code></td><td>hot-path 판단에 사용하는 유사도 임계값</td></tr>
-                <tr><td><code>hcad.adaptive.min.trust.score</code></td><td><code>0.7</code></td><td>적응형 제어 최소 신뢰 점수</td></tr>
-                <tr><td><code>hcad.pre-trigger.enabled</code></td><td><code>true</code></td><td>전체 분석 전 pre-trigger 휴리스틱 활성화</td></tr>
-                <tr><td><code>hcad.pre-trigger.cooldown-seconds</code></td><td><code>15</code></td><td>반복 pre-trigger cooldown</td></tr>
-                <tr><td><code>hcad.pre-trigger.in-flight-ttl-seconds</code></td><td><code>15</code></td><td>in-flight pre-trigger TTL</td></tr>
-                <tr><td><code>hcad.pre-trigger.negative-cache-seconds</code></td><td><code>3</code></td><td>negative cache 유지 시간</td></tr>
-                <tr><td><code>hcad.pre-trigger.redline-score</code></td><td><code>70</code></td><td>redline 위험 점수</td></tr>
-                <tr><td><code>hcad.pre-trigger.high-risk-score</code></td><td><code>50</code></td><td>고위험 임계값</td></tr>
-                <tr><td><code>hcad.pre-trigger.medium-risk-score</code></td><td><code>30</code></td><td>중위험 임계값</td></tr>
-                <tr><td><code>hcad.pre-trigger.low-baseline-confidence-threshold</code></td><td><code>0.35</code></td><td>낮은 기준선 신뢰도 임계값</td></tr>
-                <tr><td><code>hcad.pre-trigger.failed-login-burst-threshold</code></td><td><code>3</code></td><td>실패 로그인 폭주 임계값</td></tr>
-                <tr><td><code>hcad.pre-trigger.request-burst-threshold</code></td><td><code>12</code></td><td>요청 폭주 임계값</td></tr>
-                <tr><td><code>hcad.pre-trigger.rapid-request-interval-ms</code></td><td><code>1000</code></td><td>급격한 요청 간격 윈도우</td></tr>
-                <tr><td><code>hcad.pre-trigger.sensitive-path-indicators</code></td><td><code>[/admin/, /export, /download, /sensitive/, /critical/]</code></td><td>민감 경로 패턴 (포함 매칭)</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="timeouts">판정 시간 제한</h2>
+          <p>1차 분석이 정하지 못하면(ESCALATE) 2차 분석이 다시 판정합니다(<a href="../../reference/architecture/decision-engine.html#layers">판정 엔진</a>). 시간 제한은 모두 밀리초입니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.layer1.timeout.llm-ms</code></td><td><code>90000</code></td><td>1차 분석 전체 제한, 겸 1차 모델 호출 하나의 제한 후보</td><td>모델이 느려 1차 분석이 시간 초과로 끝날 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.timeout.rag-ms</code></td><td><code>8000</code></td><td>1차 분석이 과거 판정 기록 검색을 기다리는 최대 시간</td><td>벡터 저장소가 느릴 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.timeout.interactive-rag-wait-ms</code></td><td><code>600</code></td><td>요청 안에서 판정할 때 과거 기록 검색을 기다리는 시간</td><td>즉시 판정의 지연을 줄이거나 기록을 더 기다릴 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.timeout.background-rag-warmup-on-interactive-timeout</code></td><td><code>true</code></td><td>위 대기가 끝나도 검색을 뒤에서 마저 돌려 둠</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.timeout-ms</code></td><td><code>30000</code></td><td>2차 분석 전체 제한. 넘으면 검토 보류(ESCALATE)가 최종 판정으로 남음</td><td>2차 모델이 느려 검토 보류가 남을 때</td></tr>
+              <tr><td><code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code></td><td><code>60000</code></td><td>모델 호출 하나의 제한(층 제한이 더 짧으면 그것)</td><td>공급자 응답이 느릴 때</td></tr>
+              <tr><td><code>contexa.security.plane.agent.event-timeout-ms</code></td><td><code>180000</code></td><td>사건 하나를 분석하는 전체 예산(최소 1000). 넘으면 판정 없이 끝나고 다시 줄을 섬</td><td>1차 + 2차 분석이 이 시간을 넘길 때</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>기본값에서는 2차 분석 제한(30초)이 모델 호출 제한(60초)보다 짧아, 느린 2차 분석은 검토 보류로 끝나고 5분 동안 저장됩니다.</li>
+            <li>1차 모델 호출이 답을 받지 못하면(공급자 장애 · 호출 시간 초과) 2차로 넘기지 않고 추가 인증(CHALLENGE)으로 끝납니다(<a href="../../reference/architecture/decision-engine.html#overrides">모델의 답이 바뀌는 경우</a>).</li>
+          </ul>
 
-            <h3>구성 예제</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-              </div>
-              <pre><code class="language-yaml">hcad:
-  enabled: true
-  filter-order: 100
-  resource:
-    sensitive-patterns:
-      - /admin/api/security-test/sensitive/**
-      - /admin/api/security-test/critical/**
-  threshold:
-    base: 0.7
-    sensitivity: 1.0
-  baseline:
-    learning:
-      enabled: true
-      alpha: 0.1
-    bootstrap:
-      enabled: true
-      initial-samples: 10
-  geoip:
-    enabled: false
-    db-path: data/GeoLite2-City.mmdb</code></pre>
-            </div>
-          </section>
+          <h2 id="throughput">처리량과 대기열</h2>
+          <div class="callout callout-info">
+            <strong><code>contexa.security.plane.agent.*</code>는 AI 에이전트 설정이 아닙니다.</strong> Contexa 판정 엔진의 작업자 설정입니다. AI 에이전트 제한은 <a href="../../reference/agent/controls.html#settings">에이전트 제한</a>에 있습니다.
+          </div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.plane.monitor.queue-size</code></td><td><code>10000</code></td><td>분석 대기열 크기. 가득 차면 사건을 넣는 요청 스레드가 기다림</td><td>순간 사건이 아주 많을 때</td></tr>
+              <tr><td><code>contexa.security.plane.monitor.batch-size</code></td><td><code>8</code></td><td>대기열에서 한 번에 꺼내는 사건 수</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.plane.monitor.flush-interval-ms</code></td><td><code>500</code></td><td>대기열을 기다리는 주기(ms)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.plane.agent.analysis-stripes</code></td><td><code>256</code></td><td>사용자 · 세션별 줄을 처리하는 작업 스레드 수(같은 사용자 · 세션은 한 번에 하나씩)</td><td>동시 사용자가 아주 많을 때</td></tr>
+              <tr><td><code>contexa.security.plane.llm-executor.core-pool-size</code></td><td><code>32</code></td><td>모델 분석 스레드 풀의 기본 크기</td><td>모델 호출 동시성을 공급자 한도에 맞출 때</td></tr>
+              <tr><td><code>contexa.security.plane.llm-executor.max-pool-size</code></td><td><code>64</code></td><td>그 풀의 최대 크기</td><td>위와 같음</td></tr>
+              <tr><td><code>contexa.security.plane.llm-executor.queue-capacity</code></td><td><code>256</code></td><td>그 풀의 대기 자리. 다 차면 거부(과부하로 기록)</td><td>위와 같음</td></tr>
+              <tr><td><code>contexa.security.plane.llm-executor.queue-timeout-ms</code></td><td><code>60000</code></td><td>풀의 대기 자리에서 기다리는 최대 시간. 넘으면 시간 초과로 기록</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.plane.llm-executor.prestart-core-threads</code></td><td><code>true</code></td><td>기본 크기만큼 스레드를 미리 띄움</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.plane.agent.max-deferred-retries</code></td><td><code>3</code></td><td>일시 실패한 사건을 다시 줄 세우는 횟수</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.plane.agent.auto-start</code></td><td><code>true</code></td><td>판정 엔진 작업자 자동 시작. <code>false</code>면 분석이 멈추고, 사건은 재시도 뒤 버려짐</td><td>쓰지 마세요(시험용)</td></tr>
+              <tr><td><code>contexa.security.plane.agent.name</code></td><td><code>SecurityPlaneAgent-1</code></td><td>작업자 이름(처리 기록 · 지표에 쓰임)</td><td>노드를 구분할 때</td></tr>
+              <tr><td><code>contexa.security.plane.agent.deleted-account-fence-margin-ms</code></td><td><code>60000</code></td><td>지운 계정에 늦게 도착한 결과를 구별하는 여유(ms)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.zerotrust.analysis.audit-failure-cooldown-ms</code></td><td><code>30000</code></td><td>판정 감사용 관찰 기록을 DB에 쓰지 못했을 때 같은 맥락의 새 분석을 멈추는 시간(ms). 이 기록 없이는 판정을 적용하지 않음</td><td>드물게</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- SecurityPlaneProperties -->
-          
+          <h3 id="provider-throttle">공급자 호출 속도 조절(기본 꺼짐)</h3>
+          <p>유료 API의 분당 요청 · 토큰 한도를 넘지 않도록, 모델 호출 전에 기다리게 합니다. 기본으로는 OpenAI 모델 호출만 조절합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.enabled</code></td><td><code>false</code></td><td>속도 조절 켜기</td><td>유료 API 한도에 걸릴 때</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.open-ai-only</code></td><td><code>true</code></td><td>OpenAI 모델 호출만 조절</td><td>다른 공급자도 조절하려면 false</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.requests-per-minute</code></td><td><code>0</code></td><td>분당 요청 한도(0이면 보지 않음)</td><td>공급자 계정의 분당 요청 한도에 맞출 때</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.tokens-per-minute</code></td><td><code>0</code></td><td>분당 토큰 한도(0이면 보지 않음). 둘 다 0이면 조절하지 않음</td><td>공급자 계정의 분당 토큰 한도에 맞출 때</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.max-burst-requests</code></td><td><code>0</code></td><td>한꺼번에 허용하는 요청 수</td><td>순간 몰림을 허용할 때</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.max-burst-tokens</code></td><td><code>0</code></td><td>한꺼번에 허용하는 토큰 수</td><td>순간 몰림을 허용할 때</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.estimated-output-tokens</code></td><td><code>1024</code></td><td>호출 하나의 토큰을 셀 때 프롬프트에 더하는 출력 토큰 추정치</td><td>판정 답이 이보다 훨씬 길거나 짧을 때</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.max-wait-ms</code></td><td><code>120000</code></td><td>자리가 날 때까지 기다리는 최대 시간(ms)</td><td>사건 예산(<code>event-timeout-ms</code>) 안에 맞출 때</td></tr>
+            </tbody>
+          </table></div>
 
+          <h3 id="context">판정 맥락 수집</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.plane.context.time-zone</code></td><td>없음</td><td>사건의 시 · 분 · 요일을 읽는 회사 시간대(예: <code>Asia/Seoul</code>). 비우면 시스템 시간대</td><td>서버와 회사의 시간대가 다를 때</td></tr>
+              <tr><td><code>contexa.security.plane.context.login-failure-window-minutes</code></td><td><code>5</code></td><td>판정 사실에 넣는 그 사용자의 최근 로그인 실패 횟수를 세는 창(분)</td><td>실패를 더 길게 볼 때</td></tr>
+              <tr><td><code>contexa.security.plane.context.observation-capacity</code></td><td><code>5000</code></td><td>작업 프로필 · 역할 범위마다 보관하는 관찰 수(오래된 것부터 나감). 평소 행동을 이만큼에서 읽음</td><td>더 긴 이력을 보거나 메모리를 줄일 때</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- SecuritySessionProperties (summary) -->
-          <section>
-            <h2 id="session">세션 보안 속성</h2>
-            <p><code>contexa.security.session</code> 아래의 속성으로, <code>SecuritySessionProperties</code>에 바인딩됩니다. 토큰 생성, 헤더/베어러 추출, hijack 이벤트 wiring, 쿠키 이름, 세션 이상 탐지에 사용하는 위험 임계값을 구성합니다.</p>
+          <h2 id="escalate">판정을 정하지 못할 때</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.layer2.escalate-fallback-action</code></td><td><code>CHALLENGE</code></td><td>2차 분석도 정상 응답으로 검토 보류를 골랐을 때 바꿀 대응(<code>ESCALATE</code> · <code>PENDING_ANALYSIS</code>를 적으면 <code>CHALLENGE</code>로)</td><td>정하지 못한 요청을 더 엄격하게(<code>BLOCK</code>) 다룰 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.allow-escalate-final-action</code></td><td><code>false</code></td><td><code>true</code>면 2차 분석의 검토 보류를 바꾸지 않고 그대로 저장(그 뒤 요청 처리는 <a href="../../reference/identity/zero-trust-filters.html">요청 시점 집행</a>)</td><td>정하지 못한 요청을 대체 대응 없이 검토 보류로 두려 할 때</td></tr>
+              <tr><td><code>contexa.security.coldpath.max-escalation-windows</code></td><td><code>10000</code></td><td>과부하 보호용으로 기억하는 범위 · 시나리오 창의 최대 수</td><td>범위가 아주 많을 때</td></tr>
+            </tbody>
+          </table></div>
+          <p>과부하 보호: 1차 분석이 검토 보류를 냈고, 같은 범위 · 시나리오의 최근 100건 가운데 11건 이상에서 검토 보류 비율이 절반을 넘으면, 2차 분석 없이 추가 인증으로 끝냅니다. 100건 · 절반 같은 값은 코드에 고정되어 있습니다.</p>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.security.session.create.allowed</code></td><td><code>boolean</code></td><td><code>true</code></td><td>세션/토큰 생성 허용</td></tr>
-                <tr><td><code>contexa.security.session.header.name</code></td><td><code>String</code></td><td><code>X-Auth-Token</code></td><td>토큰 전달 헤더 이름</td></tr>
-                <tr><td><code>contexa.security.session.bearer.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Bearer 토큰 파싱 활성화</td></tr>
-                <tr><td><code>contexa.security.session.cookie.name</code></td><td><code>String</code></td><td><code>SESSION</code></td><td>세션 쿠키 이름</td></tr>
-                <tr><td><code>contexa.security.session.hijack.channel</code></td><td><code>String</code></td><td><code>security:session:hijack:event</code></td><td>Hijack 이벤트 채널 이름</td></tr>
-                <tr><td><code>contexa.security.session.hijack.detection.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Hijack 탐지 활성화</td></tr>
-                <tr><td><code>contexa.security.session.threat.ip-change-risk</code></td><td><code>double</code></td><td><code>0.4</code></td><td>IP 변경 위험 가중치</td></tr>
-                <tr><td><code>contexa.security.session.threat.ua-change-risk</code></td><td><code>double</code></td><td><code>0.3</code></td><td>User-Agent 변경 위험 가중치</td></tr>
-                <tr><td><code>contexa.security.session.threat.rapid-access-threshold-ms</code></td><td><code>int</code></td><td><code>100</code></td><td>짧은 간격 접근 임계값</td></tr>
-                <tr><td><code>contexa.security.session.threat.rapid-access-risk</code></td><td><code>double</code></td><td><code>0.2</code></td><td>짧은 간격 접근 위험 가중치</td></tr>
-                <tr><td><code>contexa.security.session.threat.thresholds.monitoring</code></td><td><code>double</code></td><td><code>0.5</code></td><td>모니터링 임계값</td></tr>
-                <tr><td><code>contexa.security.session.threat.thresholds.grace-period</code></td><td><code>double</code></td><td><code>0.7</code></td><td>유예 구간 임계값</td></tr>
-                <tr><td><code>contexa.security.session.threat.thresholds.invalidation</code></td><td><code>double</code></td><td><code>0.9</code></td><td>세션 무효화 임계값</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="prompt">판정 프롬프트 다듬기</h2>
+          <p>AI 모델에 무엇을 얼마나 보낼지, 어떤 프롬프트 묶음을 쓸지 정합니다. 묶음의 내용은 <a href="../../reference/architecture/prompt-engineering.html">판정 프롬프트와 묶음</a>에 있습니다. 층마다 쓸 모델 · 출력 토큰 한도 · 공급자 옵션은 <a href="ai.html">AI 모델 연결</a>에 있습니다.</p>
 
-            <p><strong>관련 문서:</strong> <a href="../../../docs/reference/identity/state-management.html">상태 관리 참조</a></p>
-          </section>
+          <h3 id="prompt-bundle">프롬프트 묶음 고르기</h3>
+          <p>이 빌드가 돌릴 수 있는 묶음은 <code>2026.10.24-v19.21</code>(기본) · <code>2026.10.24-v20.26</code> · <code>2026.10.30-v21.19</code> 셋입니다. 이 빌드가 모르는 버전을 적으면 기본 묶음이 돕니다. 에이전트 판정에 쓰는 v21 줄은 v21 묶음을 골라야 나옵니다.</p>
+          <pre><code class="language-yaml">contexa:
+  security:
+    tiered:
+      prompt-bundle:
+        active: 2026.10.30-v21.19</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.active</code></td><td>없음</td><td>돌릴 묶음 버전. 비우면 빌드 기본(v19.21)</td><td>v20 · v21 묶음을 쓸 때</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.selector</code></td><td><code>CONFIGURATION</code></td><td><code>registry</code>면 관리 화면 프롬프트 거버넌스에 등록한 릴리스(상태 · 범위 · 카나리 비율)로 묶음을 고름</td><td>묶음을 관리 화면에서 단계적으로 배포할 때</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.shadow.sample-percent</code></td><td><code>0</code></td><td>거버넌스의 섀도 릴리스를 돌릴 요청 비율(0~100)</td><td>새 묶음을 실제 판정과 나란히 시험할 때</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.shadow.daily-call-cap</code></td><td><code>100</code></td><td>섀도 실행의 하루(UTC) 모델 호출 상한</td><td>시험 비용을 묶을 때</td></tr>
+            </tbody>
+          </table></div>
 
+          <h3 id="prompt-content">프롬프트에 넣는 양</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.layer1.vector-search-limit</code></td><td><code>12</code></td><td>1차 분석의 과거 기록 유사도 검색 건수(v19 묶음. v20 · v21은 과거 기록을 정확히 조회)</td><td>과거 기록을 더 많이 · 적게 보여 줄 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.rag.similarity-threshold</code></td><td><code>0.5</code></td><td>1차 분석 유사도 검색의 최소 유사도</td><td>관련 없는 기록이 섞이면 올림</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.rag.multi-query-search-enabled</code></td><td><code>false</code></td><td>1차 분석은 기본으로 그 사용자 범위 검색 한 번만 함. 켜면 더 넓은 검색도 함(진단용)</td><td>진단할 때만</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.rag.supporting-search-enabled</code></td><td><code>false</code></td><td>1차 분석의 보조 검색(진단용)</td><td>진단할 때만</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.rag-top-k</code></td><td><code>5</code></td><td>2차 분석의 유사도 검색 건수(v19 묶음)</td><td>2차 분석에 기록을 더 줄 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.rag.similarity-threshold</code></td><td><code>0.5</code></td><td>2차 분석 유사도 검색의 최소 유사도</td><td>관련 없는 기록이 섞이면 올림</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.prompt.max-similar-events</code></td><td><code>2</code></td><td>비슷한 지난 사건 예시 수(v19 묶음)</td><td>예시를 더 줄 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.prompt.max-rag-documents</code></td><td><code>12</code></td><td>프롬프트에 넣는 과거 기록 문서 수</td><td>프롬프트가 길어 비용 · 시간이 클 때 줄임</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.prompt.include-event-id</code></td><td><code>false</code></td><td>사건 ID를 넣음(v19 사건 구역)</td><td>판정을 사건과 맞춰 볼 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.prompt.include-raw-timestamp</code></td><td><code>false</code></td><td>원래 시각 문자열을 넣음(v19 사건 구역)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.tiered.truncation.layer1.payload</code></td><td><code>200</code></td><td>요청 본문을 자르는 길이(글자)</td><td>요청 본문이 판정에 중요할 때 늘림</td></tr>
+              <tr><td><code>contexa.security.tiered.truncation.layer1.rag-document</code></td><td><code>180</code></td><td>과거 기록 문서 하나를 자르는 길이(글자). 한 조립 경로에서는 240보다 작게 적어도 240을 씀</td><td>기록 내용을 더 보여 줄 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.session.max-recent-actions</code></td><td><code>100</code></td><td>1차 분석의 세션 맥락이 들고 있는 최근 행동 수</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.cache.max-size</code></td><td><code>1000</code></td><td>1차 분석 세션 맥락 캐시의 최대 항목 수</td><td>동시 세션이 아주 많을 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.cache.ttl-minutes</code></td><td><code>30</code></td><td>그 캐시의 유지 시간(분, 마지막으로 읽은 뒤부터)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.tiered.argument-origin.quote-excerpt</code></td><td><code>true</code></td><td>에이전트 도구 출력의 인자 출처 문장을 인용함. 끄면 어느 도구에서 왔는지만 씀</td><td>도구 출력에 민감한 글이 있으면 false</td></tr>
+              <tr><td><code>contexa.security.tiered.argument-origin.max-excerpt-chars</code></td><td><code>300</code></td><td>인용 문장의 최대 길이(0~300, 0이면 인용하지 않음)</td><td>인용을 줄이거나 끌 때</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- SecurityRouterProperties -->
-          
+          <h3 id="prompt-runtime">결정성과 출력 형식</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.determinism.temperature</code></td><td><code>0.0</code></td><td>판정 호출의 온도(공급자 · 모델이 받는 경우)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.tiered.determinism.seed</code></td><td><code>1</code></td><td>판정 호출의 시드(공급자 · 모델이 받는 경우)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.default-budget-profile</code></td><td><code>CORTEX_L1_INTERACTIVE_STRICT</code></td><td>1차 분석 프롬프트의 기본 토큰 예산 프로필</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.default-budget-profile</code></td><td><code>CORTEX_L2_EXPERT_STRICT</code></td><td>2차 분석 프롬프트의 기본 토큰 예산 프로필</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-runtime.budget-enforcement</code></td><td><code>OBSERVE_ONLY</code></td><td><code>ENFORCE</code>면 예산을 넘는 v20 · v21 프롬프트에서 우선순위가 낮은 항목부터 뺌. 기본은 기록만</td><td>프롬프트 크기를 예산 안으로 묶을 때</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-runtime.native-structured-output-enabled</code></td><td><code>true</code></td><td>모델의 구조화 출력 기능을 씀. 끄면 검증하는 변환 방식으로 답을 읽음</td><td>모델이 구조화 출력을 제대로 받지 못할 때 false</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-runtime.native-structured-output-disabled-profiles</code></td><td>없음</td><td>구조화 출력을 쓰지 않을 예산 프로필 목록</td><td>일부 프로필에서만 끌 때</td></tr>
+            </tbody>
+          </table></div>
 
+          <h3 id="vector-cache">과거 기록 검색 캐시</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.vector-cache.enabled</code></td><td><code>true</code></td><td>과거 기록 검색 결과 캐시</td><td>검색 결과를 늘 새로 읽어야 할 때 false</td></tr>
+              <tr><td><code>contexa.security.tiered.vector-cache.max-size</code></td><td><code>10000</code></td><td>최대 항목 수</td><td>사용자가 아주 많을 때</td></tr>
+              <tr><td><code>contexa.security.tiered.vector-cache.expire-minutes</code></td><td><code>5</code></td><td>유지 시간(분)</td><td>새 기록을 더 빨리 반영할 때 줄임</td></tr>
+              <tr><td><code>contexa.security.tiered.vector-cache.record-stats</code></td><td><code>true</code></td><td>캐시 통계 기록</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.tiered.vector-cache.invalidate-on-write</code></td><td><code>true</code></td><td>새 기록을 저장하면 그 사용자 · 조직의 검색 결과를 비움</td><td>드물게</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- SecurityEventProperties -->
-          
+          <h3 id="trusted-proxies">클라이언트 IP와 믿을 프록시</h3>
+          <p>판정 사건 · 세션 지문 · IP 접근 제한이 요청의 클라이언트 IP를 정할 때 쓰는 설정입니다. 기본(검사 켬, 목록 비움)에서는 <code>X-Forwarded-For</code>를 믿지 않고 접속한 주소를 씁니다. 기존 로그인 연결의 <code>contexa.bridge.network.trusted-proxies</code>와는 별개입니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.security.trusted-proxies</code></td><td>없음</td><td>믿을 프록시 주소 · CIDR. 접속 주소가 이 안에 있을 때만 <code>X-Forwarded-For</code>(없으면 <code>X-Real-IP</code>)를 씀</td><td>앞에 부하 분산기 · 게이트웨이가 있을 때</td></tr>
+              <tr><td><code>contexa.security.tiered.security.trusted-proxy-validation-enabled</code></td><td><code>true</code></td><td><code>false</code>면 프록시를 가리지 않고 전달 헤더를 믿음</td><td>쓰지 마세요(헤더를 위조할 수 있음)</td></tr>
+            </tbody>
+          </table></div>
 
+          <h2 id="minimum-action">최소 대응 규칙(v19 · v20 묶음)</h2>
+          <p>판정 사실이 아래 조건에 맞으면 모델의 답이 적어도 그 대응이어야 한다는 하한입니다. 기본 <code>OBSERVE</code>는 어긴 것을 기록만 하고, <code>ENFORCE</code>면 한 번 고쳐 묻고 그래도 약하면 검토 보류로 바꿉니다. v21 묶음은 이 규칙을 평가하지 않습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.mode</code></td><td><code>OBSERVE</code></td><td><code>OBSERVE</code>(기록만) 또는 <code>ENFORCE</code></td><td>v19 · v20 묶음에서 하한을 강제할 때 <code>ENFORCE</code></td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.identity.enabled</code></td><td><code>true</code></td><td>규칙 1: 민감 자원에서 시간 · 요일 · 네트워크 · 단말 가운데 설명되지 않는 차이가 기준 수 이상이면 하한 CHALLENGE</td><td>규칙 1을 끌 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.identity.min-deviations</code></td><td><code>2</code></td><td>규칙 1의 차이 수</td><td>규칙 1을 더 엄격하게 · 느슨하게 할 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.identity.min-resource-class</code></td><td><code>SENSITIVE</code></td><td>규칙 1을 보는 최소 자원 등급</td><td>규칙 1의 자원 범위를 바꿀 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.new-device-export.enabled</code></td><td><code>true</code></td><td>규칙 2: 민감 이상 자원의 내보내기(EXPORT)가 설명되지 않는 새 단말 · 네트워크에서 오면 하한 CHALLENGE</td><td>규칙 2를 끌 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.policy-satisfaction.enabled</code></td><td><code>true</code></td><td>규칙 3: 정책 사실이 "충족하지 않음"이면 아래 하한</td><td>규칙 3을 끌 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.policy-satisfaction.action</code></td><td><code>ESCALATE</code></td><td>규칙 3의 하한. <code>CHALLENGE</code> 또는 <code>ESCALATE</code>만 되고, 다른 값이면 기동이 멈춤</td><td>정책 미충족을 추가 인증으로 낮출 때 <code>CHALLENGE</code></td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- SecurityColdPathProperties -->
-          
+          <h2 id="baseline">행위 기준선 학습</h2>
+          <p>Contexa는 사람마다 평소 일하는 시간 · 단말 · 네트워크 · 대상을 학습해(행위 기준선) 다음 판정의 사실로 씁니다. 실제로 적용된 허용 판정만 배우고, 섀도 모드에서는 배우지 않습니다(<a href="../../reference/architecture/decision-engine.html#learning">무엇을 배우나</a>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.enabled</code></td><td><code>true</code></td><td>기준선 학습 켜기</td><td>학습을 멈출 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.alpha</code></td><td><code>0.1</code></td><td>지수 이동 평균 계수(클수록 최근 요청을 크게 반영)</td><td>변화를 더 빨리 · 느리게 반영할 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.verified-weight</code></td><td><code>0.5</code></td><td>추가 인증을 통과했거나 관리자가 차단을 푼 요청을 배울 때의 가중치(허용 요청은 1)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.unverified-expiry</code></td><td><code>30d</code></td><td>검증 없이 배운 값이 다시 보이지 않으면 기준선에 남는 기간</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.half-life</code></td><td><code>14d</code></td><td>값끼리 자리를 다툴 때 오래된 빈도를 덜 세는 반감기</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.retention</code></td><td><code>30d</code></td><td>마지막 학습 뒤 새 학습이 없으면 기준선을 지우는 기간</td><td>보관 정책이 다를 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.statistical.min-samples</code></td><td><code>20</code></td><td>개인 기준선이 자리 잡는 최소 학습 요청 수</td><td>기준선이 너무 늦게 · 빨리 자리 잡을 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.statistical.min-days</code></td><td><code>5</code></td><td>학습이 걸쳐야 하는 최소 날짜 수</td><td>기준선이 너무 늦게 · 빨리 자리 잡을 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.statistical.convergence-window</code></td><td><code>10</code></td><td>새 값 비율을 보는 최근 학습 수</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.statistical.max-new-value-ratio</code></td><td><code>0.2</code></td><td>그 창에서 처음 보는 값의 비율이 이하이면 자리 잡은 것으로 봄</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.statistical.min-organization-members</code></td><td><code>3</code></td><td>조직 기준선이 자리 잡는 데 필요한 서로 다른 구성원 수</td><td>구성원이 적은 조직일 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.enabled</code></td><td><code>true</code></td><td>설명되지 않는 새 값을 바로 배우지 않고 보류함</td><td>새 값을 바로 배우게 할 때 false</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.min-resource-class</code></td><td><code>SENSITIVE</code></td><td>사람 요청을 보류하는 최소 자원 등급</td><td>보류할 자원 범위를 바꿀 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.min-observations</code></td><td><code>2</code></td><td>보류한 값을 배우기 전 같은 값이 보여야 하는 횟수</td><td>승격을 더 빠르게 · 느리게 할 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.min-distinct-days</code></td><td><code>2</code></td><td>그 값이 보여야 하는 서로 다른 날짜 수</td><td>승격을 더 빠르게 · 느리게 할 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.verified-promotes</code></td><td><code>true</code></td><td>그 값으로 검증을 통과하면 바로 배움</td><td>드물게</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.agent.enabled</code></td><td><code>true</code></td><td>에이전트 요청은 자원 등급과 상관없이 처음 보는 대상 · 행동 · 크기 · 속도 · 네트워크 · 단말을 보류함</td><td>에이전트의 보류를 끌 때</td></tr>
+            </tbody>
+          </table></div>
+          <p>단독 모드는 학습 상태를 메모리에 두어 재시작하면 사라집니다. 지키려면 분산 모드를 쓰세요(<a href="infrastructure.html#modes">단독과 분산</a>).</p>
 
+          <h2 id="risk-signals">외부 위험 신호 받기(기본 꺼짐)</h2>
+          <p>다른 시스템이 보낸 철회 · 위험 신호(Security Event Token, OpenID SSF · CAEP · RISC)를 <code>POST /contexa/api/risk-signals</code>로 받습니다. 서명을 검증한 신호는 <code>202</code>로 답하고, 그 주체의 판정을 지워 다음 요청에서 다시 판정하게 합니다. 이미 걸린 제한(BLOCK · ESCALATE · CHALLENGE)은 남습니다. 세션을 끝내는 신호(세션 철회 · 자격 증명 유출 · 계정 정지 등)는 그 사용자의 모든 세션을 로그아웃시킵니다. 검증에 실패한 신호는 <code>400</code>으로 답합니다. 보내는 쪽이 이 경로에 닿을 수 있도록 앱의 인가 정책을 열어 두어야 합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.risk-signals.receiver-enabled</code></td><td><code>false</code></td><td>수신 경로 켜기</td><td>IdP나 다른 시스템이 위험 신호를 보낼 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.risk-signals.audience</code></td><td>없음</td><td>받아들일 토큰의 수신자(aud)</td><td>켤 때 함께 적음</td></tr>
+              <tr><td><code>contexa.security.zerotrust.risk-signals.transmitters[].issuer</code></td><td>없음</td><td>보내는 쪽의 발급자(iss)</td><td>보내는 쪽마다</td></tr>
+              <tr><td><code>contexa.security.zerotrust.risk-signals.transmitters[].jwks-uri</code></td><td>없음</td><td>보내는 쪽의 서명 키 주소</td><td>보내는 쪽마다</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- SecurityPipelineProperties -->
-          
+          <h2 id="examples">상황별 예</h2>
+          <p><strong>도입 첫 주: 판정만 지켜보기</strong></p>
+          <pre><code class="language-yaml">contexa:
+  security:
+    zerotrust:
+      mode: SHADOW</code></pre>
+          <p><strong>느린 모델(로컬 모델 등): 시간 제한 늘리기</strong> — 1차 · 2차 제한과 호출 하나의 제한, 사건 전체 예산을 함께 늘립니다.</p>
+          <pre><code class="language-yaml">contexa:
+  security:
+    tiered:
+      layer1:
+        timeout:
+          llm-ms: 120000
+      layer2:
+        timeout-ms: 90000
+    plane:
+      llm-timeout:
+        provider-call-timeout-ms: 120000
+      agent:
+        event-timeout-ms: 300000</code></pre>
+          <p><strong>유료 API 한도 지키기(OpenAI)</strong></p>
+          <pre><code class="language-yaml">contexa:
+  security:
+    plane:
+      llm-provider-throttle:
+        enabled: true
+        requests-per-minute: 500
+        tokens-per-minute: 200000</code></pre>
 
-
-          
-          <!-- SecurityStepUpProperties -->
-          <section>
-            <h2 id="step-up">Step-Up 속성</h2>
-            <p><code>contexa.security.stepup</code> 아래의 속성으로, <code>SecurityStepUpProperties</code>에 바인딩됩니다. 다요소 인증(MFA) 또는 추가 승인이 필요한 고위험 작업 시 Step-Up 인증의 최대 시도 횟수 및 잠금 시간을 정의합니다.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.stepup</code></td></tr>
-                <tr><td><code>.max-attempts</code></td><td><code>int</code></td><td><code>3</code></td><td>Step-Up 인증 실패 시 허용되는 최대 시도 횟수</td></tr>
-                <tr><td><code>.lockout-duration</code></td><td><code>int</code></td><td><code>300</code></td><td>최대 실패 시도 횟수 초과 시 계정 잠금 기간 (초)</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- SaasForwardingProperties (Decision Plane) -->
-          <section>
-            <h2 id="decision-plane">Decision Plane 속성</h2>
-            <p><code>contexa.saas</code> 아래의 속성으로, Contexa SaaS Decision Plane 서비스와의 통합을 제어합니다. 로컬 결정 결과를 피드백 및 성능 메트릭과 함께 원격 Decision Plane으로 전송하기 위한 엔드포인트, 주기, 재시도 정책 및 OAuth2 클라이언트를 구성합니다.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.saas</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>false</code></td><td>SaaS Decision Plane으로의 의사결정 포워딩 활성화 여부</td></tr>
-                <tr><td><code>.endpoint</code></td><td><code>String</code></td><td><code>https://saas.ctxa.ai</code></td><td>SaaS Decision Plane 기본 엔드포인트 URL</td></tr>
-                <tr><td><code>.include-reasoning</code></td><td><code>boolean</code></td><td><code>false</code></td><td>포워딩 데이터에 결정 근거 포함 여부</td></tr>
-                <tr><td><code>.include-raw-analysis-data</code></td><td><code>boolean</code></td><td><code>false</code></td><td>포워딩 데이터에 원시 분석 데이터 포함 여부</td></tr>
-                <tr><td><code>.outbox-batch-size</code></td><td><code>int</code></td><td><code>50</code></td><td>아웃박스 이벤트 전송 배치 크기</td></tr>
-                <tr><td><code>.max-retry-attempts</code></td><td><code>int</code></td><td><code>10</code></td><td>전송 실패 시 최대 재시도 횟수</td></tr>
-                <tr><td><code>.retry-initial-backoff-ms</code></td><td><code>long</code></td><td><code>1000</code></td><td>재시도 최초 대기 시간 (밀리초)</td></tr>
-                <tr><td><code>.retry-max-backoff-ms</code></td><td><code>long</code></td><td><code>60000</code></td><td>재시도 최대 대기 시간 (밀리초)</td></tr>
-                <tr><td><code>.dispatch-interval-ms</code></td><td><code>long</code></td><td><code>30000</code></td><td>이벤트 디스패치 간격 (밀리초)</td></tr>
-                <tr><td><code>.pseudonymization-secret</code></td><td><code>String</code></td><td><code>default-dev-secret-change-in-prod</code></td><td>데이터 가명화용 솔트/비밀키</td></tr>
-                <tr><td><code>.global-correlation-secret</code></td><td><code>String</code></td><td><code>default-dev-correlation-secret</code></td><td>글로벌 상관관계 ID 생성용 비밀키</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.saas.oauth2</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>OAuth2 클라이언트 연동 활성화 여부</td></tr>
-                <tr><td><code>.registration-id</code></td><td><code>String</code></td><td><code>contexa-saas-client</code></td><td>OAuth2 클라이언트 등록 식별자</td></tr>
-                <tr><td><code>.token-uri</code></td><td><code>String</code></td><td><code>https://saas.ctxa.ai/oauth2/token</code></td><td>OAuth2 토큰 요청 URI</td></tr>
-                <tr><td><code>.client-id</code></td><td><code>String</code></td><td><code>dev-client</code></td><td>클라이언트 ID</td></tr>
-                <tr><td><code>.client-secret</code></td><td><code>String</code></td><td><code>dev-secret</code></td><td>클라이언트 시크릿</td></tr>
-                <tr><td><code>.scope</code></td><td><code>String</code></td><td><code>saas.xai.decision.ingest,...</code></td><td>OAuth2 요청 스코프 목록 (쉼표 구분)</td></tr>
-                <tr><td><code>.expiry-skew-seconds</code></td><td><code>int</code></td><td><code>30</code></td><td>액세스 토큰 만료 판정 보정 시간 (초)</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- TieredStrategyProperties -->
-          <section>
-            <h2 id="distributed-enforcement">Distributed Enforcement 속성</h2>
-            <p><code>contexa.security.tiered</code> 아래의 속성으로, <code>TieredStrategyProperties</code>에 바인딩됩니다. 로컬 에이전트와 클라우드/협업 에이전트 간의 계층형(Tiered) 보안 분석 및 통제 실행 정책을 구성합니다. 계층별 활성화 상태, 트런케이션 버퍼, 검색 제한, 보안 정책을 상세 튜닝합니다.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.tiered</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>계층형 분석 및 통제 전략 활성화 여부</td></tr>
-                <tr><td><code>.native-structured-output-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>구조화된 출력(JSON/Schema)에 대한 LLM 네이티브 지원 활용 여부</td></tr>
-                <tr><td><code>.telemetry-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Tiered 보안 텔레메트리 발행 여부</td></tr>
-                <tr><td><code>.trusted-proxy-validation-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>신뢰 프록시 IP 검증 활성화 여부</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.tiered.layer1</code> / <code>layer2</code> (분석 계층 설정)</td></tr>
-                <tr><td><code>.layer1.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>1계층(로컬 신속 분석) 활성화 여부</td></tr>
-                <tr><td><code>.layer1.default-budget-profile</code></td><td><code>String</code></td><td><code>CORTEX_L1_INTERACTIVE_STRICT</code></td><td>1계층 기본 리소스 예산 프로필</td></tr>
-                <tr><td><code>.layer2.enabled</code></td><td><code>boolean</code></td><td><code>false</code></td><td>2계층(클라우드 정밀 분석) 활성화 여부</td></tr>
-                <tr><td><code>.layer2.default-budget-profile</code></td><td><code>String</code></td><td><code>CORTEX_L2_EXPERT_STRICT</code></td><td>2계층 기본 리소스 예산 프로필</td></tr>
-                <tr><td><code>.layer2.enable-soar</code></td><td><code>boolean</code></td><td><code>false</code></td><td>2계층 정밀 분석 결과에 따라 SOAR 액션 자동 트리거 여부</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.tiered.security</code> (보안 의사결정 세부 튜닝)</td></tr>
-                <tr><td><code>.security.vector-search-limit</code></td><td><code>int</code></td><td><code>3</code></td><td>위협 판단 시 유사의사결정 벡터 검색 매칭 건수 상한</td></tr>
-                <tr><td><code>.security.max-similar-events</code></td><td><code>int</code></td><td><code>2</code></td><td>유사 위협 탐지를 위해 비교할 최근 이벤트 최대 수</td></tr>
-                <tr><td><code>.security.max-rag-documents</code></td><td><code>int</code></td><td><code>3</code></td><td>의사결정 보완을 위해 RAG로 주입할 컨텍스트 문서 상한</td></tr>
-                <tr><td><code>.security.timeout-ms</code></td><td><code>long</code></td><td><code>7000</code></td><td>2계층 원격 요청 처리 타임아웃 (밀리초)</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-
-<div class="docs-nav-footer">
-            <a href="../../../docs/install/configuration/infrastructure.html" class="docs-nav-link prev">
+          <h2 id="elsewhere">다른 쪽에 있는 설정</h2>
+          <ul>
+            <li>층마다 쓸 모델 · 백업 모델 · 출력 토큰 한도 · OpenAI · Anthropic 옵션: <a href="ai.html">AI 모델 연결</a></li>
+            <li>에이전트의 호출 상한 · 책임자 확인 · 범위 축소 · 판정 통합: <a href="../../reference/agent/controls.html#settings">에이전트 제한</a></li>
+            <li>에이전트 등록 · AuthZEN 판정 API: <a href="../../reference/agent/overview.html#settings">에이전트를 보안 주체로</a></li>
+            <li>위임 기록 · 업무 목표 계약: <a href="../../reference/agent/delegation.html#settings">위임과 목표 계약</a></li>
+            <li>판정 기록 · 봉인 증거의 서명 키와 보관: <a href="../../reference/architecture/evidence.html#settings">증거 · 검수</a></li>
+            <li>봉인된 프롬프트 검수: <a href="../../reference/architecture/prompt-inspection.html">프롬프트 검수</a></li>
+            <li>Contexa SaaS로 판정 보내기: <a href="../../reference/core/saas.html#settings">Contexa SaaS</a></li>
+            <li>단독 모드 메모리 상한 · 분산 모드 Redis 시간 제한: <a href="infrastructure.html#modes">처음 켜기와 배포</a></li>
+            <li>적어도 효과가 없는 설정(<code>contexa.security.zerotrust.thresholds.*</code> 등): <a href="../configuration.html#unused-keys">설정 길잡이</a></li>
+          </ul>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="ai.html" class="docs-nav-link prev">
               <span class="docs-nav-label">이전</span>
-              <span class="docs-nav-title">인프라 구성</span>
+              <span class="docs-nav-title">AI 모델 연결</span>
             </a>
-            <a href="../../../docs/install/configuration/ai.html" class="docs-nav-link next">
+            <a href="identity.html" class="docs-nav-link next">
               <span class="docs-nav-label">다음</span>
-              <span class="docs-nav-title">AI 구성</span>
+              <span class="docs-nav-title">Contexa가 로그인을 맡을 때</span>
             </a>
           </div>

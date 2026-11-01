@@ -264,6 +264,22 @@ function build() {
             contentHtml = readUtf8(contentFileFallback);
           }
           html = html.replace('{{content}}', contentHtml);
+          // A docs page takes its <title> and description from its own heading and lead paragraph, so the
+          // browser tab and search results match the page in its language (template titles can go stale).
+          const pagePath = relPath.replace(/\\/g, '/');
+          if (pagePath.startsWith('docs/')
+              || (lang !== 'en' && ['get-started.html', 'community.html'].includes(pagePath))) {
+            // Tags are dropped and entities kept as they are, so the text stays valid in <title> and in an attribute.
+            const plain = (s) => s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().replace(/"/g, '&quot;');
+            const h1 = contentHtml.match(/<h1[^>]*>([\s\S]*?)<\/h1>/);
+            const lead = contentHtml.match(/<p class="lead">([\s\S]*?)<\/p>/);
+            if (h1) html = html.replace(/<title>[^<]*<\/title>/, `<title>${plain(h1[1])} | Contexa Docs</title>`);
+            if (lead) {
+              const desc = plain(lead[1]);
+              html = html.replace(/<meta\s+name="description"\s+content="[^"]*">/,
+                `<meta name="description" content="${desc.length > 200 ? desc.slice(0, 197) + '…' : desc}">`);
+            }
+          }
         }
 
         // 3. Resolve i18n markers
@@ -334,8 +350,22 @@ function build() {
 
         // 11. Wrap api-tables with scroll container
         html = html.replace(/<div class="table-scroll">(<table[\s\S]*?<\/table>)<\/div>/g, '$1');
-        html = html.replace(/<table class="api-table">([\s\S]*?)<\/table>/g,
-          '<div class="table-scroll"><table class="api-table">$1</table></div>');
+        html = html.replace(/<table class="(api-table(?: [^"]*)?)">([\s\S]*?)<\/table>/g,
+          '<div class="table-scroll"><table class="$1">$2</table></div>');
+        // A prose table names each cell with its column heading, so a phone can show a row as a labelled
+        // block instead of squeezing every column (components.css, prose-table under 600px).
+        html = html.replace(/<table class="api-table prose-table">([\s\S]*?)<\/table>/g, (table, inner) => {
+          const head = inner.match(/<thead>([\s\S]*?)<\/thead>/);
+          if (!head) return table;
+          const labels = [...head[1].matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)]
+            .map((m) => m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().replace(/"/g, '&quot;'));
+          const body = inner.replace(/<tr>([\s\S]*?)<\/tr>/g, (row, cells) => {
+            if (!cells.includes('<td')) return row;
+            let i = 0;
+            return '<tr>' + cells.replace(/<td(?![^>]*data-label)/g, () => `<td data-label="${labels[i++] ?? ''}"`) + '</tr>';
+          });
+          return `<table class="api-table prose-table">${body}</table>`;
+        });
 
         // 12. Clean up empty comments left by template extraction
         html = html.replace(/\n\s*<!-- Mobile sidebar overlay -->\s*\n/g, '\n');

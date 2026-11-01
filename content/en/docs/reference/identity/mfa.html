@@ -11,748 +11,364 @@
               <span class="badge badge-info">contexa-identity</span>
             </div>
             <h1>Adaptive MFA</h1>
-            <p class="lead">Multi-Factor Authentication (MFA) configuration guide. Combines secondary factors (OTT, Passkey) after primary authentication (Form/REST) to strengthen security. Supports AI-based adaptive policies, custom pages, and Step-up authentication.</p>
+            <p class="lead">How to turn on an MFA flow that asks for second factors (an emailed one-time code, a passkey) after the primary login (form or REST). It covers what decides whether MFA is needed, the pages and addresses, the response formats, extra verification after login, the JavaScript SDK and the settings.</p>
           </div>
 
-          <!-- Overview -->
-          <section class="docs-section">
-            <h2 id="overview">Overview</h2>
-            <p>Contexa MFA consists of primary authentication + secondary factor(s). The policy engine determines whether MFA is required, and the state machine manages the authentication flow.</p>
+          <div class="callout callout-info">
+            <strong>This is a feature for when Contexa owns login (<code>CONTEXA_OWNED</code>).</strong> With the default <code>HOST_OWNED</code>, your application's Spring Security handles login and no Contexa MFA flow is built. To keep your application's own login and MFA and tell Contexa the result, see <a href="../common/bridge.html#mfa">Connecting Your Existing Login</a>. With <code>@EnableAISecurity(mode = SecurityMode.FULL)</code> and no <code>PlatformConfig</code> defined, one MFA flow (form + passkey + one-time code) is on by default.
+          </div>
 
-            <div class="arch-vertical-flow">
-              <div class="arch-vf-node">Primary Auth <span class="arch-vf-sub">Form / REST Login</span></div>
-              <div class="arch-vf-arrow">&#x25BC;</div>
-              <div class="arch-vf-decision">MfaPolicyProvider</div>
-              <div class="arch-vf-branch">
-                <div class="arch-vf-branch-left">
-                  <div class="arch-vf-branch-label">MFA Not Required</div>
-                  <div class="arch-vf-arrow">&#x25BC;</div>
-                  <div class="arch-vf-node arch-vf-success">Auth Complete</div>
-                </div>
-                <div class="arch-vf-branch-right">
-                  <div class="arch-vf-branch-label">MFA Required</div>
-                  <div class="arch-vf-arrow">&#x25BC;</div>
-                  <div class="arch-vf-node">Factor Selection <span class="arch-vf-sub">OTT / Passkey</span></div>
-                  <div class="arch-vf-arrow">&#x25BC;</div>
-                  <div class="arch-vf-node">State Machine <span class="arch-vf-sub">Challenge &rarr; Verify</span></div>
-                  <div class="arch-vf-arrow">&#x25BC;</div>
-                  <div class="arch-vf-node arch-vf-success">MFA Success</div>
-                </div>
-              </div>
-            </div>
-
-            <p>The default MFA order is <strong>200</strong>. Calling <code>.form()</code> or <code>.rest()</code> directly from <code>.mfa()</code> throws an <code>UnsupportedOperationException</code>. You must use <code>.primaryAuthentication()</code> instead.</p>
-          </section>
-
-          <!-- Quick Start -->
-          <section class="docs-section">
-            <h2 id="quick-start">Quick Start</h2>
-            <p>The simplest MFA configuration with Form primary authentication + Passkey secondary authentication.</p>
-
-<pre><code class="language-java">registry
-    .mfa(mfa -&gt; mfa
-        .primaryAuthentication(primary -&gt; primary
-            .formLogin(form -&gt; form.loginPage("/login")))
-        .passkey(Customizer.withDefaults())
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
-          </section>
-
-          <!-- Primary Authentication -->
-          <section class="docs-section">
-            <h2 id="primary-authentication">Primary Authentication</h2>
-            <p>Configures the primary authentication method via <code>primaryAuthentication()</code>. Only one of <code>formLogin()</code> or <code>restLogin()</code> can be selected (mutually exclusive).</p>
-
-            <h3>Form Primary</h3>
-<pre><code class="language-java">.mfa(mfa -&gt; mfa
-    .primaryAuthentication(primary -&gt; primary
-        .formLogin(form -&gt; form
-            .loginPage("/login")
-            .usernameParameter("email")
-            .failureUrl("/login?error")))
-    .ott(Customizer.withDefaults())
-)</code></pre>
-
-            <h3>REST Primary</h3>
-<pre><code class="language-java">.mfa(mfa -&gt; mfa
-    .primaryAuthentication(primary -&gt; primary
-        .restLogin(rest -&gt; rest
-            .loginProcessingUrl("/api/auth/login")))
-    .passkey(Customizer.withDefaults())
-)</code></pre>
-
-            <div class="callout callout-info">
-              <strong>Primary Authentication Order</strong><br>
-              Primary authentication is automatically assigned order 0. Secondary factors are automatically assigned sequential order values (1, 2, 3...) via <code>currentStepOrderCounter</code>.
-            </div>
-          </section>
-
-          <!-- MFA Factors -->
-          <section class="docs-section">
-            <h2 id="mfa-factors">MFA Factors (Secondary Authentication)</h2>
-            <p>Adds secondary authentication factors. At least one secondary factor is required, and multiple factors can be combined.</p>
-
-            <h3>Available Secondary Factors</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Factor</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>.ott()</code></td><td>One-Time Token</td><td>Email/SMS one-time code</td></tr>
-                <tr><td><code>.passkey()</code></td><td>WebAuthn / Passkey</td><td>Biometric authentication / hardware key</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Multiple Factor Combination</h3>
-<pre><code class="language-java">.mfa(mfa -&gt; mfa
-    .primaryAuthentication(primary -&gt; primary
-        .formLogin(form -&gt; form.loginPage("/login")))
-    .ott(ott -&gt; ott
-        .tokenService(emailTokenService))
-    .passkey(passkey -&gt; passkey
-        .rpName("My App")
-        .rpId("example.com"))
-)</code></pre>
-            <p>Each factor is automatically assigned a sequential order via <code>currentStepOrderCounter</code> (1, 2, 3...). Users select their preferred factor on the factor selection page.</p>
-
-            <h3 id="required-factors">requiredFactors() - Required Factor Count</h3>
-            <p>Controls how many secondary factors must be completed for MFA to succeed. By default, <strong>all registered factors</strong> must be completed.</p>
-
-<pre><code class="language-java">// Register 2 factors, but only 1 is required to complete MFA
-.mfa(mfa -&gt; mfa
-    .primaryAuthentication(primary -&gt; primary
-        .formLogin(Customizer.withDefaults()))
-    .passkey(Customizer.withDefaults())
-    .ott(Customizer.withDefaults())
-    .requiredFactors(1)
-)</code></pre>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Setting</th><th>Behavior</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>.requiredFactors(1)</code></td><td>Only 1 factor needs to succeed. The first factor starts automatically; if it fails, "Try another method" link allows switching to a different factor.</td></tr>
-                <tr><td><code>.requiredFactors(2)</code></td><td>2 factors must succeed. After completing one, the next uncompleted factor starts automatically.</td></tr>
-                <tr><td>Not set (default)</td><td>All registered factors must be completed.</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="callout callout-info">
-              <strong>Factor Selection Behavior</strong><br>
-              When multiple factor types are registered, each MFA challenge page displays a "Try another method" link. Already completed factor types are excluded from the selection page. The same factor type cannot be used twice.
-            </div>
-
-            <h4>Use Case: Flexible Fallback</h4>
-            <p>Register multiple factors for redundancy while requiring only one. Users who cannot use Passkey (e.g., no biometric hardware) can fall back to OTT email verification.</p>
-
-<pre><code class="language-java">// Admin portal: Passkey preferred, OTT as fallback
-.mfa(mfa -&gt; mfa
-    .urlPrefix("/admin")
-    .primaryAuthentication(primary -&gt; primary
-        .formLogin(form -&gt; form.defaultSuccessUrl("/admin")))
-    .passkey(Customizer.withDefaults())   // Starts first (auto-selected)
-    .ott(Customizer.withDefaults())       // Available as fallback
-    .requiredFactors(1)                   // Only 1 needed
-)</code></pre>
-          </section>
-
-          <!-- MFA Pages -->
-          <section class="docs-section">
-            <h2 id="mfa-pages">MFA Pages</h2>
-            <p>Customizes the page URLs for each step of the MFA flow via <code>mfaPage()</code>.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>selectFactorPage(String)</code></td><td>Factor selection page URL</td></tr>
-                <tr><td><code>ottPages(String requestUrl, String verifyUrl)</code></td><td>OTT request/verification page URLs (configured at once)</td></tr>
-                <tr><td><code>ottRequestPage(String)</code></td><td>OTT code request page URL</td></tr>
-                <tr><td><code>ottVerifyPage(String)</code></td><td>OTT code verification page URL</td></tr>
-                <tr><td><code>passkeyChallengePages(String)</code></td><td>Passkey challenge page URL</td></tr>
-                <tr><td><code>configurePageUrl(String)</code></td><td>MFA configuration page URL</td></tr>
-                <tr><td><code>failurePageUrl(String)</code></td><td>MFA failure page URL</td></tr>
-              </tbody>
-            </table></div>
-
-<pre><code class="language-java">.mfa(mfa -&gt; mfa
-    .primaryAuthentication(primary -&gt; primary
-        .formLogin(form -&gt; form.loginPage("/login")))
-    .ott(Customizer.withDefaults())
-    .mfaPage(page -&gt; page
-        .selectFactorPage("/mfa/select")
-        .ottPages("/mfa/ott/request", "/mfa/ott/verify")
-        .failurePageUrl("/mfa/failed"))
-)</code></pre>
-
-            <h3 id="custom-mfa-pages">Creating Custom MFA Pages</h3>
-            <p>You can freely modify the CSS and layout of MFA pages. However, the following elements must be preserved.</p>
-
-            <h4>Do Not Modify</h4>
-            <ul>
-              <li>CSRF meta tag: <code>&lt;meta name="_csrf" th:content="${csrfToken}"&gt;</code></li>
-              <li><code>id="contexa-page-config"</code> div and <code>data-*</code> attributes</li>
-              <li>Input name attributes: <code>username</code>, <code>password</code>, <code>token</code>, <code>_csrf</code>, <code>mfaSessionId</code></li>
-              <li>Form <code>id</code>, <code>method</code>, <code>th:action</code></li>
-              <li>button id: <code>loginButton</code>, <code>sendCodeButton</code>, <code>verifyButton</code>, <code>resendButton</code>, <code>authButton</code></li>
-              <li><code>th:utext="${hiddenInputsHtml}"</code> ??Auto-generates CSRF + mfaSessionId hidden inputs</li>
+          <h2 id="overview">At a glance</h2>
+          <p>When the primary login succeeds, the MFA policy decides whether this user needs MFA. If so, Contexa opens the page of the first second factor right away, and the user can pick a remaining factor with "another method". The login finishes once the required number of factors is done.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The four outcomes of the MFA policy after the primary login</strong>The policy looks at the Zero Trust decision stored for this user (<a href="#policy">Policy</a>).</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">Primary login</span><span class="dg-node-desc"><code>POST /mfa/login</code> (form) or <code>POST /api/mfa/login</code> (REST)</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">MFA policy decision</span><span class="dg-node-desc">MFA policy provider (<code>MfaPolicyProvider</code>) and evaluators</span></li>
+            </ol>
+            <p class="dg-outcomes-title">Depending on the decision</p>
+            <ul class="dg-outcomes">
+              <li class="dg-node dg-allow"><span class="dg-node-title">No MFA needed</span><span class="dg-node-desc">Login completes at once</span></li>
+              <li class="dg-node dg-challenge"><span class="dg-node-title">MFA needed</span><span class="dg-node-desc">The first factor's page opens automatically</span></li>
+              <li class="dg-node dg-block"><span class="dg-node-title">Blocked</span><span class="dg-node-desc">403 <code>AUTHENTICATION_BLOCKED</code></span></li>
+              <li class="dg-node dg-escalate"><span class="dg-node-title">Held for review</span><span class="dg-node-desc">The same response as blocked (403)</span></li>
             </ul>
+          </figure>
+          <p>There are two second factors: an emailed <strong>one-time code</strong> (<code>.ott()</code>) and a <strong>passkey</strong> (<code>.passkey()</code>). There is no authenticator app code (TOTP) or text message (SMS) factor.</p>
 
-            <h4>Safe to Modify</h4>
-            <ul>
-              <li>CSS colors, layout, background</li>
-              <li>Logos, icons</li>
-              <li>Text content</li>
-              <li>Form field styles</li>
-            </ul>
+          <h2 id="quick-start">The simplest MFA</h2>
+          <pre><code class="language-java">registry
+        .mfa(mfa -&gt; mfa
+                .primaryAuthentication(primary -&gt; primary.formLogin(Customizer.withDefaults()))
+                .passkey(Customizer.withDefaults())
+                .ott(Customizer.withDefaults()))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <ul>
+            <li>Contexa generates the login page <code>GET /mfa/login</code> and the factor pages. The primary login is processed at <code>POST /mfa/login</code>.</li>
+            <li>The flow is named <code>mfa</code>, its default order is 200, and the chain bean is named like <code>mfaSecurityFilterChain1</code>.</li>
+            <li>The primary login is one of <code>formLogin</code> and <code>restLogin</code> (<code>.primaryAuthentication(...)</code> is required).</li>
+            <li>Without any second factor, startup fails. Calling <code>.form()</code> or <code>.rest()</code> inside <code>.mfa()</code> throws <code>UnsupportedOperationException</code>. Writing the same factor twice makes the later one replace the earlier one.</li>
+          </ul>
+          <div class="callout callout-warning">
+            <strong>The one-time code factor needs mail settings.</strong> The code is sent with Spring mail (<code>spring.mail.*</code>); without a mail sender, issuing a code fails as <code>contexa.auth.ott.fail-on-email-error</code> (default <code>true</code>) says (<a href="authentication.html#ott">One-time code</a>).
+          </div>
+          <h3 id="mfa-verify">Checking it</h3>
+          <ul>
+            <li>Opening a protected address goes to the <code>/mfa/login</code> page.</li>
+            <li>After the primary login, if MFA is needed, the first factor's page opens (for example <code>/mfa/challenge/passkey</code>). A user logging in for the first time has no stored decision and goes through MFA.</li>
+          </ul>
 
-            <h4>Required JavaScript Files</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>File</th><th>Target Page</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>/js/contexa-mfa-sdk.js</code></td><td>All MFA pages (required)</td></tr>
-                <tr><td><code>/js/contexa-login-page.js</code></td><td>Login page</td></tr>
-                <tr><td><code>/js/contexa-ott-request-page.js</code></td><td>OTT code request page</td></tr>
-                <tr><td><code>/js/contexa-ott-verify-page.js</code></td><td>OTT code verification page</td></tr>
-                <tr><td><code>/js/contexa-passkey-page.js</code></td><td>Passkey challenge page</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="factors">Second factors and how many are required</h2>
+          <p>The primary login is number 0 and second factors are 1, 2, … in the order written. <code>requiredFactors(n)</code> sets how many factors must be completed.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>requiredFactors</code></th><th>Behavior</th></tr></thead>
+            <tbody>
+              <tr><td>Not set</td><td>Every registered factor must be completed</td></tr>
+              <tr><td>1</td><td>Any one factor. The first factor opens automatically, and the "another method" link lets the user pick a remaining one (completed factors drop out of the list)</td></tr>
+              <tr><td>N</td><td>N factors must be completed. When one is done, the next follows automatically</td></tr>
+              <tr><td>More than the factors</td><td>Can never complete. It is not checked at startup, so take care</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-java">registry
+        .mfa(mfa -&gt; mfa
+                .primaryAuthentication(primary -&gt; primary.formLogin(Customizer.withDefaults()))
+                .passkey(Customizer.withDefaults())
+                .ott(Customizer.withDefaults())
+                .requiredFactors(1))   // passkey first; devices without one use the one-time code
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
 
-            <h4>MFA Data Flow</h4>
-            <div class="arch-vertical-flow">
-              <div class="arch-vf-node">POST /login <span class="arch-vf-sub">Primary Authentication</span></div>
-              <div class="arch-vf-arrow">&#x25BC;</div>
-              <div class="arch-vf-decision">/mfa/select-factor</div>
-              <div class="arch-vf-branch">
-                <div class="arch-vf-branch-left">
-                  <div class="arch-vf-branch-label">OTT</div>
-                  <div class="arch-vf-node">/mfa/ott/request-code-ui</div>
-                  <div class="arch-vf-arrow">&#x25BC;</div>
-                  <div class="arch-vf-node">POST /mfa/ott/generate-code</div>
-                  <div class="arch-vf-arrow">&#x25BC;</div>
-                  <div class="arch-vf-node">/mfa/challenge/ott</div>
-                  <div class="arch-vf-arrow">&#x25BC;</div>
-                  <div class="arch-vf-node arch-vf-success">POST /login/mfa-ott</div>
-                  <div class="arch-vf-result">
-                    <span class="arch-vf-badge arch-vf-badge-success">Success</span>
-                    <span class="arch-vf-badge arch-vf-badge-error">Failure</span>
-                  </div>
-                </div>
-                <div class="arch-vf-branch-right">
-                  <div class="arch-vf-branch-label">Passkey</div>
-                  <div class="arch-vf-node">/mfa/challenge/passkey</div>
-                  <div class="arch-vf-arrow">&#x25BC;</div>
-                  <div class="arch-vf-node">navigator.credentials.get() <span class="arch-vf-sub">WebAuthn API</span></div>
-                  <div class="arch-vf-arrow">&#x25BC;</div>
-                  <div class="arch-vf-node arch-vf-success">POST /login/mfa-webauthn</div>
-                  <div class="arch-vf-result">
-                    <span class="arch-vf-badge arch-vf-badge-success">Success</span>
-                    <span class="arch-vf-badge arch-vf-badge-error">Failure</span>
-                  </div>
-                </div>
-              </div>
+          <h2 id="pages">Pages and addresses</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Page · address</th><th>Default</th><th>Setting</th></tr></thead>
+            <tbody>
+              <tr><td>Primary login page and processing (form)</td><td><code>/mfa/login</code></td><td><code>contexa.auth.urls.primary.form-login-page</code> · <code>form-login-processing</code></td></tr>
+              <tr><td>Primary login processing (REST)</td><td><code>/api/mfa/login</code></td><td><code>contexa.auth.urls.primary.rest-login-processing</code></td></tr>
+              <tr><td>Factor selection page</td><td><code>/mfa/select-factor</code></td><td><code>contexa.auth.urls.mfa.select-factor</code></td></tr>
+              <tr><td>One-time code request page</td><td><code>/mfa/ott/request-code-ui</code></td><td><code>contexa.auth.urls.factors.ott.request-code-ui</code></td></tr>
+              <tr><td>One-time code issuing</td><td><code>POST /mfa/ott/generate-code</code></td><td><code>contexa.auth.urls.factors.ott.code-generation</code></td></tr>
+              <tr><td>One-time code entry page</td><td><code>/mfa/challenge/ott</code></td><td><code>contexa.auth.urls.factors.ott.challenge-ui</code></td></tr>
+              <tr><td>One-time code check</td><td><code>POST /login/mfa-ott</code></td><td><code>contexa.auth.urls.factors.ott.login-processing</code></td></tr>
+              <tr><td>Passkey page</td><td><code>/mfa/challenge/passkey</code></td><td><code>contexa.auth.urls.factors.passkey.challenge-ui</code></td></tr>
+              <tr><td>Passkey check</td><td><code>POST /login/mfa-webauthn</code></td><td><code>contexa.auth.urls.factors.passkey.login-processing</code></td></tr>
+            </tbody>
+          </table></div>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Page moves per factor</strong>It starts from the factor opened after the primary login; the selection page switches to another factor.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side"><p class="dg-side-title">One-time code</p><ul><li>Request page <code>/mfa/ott/request-code-ui</code></li><li>Issue the code <code>POST /mfa/ott/generate-code</code> → email</li><li>Entry page <code>/mfa/challenge/ott</code></li><li>Check <code>POST /login/mfa-ott</code></li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Passkey</p><ul><li>Page <code>/mfa/challenge/passkey</code></li><li>Browser <code>navigator.credentials.get()</code></li><li>Check <code>POST /login/mfa-webauthn</code></li></ul></div>
             </div>
-          </section>
+          </figure>
+          <h3 id="mfa-page">Changing page addresses</h3>
+          <p>When <code>mfaPage(...)</code> changes a page address, Contexa does not generate the page at that address and passes the request to the application, which must make the page.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Method</th><th>Page it changes</th></tr></thead>
+            <tbody>
+              <tr><td><code>selectFactorPage(String)</code></td><td>Factor selection page</td></tr>
+              <tr><td><code>ottPages(String requestUrl, String verifyUrl)</code></td><td>One-time code request and entry pages together</td></tr>
+              <tr><td><code>ottRequestPage(String)</code></td><td>One-time code request page</td></tr>
+              <tr><td><code>ottVerifyPage(String)</code></td><td>One-time code entry page</td></tr>
+              <tr><td><code>passkeyChallengePages(String)</code></td><td>Passkey page</td></tr>
+              <tr><td><code>configurePageUrl(String)</code></td><td>MFA configuration page</td></tr>
+              <tr><td><code>failurePageUrl(String)</code></td><td>MFA failure page</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-java">registry
+        .mfa(mfa -&gt; mfa
+                .primaryAuthentication(primary -&gt; primary.formLogin(Customizer.withDefaults()))
+                .ott(Customizer.withDefaults())
+                .mfaPage(page -&gt; page
+                        .selectFactorPage("/mfa/select")
+                        .ottPages("/mfa/ott/request", "/mfa/ott/verify")
+                        .failurePageUrl("/mfa/failed")))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <h3 id="custom-login">Your own primary login page</h3>
+          <ul>
+            <li>With <code>loginPage</code>, as in <code>formLogin(form -&gt; form.loginPage("/login"))</code>, Contexa does not generate a login page. The application makes that page, and the page posts to <code>POST /mfa/login</code>.</li>
+            <li>To keep Contexa's page and change only its address, use <code>defaultLoginUrl("/signin")</code>. The page address and the processing path change together.</li>
+          </ul>
+          <h3 id="custom-pages">Rules for your own MFA pages</h3>
+          <p>The look (CSS, layout, logo, wording) can change freely. Contexa's scripts look for the elements below, so keep them.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Required element</th><th>Value</th></tr></thead>
+            <tbody>
+              <tr><td>Scripts</td><td><code>/js/contexa-mfa-sdk.js</code> (every page) and per page <code>/js/contexa-login-page.js</code>, <code>/js/contexa-ott-request-page.js</code>, <code>/js/contexa-ott-verify-page.js</code>, <code>/js/contexa-passkey-page.js</code></td></tr>
+              <tr><td>CSRF meta tags</td><td><code>&lt;meta name="_csrf"&gt;</code> and <code>&lt;meta name="_csrf_header"&gt;</code> with Spring Security's CSRF token value and header name</td></tr>
+              <tr><td>Page configuration element</td><td><code>id="contexa-page-config"</code> and its <code>data-*</code> attributes (<code>data-token-persistence</code>, <code>data-select-factor-url</code>, <code>data-failure-url</code>, <code>data-max-attempts</code>, <code>data-attempts-made</code>)</td></tr>
+              <tr><td>Input ids</td><td>Login page <code>username</code> · <code>password</code>, code entry page <code>token</code>, message areas <code>message-area</code> · <code>errorMessage</code></td></tr>
+              <tr><td>Hidden input names</td><td><code>_csrf</code> (CSRF token), <code>mfaSessionId</code> (MFA session). Pages Contexa generates add both automatically</td></tr>
+              <tr><td>Form ids</td><td><code>ottRequestForm</code>, <code>verifyForm</code>, <code>resendForm</code></td></tr>
+              <tr><td>Button ids</td><td><code>loginButton</code>, <code>sendCodeButton</code>, <code>verifyButton</code>, <code>resendButton</code>, <code>authButton</code></td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- MFA Policy Customization -->
-          <section class="docs-section">
-            <h2 id="mfa-policy">MFA Policy Customization</h2>
-            <p>Implement <code>MfaPolicyProvider</code> to customize MFA requirement decisions. Since it is registered with <code>@ConditionalOnMissingBean</code>, defining a bean of the same type automatically overrides it.</p>
-
-            <h3>Built-in Implementations</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Implementation</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>DefaultMfaPolicyProvider</code></td><td>Static rule-based. Determines MFA requirement based on user roles and MFA configuration</td></tr>
-                <tr><td><code>AIAdaptiveMfaPolicyProvider</code></td><td>AI risk analysis-based dynamic policy. Falls back to DefaultMfaPolicyProvider when AI Core is unavailable</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Custom Policy Implementation Example</h3>
-<pre><code class="language-java">@Bean
-public MfaPolicyProvider mfaPolicyProvider() {
-    return new MfaPolicyProvider() {
+          <h2 id="policy">The policy that decides whether MFA is needed</h2>
+          <p>When the primary login succeeds, the MFA policy provider decides. The default provider is the AI adaptive provider (<code>AIAdaptiveMfaPolicyProvider</code>), and among the registered <strong>evaluators</strong> the one with the highest priority that covers this user decides.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Evaluator</th><th>Priority</th><th>Users it covers</th><th>Decision</th></tr></thead>
+            <tbody>
+              <tr><td><code>AgentAccountMfaPolicyEvaluator</code></td><td>1000</td><td>Accounts of approved agents</td><td>Never sends them to factors made for people; follows only Contexa's decision</td></tr>
+              <tr><td><code>ZeroTrustPolicyEvaluator</code></td><td>100</td><td>Every other user</td><td>Stored decision ALLOW → MFA skipped. CHALLENGE → MFA. BLOCK → blocked. ESCALATE → held for review (blocked). No decision (PENDING_ANALYSIS) → skipped if the last verified decision was ALLOW, otherwise MFA. No decision record, or an old one (<code>contexa.security.zerotrust.analysis.max-age-ms</code>, 1 hour) → MFA</td></tr>
+              <tr><td><code>DefaultMfaPolicyEvaluator</code></td><td>-100</td><td>A fallback for when an earlier evaluator throws</td><td>Asks for MFA in an MFA flow. The built-in evaluators turn their own errors into "MFA needed", so it is rarely used</td></tr>
+            </tbody>
+          </table></div>
+          <p>The policy has four decisions: <code>NO_MFA_REQUIRED</code> (not needed), <code>CHALLENGED</code> (needed), <code>BLOCKED</code> (blocked) and <code>ESCALATED</code> (held for review, access blocked). Blocked and held for review both answer the primary login with 403 <code>AUTHENTICATION_BLOCKED</code>.</p>
+          <p>The AI adaptive provider adjusts the evaluator's decision with the AI analysis results (block mark, decision type, risk score). Without the AI feature (<code>AICoreOperations</code>) it uses the evaluator's decision as it is, without this adjustment. The decision for an approved agent account is never adjusted.</p>
+          <h3 id="custom-policy">Changing the policy</h3>
+          <ul>
+            <li><strong>Add an evaluator:</strong> a <code>MfaPolicyEvaluator</code> bean is considered by priority together with the built-in evaluators. Narrow the users it covers with <code>supports(...)</code>. An evaluator that covers every user with a priority above 100 takes over the decision based on the Zero Trust decision.</li>
+            <li><strong>For one flow only:</strong> <code>.mfa(mfa -&gt; mfa.policyProvider(myProvider))</code> changes that flow's provider.</li>
+            <li><strong>The whole provider:</strong> a <code>MfaPolicyProvider</code> bean named <code>aiAdaptiveMfaPolicyProvider</code> replaces the default provider. Adding a bean of the same type under another name leaves the <code>@Primary</code> default in use. A provider implements four methods: <code>evaluateInitialMfaRequirement</code>, <code>evaluateNextFactor</code>, <code>isFactorAvailableForUser</code> and <code>getRequiredFactorCount</code>.</li>
+          </ul>
+          <pre><code class="language-java">@Bean
+public MfaPolicyEvaluator adminFlowAlwaysMfa() {
+    return new MfaPolicyEvaluator() {
         @Override
-        public MfaDecision evaluateInitialMfaRequirement(FactorContext ctx) {
-            String ip = ctx.getRequest().getRemoteAddr();
-            if (trustedIpRanges.contains(ip)) {
-                return MfaDecision.noMfaRequired();
-            }
-            return MfaDecision.challenged("Untrusted IP");
+        public boolean supports(FactorContext context) {
+            return context != null &amp;&amp; "mfa_admin".equals(context.getFlowTypeName());
         }
-        // ... other methods
+
+        @Override
+        public MfaDecision evaluatePolicy(FactorContext context) {
+            return MfaDecision.challenged("The admin flow always asks for a second factor");
+        }
+
+        @Override
+        public int getPriority() {
+            return 500;
+        }
     };
 }</code></pre>
+          <p>Inside an evaluator, request information comes from the <code>FactorContext</code> attributes. For example the IP of the primary login request is <code>context.getAttribute(FactorContextAttributes.DeviceAndSession.CLIENT_IP)</code>.</p>
 
-            <h3>MfaDecision Types</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>DecisionType</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>NO_MFA_REQUIRED</code></td><td>MFA not required. Authentication completes immediately</td></tr>
-                <tr><td><code>CHALLENGED</code></td><td>MFA required. Secondary factor authentication demanded</td></tr>
-                <tr><td><code>BLOCKED</code></td><td>Authentication blocked. Access denied</td></tr>
-                <tr><td><code>ESCALATED</code></td><td>Escalated for administrator review. Only administrators can resolve</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="step-up">Extra verification after login</h2>
+          <p>When the next request of a logged-in user finds a stored CHALLENGE decision, the request-time challenge filter starts MFA again (step-up). A browser goes to the <code>/contexa/zero-trust/challenge-required?mfaUrl=…</code> notice page, and an API gets 401 <code>MFA_CHALLENGE_REQUIRED</code> (body <code>mfaUrl</code>, <code>challengeNoticeUrl</code>). When this MFA succeeds, the decision changes to ALLOW. The full responses are in <a href="zero-trust-filters.html#responses">Request-Time Enforcement</a>.</p>
+          <p>On a page that loads the JavaScript SDK, the SDK looks at <code>fetch</code> responses and handles them as follows.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Response</th><th>What the SDK does</th></tr></thead>
+            <tbody>
+              <tr><td>401 <code>MFA_CHALLENGE_REQUIRED</code> · <code>BLOCK_MFA_REQUIRED</code></td><td>Moves to <code>challengeNoticeUrl</code> (or <code>mfaUrl</code>)</td></tr>
+              <tr><td>Any other 401 (expired access token)</td><td>Refreshes the token once and sends the same request again</td></tr>
+              <tr><td>403 <code>ACCOUNT_BLOCKED</code> · <code>BLOCK_MFA_FAILED</code></td><td>Moves to <code>redirectUrl</code> (blocked page)</td></tr>
+              <tr><td>423 <code>SECURITY_REVIEW_IN_PROGRESS</code></td><td>Moves to <code>redirectUrl</code> (analysis pending page)</td></tr>
+              <tr><td>403 with the response-cut marker</td><td>Moves to the blocked page</td></tr>
+            </tbody>
+          </table></div>
+          <p>After MFA the original request is not sent again automatically. A request is resent only after an expired token is refreshed.</p>
 
-            <h3>Injecting Policy via DSL</h3>
-<pre><code class="language-java">.mfa(mfa -&gt; mfa
-    .policyProvider(customMfaPolicyProvider)
-    .primaryAuthentication(primary -&gt; primary
-        .formLogin(form -&gt; form.loginPage("/login")))
-    .passkey(Customizer.withDefaults())
-)</code></pre>
-          </section>
+          <h2 id="responses">Response formats and endpoints</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>When</th><th>Response body (JSON)</th></tr></thead>
+            <tbody>
+              <tr><td>MFA needed after the primary login</td><td><code>status</code> (<code>MFA_REQUIRED</code>), <code>message</code>, <code>mfaSessionId</code>, <code>nextStepUrl</code>, <code>progress</code>, <code>nextFactorType</code>, <code>nextStepId</code>. When a factor must be chosen, <code>status</code> is <code>MFA_REQUIRED_SELECT_FACTOR</code> with <code>availableFactors</code></td></tr>
+              <tr><td>MFA complete</td><td><code>authenticated</code> (<code>true</code>), <code>status</code> (<code>MFA_COMPLETED</code>), <code>message</code>, <code>redirectUrl</code>, <code>stateType</code>. In the token state the token fields are added, and <code>nextAction</code> appears when passkey registration is suggested</td></tr>
+              <tr><td>Primary login blocked</td><td>403 <code>AUTHENTICATION_BLOCKED</code></td></tr>
+              <tr><td>Primary login failed</td><td>401 <code>PRIMARY_AUTH_FAILED</code> (API). A browser moves to <code>/login?error=primary_auth_failed</code></td></tr>
+              <tr><td>Factor check failed</td><td>401 <code>MFA_FACTOR_VERIFICATION_FAILED</code>: <code>timestamp</code>, <code>status</code>, <code>error</code>, <code>message</code>, <code>path</code> + <code>mfaSessionId</code>, <code>failedFactor</code>, <code>attemptsMade</code>, <code>maxAttempts</code>, <code>currentState</code></td></tr>
+            </tbody>
+          </table></div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Endpoint</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET /api/mfa/config</code></td><td>MFA addresses and settings (used by the SDK)</td></tr>
+              <tr><td><code>POST /mfa/select-factor</code></td><td>Selects a factor</td></tr>
+              <tr><td><code>POST /mfa/ott/generate-code</code></td><td>Issues a one-time code</td></tr>
+              <tr><td><code>POST /login/mfa-ott</code></td><td>Checks a one-time code</td></tr>
+              <tr><td><code>POST /mfa/challenge/passkey</code></td><td>Starts the passkey check</td></tr>
+              <tr><td><code>POST /login/mfa-webauthn</code></td><td>Checks the passkey</td></tr>
+              <tr><td><code>POST /mfa/cancel</code></td><td>Cancels MFA</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>The setting <code>contexa.auth.urls.mfa.status</code> (default <code>/mfa/status</code>) has an address but nothing handles it.</li>
+            <li>With <code>urlPrefix</code>, the SDK is told <code>/prefix/api/mfa/config</code>, but nothing receives that address; only <code>/api/mfa/config</code> answers.</li>
+          </ul>
 
-          <!-- Step-up Authentication -->
-          <section class="docs-section">
-            <h2 id="step-up">Step-up Authentication</h2>
-            <p>Requires additional authentication when an already authenticated user accesses sensitive resources.</p>
+          <h2 id="multiple">Several MFA flows</h2>
+          <p>Each MFA flow can have its own chain, factors and addresses. <code>urlPrefix("/admin")</code> puts the prefix in front of every MFA address of that flow and makes the chain scope <code>/admin/**</code> (<code>securityMatcher</code> set automatically). The prefix may contain only letters, digits, <code>/</code>, <code>_</code> and <code>-</code>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Default address</th><th><code>urlPrefix("/admin")</code></th></tr></thead>
+            <tbody>
+              <tr><td><code>/mfa/login</code></td><td><code>/admin/mfa/login</code></td></tr>
+              <tr><td><code>/mfa/select-factor</code></td><td><code>/admin/mfa/select-factor</code></td></tr>
+              <tr><td><code>/login/mfa-ott</code></td><td><code>/admin/login/mfa-ott</code></td></tr>
+              <tr><td><code>/login/mfa-webauthn</code></td><td><code>/admin/login/mfa-webauthn</code></td></tr>
+              <tr><td><code>/mfa/cancel</code></td><td><code>/admin/mfa/cancel</code></td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>Flow names: <code>name("admin")</code> gives <code>mfa_admin</code>; without a name they are <code>mfa</code>, <code>mfa_2</code>, <code>mfa_3</code> in order.</li>
+            <li>An MFA flow without a prefix takes every request, so put it last. Flows after it are never reached, and an error is logged at startup.</li>
+            <li><code>.mfa()</code> has no <code>rawHttp</code>; the scope is set with <code>urlPrefix</code>.</li>
+          </ul>
+          <pre><code class="language-java">registry
+        .mfa(mfa -&gt; mfa.name("admin").urlPrefix("/admin").order(50)
+                .primaryAuthentication(primary -&gt; primary.formLogin(Customizer.withDefaults()))
+                .passkey(Customizer.withDefaults())
+                .requiredFactors(1))
+        .session(Customizer.withDefaults())
+        .mfa(mfa -&gt; mfa
+                .primaryAuthentication(primary -&gt; primary.formLogin(Customizer.withDefaults()))
+                .ott(Customizer.withDefaults()))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <h3 id="with-single">Together with single login</h3>
+          <p>MFA flows and single login flows can sit side by side. Requests are split by order and scope, and each flow picks its own state.</p>
+          <pre><code class="language-java">registry
+        .mfa(mfa -&gt; mfa.urlPrefix("/admin").order(50)
+                .primaryAuthentication(primary -&gt; primary.formLogin(Customizer.withDefaults()))
+                .passkey(Customizer.withDefaults()))
+        .session(Customizer.withDefaults())
+        .rest(rest -&gt; rest.order(100))
+        .oauth2(Customizer.withDefaults())
+        .build();</code></pre>
+          <h3 id="mfa-options"><code>.mfa()</code> options</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>primaryAuthentication(...)</code></td><td>Primary login (<code>formLogin</code> or <code>restLogin</code>)</td></tr>
+              <tr><td><code>ott(...)</code> · <code>passkey(...)</code></td><td>Second factors</td></tr>
+              <tr><td><code>requiredFactors(int)</code></td><td>How many factors must be completed</td></tr>
+              <tr><td><code>name(String)</code> · <code>urlPrefix(String)</code> · <code>order(int)</code></td><td>Flow name · address prefix and scope · order (default 200)</td></tr>
+              <tr><td><code>policyProvider(...)</code></td><td>This flow's MFA policy provider</td></tr>
+              <tr><td><code>mfaPage(...)</code></td><td>Page addresses</td></tr>
+              <tr><td><code>mfaSuccessHandler(...)</code> · <code>mfaFailureHandler(...)</code> · <code>defaultDeviceTrustEnabled(boolean)</code> · <code>asep(...)</code></td><td>Accept a value but are not used in the current version</td></tr>
+            </tbody>
+          </table></div>
 
-            <div class="arch-vertical-flow">
-              <div class="arch-vf-node">Authenticated User <span class="arch-vf-sub">Accesses sensitive resource</span></div>
-              <div class="arch-vf-arrow">&#x25BC;</div>
-              <div class="arch-vf-node arch-vf-warning">Server: 401 <span class="arch-vf-sub">MFA_CHALLENGE_REQUIRED</span></div>
-              <div class="arch-vf-arrow">&#x25BC;</div>
-              <div class="arch-vf-node">SDK Global Interceptor <span class="arch-vf-sub">Auto-detect 401 / 403 / 423 responses</span></div>
-              <div class="arch-vf-arrow">&#x25BC;</div>
-              <div class="arch-vf-node">MFA Factor Challenge <span class="arch-vf-sub">Redirect to factor selection page</span></div>
-              <div class="arch-vf-arrow">&#x25BC;</div>
-              <div class="arch-vf-node arch-vf-success">Auto-Retry <span class="arch-vf-sub">Original request automatically retried</span></div>
-            </div>
-
-            <p>The ContexaMFA SDK Global Interceptor automatically detects <code>401</code>/<code>403</code>/<code>423</code> responses from all HTTP requests and redirects to the MFA challenge. After authentication completes, the original request is automatically retried.</p>
-          </section>
-
-          <!-- MFA State Machine Events -->
-          <section class="docs-section">
-            <h2 id="mfa-events">MFA State Machine Events</h2>
-            <p>Use <code>@EventListener</code> to receive MFA state change events for implementing audit logs, notifications, and more.</p>
-
-            <h3>Event Types</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Event</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>StateChangeEvent</code></td><td>MFA state transition (e.g., FACTOR_SELECTION -&gt; OTT_CHALLENGE)</td></tr>
-                <tr><td><code>ErrorEvent</code></td><td>Error occurred (SECURITY, TIMEOUT, LIMIT_EXCEEDED, SYSTEM)</td></tr>
-                <tr><td><code>PerformanceAlertEvent</code></td><td>Performance warning (slow response, etc.)</td></tr>
-                <tr><td><code>CustomEvent</code></td><td>User-defined event</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Terminal States</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>State</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>MFA_SUCCESSFUL</code></td><td>MFA succeeded. Full authentication complete</td></tr>
-                <tr><td><code>MFA_NOT_REQUIRED</code></td><td>MFA not required. Skipped by policy</td></tr>
-                <tr><td><code>MFA_FAILED_TERMINAL</code></td><td>MFA permanently failed. No retry allowed</td></tr>
-                <tr><td><code>MFA_CANCELLED</code></td><td>User cancelled MFA</td></tr>
-                <tr><td><code>MFA_TIMEOUT</code></td><td>Session timeout</td></tr>
-                <tr><td><code>MFA_SESSION_EXPIRED</code></td><td>MFA session expired</td></tr>
-                <tr><td><code>MFA_ACCOUNT_LOCKED</code></td><td>Account locked</td></tr>
-                <tr><td><code>MFA_SYSTEM_ERROR</code></td><td>System error</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Audit Log Implementation Example</h3>
-<pre><code class="language-java">@EventListener
-public void onMfaStateChange(MfaStateMachineEvents.StateChangeEvent event) {
-    auditService.log(
-        event.getUserId(),
-        event.getFromState(),
-        event.getToState()
-    );
-}
-
-@EventListener
-public void onMfaError(MfaStateMachineEvents.ErrorEvent event) {
-    alertService.notify(
-        event.getErrorType(),
-        event.getMessage()
-    );
-}</code></pre>
-          </section>
-
-          <!-- Multi MFA -->
-          <section class="docs-section">
-            <h2 id="multi-mfa">Multi MFA</h2>
-            <p>Run multiple independent MFA flows simultaneously. Each flow has its own <strong>SecurityFilterChain</strong>, <strong>secondary authentication factors</strong>, and <strong>URL namespace</strong>.</p>
-
-            <div class="arch-vertical-flow" style="padding:var(--space-6)">
-              <div class="arch-vf-node">Incoming Request</div>
-              <div class="arch-vf-arrow">&#x25BC;</div>
-              <div class="arch-vf-decision">URL Pattern Match</div>
-              <div class="arch-split" style="margin:var(--space-4) 0 0 0">
-                <div class="arch-split-card">
-                  <div class="arch-split-title">/admin/**</div>
-                  <div class="arch-split-meta">
-                    <strong>Chain:</strong> SecurityFilterChain (order=60)<br>
-                    <strong>typeName:</strong> <code>mfa</code><br>
-                    <strong>Factors:</strong> Passkey<br>
-                    <strong>URLs:</strong> <code>/admin/mfa/login</code>, <code>/admin/mfa/select-factor</code>
-                  </div>
-                </div>
-                <div class="arch-split-card">
-                  <div class="arch-split-title">/user/**</div>
-                  <div class="arch-split-meta">
-                    <strong>Chain:</strong> SecurityFilterChain (order=70)<br>
-                    <strong>typeName:</strong> <code>mfa_2</code><br>
-                    <strong>Factors:</strong> OTT<br>
-                    <strong>URLs:</strong> <code>/user/mfa/login</code>, <code>/user/mfa/select-factor</code>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="callout callout-info">
-              <strong>Core Principle</strong><br>
-              Each MFA flow is configured as an independent SecurityFilterChain. Setting <code>urlPrefix()</code> automatically applies a prefix to all MFA URLs and configures <code>securityMatcher</code>, ensuring complete isolation between flows.
-            </div>
-
-            <h3 id="required-factors">requiredFactors() &mdash; Multi-Factor Count</h3>
-            <p>By default, MFA requires <strong>all configured secondary factors</strong> to complete. For example, if you configure both <code>.ott()</code> and <code>.passkey()</code>, the user must complete <em>both</em> before MFA succeeds. Use <code>requiredFactors(int count)</code> to override this and require fewer factors than configured.</p>
-
-            <div class="callout callout-info">
-              <p><strong>Default behavior:</strong> <code>AbstractMfaPolicyEvaluator.getBaseFactorCountFromConfig()</code> counts non-primary steps in the flow configuration. If <code>requiredFactors()</code> is not called, the default is the total number of registered MFA factors (e.g., <code>.ott()</code> + <code>.passkey()</code> = 2).</p>
-            </div>
-
-            <div class="code-block">
-              <div class="code-block-header"><span class="code-block-lang">Java</span></div>
-              <pre><code class="language-java">// Default: both OTT and Passkey required (2 factors registered = 2 required)
-registry
-    .mfa(mfa -> mfa
-        .primaryAuthentication(auth -> auth.formLogin(Customizer.withDefaults()))
-        .ott(Customizer.withDefaults())
-        .passkey(Customizer.withDefaults())
-    ).session(Customizer.withDefaults())
-
-// Override: require only 1 of the 2 configured factors
-registry
-    .mfa(mfa -> mfa
-        .requiredFactors(1)
-        .primaryAuthentication(auth -> auth.formLogin(Customizer.withDefaults()))
-        .ott(Customizer.withDefaults())
-        .passkey(Customizer.withDefaults())
-    ).session(Customizer.withDefaults())</code></pre>
-            </div>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Value</th><th>Behavior</th><th>Example</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Not set (default)</td><td>All configured factors must be completed. If OTT + Passkey are registered, the user must complete <strong>both</strong>.</td><td>OTT + Passkey configured &rarr; 2 required</td></tr>
-                <tr><td><code>1</code></td><td>User completes <strong>any one</strong> factor (OTT <em>or</em> Passkey), then MFA succeeds.</td><td>Standard 2FA: password + one additional factor</td></tr>
-                <tr><td><code>N</code></td><td>User must complete exactly <strong>N</strong> distinct factors in sequence.</td><td>Custom policy: require N of M configured factors</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="callout callout-warning">
-              <p><strong>Important:</strong> <code>requiredFactors(N)</code> must not exceed the number of configured factors. The state machine's <code>AllFactorsCompletedGuard</code> checks <code>completedCount &gt;= requiredCount</code> &mdash; if required exceeds available, MFA can never succeed.</p>
-            </div>
-
-            <h3 id="multi-mfa-basic">Basic Configuration</h3>
-            <p>Registering multiple <code>.mfa()</code> calls automatically assigns unique typeNames.</p>
-
-<pre><code class="language-java">registry
-    .mfa(mfa -&gt; mfa
-        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
-        .passkey(Customizer.withDefaults())
-        .order(60)
-    ).session(Customizer.withDefaults())   // typeName = "mfa" (auto)
-
-    .mfa(mfa -&gt; mfa
-        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
-        .ott(Customizer.withDefaults())
-        .order(70)
-    ).session(Customizer.withDefaults())   // typeName = "mfa_2" (auto)
-
-    .build();</code></pre>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Registration Order</th><th>Auto typeName</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>First <code>.mfa()</code></td><td><code>mfa</code></td><td>Same as single MFA (backward compatible)</td></tr>
-                <tr><td>Second <code>.mfa()</code></td><td><code>mfa_2</code></td><td>Auto-numbered</td></tr>
-                <tr><td>Third <code>.mfa()</code></td><td><code>mfa_3</code></td><td>Auto-numbered</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="multi-mfa-name">name() - Explicit Flow Naming</h3>
-            <p>Use <code>name()</code> to assign a meaningful flow name instead of auto-numbering.</p>
-
-<pre><code class="language-java">.mfa(mfa -&gt; mfa
-    .name("admin")     // typeName = "mfa_admin"
-    .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
-    .passkey(Customizer.withDefaults())
-    .order(60)
-).session(Customizer.withDefaults())
-
-.mfa(mfa -&gt; mfa
-    .name("user")      // typeName = "mfa_user"
-    .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
-    .ott(Customizer.withDefaults())
-    .order(70)
-).session(Customizer.withDefaults())</code></pre>
-
-            <h3 id="multi-mfa-urlprefix">urlPrefix() - URL Isolation</h3>
-            <p><code>urlPrefix()</code> <strong>automatically applies a prefix to all MFA URLs</strong> for the flow and auto-configures <code>securityMatcher</code>. This ensures each Multi MFA flow operates in its own URL namespace.</p>
-
-<pre><code class="language-java">registry
-    // Admin: Passkey MFA
-    .mfa(mfa -&gt; mfa
-        .urlPrefix("/admin")
-        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
-        .passkey(Customizer.withDefaults())
-        .order(60)
-    ).session(Customizer.withDefaults())
-
-    // User: OTT MFA
-    .mfa(mfa -&gt; mfa
-        .urlPrefix("/user")
-        .primaryAuthentication(auth -&gt; auth.formLogin(Customizer.withDefaults()))
-        .ott(Customizer.withDefaults())
-        .order(70)
-    ).session(Customizer.withDefaults())
-
-    .build();</code></pre>
-
-            <p>URL transformation when <code>urlPrefix("/admin")</code> is set:</p>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Default URL</th><th>After urlPrefix</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>/mfa/login</code></td><td><code>/admin/mfa/login</code></td></tr>
-                <tr><td><code>/mfa/select-factor</code></td><td><code>/admin/mfa/select-factor</code></td></tr>
-                <tr><td><code>/login/mfa-ott</code></td><td><code>/admin/login/mfa-ott</code></td></tr>
-                <tr><td><code>/login/mfa-webauthn</code></td><td><code>/admin/login/mfa-webauthn</code></td></tr>
-                <tr><td><code>/mfa/cancel</code></td><td><code>/admin/mfa/cancel</code></td></tr>
-                <tr><td><code>/api/mfa/config</code></td><td><code>/admin/api/mfa/config</code></td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="callout callout-info">
-              <strong>Automatic securityMatcher</strong><br>
-              Setting <code>urlPrefix("/admin")</code> automatically applies <code>http.securityMatcher("/admin/**")</code>. No need to use <code>rawHttp()</code> separately.
-            </div>
-
-            <h3 id="multi-mfa-defaultloginurl">defaultLoginUrl() - Individual URL Override</h3>
-            <p>Use this when you want to change individual URLs instead of applying <code>urlPrefix()</code>. Changes the <strong>auto-generated login form URL</strong> while maintaining Spring Security standard custom page behavior.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>API</th><th>Behavior</th><th>Auto Form Generation</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>.loginPage("/custom")</code></td><td>Redirects to custom page (Spring Security standard)</td><td>No (user-provided page)</td></tr>
-                <tr><td><code>.defaultLoginUrl("/admin/mfa/login")</code></td><td>Changes auto-generated form URL</td><td>Yes (Contexa auto-generated)</td></tr>
-              </tbody>
-            </table></div>
-
-<pre><code class="language-java">.mfa(mfa -&gt; mfa
-    .primaryAuthentication(auth -&gt; auth.formLogin(form -&gt; form
-        .defaultLoginUrl("/admin/mfa/login")
-        .defaultSuccessUrl("/admin/dashboard")))
-    .passkey(Customizer.withDefaults())
-    .order(60)
-).session(Customizer.withDefaults())</code></pre>
-
-            <h3 id="multi-mfa-api">Multi MFA DSL API Summary</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Location</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>.name(String)</code></td><td><code>.mfa()</code></td><td>Set flow name. typeName = <code>mfa_{name}</code></td></tr>
-                <tr><td><code>.urlPrefix(String)</code></td><td><code>.mfa()</code></td><td>Apply prefix to all MFA URLs + auto securityMatcher</td></tr>
-                <tr><td><code>.defaultLoginUrl(String)</code></td><td><code>.formLogin()</code></td><td>Change auto-generated form URL (loginProcessingUrl auto-synced)</td></tr>
-                <tr><td><code>.order(int)</code></td><td><code>.mfa()</code></td><td>SecurityFilterChain priority (lower = higher priority)</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="multi-mfa-caution">Important Notes</h3>
-            <div class="callout callout-warning">
-              <strong>securityMatcher Required</strong><br>
-              When Multi MFA flows use different secondary factors (e.g., Flow 1 uses Passkey, Flow 2 uses OTT), you <strong>must</strong> separate URL scopes using <code>urlPrefix()</code> or <code>rawHttp(http -&gt; http.securityMatcher(...))</code>. Without separation, secondary authentication requests from one flow may be processed by another flow's SecurityFilterChain, resulting in failure.
-            </div>
-          </section>
-
-          <!-- MFA + Single Auth -->
-          <section class="docs-section">
-            <h2 id="mfa-with-single">MFA + Single Authentication Co-configuration</h2>
-            <p>Register both MFA and single authentication together to apply different authentication levels to different request paths.</p>
-
-<pre><code class="language-java">registry
-    // Admin: Form + OAuth2 (Single Auth)
-    .form(f -&gt; f.order(20).loginPage("/admin/login")
-        .rawHttp(http -&gt; http.securityMatcher("/admin/**")))
-    .oauth2(Customizer.withDefaults())
-
-    // User: MFA (Form Primary + Passkey) + Session
-    .mfa(m -&gt; m.order(100)
-        .primaryAuthentication(auth -&gt; auth
-            .formLogin(form -&gt; form.loginPage("/login")))
-        .passkey(Customizer.withDefaults()))
-    .session(Customizer.withDefaults())
-
-    .build();</code></pre>
-
-            <p>Use <code>order()</code> to control filter chain priority, and <code>rawHttp()</code>'s <code>securityMatcher()</code> to determine which chain handles which requests. Different state management (session/oauth2) can be configured for each authentication method.</p>
-          </section>
-
-          <!-- MFA Handlers -->
-          <section class="docs-section">
-            <h2 id="mfa-handlers">MFA Handlers</h2>
-            <p>Custom handlers can be specified for MFA success and failure.</p>
-
-<pre><code class="language-java">.mfa(mfa -&gt; mfa
-    .mfaSuccessHandler(customSuccessHandler)
-    .mfaFailureHandler(customFailureHandler)
-    .primaryAuthentication(primary -&gt; primary
-        .formLogin(form -&gt; form.loginPage("/login")))
-    .passkey(Customizer.withDefaults())
-)</code></pre>
-
-            <p>For handler interfaces and implementation guidance, refer to the handler auto-selection section in the <a href="authentication.html#handler-resolution">Authentication</a> documentation.</p>
-          </section>
-
-          <!-- MFA REST API -->
-          <section class="docs-section">
-            <h2 id="mfa-rest-api">MFA REST API</h2>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>URL</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>GET</code></td><td><code>/api/mfa/config</code></td><td>Retrieve MFA configuration</td></tr>
-
-                <tr><td><code>POST</code></td><td><code>/mfa/select-factor</code></td><td>Select MFA factor</td></tr>
-                <tr><td><code>POST</code></td><td><code>/mfa/ott/generate-code</code></td><td>Generate MFA OTT code</td></tr>
-                <tr><td><code>POST</code></td><td><code>/login/mfa-ott</code></td><td>Process MFA OTT login</td></tr>
-                <tr><td><code>POST</code></td><td><code>/login/mfa-webauthn</code></td><td>MFA Passkey authentication</td></tr>
-                <tr><td><code>POST</code></td><td><code>/mfa/cancel</code></td><td>Cancel MFA</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Response Format</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Scenario</th><th>Response</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Authentication success</td><td><code>{ "success": true, "redirectUrl": "..." }</code></td></tr>
-                <tr><td>MFA required</td><td><code>{ "mfaRequired": true, "selectFactorUrl": "...", "mfaSessionId": "..." }</code></td></tr>
-                <tr><td>Authentication failure</td><td><code>{ "success": false, "error": "...", "failureType": "..." }</code></td></tr>
-                <tr><td>Step-up required</td><td><code>401 MFA_CHALLENGE_REQUIRED</code></td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- ContexaMFA JavaScript SDK -->
-          <section class="docs-section">
-            <h2 id="js-sdk">ContexaMFA JavaScript SDK</h2>
-            <p>A JavaScript SDK (v2.2.0, exposed as <code>window.ContexaMFA</code>) that controls the MFA flow in the browser.</p>
-
-            <h3>Quick Start</h3>
-<pre><code class="language-html">&lt;script src="../../../js/contexa-mfa-sdk.js"&gt;&lt;/script&gt;
+          <h2 id="sdk">JavaScript SDK</h2>
+          <p>Loading <code>/js/contexa-mfa-sdk.js</code> creates <code>window.ContexaMFA</code> (version 2.2.0). The MFA pages Contexa generates use this SDK. In your own pages or an SPA, use <code>new ContexaMFA.Client(options)</code>.</p>
+          <pre><code class="language-html">&lt;script src="/js/contexa-mfa-sdk.js"&gt;&lt;/script&gt;
 &lt;script&gt;
-const mfa = new ContexaMFA.Client({
-    autoInit: true,
-    tokenPersistence: 'localStorage'
-});
-// Primary login calls live on the internal api client; after the server returns
-// an MFA challenge, use the Client methods below (selectFactor, verifyOtt, verifyPasskey).
-mfa.apiClient.loginForm('username', 'password')
-    .then(result =&gt; { /* handle result */ });
+  const mfa = new ContexaMFA.Client({ tokenPersistence: 'sessionStorage' });
+
+  async function signIn(username, password) {
+    // The primary login goes through apiClient. Then call selectFactor, verifyOtt or verifyPasskey depending on the response.
+    const result = await mfa.apiClient.loginForm(username, password);
+    console.log(result);
+  }
 &lt;/script&gt;</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Constructor option</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>autoInit</code></td><td><code>true</code></td><td>Restores the stored MFA progress and tokens</td></tr>
+              <tr><td><code>autoRedirect</code></td><td><code>true</code></td><td>Moves between pages automatically for each MFA step</td></tr>
+              <tr><td><code>tokenPersistence</code></td><td><code>'memory'</code></td><td>Token storage: <code>'memory'</code> (gone on reload), <code>'sessionStorage'</code>, <code>'localStorage'</code></td></tr>
+              <tr><td><code>attachAuthorization</code></td><td>none</td><td>When on, the SDK attaches the access token to requests</td></tr>
+            </tbody>
+          </table></div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Method</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>init(options)</code></td><td>Reads the server configuration and initializes</td></tr>
+              <tr><td><code>selectFactor(factorType)</code></td><td>Selects a factor</td></tr>
+              <tr><td><code>verifyOtt(code, username)</code></td><td>Checks a one-time code (without <code>username</code>, the SDK's stored value)</td></tr>
+              <tr><td><code>verifyPasskey()</code></td><td>Passkey check: gets the options → <code>navigator.credentials.get()</code> → server check, in order</td></tr>
+              <tr><td><code>performWebAuthnAuthentication(headers, contextPath)</code></td><td>Low-level passkey flow for embedded pages</td></tr>
+              <tr><td><code>handleAuthenticationResult(result)</code></td><td>Stores tokens and moves pages for a completed response</td></tr>
+              <tr><td><code>persistTokensToStorage(result)</code></td><td>Stores tokens as <code>tokenPersistence</code> says</td></tr>
+              <tr><td><code>logout()</code></td><td>Logs out and clears the client state and tokens</td></tr>
+              <tr><td><code>clearClientState()</code> · <code>clearPersistedTokens()</code></td><td>Clears the in-memory state or the stored tokens without a server call</td></tr>
+              <tr><td><code>apiClient.login(username, password)</code> · <code>apiClient.loginForm(username, password)</code></td><td>Primary login (REST JSON or form)</td></tr>
+              <tr><td><code>apiClient.requestOttCode()</code></td><td>Gets a one-time code again</td></tr>
+              <tr><td><code>apiClient.getPasskeyOptions()</code> · <code>apiClient.verifyPasskey(credential)</code></td><td>Gets passkey options · checks the passkey</td></tr>
+              <tr><td><code>window.ContexaMFA.refreshTokens()</code></td><td>Refreshes the access token</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3>Client API (<code>ContexaMFA.Client</code>)</h3>
-            <p>High-level MFA flow methods on the <code>ContexaMFA.Client</code> instance. Primary credential submission lives on <code>client.apiClient</code> (<code>login</code>, <code>loginForm</code>, <code>requestOttCode</code>).</p>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Return Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>init(options)</code></td><td>Promise</td><td>Initialize SDK, load server configuration. Delegates to <code>apiClient.init</code>.</td></tr>
-                <tr><td><code>selectFactor(factorType)</code></td><td>Promise&lt;FactorResult&gt;</td><td>Select MFA factor and update local state.</td></tr>
-                <tr><td><code>verifyOtt(code, username)</code></td><td>Promise&lt;VerifyResult&gt;</td><td>Verify OTT code (username optional; falls back to the SDK-tracked username).</td></tr>
-                <tr><td><code>verifyPasskey()</code></td><td>Promise&lt;VerifyResult&gt;</td><td>WebAuthn Passkey authentication. The Client method takes no arguments &mdash; it internally calls <code>getPasskeyOptions()</code>, invokes <code>navigator.credentials.get()</code>, then delegates to <code>apiClient.verifyPasskey(publicKeyCredential)</code>.</td></tr>
-                <tr><td><code>performWebAuthnAuthentication(headers, contextPath)</code></td><td>Promise</td><td>Lower-level WebAuthn flow for embedded MFA surfaces.</td></tr>
-                <tr><td><code>handleAuthenticationResult(result)</code></td><td>void</td><td>Applies token transport and redirect rules for a completed authentication result.</td></tr>
-                <tr><td><code>persistTokensToStorage(result)</code></td><td>void</td><td>Persists tokens to the storage configured by <code>tokenPersistence</code>.</td></tr>
-                <tr><td><code>logout()</code></td><td>Promise</td><td>Logout and clear client/token state.</td></tr>
-                <tr><td><code>clearClientState()</code></td><td>void</td><td>Clears in-memory client state without calling the server.</td></tr>
-                <tr><td><code>clearPersistedTokens()</code></td><td>void</td><td>Clears persisted tokens from local/session storage when <code>tokenPersistence</code> is not <code>memory</code>.</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="states">Progress states</h2>
+          <p>A state machine (<code>MfaState</code>) manages MFA progress. Its end states are:</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>State</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>MFA_SUCCESSFUL</code></td><td>MFA succeeded</td></tr>
+              <tr><td><code>MFA_NOT_REQUIRED</code></td><td>MFA not needed</td></tr>
+              <tr><td><code>MFA_FAILED_TERMINAL</code></td><td>Final failure</td></tr>
+              <tr><td><code>MFA_CANCELLED</code></td><td>Cancelled by the user</td></tr>
+              <tr><td><code>MFA_SESSION_EXPIRED</code></td><td>MFA session expired</td></tr>
+              <tr><td><code>MFA_SESSION_INVALIDATED</code></td><td>MFA session invalidated</td></tr>
+              <tr><td><code>MFA_RETRY_LIMIT_EXCEEDED</code></td><td>Attempt limit (<code>contexa.auth.mfa.max-retry-attempts</code>) exceeded</td></tr>
+              <tr><td><code>MFA_SYSTEM_ERROR</code></td><td>System error</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-info">
+            <strong>No state change events are published.</strong> The state machine event classes (<code>MfaStateMachineEvents</code>) are in the code, but nothing publishes them in the current version, so <code>@EventListener</code> cannot receive them.
+          </div>
 
-            <h3>Internal <code>apiClient</code> Methods</h3>
-            <p>Exposed via <code>client.apiClient</code> for primary login and OTT request-code flows.</p>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Return Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>login(username, password)</code></td><td>Promise&lt;LoginResult&gt;</td><td>JSON login request used for REST primary authentication.</td></tr>
-                <tr><td><code>loginForm(username, password)</code></td><td>Promise&lt;LoginResult&gt;</td><td>Form POST login used for Form primary authentication.</td></tr>
-                <tr><td><code>requestOttCode()</code></td><td>Promise&lt;RequestResult&gt;</td><td>Request OTT code resend using the configured <code>requestOttCode</code> endpoint.</td></tr>
-                <tr><td><code>getPasskeyOptions()</code></td><td>Promise</td><td>Fetch WebAuthn assertion options before calling <code>navigator.credentials.get()</code>.</td></tr>
-                <tr><td><code>verifyPasskey(publicKeyCredential)</code></td><td>Promise&lt;VerifyResult&gt;</td><td>Low-level WebAuthn verify called by the high-level <code>client.verifyPasskey()</code>.</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="results">Changing result handling</h2>
+          <ul>
+            <li><code>.mfa()</code>'s <code>mfaSuccessHandler</code> and <code>mfaFailureHandler</code> accept a value but are not used.</li>
+            <li>The handlers that write MFA responses (<code>PrimaryAuthenticationSuccessHandler</code>, <code>MfaFactorProcessingSuccessHandler</code>, <code>UnifiedAuthenticationFailureHandler</code>) are classes that cannot be extended (final).</li>
+            <li>So MFA results are handled in the page or the SDK, from the JSON and redirects in <a href="#responses">Response formats</a>. For single login flows see <a href="authentication.html#handlers">Success and failure handling</a>.</li>
+          </ul>
 
-            <h3>Constructor Options</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Option</th><th>Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>autoInit</code></td><td>boolean</td><td>Whether to auto-initialize</td></tr>
-                <tr><td><code>autoRedirect</code></td><td>boolean</td><td>Auto-redirect after authentication</td></tr>
-                <tr><td><code>tokenPersistence</code></td><td>'memory' | 'localStorage' | 'sessionStorage'</td><td>Token storage strategy (memory, localStorage, or sessionStorage)</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Global Interceptor</h3>
-            <p>Automatically detects <code>401</code>/<code>403</code>/<code>423</code> responses from all <code>fetch</code>/<code>XMLHttpRequest</code> calls and redirects to the Step-up authentication page. After authentication completes, the original request is automatically retried.</p>
-          </section>
-
-          <!-- MFA Configuration -->
-          <section>
-            <div class="callout callout-info">
-              <strong>MFA Configuration Properties</strong><br>
-              The <code>spring.auth.mfa.*</code> namespace provides MFA configuration properties including timeouts (<code>sessionTimeoutMs</code>, <code>challengeTimeoutMs</code>), retry settings (<code>maxRetryAttempts</code>, <code>accountLockoutDurationMs</code>), OTP settings (<code>otpTokenValiditySeconds</code>, <code>otpTokenLength</code>), repository selection, and page URLs. See the <a href="state-management.html">State Management</a> documentation for the complete list.
-            </div>
-            <div class="callout callout-warning">
-              <strong>Status Endpoint Note</strong><br>
-              <code>spring.auth.urls.mfa.status</code> exists as a configurable URL slot in the runtime configuration model, but the current OSS runtime does not expose a dedicated <code>/api/mfa/status</code> controller endpoint.
-            </div>
-          </section>
-
+          <h2 id="settings">Settings</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning · when to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.mfa.session-timeout-ms</code></td><td><code>600000</code></td><td>How long an MFA session lasts (ms). When users need more time to finish the factors</td></tr>
+              <tr><td><code>contexa.auth.mfa.challenge-timeout-ms</code></td><td><code>300000</code></td><td>Time limit of one factor's check (ms). Used for the expiry time in responses</td></tr>
+              <tr><td><code>contexa.auth.mfa.max-retry-attempts</code></td><td><code>5</code></td><td>Attempt limit of a factor check. The <code>maxAttempts</code> of failure responses</td></tr>
+              <tr><td><code>contexa.auth.mfa.minimum-delay-ms</code></td><td><code>500</code></td><td>Minimum delay of login failure responses (ms)</td></tr>
+              <tr><td><code>contexa.identity.mfa.enabled</code></td><td><code>true</code></td><td>Off turns off the MFA policy auto-configuration</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>Where MFA sessions are kept</strong> is decided by <code>contexa.infrastructure.mode</code>: <code>standalone</code> (default) uses the HTTP session, <code>distributed</code> (with Redis) uses Redis, with the fixed Redis key prefix <code>mfa:session:v2:</code> and cookie name <code>MFA_SID</code>. The repository selection and Redis settings under <code>contexa.auth.mfa</code> are not read.</li>
+            <li>A user who needs to register a passkey after MFA is pointed to the registration page by the <code>nextAction</code> of the completion response.</li>
+          </ul>
+          <p>All settings are in <a href="../../install/configuration/identity.html">Settings when Contexa owns login</a>.</p>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/identity/authentication.html" class="docs-nav-link prev">
+            <a href="authentication.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Authentication</span>
+              <span class="docs-nav-title">Login Methods</span>
             </a>
-            <a href="../../../docs/reference/identity/asep.html" class="docs-nav-link next">
+            <a href="asep.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">ASEP Annotations</span>
+              <span class="docs-nav-title">ASEP Security Exception Handling</span>
             </a>
           </div>

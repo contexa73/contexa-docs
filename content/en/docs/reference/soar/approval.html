@@ -3,597 +3,223 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Approval Workflows</span>
+            <a href="index.html">SOAR Extension Points</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Connecting Human Approval</span>
           </nav>
+
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
-              <span class="badge badge-danger">Enterprise</span>
+              <span class="badge badge-secondary">Extension point · Enterprise</span>
             </div>
-            <h1>Approval Workflows</h1>
-            <p class="lead">Human-in-the-loop approval system for SOAR tool execution. Manages the full approval lifecycle from request creation through resolution, with support for auto-approval, single-approver, multi-approver, unanimous, and emergency approval types.</p>
+            <h1>Connecting Human Approval (Implementing ApprovalService)</h1>
+            <p class="lead">For when you add your own flow that gets a person's approval before a response tool runs. It covers the methods you must fill in, where the OSS calls this service, the approval data types, notification hooks and the storage tables.</p>
           </div>
 
-          <!-- Overview -->
-          <section>
-            <h2>Overview</h2>
-            <p>When a <code>@SoarTool</code>-annotated method requires approval before execution, the SOAR pipeline delegates to the <code>ApprovalService</code>. The service creates an <code>ApprovalRequest</code>, notifies designated approvers via <code>SoarApprovalNotifier</code>, and tracks the request through its lifecycle until it is approved, rejected, expired, or cancelled.</p>
-            <p>The approval system integrates with the <code>SoarContext</code> session state, transitioning the session to <code>WAITING_APPROVAL</code> while approval is pending. Once resolved, the pipeline either proceeds with tool execution or aborts the action based on the approval outcome.</p>
+          <div class="callout callout-warning">
+            <strong>The OSS has no <code>ApprovalService</code> implementation.</strong> Creating approval requests, notifying approvers, and waiting for approval before resuming a response all need your own implementation or the enterprise SOAR module. Several default methods of the interface throw <code>UnsupportedOperationException</code>.
+          </div>
 
-            <div class="arch-flow">
-              <div class="arch-flow-node">@SoarTool (approval = REQUIRED)</div>
-              <div class="arch-flow-node">ApprovalRequestDetails</div>
-              <div class="arch-flow-node">ApprovalService.requestApproval()</div>
-              <div class="arch-flow-node">ApprovalRequest (PENDING)</div>
-              <div class="arch-flow-node">SoarApprovalNotifier</div>
-              <div class="arch-flow-node">Human Review</div>
-              <div class="arch-flow-node">APPROVED / REJECTED</div>
-            </div>
-          </section>
+          <h2 id="oss-approval">The human approval that works in the OSS today: unblocking</h2>
+          <p>The human approval that actually works in the OSS is not SOAR but <strong>an administrator unblocking a user</strong>. When an administrator releases a blocked user in the admin console, Contexa records and learns from that decision.</p>
+          <ul>
+            <li>The user's behavioral baseline learns from the facts of the blocked request.</li>
+            <li>The administrator override is written to the audit log.</li>
+            <li>If the decision feedback and threat outcome channels of the Contexa SaaS connection are on, those results are sent (<a href="../core/saas.html">Contexa SaaS connection</a>, off by default).</li>
+          </ul>
+          <p>The block and unblock flows are in <a href="../identity/zero-trust-filters.html">Request-time enforcement</a> and <a href="../iam/admin.html">Admin console</a>.</p>
 
-          <!-- ApprovalService -->
-          <section>
-            <h2>ApprovalService</h2>
-            <p>The core service interface for managing approval workflows. Provides both abstract methods that implementations must define and convenience default methods for common operations.</p>
+          <h2 id="called-from">Where the OSS calls this service</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>How Layer 2 requests approval</strong>This is the only place the OSS calls the service, and today the call is never reached.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-model"><span class="dg-node-tag">Layer 2</span><span class="dg-node-title">A decision is made</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Condition</span><span class="dg-node-title">The decision carries the "approval required" flag and an <code>ApprovalService</code> bean exists</span><span class="dg-node-desc">The flag is set only on Layer 2's technical-failure fallback decision, which returns before this step. So in the OSS the next step is never reached.</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">Call</span><span class="dg-node-title"><code>requestApproval(SoarContext, ApprovalRequestDetails)</code></span><span class="dg-node-desc">Context: session ID, organization ID, creation time. Details: <code>actionName</code>=<code>SOAR_CRITICAL_RESPONSE</code>, <code>actionType</code>=<code>CRITICAL_RESPONSE</code>, <code>riskLevel</code>=<code>CRITICAL</code>, description (the model's recommendation, or a default sentence), <code>arguments</code>=<code>event:&lt;event ID&gt;</code>, parameters (threat category, action)</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Then</span><span class="dg-node-title">The decision goes on without waiting for the result</span><span class="dg-node-desc">The returned approval ID is not used. It is not a pause-and-resume design.</span></li>
+            </ol>
+          </figure>
+          <p>The bean is injected optionally (<code>@Autowired(required = false)</code>), so one <code>ApprovalService</code> bean in your application is what Layer 2 receives. In practice your service serves your own SOAR flow (<a href="index.html#build">SOAR extension points</a>) rather than this call.</p>
 
-            <div class="api-signature">
-              <code>public interface ApprovalService</code>
-              <span style="margin-left: 1rem;"><code>io.contexa.contexacore.soar.approval</code></span>
-            </div>
+          <h2 id="checklist">Implementation checklist</h2>
+          <p>Implement the five abstract methods. Many default methods throw, so override the ones you intend to use.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Method</th><th>Kind</th><th>Default behavior</th></tr></thead>
+            <tbody>
+              <tr><td><code>String requestApproval(SoarContext, ApprovalRequestDetails)</code></td><td>Abstract</td><td>Creates an approval request and returns its approval ID</td></tr>
+              <tr><td><code>ApprovalStatus getApprovalStatus(String approvalId)</code></td><td>Abstract</td><td>The current status of the request</td></tr>
+              <tr><td><code>void handleApprovalResponse(String approvalId, boolean isApproved, String comment, String reviewer)</code></td><td>Abstract</td><td>Handles an approval or a rejection</td></tr>
+              <tr><td><code>Set&lt;String&gt; getPendingApprovalIds()</code></td><td>Abstract</td><td>IDs of the pending requests</td></tr>
+              <tr><td><code>int getPendingCount()</code></td><td>Abstract</td><td>Number of pending requests</td></tr>
+              <tr><td><code>handleApprovalResponse(..., Set&lt;String&gt; reviewerRoles)</code></td><td>Default</td><td>Drops the roles and calls the four-argument method</td></tr>
+              <tr><td><code>processApprovalResponse(requestId, approved, reviewer, comment)</code></td><td>Default</td><td>Calls <code>handleApprovalResponse</code> with the arguments reordered (a form with roles also exists)</td></tr>
+              <tr><td><code>processApproval(approvalId, approved, reason)</code></td><td>Default</td><td><code>handleApprovalResponse</code> with reviewer <code>"system"</code></td></tr>
+              <tr><td><code>approve(approvalId)</code>, <code>reject(approvalId)</code></td><td>Default</td><td><code>handleApprovalResponse</code> with comment <code>"Approved"</code> or <code>"Rejected"</code> and reviewer <code>"system"</code></td></tr>
+              <tr><td><code>getPendingApprovals()</code></td><td>Default</td><td>Empty list</td></tr>
+              <tr><td><code>getApprovalRequest(approvalId)</code></td><td>Default</td><td><code>null</code></td></tr>
+              <tr><td><code>CompletableFuture&lt;Boolean&gt; requestApproval(ApprovalRequest)</code></td><td>Default</td><td><code>UnsupportedOperationException</code></td></tr>
+              <tr><td><code>waitForApprovalSync(ApprovalRequest)</code></td><td>Default</td><td><code>UnsupportedOperationException</code>. No OSS code calls it</td></tr>
+              <tr><td><code>saveApprovalRequest(ApprovalRequest)</code>, <code>sendApprovalNotification(ApprovalRequest)</code></td><td>Default</td><td><code>UnsupportedOperationException</code></td></tr>
+              <tr><td><code>submitApprovalRequest(ApprovalRequest)</code></td><td>Default</td><td>Saves, then notifies. Throws unless you override the two methods above</td></tr>
+              <tr><td><code>cancelApproval</code>, <code>reassignApproval</code>, <code>reopenApproval</code>, <code>bulkHandleApprovals</code></td><td>Default</td><td><code>UnsupportedOperationException</code></td></tr>
+            </tbody>
+          </table></div>
 
-            <h3>Abstract Methods</h3>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">requestApproval</span>
-                <span class="api-method-return">String</span>
-              </div>
-              <p class="api-method-desc">Creates a new approval request for a SOAR tool execution. Returns the generated approval ID that can be used to track and resolve the request.</p>
-              <div class="api-method-params">
-                <div class="api-param">
-                  <span class="api-param-name">soarContext</span>
-                  <span class="api-param-type">SoarContext</span>
-                  <span class="api-param-desc">The current SOAR session context containing incident details and session state.</span>
-                </div>
-                <div class="api-param">
-                  <span class="api-param-name">requestDetails</span>
-                  <span class="api-param-type">ApprovalRequestDetails</span>
-                  <span class="api-param-desc">Details of the action requiring approval, including action name, type, risk level, and parameters.</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getApprovalStatus</span>
-                <span class="api-method-return">ApprovalStatus</span>
-              </div>
-              <p class="api-method-desc">Retrieves the current status of an approval request by its ID.</p>
-              <div class="api-method-params">
-                <div class="api-param">
-                  <span class="api-param-name">approvalId</span>
-                  <span class="api-param-type">String</span>
-                  <span class="api-param-desc">The approval request identifier returned by <code>requestApproval()</code>.</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">handleApprovalResponse</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <p class="api-method-desc">Processes an approval or rejection response from a human reviewer.</p>
-              <div class="api-method-params">
-                <div class="api-param">
-                  <span class="api-param-name">approvalId</span>
-                  <span class="api-param-type">String</span>
-                  <span class="api-param-desc">The approval request identifier.</span>
-                </div>
-                <div class="api-param">
-                  <span class="api-param-name">isApproved</span>
-                  <span class="api-param-type">boolean</span>
-                  <span class="api-param-desc">Whether the request is approved (<code>true</code>) or rejected (<code>false</code>).</span>
-                </div>
-                <div class="api-param">
-                  <span class="api-param-name">comment</span>
-                  <span class="api-param-type">String</span>
-                  <span class="api-param-desc">Reviewer comment or rejection reason.</span>
-                </div>
-                <div class="api-param">
-                  <span class="api-param-name">reviewer</span>
-                  <span class="api-param-type">String</span>
-                  <span class="api-param-desc">Identifier of the reviewing user.</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getPendingApprovalIds</span>
-                <span class="api-method-return">Set&lt;String&gt;</span>
-              </div>
-              <p class="api-method-desc">Returns the set of all currently pending approval request IDs.</p>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getPendingCount</span>
-                <span class="api-method-return">int</span>
-              </div>
-              <p class="api-method-desc">Returns the number of currently pending approval requests.</p>
-            </div>
-
-            <h3>Default Convenience Methods</h3>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Return</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>requestApproval(ApprovalRequest)</code></td>
-                  <td>CompletableFuture&lt;Boolean&gt;</td>
-                  <td>Asynchronous approval request using an <code>ApprovalRequest</code> object directly.</td>
-                </tr>
-                <tr>
-                  <td><code>processApprovalResponse(requestId, approved, reviewer, comment)</code></td>
-                  <td>void</td>
-                  <td>Delegates to <code>handleApprovalResponse()</code> with reordered parameters for convenience.</td>
-                </tr>
-                <tr>
-                  <td><code>waitForApprovalSync(ApprovalRequest)</code></td>
-                  <td>boolean</td>
-                  <td>Blocking wait for approval resolution. Used in <code>SYNC</code> execution mode.</td>
-                </tr>
-                <tr>
-                  <td><code>saveApprovalRequest(ApprovalRequest)</code></td>
-                  <td>ApprovalRequest</td>
-                  <td>Persists an approval request to the backing store.</td>
-                </tr>
-                <tr>
-                  <td><code>sendApprovalNotification(ApprovalRequest)</code></td>
-                  <td>void</td>
-                  <td>Sends a notification to designated approvers about a pending request.</td>
-                </tr>
-                <tr>
-                  <td><code>processApproval(approvalId, approved, reason)</code></td>
-                  <td>void</td>
-                  <td>Simplified approval processing with <code>"system"</code> as the default reviewer.</td>
-                </tr>
-                <tr>
-                  <td><code>getPendingApprovals()</code></td>
-                  <td>List&lt;ApprovalRequest&gt;</td>
-                  <td>Returns all pending approval requests as full objects.</td>
-                </tr>
-                <tr>
-                  <td><code>submitApprovalRequest(ApprovalRequest)</code></td>
-                  <td>void</td>
-                  <td>Composite operation: saves the request then sends a notification.</td>
-                </tr>
-                <tr>
-                  <td><code>approve(approvalId)</code></td>
-                  <td>void</td>
-                  <td>Quick approval with default comment <code>"Approved"</code> and reviewer <code>"system"</code>.</td>
-                </tr>
-                <tr>
-                  <td><code>reject(approvalId)</code></td>
-                  <td>void</td>
-                  <td>Quick rejection with default comment <code>"Rejected"</code> and reviewer <code>"system"</code>.</td>
-                </tr>
-                <tr>
-                  <td><code>getApprovalRequest(approvalId)</code></td>
-                  <td>ApprovalRequest</td>
-                  <td>Retrieves the full approval request object by ID. Returns <code>null</code> by default.</td>
-                </tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- ApprovalRequest -->
-          <section>
-            <h2>ApprovalRequest</h2>
-            <p>The domain object representing a single approval request. Tracks the full lifecycle from creation through resolution, including the requesting tool, approval type, reviewer information, and timeout configuration. Supports both builder-pattern construction and a convenience factory method.</p>
-
-            <div class="api-signature">
-              <code>public class ApprovalRequest implements Serializable</code>
-              <span style="margin-left: 1rem;"><code>io.contexa.contexacore.domain</code></span>
-            </div>
-
-            <h3>Key Fields</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Field</th><th>Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>requestId</code></td><td>String</td><td>Unique identifier (e.g., <code>APR-1709942400000</code>).</td></tr>
-                <tr><td><code>sessionId</code></td><td>String</td><td>The SOAR session that initiated the request.</td></tr>
-                <tr><td><code>incidentId</code></td><td>String</td><td>Associated security incident identifier.</td></tr>
-                <tr><td><code>toolName</code></td><td>String</td><td>Name of the <code>@SoarTool</code> requiring approval.</td></tr>
-                <tr><td><code>actionType</code></td><td>String</td><td>Classification of the action (e.g., "BLOCK_IP", "ISOLATE_HOST").</td></tr>
-                <tr><td><code>parameters</code></td><td>Map&lt;String, Object&gt;</td><td>Tool invocation parameters for reviewer inspection.</td></tr>
-                <tr><td><code>reason</code></td><td>String</td><td>Justification for the action.</td></tr>
-                <tr><td><code>approvalType</code></td><td>ApprovalType</td><td>The type of approval workflow to follow.</td></tr>
-                <tr><td><code>status</code></td><td>ApprovalStatus</td><td>Current lifecycle status.</td></tr>
-                <tr><td><code>requestedAt</code></td><td>LocalDateTime</td><td>Timestamp of request creation.</td></tr>
-                <tr><td><code>requestedBy</code></td><td>String</td><td>The user or system that initiated the request.</td></tr>
-                <tr><td><code>approvedBy</code></td><td>String</td><td>The reviewer who resolved the request.</td></tr>
-                <tr><td><code>approvedAt</code></td><td>LocalDateTime</td><td>Timestamp of approval or rejection.</td></tr>
-                <tr><td><code>rejectionReason</code></td><td>String</td><td>Reason provided when request is rejected.</td></tr>
-                <tr><td><code>requiredRoles</code></td><td>Set&lt;String&gt;</td><td>Roles required to approve this request.</td></tr>
-                <tr><td><code>requiredApprovers</code></td><td>Integer</td><td>Number of approvers needed for <code>MULTI</code> or <code>UNANIMOUS</code> types.</td></tr>
-                <tr><td><code>approvalTimeout</code></td><td>Integer</td><td>Timeout in minutes before the request expires.</td></tr>
-                <tr><td><code>potentialImpact</code></td><td>String</td><td>Description of the potential impact of the action.</td></tr>
-                <tr><td><code>organizationId</code></td><td>String</td><td>Organization context for multi-tenant deployments.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Lifecycle Methods</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Description</th><th>Status Transition</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>approve(approver)</code></td><td>Marks the request as approved, records the approver and timestamp.</td><td>* → APPROVED</td></tr>
-                <tr><td><code>reject(approver, reason)</code></td><td>Marks the request as rejected with a reason.</td><td>* → REJECTED</td></tr>
-                <tr><td><code>expire()</code></td><td>Marks the request as expired (timeout reached).</td><td>PENDING → EXPIRED</td></tr>
-                <tr><td><code>cancel()</code></td><td>Cancels the request (e.g., incident resolved before approval).</td><td>PENDING → CANCELLED</td></tr>
-                <tr><td><code>addApproval(approver, name, role, comments)</code></td><td>Records an individual approval for multi-approver workflows.</td><td>* → APPROVED</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Factory Method</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Quick creation with auto-generated APR- prefixed ID
+          <h2 id="data">Approval data</h2>
+          <h3 id="approval-request"><code>ApprovalRequest</code></h3>
+          <p>A serializable value object in <code>io.contexa.contexacore.domain</code>. Main fields:</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>requestId</code></td><td>Request ID. Made by <code>create(...)</code>: <code>APR-&lt;current millis&gt;</code> (for example <code>APR-1709942400000</code>)</td></tr>
+              <tr><td><code>sessionId</code>, <code>incidentId</code>, <code>organizationId</code></td><td>Session, incident, organization</td></tr>
+              <tr><td><code>toolName</code>, <code>actionType</code>, <code>parameters</code>, <code>reason</code>, <code>potentialImpact</code></td><td>What is to be done and why</td></tr>
+              <tr><td><code>approvalType</code>, <code>status</code></td><td>Approval type and status (table below)</td></tr>
+              <tr><td><code>requestedAt</code>, <code>requestedBy</code>, <code>approvedAt</code>, <code>approvedBy</code>, <code>rejectionReason</code></td><td>Request and handling record</td></tr>
+              <tr><td><code>requiredRoles</code></td><td>Roles that may approve</td></tr>
+              <tr><td><code>requiredApprovers</code></td><td>Number of approvers needed. No OSS code reads this value</td></tr>
+              <tr><td><code>approvalTimeout</code></td><td>Approval time limit (minutes). The same value as <code>getTimeoutMinutes()</code> and the builder's <code>timeoutMinutes(...)</code></td></tr>
+              <tr><td><code>metadata</code></td><td>Other values (the builder's <code>toolDescription</code> and <code>riskAssessment</code> go here)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The methods that change the status do not check the current status; they only set values.</p>
+          <ul>
+            <li><code>approve(approver)</code>: <code>APPROVED</code>, records who and when. <code>reject(approver, reason)</code>: <code>REJECTED</code> with the reason.</li>
+            <li><code>expire()</code>, <code>cancel()</code>: <code>EXPIRED</code>, <code>CANCELLED</code>, <strong>even when the request is not pending</strong>.</li>
+            <li><code>addApproval(approver, name, role, comments)</code>: stores neither name, role nor comments and becomes <code>APPROVED</code> <strong>on the first call</strong>. It does not count several approvers' approvals; count multi-approval in your implementation.</li>
+            <li><code>isAutoApprovable()</code>: true when the approval type is <code>AUTO</code>.</li>
+          </ul>
+          <pre><code class="language-java">// Static factory: requestId = "APR-&lt;millis&gt;", status = PENDING, requestedAt = now
 ApprovalRequest request = ApprovalRequest.create(
-    "session-abc-123",       // sessionId
-    "block_ip_address",      // toolName
-    Map.of("ip", "10.0.0.1", "duration", 24),  // parameters
-    "Suspicious traffic detected from this IP"   // reason
-);
-// request.status = PENDING, request.requestedAt = now()</code></pre>
-            </div>
+        "session-123", "session_termination", Map.of("userId", "alice"), "Repeated unblock MFA failures");
 
-            <h3>Builder Pattern</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">ApprovalRequest request = ApprovalRequest.builder()
-    .requestId("APR-custom-001")
-    .sessionId("session-abc-123")
-    .incidentId("INC-2024-001")
-    .toolName("isolate_host")
-    .actionDescription("Isolate compromised host from network")
-    .toolParameters(Map.of("hostname", "web-server-03", "incidentId", "INC-2024-001"))
-    .approvalType(ApprovalType.MULTI)
-    .requestedBy("soar-pipeline")
-    .requestReason("Host shows signs of lateral movement")
-    .potentialImpact("Service disruption for web-server-03")
-    .riskAssessment("HIGH - production server with active traffic")
-    .timeoutMinutes(30)
-    .organizationId("org-456")
-    .build();</code></pre>
-            </div>
-          </section>
+// Builder: build() sets requestedAt to now and requiredRoles to an empty set.
+// The builder leaves status empty unless you set it, so set it yourself.
+ApprovalRequest built = ApprovalRequest.builder()
+        .requestId("APR-" + System.currentTimeMillis())
+        .sessionId("session-123")
+        .toolName("session_termination")
+        .toolParameters(Map.of("userId", "alice"))
+        .approvalType(ApprovalRequest.ApprovalType.MANUAL)
+        .status(ApprovalRequest.ApprovalStatus.PENDING)
+        .requestReason("Repeated unblock MFA failures")
+        .timeoutMinutes(30)
+        .build();</code></pre>
 
-          <!-- ApprovalType Enum -->
-          <section id="approval-type">
-            <h2>ApprovalType</h2>
-            <p>Defines the approval workflow variant for a request. Determines how many approvers are needed and how the approval process is managed.</p>
+          <h3 id="approval-type">Approval type <code>ApprovalType</code> and status <code>ApprovalStatus</code></h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Enum</th><th>Values (descriptions in code)</th></tr></thead>
+            <tbody>
+              <tr><td><code>ApprovalRequest.ApprovalType</code></td><td><code>AUTO</code> (Auto Approval), <code>MANUAL</code> (Manual Approval Required), <code>SINGLE</code> (Single Approval), <code>MULTI</code> (Multi Approval Required), <code>UNANIMOUS</code> (Unanimous), <code>EMERGENCY</code> (Emergency Approval)</td></tr>
+              <tr><td><code>ApprovalRequest.ApprovalStatus</code></td><td><code>PENDING</code>, <code>APPROVED</code>, <code>REJECTED</code>, <code>EXPIRED</code>, <code>CANCELLED</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>The OSS has no code that handles each type differently (multi or unanimous counting, an emergency procedure). Use the type as a marker your implementation uses to choose how to handle a request. Which type an <code>@SoarTool</code> approval requirement becomes is in <a href="soar-tool.html#approval-requirement">@SoarTool and Tool Approval Levels</a>.</p>
 
-            <div class="api-signature">
-              <code>public enum ApprovalType</code>
-              <span style="margin-left: 1rem;">(nested in <code>ApprovalRequest</code>)</span>
-            </div>
+          <h3 id="details"><code>ApprovalRequestDetails</code></h3>
+          <p>A serializable record (<code>io.contexa.contexacore.soar.approval</code>) passed to <code>requestApproval(SoarContext, ApprovalRequestDetails)</code>. Fields: <code>actionName</code>, <code>actionType</code>, <code>riskLevel</code>, <code>description</code>, <code>arguments</code> (a string), <code>parameters</code> (a map).</p>
+          <pre><code class="language-java">ApprovalRequestDetails details = new ApprovalRequestDetails(
+        "session_termination",            // actionName
+        "CONTAINMENT",                    // actionType
+        "HIGH",                           // riskLevel
+        "Terminate every session of alice",
+        "userId=alice",                   // arguments
+        Map.of("userId", "alice"));       // parameters
 
-            <table class="enum-table">
-              <thead>
-                <tr><th>Value</th><th>Description</th><th>Use Case</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>AUTO</code></td>
-                  <td>Auto Approval. Request is automatically approved based on policy.</td>
-                  <td>Low-risk tools where the <code>ToolApprovalPolicyManager</code> determines no human review is needed.</td>
-                </tr>
-                <tr>
-                  <td><code>MANUAL</code></td>
-                  <td>Manual Approval Required. A human must review and decide.</td>
-                  <td>Standard approval for moderate-risk actions that need human oversight.</td>
-                </tr>
-                <tr>
-                  <td><code>SINGLE</code></td>
-                  <td>Single Approval. One designated approver must approve.</td>
-                  <td>Actions requiring a specific role holder's authorization (e.g., SOC analyst for IP blocks).</td>
-                </tr>
-                <tr>
-                  <td><code>MULTI</code></td>
-                  <td>Multi Approval Required. A configurable number of approvers must independently approve.</td>
-                  <td>High-risk actions requiring consensus (e.g., host isolation, firewall changes).</td>
-                </tr>
-                <tr>
-                  <td><code>UNANIMOUS</code></td>
-                  <td>Unanimous. All designated approvers must approve.</td>
-                  <td>Critical infrastructure changes where any single objection should block execution.</td>
-                </tr>
-                <tr>
-                  <td><code>EMERGENCY</code></td>
-                  <td>Emergency Approval. Expedited approval with reduced requirements.</td>
-                  <td>Time-critical incidents where standard approval timelines are too slow.</td>
-                </tr>
-              </tbody>
-            </table>
-          </section>
+String approvalId = approvalService.requestApproval(soarContext, details);   // the bean you implemented</code></pre>
 
-          <!-- ApprovalStatus Enum -->
-          <section id="approval-status">
-            <h2>ApprovalStatus</h2>
-            <p>Represents the current state of an approval request in its lifecycle.</p>
+          <h2 id="notifier">Receiving notices: <code>SoarApprovalNotifier</code></h2>
+          <p>An interface in <code>io.contexa.contexacore.autonomous.notification</code> with two methods: <code>receiveApprovalNotification(String message)</code> and <code>sendApprovalReminder(String approvalId)</code>. The OSS has no implementation.</p>
+          <ul>
+            <li>In distributed mode (<code>contexa.infrastructure.mode=distributed</code>), when the Redis configuration is on (with the Redisson library and a Redis connection) and this bean exists, messages on the Redis channel <code>soar:approval:requests</code> go to <code>receiveApprovalNotification</code>.</li>
+            <li>No OSS code sends to this channel. The sender (publishing when an approval request is made) and mail or messenger notices are yours to write.</li>
+            <li>No OSS code calls <code>sendApprovalReminder</code> either.</li>
+          </ul>
 
-            <div class="api-signature">
-              <code>public enum ApprovalStatus</code>
-              <span style="margin-left: 1rem;">(nested in <code>ApprovalRequest</code>)</span>
-            </div>
+          <h2 id="storage">Storage</h2>
+          <p>The OSS schema creates 6 approval tables (<code>soar_approval_policies</code>, <code>soar_approval_requests</code>, <code>soar_approval_steps</code>, <code>soar_approval_assignments</code>, <code>soar_approval_votes</code>, <code>approval_notifications</code>) and includes entities (<code>ApprovalPolicyEntity</code>, <code>SoarApprovalRequest</code>, <code>SoarApprovalStep</code>, <code>SoarApprovalAssignment</code>, <code>SoarApprovalVote</code>, <code>ApprovalNotification</code>) and repositories. But no OSS code writes or reads these tables (the only repository registered as a bean is <code>ApprovalPolicyRepository</code>, and nothing uses it). To keep approval records in the database, wire the repositories in your implementation.</p>
 
-            <table class="enum-table">
-              <thead>
-                <tr><th>Value</th><th>Description</th><th>Terminal</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>PENDING</code></td>
-                  <td>Request created, awaiting reviewer action.</td>
-                  <td>No</td>
-                </tr>
-                <tr>
-                  <td><code>APPROVED</code></td>
-                  <td>Request approved. Tool execution may proceed.</td>
-                  <td>Yes</td>
-                </tr>
-                <tr>
-                  <td><code>REJECTED</code></td>
-                  <td>Request rejected. Tool execution is blocked.</td>
-                  <td>Yes</td>
-                </tr>
-                <tr>
-                  <td><code>EXPIRED</code></td>
-                  <td>Request timed out before receiving a response.</td>
-                  <td>Yes</td>
-                </tr>
-                <tr>
-                  <td><code>CANCELLED</code></td>
-                  <td>Request cancelled (e.g., incident resolved, session terminated).</td>
-                  <td>Yes</td>
-                </tr>
-              </tbody>
-            </table>
-          </section>
+          <h2 id="example">A minimal implementation</h2>
+          <p>The smallest implementation, keeping approval requests in memory. A real one adds storage (database) and approver notices.</p>
+          <pre><code class="language-java">import io.contexa.contexacore.domain.ApprovalRequest;
+import io.contexa.contexacore.domain.SoarContext;
+import io.contexa.contexacore.soar.approval.ApprovalRequestDetails;
+import io.contexa.contexacore.soar.approval.ApprovalService;
+import org.springframework.stereotype.Service;
 
-          <!-- ApprovalRequestDetails -->
-          <section>
-            <h2>ApprovalRequestDetails</h2>
-            <p>An immutable record that captures the details of the action requiring approval. Passed to <code>ApprovalService.requestApproval()</code> alongside the <code>SoarContext</code> to create a new approval request.</p>
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
-            <div class="api-signature">
-              <code>public record ApprovalRequestDetails implements Serializable</code>
-              <span style="margin-left: 1rem;"><code>io.contexa.contexacore.soar.approval</code></span>
-            </div>
+@Service
+public class InMemoryApprovalService implements ApprovalService {
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Field</th><th>Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>actionName</code></td>
-                  <td>String</td>
-                  <td>The <code>@SoarTool</code> name that requires approval (e.g., <code>"block_ip_address"</code>).</td>
-                </tr>
-                <tr>
-                  <td><code>actionType</code></td>
-                  <td>String</td>
-                  <td>Classification of the action (e.g., <code>"CONTAINMENT"</code>, <code>"ERADICATION"</code>).</td>
-                </tr>
-                <tr>
-                  <td><code>riskLevel</code></td>
-                  <td>String</td>
-                  <td>Assessed risk level of the action (e.g., <code>"HIGH"</code>, <code>"CRITICAL"</code>).</td>
-                </tr>
-                <tr>
-                  <td><code>description</code></td>
-                  <td>String</td>
-                  <td>Human-readable description of what the action will do.</td>
-                </tr>
-                <tr>
-                  <td><code>arguments</code></td>
-                  <td>String</td>
-                  <td>Serialized arguments the tool will be invoked with.</td>
-                </tr>
-                <tr>
-                  <td><code>parameters</code></td>
-                  <td>Map&lt;String, Object&gt;</td>
-                  <td>Structured parameters for the tool invocation.</td>
-                </tr>
-              </tbody>
-            </table></div>
+    private final Map&lt;String, ApprovalRequest&gt; requests = new ConcurrentHashMap&lt;&gt;();
 
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">ApprovalRequestDetails details = new ApprovalRequestDetails(
-    "block_ip_address",                          // actionName
-    "CONTAINMENT",                               // actionType
-    "HIGH",                                      // riskLevel
-    "Block IP 10.0.0.1 at the firewall level",   // description
-    "{ip: 10.0.0.1, duration: 24}",              // arguments
-    Map.of("ip", "10.0.0.1", "durationHours", 24) // parameters
-);
-
-String approvalId = approvalService.requestApproval(soarContext, details);</code></pre>
-            </div>
-          </section>
-
-          <!-- SoarApprovalNotifier -->
-          <section>
-            <h2>SoarApprovalNotifier</h2>
-            <p>Notification interface for the approval system. Implementations deliver approval notifications to human reviewers through configured channels (e.g., Slack, email, PagerDuty) and send reminders for stale pending requests.</p>
-
-            <div class="api-signature">
-              <code>public interface SoarApprovalNotifier</code>
-              <span style="margin-left: 1rem;"><code>io.contexa.contexacore.autonomous.notification</code></span>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">receiveApprovalNotification</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <p class="api-method-desc">Receives and processes an incoming approval notification message. Called when a new approval request is created or when an external system sends an approval decision.</p>
-              <div class="api-method-params">
-                <div class="api-param">
-                  <span class="api-param-name">message</span>
-                  <span class="api-param-type">String</span>
-                  <span class="api-param-desc">The notification message content.</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">sendApprovalReminder</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <p class="api-method-desc">Sends a reminder notification for a pending approval request that has not been resolved within the expected timeframe.</p>
-              <div class="api-method-params">
-                <div class="api-param">
-                  <span class="api-param-name">approvalId</span>
-                  <span class="api-param-type">String</span>
-                  <span class="api-param-desc">The approval request ID to send a reminder for.</span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- Workflow Example -->
-          <section>
-            <h2>End-to-End Workflow Example</h2>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// 1. SOAR pipeline determines a tool requires approval
-ApprovalRequestDetails details = new ApprovalRequestDetails(
-    "isolate_host", "CONTAINMENT", "CRITICAL",
-    "Isolate web-server-03 due to lateral movement detection",
-    "{hostname: web-server-03}", Map.of("hostname", "web-server-03")
-);
-
-// 2. Request approval through the service
-String approvalId = approvalService.requestApproval(soarContext, details);
-// SoarContext transitions to WAITING_APPROVAL
-
-// 3. Check status (polling or event-driven)
-ApprovalStatus status = approvalService.getApprovalStatus(approvalId);
-
-// 4a. Human approves via dashboard or notification channel
-approvalService.handleApprovalResponse(
-    approvalId, true, "Confirmed lateral movement in logs", "analyst-jane"
-);
-
-// 4b. Or use convenience methods
-approvalService.approve(approvalId);   // Quick system approval
-approvalService.reject(approvalId);    // Quick system rejection
-
-// 5. Pipeline checks status and proceeds with tool execution
-if (approvalService.getApprovalStatus(approvalId) == ApprovalStatus.APPROVED) {
-    // Execute the @SoarTool method
-}</code></pre>
-            </div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Using the builder for full control over the approval request
-ApprovalRequest request = ApprovalRequest.builder()
-    .sessionId(soarContext.getSessionId())
-    .incidentId(soarContext.getIncidentId())
-    .toolName("isolate_host")
-    .approvalType(ApprovalType.MULTI)
-    .requestedBy("soar-pipeline")
-    .requestReason("Lateral movement detected from web-server-03")
-    .potentialImpact("Web traffic disruption for 200+ active sessions")
-    .riskAssessment("CRITICAL - production server under active attack")
-    .timeoutMinutes(15)
-    .organizationId(soarContext.getOrganizationId())
-    .build();
-
-// Submit: saves and notifies in one call
-approvalService.submitApprovalRequest(request);
-
-// Or use async API
-CompletableFuture&lt;Boolean&gt; future = approvalService.requestApproval(request);
-future.thenAccept(approved -&gt; {
-    if (approved) {
-        // Proceed with tool execution
+    @Override
+    public String requestApproval(SoarContext soarContext, ApprovalRequestDetails details) {
+        String approvalId = "APR-" + UUID.randomUUID();
+        ApprovalRequest request = ApprovalRequest.builder()
+                .requestId(approvalId)
+                .sessionId(soarContext.getSessionId())
+                .toolName(details.actionName())
+                .actionDescription(details.description())
+                .toolParameters(details.parameters() != null ? details.parameters() : Map.of())
+                .status(ApprovalRequest.ApprovalStatus.PENDING)
+                .build();
+        requests.put(approvalId, request);
+        // Notify the approvers here (mail, messenger).
+        return approvalId;
     }
-});</code></pre>
-            </div>
-          </section>
 
-          <!-- Related Links -->
-          <section>
-            <h2>Related</h2>
-            <div class="related-links-grid">
-              <a href="soar-tool.html" class="related-link-card">
-                <h3>@SoarTool Annotation</h3>
-                <p>Configure approval requirements, rate limits, and permissions on individual SOAR tools.</p>
-              </a>
-              <a href="index.html" class="related-link-card">
-                <h3>SOAR Overview</h3>
-                <p>Architecture and execution flow of the SOAR pipeline that triggers approval workflows.</p>
-              </a>
-              <a href="../../../docs/install/shadow-mode.html" class="related-link-card">
-                <h3>Shadow Mode</h3>
-                <p>Operational modes that control whether approval workflows are enforced or simulated.</p>
-              </a>
-            </div>
-          </section>
+    @Override
+    public ApprovalRequest.ApprovalStatus getApprovalStatus(String approvalId) {
+        ApprovalRequest request = requests.get(approvalId);
+        return request != null ? request.getStatus() : null;
+    }
 
+    @Override
+    public void handleApprovalResponse(String approvalId, boolean isApproved, String comment, String reviewer) {
+        ApprovalRequest request = requests.get(approvalId);
+        if (request == null || request.getStatus() != ApprovalRequest.ApprovalStatus.PENDING) {
+            return;   // ApprovalRequest does not check the status, so stop here.
+        }
+        if (isApproved) {
+            request.approve(reviewer);
+        } else {
+            request.reject(reviewer, comment);
+        }
+    }
+
+    @Override
+    public Set&lt;String&gt; getPendingApprovalIds() {
+        return requests.values().stream()
+                .filter(r -&gt; r.getStatus() == ApprovalRequest.ApprovalStatus.PENDING)
+                .map(ApprovalRequest::getRequestId)
+                .collect(Collectors.toSet());
+    }
+
+    @Override
+    public int getPendingCount() {
+        return getPendingApprovalIds().size();
+    }
+
+    @Override
+    public ApprovalRequest getApprovalRequest(String approvalId) {
+        return requests.get(approvalId);
+    }
+}</code></pre>
           <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="soar-tool.html" class="docs-nav-link prev">
+            <a href="index.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">@SoarTool Annotation</span>
+              <span class="docs-nav-title">SOAR Extension Points: What the OSS Has and What You Build</span>
             </a>
-            <a href="../../../docs/reference/identity/dsl.html" class="docs-nav-link next">
+            <a href="soar-tool.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Identity DSL</span>
+              <span class="docs-nav-title">@SoarTool and Tool Approval Levels</span>
             </a>
           </div>

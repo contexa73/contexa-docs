@@ -1,520 +1,337 @@
-﻿<nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">Home</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Model Providers</span>
+            <span class="breadcrumb-current">Connecting and Choosing Models</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-secondary">contexa-autoconfigure</span>
             </div>
-            <h1>Model Providers</h1>
-            <p class="lead">The model provider system manages LLM models across multiple runtimes. The <code>DynamicModelRegistry</code> registers models from the <code>LlmRuntimeCatalog</code> chat bindings and the configured <code>TieredLLMProperties</code> layers, while the <code>DynamicModelSelectionStrategy</code> resolves the runtime model for each request from explicit model hints, tier mapping, and a primary <code>ChatModel</code> fallback.</p>
+            <h1>Connecting and Choosing Models</h1>
+            <p class="lead">How to connect the AI model providers Contexa uses (OpenAI, Anthropic, Ollama and others) and how to set the primary model and the model of each layer (Layer 1, Layer 2). It also covers how to see which model a request used and how the embedding model is chosen.</p>
           </div>
 
-          <!-- Overview -->
-          <section class="docs-section">
-            <h2 id="overview">Overview</h2>
-            <p>Contexa supports multiple LLM runtimes simultaneously. At startup, the <code>DynamicModelRegistry</code> populates its descriptor map through two mechanisms:</p>
-            <ol>
-              <li><strong>LlmRuntimeCatalog chat bindings</strong> &mdash; every <code>LlmRuntimeBinding</code> returned from <code>LlmRuntimeCatalog.getChatBindings()</code> is registered. The catalog is built from Spring AI <code>ChatModel</code> beans created by the Contexa runtime (for example via <code>contexa.llm.chat.ollama.*</code>) and by Spring AI autoconfigurations (Anthropic, OpenAI, and others).</li>
-              <li><strong>TieredLLMProperties layers</strong> &mdash; the primary and optional backup models configured for <code>spring.ai.security.layer1</code> and <code>spring.ai.security.layer2</code> are registered with their tier. The registry uses <code>resolveCanonicalModelId(...)</code> so the same model can be found by its runtime ID, bean name, or any alias.</li>
+          <h2 id="overview">At a glance</h2>
+          <p>The words used on this page:</p>
+          <ul>
+            <li><strong>Provider:</strong> where a model comes from, named <code>openai</code>, <code>anthropic</code>, <code>ollama</code> and so on.</li>
+            <li><strong>Binding:</strong> one chat or embedding model created as a Spring bean, together with the names it can be found by (bean name, runtime ID, model ID, aliases). The list of bindings is the catalog (<code>LlmRuntimeCatalog</code>).</li>
+            <li><strong>Primary chat model:</strong> the chat model always used when no other model was chosen (bean name <code>primaryChatModel</code>).</li>
+            <li><strong>Layer model:</strong> the model set for layer 1 or layer 2. The security decision engine's Layer 1 and Layer 2 and calls that name a layer use it.</li>
+          </ul>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>From settings to a call</strong>The upper steps happen once at start; the last one happens on every call.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-host"><span class="dg-node-tag">App settings</span><span class="dg-node-title">Connect providers</span><span class="dg-node-desc">Spring AI starters and <code>spring.ai.*</code>, or Contexa's own Ollama</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">Spring beans</span><span class="dg-node-title">Chat and embedding models</span><span class="dg-node-desc">A model bean is created for each provider</span></li>
+              <li class="dg-node"><span class="dg-node-tag">At start</span><span class="dg-node-title">Build the bindings</span><span class="dg-node-desc">Provider and model ID are found for each bean; <code>contexa.llm.bindings</code> adds names</span></li>
+              <li class="dg-node"><span class="dg-node-tag">At start</span><span class="dg-node-title">Set the primary chat model and the layer models</span><span class="dg-node-desc"><code>contexa.llm.selection.chat</code>, <code>contexa.security.tiered.llm.layer1.model</code> · <code>layer2.model</code></span></li>
+              <li class="dg-node dg-request"><span class="dg-node-tag">Every call</span><span class="dg-node-title">Choose the model</span><span class="dg-node-desc">Requested model → layer model → backup model → primary chat model</span></li>
             </ol>
-            <p>The registry infers the provider name from the model ID when no binding is available. Recognised substrings include <code>llama</code>, <code>qwen</code>, <code>gemma</code>, <code>mistral</code>, <code>phi</code>, <code>exaone</code>, <code>codellama</code>, and <code>deepseek</code> (&rarr; <code>ollama</code>), <code>claude</code> (&rarr; <code>anthropic</code>), <code>gpt</code>/<code>o1</code>/<code>davinci</code> (&rarr; <code>openai</code>), <code>gemini</code>/<code>vertex</code> (&rarr; <code>gemini</code>), and <code>bedrock</code> (&rarr; <code>bedrock</code>). Anything else is labelled <code>spring</code>.</p>
+          </figure>
 
-<svg viewBox="0 0 760 310" width="100%" style="display:block;margin:1.5rem auto;font-family:Inter,system-ui,sans-serif;" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <marker id="mp-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,1.5 L8,5 L0,8.5Z" fill="#94A3B8"/>
-    </marker>
-    <marker id="mp-arr-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,1.5 L8,5 L0,8.5Z" fill="#10B981"/>
-    </marker>
-  </defs>
-  <style>
-    .mp-box{fill:#F8FAFC;stroke:#CBD5E1;stroke-width:1.5;}
-    .mp-box-start{fill:#EFF6FF;stroke:#3B82F6;stroke-width:2;}
-    .mp-box-ok{fill:#F0FDF4;stroke:#10B981;stroke-width:1.5;}
-    .mp-box-src{fill:#FFF7ED;stroke:#FCD34D;stroke-width:1.5;}
-    .mp-title{fill:#1E293B;font-size:14px;font-weight:700;}
-    .mp-sub{fill:#64748B;font-size:12px;}
-    .mp-line{stroke:#94A3B8;stroke-width:1.5;fill:none;}
-    .mp-line-ok{stroke:#10B981;stroke-width:1.5;fill:none;}
-    .mp-label{fill:#64748B;font-size:11px;}
-    .mp-head{fill:#334155;font-size:13px;font-weight:700;}
-    .mp-sep{stroke:#E2E8F0;stroke-width:1;stroke-dasharray:4,3;}
-  </style>
-  <text x="380" y="18" text-anchor="middle" class="mp-head">① @PostConstruct Startup — DynamicModelRegistry Registration Flow</text>
-  <rect x="10" y="28" width="140" height="48" rx="7" class="mp-box-start"/>
-  <text x="80" y="50" text-anchor="middle" class="mp-title">@PostConstruct</text>
-  <text x="80" y="66" text-anchor="middle" class="mp-sub">Application Startup</text>
-  <rect x="170" y="28" width="160" height="48" rx="7" class="mp-box-src"/>
-  <text x="250" y="50" text-anchor="middle" class="mp-title">LlmRuntimeCatalog</text>
-  <text x="250" y="66" text-anchor="middle" class="mp-sub">getChatBindings()</text>
-  <rect x="350" y="28" width="160" height="48" rx="7" class="mp-box-src"/>
-  <text x="430" y="50" text-anchor="middle" class="mp-title">TieredLLMProperties</text>
-  <text x="430" y="66" text-anchor="middle" class="mp-sub">layer1 / layer2 config</text>
-  <rect x="530" y="28" width="160" height="48" rx="7" class="mp-box-ok"/>
-  <text x="610" y="50" text-anchor="middle" class="mp-title">DynamicModelRegistry</text>
-  <text x="610" y="66" text-anchor="middle" class="mp-sub">Descriptor map ready</text>
-  <line x1="150" y1="52" x2="168" y2="52" class="mp-line" marker-end="url(#mp-arr)"/>
-  <line x1="330" y1="52" x2="348" y2="52" class="mp-line" marker-end="url(#mp-arr)"/>
-  <line x1="510" y1="52" x2="528" y2="52" class="mp-line-ok" marker-end="url(#mp-arr-g)"/>
-  <line x1="10" y1="105" x2="750" y2="105" class="mp-sep"/>
-  <text x="380" y="122" text-anchor="middle" class="mp-head">② Runtime getModel() — Cache Lookup and Catalog Resolution Flow</text>
-  <rect x="10" y="132" width="120" height="48" rx="7" class="mp-box-start"/>
-  <text x="70" y="154" text-anchor="middle" class="mp-title">getModel()</text>
-  <text x="70" y="170" text-anchor="middle" class="mp-sub">modelId request</text>
-  <rect x="150" y="132" width="120" height="48" rx="7" class="mp-box"/>
-  <text x="210" y="150" text-anchor="middle" class="mp-title">Cache Lookup</text>
-  <text x="210" y="166" text-anchor="middle" class="mp-sub">descriptorMap</text>
-  <rect x="150" y="220" width="120" height="40" rx="7" class="mp-box-ok"/>
-  <text x="210" y="244" text-anchor="middle" class="mp-title" style="font-size:13px;">Cache HIT → Return</text>
-  <rect x="290" y="132" width="140" height="48" rx="7" class="mp-box"/>
-  <text x="360" y="150" text-anchor="middle" class="mp-title">Catalog Lookup</text>
-  <text x="360" y="166" text-anchor="middle" class="mp-sub">resolveCanonicalModelId</text>
-  <rect x="450" y="132" width="140" height="48" rx="7" class="mp-box"/>
-  <text x="520" y="150" text-anchor="middle" class="mp-title">ChatModel Init</text>
-  <text x="520" y="166" text-anchor="middle" class="mp-sub">Infer provider · resolve bean</text>
-  <rect x="610" y="132" width="130" height="48" rx="7" class="mp-box-ok"/>
-  <text x="675" y="150" text-anchor="middle" class="mp-title">Cache + Return</text>
-  <text x="675" y="166" text-anchor="middle" class="mp-sub">ChatModel returned</text>
-  <line x1="130" y1="156" x2="148" y2="156" class="mp-line" marker-end="url(#mp-arr)"/>
-  <line x1="210" y1="180" x2="210" y2="218" class="mp-line-ok" marker-end="url(#mp-arr-g)"/>
-  <text x="225" y="205" class="mp-label">HIT</text>
-  <line x1="270" y1="156" x2="288" y2="156" class="mp-line" marker-end="url(#mp-arr)"/>
-  <text x="280" y="148" class="mp-label">MISS</text>
-  <line x1="430" y1="156" x2="448" y2="156" class="mp-line" marker-end="url(#mp-arr)"/>
-  <line x1="590" y1="156" x2="608" y2="156" class="mp-line-ok" marker-end="url(#mp-arr-g)"/>
-</svg>
-          </section>
-
-          <!-- LlmRuntimeCatalog -->
-          <section class="docs-section">
-            <h2 id="llm-runtime-catalog">LlmRuntimeCatalog</h2>
-            <p>The interface that exposes discovered chat and embedding runtimes. The registry uses it to find bindings and resolve live <code>ChatModel</code> instances on demand.</p>
-
-            <div class="api-signature">
-              <code>public interface LlmRuntimeCatalog</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getChatBindings()</span>
-                <span class="api-method-return">List&lt;LlmRuntimeBinding&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns all chat runtime bindings known to the catalog.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getEmbeddingBindings()</span>
-                <span class="api-method-return">List&lt;LlmRuntimeBinding&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns all embedding runtime bindings known to the catalog.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">findChatBinding(String selector)</span>
-                <span class="api-method-return">Optional&lt;LlmRuntimeBinding&gt;</span>
-              </div>
-              <div class="api-method-desc">Locates a chat binding by runtime ID, bean name, model ID, or any registered alias.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">findEmbeddingBinding(String selector)</span>
-                <span class="api-method-return">Optional&lt;LlmRuntimeBinding&gt;</span>
-              </div>
-              <div class="api-method-desc">Locates an embedding binding by any of the same selectors.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolveChatModel(String selector)</span>
-                <span class="api-method-return">ChatModel</span>
-              </div>
-              <div class="api-method-desc">Returns the live Spring AI <code>ChatModel</code> for the matching binding.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolveEmbeddingModel(String selector)</span>
-                <span class="api-method-return">EmbeddingModel</span>
-              </div>
-              <div class="api-method-desc">Returns the live Spring AI <code>EmbeddingModel</code> for the matching binding.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolvePrimaryChatModel(String priorityConfig)</span>
-                <span class="api-method-return">Optional&lt;ChatModel&gt;</span>
-              </div>
-              <div class="api-method-desc">Resolves the primary chat model using a comma-separated priority configuration string.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolvePrimaryEmbeddingModel(String priorityConfig)</span>
-                <span class="api-method-return">Optional&lt;EmbeddingModel&gt;</span>
-              </div>
-              <div class="api-method-desc">Resolves the primary embedding model using a priority configuration string.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolveSpringPrimaryChatModel()</span>
-                <span class="api-method-return">Optional&lt;ChatModel&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns the Spring AI primary <code>ChatModel</code> bean when one is present in the context.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolveSpringPrimaryEmbeddingModel()</span>
-                <span class="api-method-return">Optional&lt;EmbeddingModel&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns the Spring AI primary <code>EmbeddingModel</code> bean when one is present.</div>
-            </div>
-          </section>
-
-          <!-- LlmRuntimeBinding -->
-          <section class="docs-section">
-            <h2 id="llm-runtime-binding">LlmRuntimeBinding</h2>
-            <p>An immutable record of a single runtime binding. Bindings are created by Contexa's LLM autoconfiguration and consumed by both the catalog and the registry.</p>
-
-            <div class="api-signature">
-              <code>public final class LlmRuntimeBinding</code>
-            </div>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>runtimeId</code></td><td><code>String</code></td><td>Contexa runtime ID assigned to this binding.</td></tr>
-                <tr><td><code>beanName</code></td><td><code>String</code></td><td>Spring bean name of the underlying model bean.</td></tr>
-                <tr><td><code>provider</code></td><td><code>String</code></td><td>Provider identifier (for example, <code>ollama</code>, <code>anthropic</code>, <code>openai</code>).</td></tr>
-                <tr><td><code>modelId</code></td><td><code>String</code></td><td>Canonical model ID reported by the runtime (for example, <code>llama3.1:8b</code>).</td></tr>
-                <tr><td><code>aliases</code></td><td><code>Set&lt;String&gt;</code></td><td>Additional selectors that resolve to the same binding.</td></tr>
-                <tr><td><code>type</code></td><td><code>LlmRuntimeType</code></td><td>Chat or embedding runtime type.</td></tr>
-                <tr><td><code>primary</code></td><td><code>boolean</code></td><td>Whether this binding is marked as the Spring primary for its type.</td></tr>
-                <tr><td><code>source</code></td><td><code>String</code></td><td>Origin of the binding (for example, autoconfiguration class or configuration key).</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Helper Methods</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Return</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>canonicalId()</code></td><td><code>String</code></td><td>Returns the preferred identifier for the binding: <code>modelId</code>, then <code>runtimeId</code>, then <code>beanName</code>.</td></tr>
-                <tr><td><code>matches(String selector)</code></td><td><code>boolean</code></td><td>Returns whether the selector matches <code>runtimeId</code>, <code>beanName</code>, <code>modelId</code>, or any alias.</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- ModelDescriptor -->
-          <section class="docs-section">
-            <h2 id="model-descriptor">ModelDescriptor</h2>
-            <p>Describes a model's identity, capabilities, default options, and current status.</p>
-
-            <div class="api-signature">
-              <code>@Data @Builder<br>public class ModelDescriptor</code>
-            </div>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>modelId</code></td><td><code>String</code></td><td>Unique model identifier (for example, <code>llama3.1:8b</code>, <code>claude-3-opus</code>).</td></tr>
-                <tr><td><code>displayName</code></td><td><code>String</code></td><td>Human-readable model name.</td></tr>
-                <tr><td><code>provider</code></td><td><code>String</code></td><td>Provider name (<code>ollama</code>, <code>anthropic</code>, <code>openai</code>).</td></tr>
-                <tr><td><code>tier</code></td><td><code>Integer</code></td><td>The configured runtime tier assigned to the model (1 or 2). Null if unassigned.</td></tr>
-                <tr><td><code>version</code></td><td><code>String</code></td><td>Model version string.</td></tr>
-                <tr><td><code>capabilities</code></td><td><code>ModelCapabilities</code></td><td>Nested class describing streaming, tool calling, multimodal, context window, and output budget.</td></tr>
-                <tr><td><code>options</code></td><td><code>ModelOptions</code></td><td>Nested class describing default sampling options (temperature, topP, topK, repetitionPenalty).</td></tr>
-                <tr><td><code>status</code></td><td><code>ModelStatus</code></td><td><code>AVAILABLE</code> or <code>UNAVAILABLE</code>.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>ModelCapabilities (nested class)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Field</th><th>Type</th><th>Default</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>streaming</code></td><td><code>boolean</code></td><td>true</td></tr>
-                <tr><td><code>toolCalling</code></td><td><code>boolean</code></td><td>false</td></tr>
-                <tr><td><code>functionCalling</code></td><td><code>boolean</code></td><td>false</td></tr>
-                <tr><td><code>multiModal</code></td><td><code>boolean</code></td><td>false</td></tr>
-                <tr><td><code>maxTokens</code></td><td><code>int</code></td><td>4096</td></tr>
-                <tr><td><code>contextWindow</code></td><td><code>int</code></td><td>4096</td></tr>
-                <tr><td><code>maxOutputTokens</code></td><td><code>int</code></td><td>4096</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>ModelOptions (nested class)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Field</th><th>Type</th><th>Default</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>temperature</code></td><td><code>Double</code></td><td>0.7</td></tr>
-                <tr><td><code>topP</code></td><td><code>Double</code></td><td>0.9</td></tr>
-                <tr><td><code>topK</code></td><td><code>Integer</code></td><td>null</td></tr>
-                <tr><td><code>repetitionPenalty</code></td><td><code>Double</code></td><td>1.0</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Helper Method</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">supportsAdvancedFeatures()</span>
-                <span class="api-method-return">boolean</span>
-              </div>
-              <div class="api-method-desc">Returns <code>true</code> when the capabilities declare tool calling, function calling, or multimodal support.</div>
-            </div>
-          </section>
-
-          <!-- DynamicModelRegistry -->
-          <section class="docs-section">
-            <h2 id="dynamic-model-registry">DynamicModelRegistry</h2>
-            <p>Central registry that manages descriptors and caches <code>ChatModel</code> instances. It registers models from the catalog and from tier configuration during <code>@PostConstruct</code> initialization.</p>
-
-            <div class="api-signature">
-              <code>public class DynamicModelRegistry</code>
-            </div>
-
-            <h3>Constructor Dependencies</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Dependency</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>ApplicationContext</code></td><td>Spring application context reference used during initialization.</td></tr>
-                <tr><td><code>TieredLLMProperties</code></td><td>Configured tier hierarchy (layer 1 and layer 2, primary and backup models).</td></tr>
-                <tr><td><code>LlmRuntimeCatalog</code></td><td>Catalog of Spring AI runtime bindings. Optional: when absent, <code>getModel(...)</code> raises <code>ModelSelectionException</code>.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Public API</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getModel(String modelId)</span>
-                <span class="api-method-return">ChatModel</span>
-              </div>
-              <div class="api-method-desc">Returns the <code>ChatModel</code> for the given ID. Resolves the canonical model ID, looks up the binding, asks the catalog to resolve a live model, and caches the result. Throws <code>ModelSelectionException</code> when the ID or catalog is missing.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getAllModels()</span>
-                <span class="api-method-return">Collection&lt;ModelDescriptor&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns a copy of every registered model descriptor.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getDescriptor(String modelId)</span>
-                <span class="api-method-return">ModelDescriptor</span>
-              </div>
-              <div class="api-method-desc">Returns the registered descriptor for a model ID without instantiating a new <code>ChatModel</code>.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getModelsByProvider(String provider)</span>
-                <span class="api-method-return">List&lt;ModelDescriptor&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns <code>AVAILABLE</code> descriptors filtered by provider name (case insensitive).</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">registerModel(ModelDescriptor descriptor)</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">Registers a descriptor or merges it into an existing one. Existing tier and provider values are preserved when the incoming descriptor leaves them unset.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">refreshModels()</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">Clears descriptors, instance cache, and aliases, then re-registers catalog bindings and configuration layers.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">updateModelStatus(String modelId, ModelStatus status)</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">Updates the availability status of a registered model.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">shutdown()</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc"><code>@PreDestroy</code> hook that clears descriptors, instance cache, and aliases.</div>
-            </div>
-          </section>
-
-          <!-- ModelSelectionStrategy -->
-          <section class="docs-section">
-            <h2 id="model-selection-strategy">ModelSelectionStrategy</h2>
-            <p>Interface for model selection logic. The <code>DynamicModelSelectionStrategy</code> is the default implementation.</p>
-
-            <div class="api-signature">
-              <code>public interface ModelSelectionStrategy</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">selectModel(ExecutionContext context)</span>
-                <span class="api-method-return">ChatModel</span>
-              </div>
-              <div class="api-method-desc">Selects the best model for the given execution context. Returns null if no model is available.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getSupportedModels()</span>
-                <span class="api-method-return">Set&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns the set of all model IDs available for selection.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">isModelAvailable(String modelName)</span>
-                <span class="api-method-return">boolean</span>
-              </div>
-              <div class="api-method-desc">Checks whether a specific model is currently available.</div>
-            </div>
-          </section>
-
-          <!-- DynamicModelSelectionStrategy -->
-          <section class="docs-section">
-            <h2 id="dynamic-selection">DynamicModelSelectionStrategy</h2>
-            <p>The default selection strategy uses an explicit-model-first fallback chain. It is constructed with a <code>DynamicModelRegistry</code>, the <code>TieredLLMProperties</code>, and the primary <code>ChatModel</code> bean.</p>
-
-            <div class="api-signature">
-              <code>public class DynamicModelSelectionStrategy implements ModelSelectionStrategy</code>
-            </div>
-
-            <ol>
-              <li><strong>Explicit model request</strong> &mdash; <code>ExecutionContext.preferredModel</code> is tried first. When absent, the strategy looks for metadata keys in this order: <code>requestedModelId</code>, <code>preferredModel</code>, <code>runtimeModelId</code>, <code>modelId</code>.</li>
-              <li><strong>Tier resolution</strong> &mdash; When no explicit model resolves, the strategy picks a tier in this order: <code>analysisLevel.getDefaultTier()</code>, then <code>securityTaskType.getDefaultTier()</code>, then <code>ExecutionContext.tier</code>. Values above 1 are normalized to configured layer 2.</li>
-              <li><strong>Primary/backup lookup</strong> &mdash; The strategy reads <code>TieredLLMProperties.getModelNameForTier(...)</code> for the primary model and <code>getBackupModelNameForTier(...)</code> for the backup.</li>
-              <li><strong>Primary ChatModel fallback</strong> &mdash; If every tier candidate fails, the auto-configured primary <code>ChatModel</code> bean is returned as the last fallback.</li>
-            </ol>
-
-            <h3>Resolution Metadata</h3>
-            <p>The strategy records the outcome on <code>ExecutionContext.metadata</code>. Downstream code and advisors can inspect these keys:</p>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Key</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>requestedModelId</code></td><td>The explicit model ID requested, when one was provided.</td></tr>
-                <tr><td><code>requestedModelSourceKey</code></td><td>Where the requested ID came from (for example, <code>executionContext.preferredModel</code> or <code>executionContext.metadata.runtimeModelId</code>).</td></tr>
-                <tr><td><code>selectedModelId</code></td><td>The model ID that was finally selected.</td></tr>
-                <tr><td><code>selectedModelProvider</code></td><td>Provider name from the matching <code>ModelDescriptor</code>, when available.</td></tr>
-                <tr><td><code>runtimeModelId</code></td><td>Duplicate of <code>selectedModelId</code> for downstream consumers that look for it under that key.</td></tr>
-                <tr><td><code>modelSelectionSource</code></td><td>Why the model was chosen (for example, <code>explicit_model</code>, <code>analysis_level:NORMAL</code>, <code>security_task_type:FORENSIC_ANALYSIS</code>, <code>tier:2</code>, or <code>primary_chat_model</code>).</td></tr>
-                <tr><td><code>modelSelectionFallbackUsed</code></td><td><code>true</code> when a backup or the primary fallback was used.</td></tr>
-                <tr><td><code>modelSelectionCandidates</code></td><td>Ordered list of model IDs the strategy tried.</td></tr>
-                <tr><td><code>modelSelectionFailure</code></td><td>Reason for failure when no model could be selected.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Additional Method</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getModelCapabilities(String modelName)</span>
-                <span class="api-method-return">Map&lt;String, Object&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns a map that summarises the descriptor's model ID, provider, capabilities block, context window, maxTokens, streaming flag, tier, and status. Returns an empty map when the model is not registered.</div>
-            </div>
-          </section>
-
-          <!-- Configuration -->
-          <section class="docs-section">
-            <h2 id="configuration">Configuration</h2>
-
-            <h3>Tiered Model Hierarchy</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">spring:
+          <h2 id="connect">Connecting a provider</h2>
+          <p>Spring AI makes the connection. Add the provider starter and set <code>spring.ai.&lt;provider&gt;.*</code>; the provider's model beans are created and Contexa finds and uses them. Contexa has no provider keys of its own such as <code>contexa.llm.openai.*</code>.</p>
+          <pre><code class="language-yaml"># Dependency: org.springframework.ai:spring-ai-starter-model-openai
+# Other required settings (contexa.datasource.url and so on) follow the quick start.
+spring:
   ai:
-    security:
-      layer1:
-        model: qwen2.5:7b
-        backup:
-          model: qwen2.5:7b
-      layer2:
-        model: gpt-4o-mini
-        backup:
-          model: llama3.1:8b
-      tiered:
-        layer1:
-          timeout-ms: 30000
-        layer2:
-          timeout-ms: 60000
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-4o-mini</code></pre>
+          <ul>
+            <li>Without any chat model, Contexa's LLM beans (primary chat model, orchestrator) are not created.</li>
+            <li>When <code>contexa.llm.selection.chat.priority</code> names exactly one provider (<code>openai</code>, <code>anthropic</code> or <code>ollama</code>), Contexa sets <code>spring.ai.model.chat</code> to it by default so that Spring AI creates only that provider's chat model. The first provider of <code>contexa.llm.selection.embedding.priority</code> (<code>openai</code> or <code>ollama</code>) becomes <code>spring.ai.model.embedding</code>. A value you set yourself always wins.</li>
+            <li>With <code>contexa.llm.enabled=false</code> the whole LLM auto-configuration of Contexa is off.</li>
+          </ul>
 
-contexa:
+          <h3 id="dedicated-ollama">Contexa's own Ollama connection</h3>
+          <p>An Ollama chat model can be created from Contexa settings alone, without Spring AI starter settings. The Spring AI Ollama library (<code>OllamaChatModel</code>) must be on the classpath.</p>
+          <pre><code class="language-yaml">contexa:
   llm:
     chat:
       ollama:
-        base-url: http://localhost:11434
-        model: qwen2.5:7b</code></pre>
-            </div>
+        base-url: http://localhost:11434   # setting it turns this on
+        model: qwen2.5:7b                  # empty: qwen3:8b
+        keep-alive: 10m                    # empty: Ollama's default</code></pre>
+          <ul>
+            <li>Setting <code>base-url</code> is the switch. It creates the chat model bean <code>contexaOllamaChatModel</code> and the embedding model bean <code>contexaSharedOllamaEmbeddingModel</code> on the same server.</li>
+            <li>The embedding model name is <code>contexa.llm.embedding.ollama.model</code> (empty: <code>mxbai-embed-large</code>). To run embeddings on another server, set <code>contexa.llm.embedding.ollama.dedicated-runtime-enabled=true</code> and <code>contexa.llm.embedding.ollama.base-url</code>.</li>
+            <li><strong>Note:</strong> the binding's model ID of this bean comes from <code>spring.ai.ollama.chat.options.model</code> (otherwise the bean name), not from <code>contexa.llm.chat.ollama.model</code>. To point a layer model name at this bean, write the model ID with <a href="#bindings">Naming bindings</a>.</li>
+          </ul>
 
-            <div class="callout callout-info">
-              <p><strong>Selection order:</strong> explicit model request &rarr; <code>analysisLevel</code> &rarr; <code>securityTaskType</code> &rarr; explicit <code>tier</code> &rarr; primary <code>ChatModel</code> fallback. The runtime only has configured layers 1 and 2, so higher semantic tiers are normalized to layer 2.</p>
-            </div>
-          </section>
+          <h2 id="primary">Choosing the primary chat model</h2>
+          <p>With several providers present, <code>contexa.llm.selection.chat.mode</code> decides which model becomes the primary chat model.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>mode</code> value</th><th>How it chooses</th><th>When to use it</th></tr></thead>
+            <tbody>
+              <tr><td><code>dynamic-priority</code> (default)</td><td>The model of the first provider in <code>priority</code> (default <code>openai,anthropic,ollama</code>) whose bean is ready. When no provider in the list is ready, any binding is used.</td><td>Several providers, only the order matters</td></tr>
+              <tr><td><code>fixed</code></td><td>Only the model of the one provider in <code>priority</code>. With two or more listed the application does not start, and if that provider is not ready no other provider is used and start fails.</td><td>Exactly one provider must be used</td></tr>
+              <tr><td><code>spring-primary</code></td><td>The binding marked Spring <code>@Primary</code>; with a single binding, that one. With two or more <code>@Primary</code>, or several bindings and none marked, the application does not start.</td><td>The application already marks a chat model <code>@Primary</code></td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>Write the value in lower case with hyphens.</strong> The conditions that create the primary chat model bean compare with <code>dynamic-priority</code>, <code>fixed</code> and <code>spring-primary</code>. Written as the upper-case enum name (<code>DYNAMIC_PRIORITY</code>, <code>SPRING_PRIMARY</code>), the setting is accepted but no condition matches, and no primary chat model bean is created.
+          </div>
+          <pre><code class="language-yaml">contexa:
+  llm:
+    selection:
+      chat:
+        mode: fixed
+        priority: anthropic</code></pre>
+          <p>The old setting <code>contexa.llm.chat-model-priority</code> is read only when <code>priority</code> is empty (to be removed).</p>
 
-          <!-- Related -->
-          <section class="docs-section">
-            <h2 id="related">Related</h2>
-            <div class="related-links">
-              <div class="related-links-grid">
-                <a href="../../../docs/reference/core/llm-orchestrator.html" class="related-link-card">
-                  <h3>LLM Orchestrator</h3>
-                  <p>Uses ModelSelectionStrategy to choose models for each request.</p>
-                </a>
-                <a href="../../../docs/reference/core/pipeline.html" class="related-link-card">
-                  <h3>AI Pipeline</h3>
-                  <p>Pipeline executors use the model system through the orchestrator.</p>
-                </a>
-              </div>
-            </div>
-          </section>
+          <h2 id="bindings">Naming bindings (bindings)</h2>
+          <p>At start Contexa makes one binding for each chat and embedding model bean. Without any setting it finds out the following.</p>
+          <ul>
+            <li><strong>Provider:</strong> from words in the bean class and bean name. <code>ollama</code> → ollama, <code>anthropic</code> · <code>claude</code> → anthropic, <code>openai</code> · <code>azureopenai</code> → openai, <code>gemini</code> · <code>vertex</code> → gemini, <code>mistral</code> → mistral, <code>bedrock</code> → bedrock, <code>huggingface</code> · <code>hf</code> → huggingface, otherwise <code>spring</code>.</li>
+            <li><strong>Model ID:</strong> for chat, <code>spring.ai.openai.chat.options.model</code> (Azure: <code>spring.ai.azure.openai.chat.options.deployment-name</code> · <code>.model</code>), <code>spring.ai.anthropic.chat.options.model</code>, <code>spring.ai.ollama.chat.options.model</code>. For embedding, <code>spring.ai.openai.embedding.options.model</code> (Azure included) and <code>spring.ai.ollama.embedding.options.model</code>. Without a value, the bean name.</li>
+            <li>A binding can be found by its bean name, runtime ID, model ID or any alias.</li>
+          </ul>
+          <p>To change or add names, use <code>contexa.llm.bindings.chat.&lt;ID&gt;</code> (<code>.embedding.&lt;ID&gt;</code> for embedding). When <code>&lt;ID&gt;</code> equals a bean name, or <code>bean-name</code> equals it, the entry becomes that bean's binding and <code>&lt;ID&gt;</code> becomes the runtime ID.</p>
+          <pre><code class="language-yaml">contexa:
+  llm:
+    bindings:
+      chat:
+        contexaOllamaChatModel:        # key = bean name
+          model-id: qwen2.5:7b         # found by this name
+          aliases: [local-small]       # more names
+          # provider: ollama             # empty: decided by the rules above
+          # primary: true                # chosen by spring-primary selection
+          # enabled: false               # this entry is not used</code></pre>
+          <ul>
+            <li>When one name (selector) belongs to two bindings, the application does not start (<code>Duplicate chat runtime selector '…'</code>). Keep bean names, runtime IDs, model IDs and aliases unique.</li>
+            <li>When the bean a <code>bean-name</code> points to does not exist, a WARN line is logged and the entry is skipped.</li>
+          </ul>
 
+          <h2 id="layer-models">Setting the layer models (Layer 1, Layer 2)</h2>
+          <p>Layer models are set with <code>contexa.security.tiered.llm.layer1.model</code> · <code>layer2.model</code>; left empty, the primary chat model is used. Each layer can also have a <code>backup.model</code>. How the security decision engine uses them is in <a href="../architecture/decision-engine.html#layer-models">Decision Engine: a different model for each layer</a>; this section explains how a name becomes an actual model.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>How a model name becomes a model</strong>The same for layer models, requested models and backup models.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">Model name</span><span class="dg-node-desc">For example <code>gpt-4o</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">Question 1</span><span class="dg-node-title">Is there a binding with this name?</span><span class="dg-node-desc">Yes when its bean name, runtime ID, model ID or an alias is the same</span></li>
+              <li class="dg-edge">Only when there is none ↓</li>
+              <li class="dg-node"><span class="dg-node-tag">Question 2</span><span class="dg-node-title">Can the primary chat model be copied?</span><span class="dg-node-desc">In Spring AI 1.1.8, copying (<code>mutate()</code>) works for OpenAI chat models and not for Anthropic or Ollama chat models</span></li>
+            </ol>
+            <div class="dg-compare">
+              <div class="dg-side dg-model"><p class="dg-side-title">With a binding</p><ul><li>Sent to that binding's model (its provider)</li></ul></div>
+              <div class="dg-side dg-model"><p class="dg-side-title">When it can be copied</p><ul><li>Sent with the primary chat model's provider and settings, only the model name changed</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Neither</p><ul><li>Layer model: the application does not start</li><li>Requested or backup model: selection moves to the next candidate</li></ul></div>
+            </div>
+          </figure>
+          <p>To mix providers, make each layer model name the same as a binding's model ID. Below, layer 1 is Ollama while layer 2 and the primary chat model are OpenAI (with both starters, <code>spring-ai-starter-model-openai</code> and <code>spring-ai-starter-model-ollama</code>).</p>
+          <pre><code class="language-yaml">spring:
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-4o-mini        # model ID of the OpenAI binding
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: qwen2.5:7b         # model ID of the Ollama binding
+contexa:
+  llm:
+    selection:
+      chat:
+        priority: openai,ollama     # the primary chat model is OpenAI
+  security:
+    tiered:
+      llm:
+        layer1:
+          model: qwen2.5:7b         # same name as the Ollama binding → Ollama
+        layer2:
+          model: gpt-4o-mini        # same name as the OpenAI binding → OpenAI</code></pre>
+          <ul>
+            <li><strong>When a name matches no binding,</strong> a copy of the primary chat model sends that name to its own provider. For example, with an OpenAI primary chat model and a layer model <code>qwen2.5:7b</code> but no matching binding, OpenAI is asked for <code>qwen2.5:7b</code>.</li>
+            <li><strong>Checked at start.</strong> When a layer model (<code>layer1.model</code> · <code>layer2.model</code>) cannot be made, start stops with <code>… cannot be used: no chat runtime binding has this model id and the primary chat model cannot be copied with it …</code>. Backup models are not checked at start.</li>
+            <li><code>contexa.security.tiered.llm.tiered.layer1.timeout-ms</code> · <code>layer2.timeout-ms</code> are used only as the layer time limit of <code>stream()</code> (<a href="llm-orchestrator.html#limits">Calling an LLM</a>). The time limits of the security decision layers are other settings (<a href="../architecture/decision-engine.html#settings">Decision Engine settings</a>).</li>
+          </ul>
+
+          <h2 id="request-order">How the model is chosen for each request</h2>
+          <p>For every call, the selection strategy (<code>DynamicModelSelectionStrategy</code>) decides in the order below.</p>
+          <ol>
+            <li><strong>Requested model:</strong> <code>ExecutionContext.preferredModel</code>, otherwise the metadata <code>requestedModelId</code> → <code>preferredModel</code> → <code>modelId</code>. The metadata <code>runtimeModelId</code> is cleared before selection, so it is not an input. A model that cannot be made is recorded as a failure and selection moves on.</li>
+            <li><strong>Layer model:</strong> the layer comes from <code>analysisLevel</code> → <code>securityTaskType</code> → <code>tier</code>; 1 or less is layer 1, 2 or more is layer 2. With no model set for that layer, go to 4.</li>
+            <li><strong>Backup model:</strong> the layer's <code>backup.model</code>, when the layer model cannot be made</li>
+            <li><strong>Primary chat model:</strong> always the last candidate. With no model at all, <code>null</code> is returned and the call ends with an error. An exception during selection is a <code>ModelSelectionException</code>.</li>
+          </ol>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>modelSelectionSource</code> value</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>explicit_model</code></td><td>The requested model</td></tr>
+              <tr><td><code>analysis_level:NORMAL</code> and so on</td><td>The layer model chosen by <code>analysisLevel</code></td></tr>
+              <tr><td><code>security_task_type:FORENSIC_ANALYSIS</code> and so on</td><td>The layer model chosen by the task type</td></tr>
+              <tr><td><code>tier:2</code> and so on</td><td>The layer model chosen by <code>tier</code></td></tr>
+              <tr><td>One of the above followed by <code>:backup</code></td><td>That layer's backup model</td></tr>
+              <tr><td><code>primary_chat_model</code></td><td>The primary chat model</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="check">Checking</h2>
+          <p>After the choice, the result is in the metadata of that call's <code>ExecutionContext</code> (<a href="llm-orchestrator.html#check">Checking a call</a> also has call time and token counts).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>requestedModelId</code></td><td>The requested model name (if any)</td></tr>
+              <tr><td><code>requestedModelSourceKey</code></td><td>Where that name was read (for example <code>executionContext.preferredModel</code>, <code>executionContext.metadata.modelId</code>)</td></tr>
+              <tr><td><code>selectedModelId</code></td><td>The model ID finally chosen</td></tr>
+              <tr><td><code>selectedModelProvider</code></td><td>That model's provider (when known)</td></tr>
+              <tr><td><code>runtimeModelId</code></td><td>The same value as <code>selectedModelId</code> (a copy for readers of this key)</td></tr>
+              <tr><td><code>modelSelectionSource</code></td><td>Why it was chosen (table above)</td></tr>
+              <tr><td><code>modelSelectionFallbackUsed</code></td><td><code>true</code> when a later candidate replaced the requested or layer model</td></tr>
+              <tr><td><code>modelSelectionCandidates</code></td><td>The model IDs tried, in order</td></tr>
+              <tr><td><code>modelSelectionFailure</code></td><td>Why no model could be chosen</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>Seeing the bindings:</strong> <code>LlmRuntimeCatalog.getChatBindings()</code>; registered models with <code>DynamicModelRegistry.getAllModels()</code> · <code>getModelsByProvider("openai")</code>; one model with <code>DynamicModelSelectionStrategy.getModelCapabilities(name)</code>.</li>
+            <li><strong>Logs:</strong> a binding that is not ready logs WARN <code>LLM runtime provider '…' binding '…' is not ready</code>; a requested model that cannot be used logs WARN <code>Requested model … not available</code>.</li>
+          </ul>
+
+          <h2 id="embedding">Choosing the embedding model</h2>
+          <p>The embedding model turns documents into vectors (<a href="rag.html">RAG</a>). Because the vector store's dimension is bound to one embedding model, embeddings are fixed to one provider.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>contexa.llm.selection.embedding.mode</code></th><th>How it chooses</th></tr></thead>
+            <tbody>
+              <tr><td><code>fixed</code> (default)</td><td>The one provider in <code>priority</code> (default <code>openai</code>). With two or more listed the application does not start. When that provider's binding is not ready, another embedding binding is used.</td></tr>
+              <tr><td><code>spring-primary</code></td><td>The <code>@Primary</code> embedding binding (same rules as chat)</td></tr>
+              <tr><td><code>dynamic-priority</code></td><td>Not supported; choosing it fails at start.</td></tr>
+            </tbody>
+          </table></div>
+          <p>How to match the dimension, and the dimension check at start, are in <a href="rag.html#prepare">RAG: before you start</a>.</p>
+
+          <h2 id="capabilities">Provider capability settings</h2>
+          <p>Models take different options. You can change the model lists Contexa uses when it fits the options (<a href="llm-orchestrator.html#provider-options">provider options</a>). A list is regular expressions joined with commas, and the whole model ID must match.</p>
+          <ul>
+            <li><code>contexa.llm.model-capabilities.openai.max-completion-token-patterns</code>: OpenAI models whose output length is sent as <code>max_completion_tokens</code>. Default <code>gpt-5(?:[.-].*)?,o\d+(?:[.-].*)?</code>.</li>
+            <li><code>contexa.llm.model-capabilities.openai.default-sampling-only-patterns</code>: OpenAI models sent without <code>temperature</code> · <code>topP</code>. Default: the same list as above.</li>
+            <li><code>contexa.llm.model-capabilities.anthropic.default-sampling-only-patterns</code>: Claude models sent without sampling values. Default: the list of Claude models fixed in the code.</li>
+            <li><code>contexa.llm.model-capabilities.anthropic.thinking</code>: the table of thinking and effort each Claude model takes. A list set here replaces the default table.</li>
+            <li><code>contexa.llm.model-capabilities.anthropic.system-prompt-cache</code> (default <code>true</code>): whether the system prompt is cached when no cache strategy is configured.</li>
+            <li><code>contexa.llm.model-capabilities.ollama.disable-thinking-patterns</code>: Ollama models sent with thinking off (no default).</li>
+          </ul>
+          <p>For the OpenAI and Ollama lists and the Anthropic sampling list, a JVM system property of the same name or an environment variable (for example <code>CONTEXA_LLM_MODEL_CAPABILITIES_OPENAI_MAX_COMPLETION_TOKEN_PATTERNS</code>) is used first when present.</p>
+
+          <h2 id="settings">Settings you will change most</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.llm.selection.chat.mode</code></td><td><code>dynamic-priority</code></td><td>How the primary chat model is chosen</td><td>To use one provider only (<code>fixed</code>) or follow the application's <code>@Primary</code></td></tr>
+              <tr><td><code>contexa.llm.selection.chat.priority</code></td><td><code>openai,anthropic,ollama</code></td><td>Provider order (one provider with <code>fixed</code>)</td><td>To change the primary chat model's provider</td></tr>
+              <tr><td><code>contexa.security.tiered.llm.layer1.model</code><br><code>contexa.security.tiered.llm.layer2.model</code></td><td>None</td><td>The model of each layer (empty: the primary chat model)</td><td>When the layers use different models</td></tr>
+              <tr><td><code>contexa.llm.chat.ollama.base-url</code></td><td>None</td><td>Address of Contexa's own Ollama connection (setting it turns it on)</td><td>To use Ollama without a Spring AI starter</td></tr>
+              <tr><td><code>contexa.llm.selection.embedding.priority</code></td><td><code>openai</code></td><td>The embedding provider (one)</td><td>To switch embeddings to Ollama</td></tr>
+            </tbody>
+          </table></div>
+          <p>All model connection settings are in <a href="../../install/configuration/ai.html">AI model settings</a>.</p>
+
+          <h2 id="extension">Extension points</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Bean</th><th>When you provide your own</th></tr></thead>
+            <tbody>
+              <tr><td><code>ModelSelectionStrategy</code></td><td>Changes the rule that chooses the model for each call (default <code>DynamicModelSelectionStrategy</code>).</td></tr>
+              <tr><td><code>primaryChatModel</code> (by name)</td><td>The application decides the primary chat model; Contexa's choice of the primary chat model (<code>contexa.llm.selection.chat.mode</code>) is skipped.</td></tr>
+              <tr><td><code>LlmRuntimeCatalog</code></td><td>Builds the bindings another way (default <code>SpringLlmRuntimeCatalog</code>).</td></tr>
+              <tr><td><code>DynamicModelRegistry</code></td><td>Changes how models are registered and cached.</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="reference">Reference</h2>
+          <details>
+            <summary><strong><code>LlmRuntimeCatalog</code></strong> — the bindings</summary>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>Method</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr><td><code>getChatBindings()</code> · <code>getEmbeddingBindings()</code></td><td>All chat or embedding bindings</td></tr>
+                <tr><td><code>findChatBinding(selector)</code> · <code>findEmbeddingBinding(selector)</code></td><td>Finds a binding by runtime ID, bean name, model ID or alias (<code>Optional</code>)</td></tr>
+                <tr><td><code>resolveChatModel(selector)</code> · <code>resolveEmbeddingModel(selector)</code></td><td>The binding's actual model bean; <code>IllegalStateException</code> when none</td></tr>
+                <tr><td><code>resolvePrimaryChatModel(priority)</code> · <code>resolvePrimaryEmbeddingModel(priority)</code></td><td>The ready model in the comma-separated provider order; any binding when no listed provider has one</td></tr>
+                <tr><td><code>resolveProviderChatModel(provider)</code></td><td>Only that provider's chat model (<code>fixed</code> selection)</td></tr>
+                <tr><td><code>resolveSpringPrimaryChatModel()</code> · <code>resolveSpringPrimaryEmbeddingModel()</code></td><td>The <code>@Primary</code> binding; the single one when only one exists; an exception with several <code>@Primary</code> or none among several</td></tr>
+              </tbody>
+            </table></div>
+          </details>
+          <details>
+            <summary><strong><code>LlmRuntimeBinding</code></strong> — one binding (immutable)</summary>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>Value</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>runtimeId</code></td><td>The key under <code>contexa.llm.bindings</code>, or the bean name without a setting</td></tr>
+                <tr><td><code>beanName</code></td><td>The model bean's name</td></tr>
+                <tr><td><code>provider</code></td><td>The provider (<code>openai</code>, <code>anthropic</code>, <code>ollama</code> and so on)</td></tr>
+                <tr><td><code>modelId</code></td><td>The setting's <code>model-id</code>, otherwise <code>spring.ai.&lt;provider&gt;.…options.model</code>, otherwise the bean name</td></tr>
+                <tr><td><code>aliases</code></td><td>Bean name, runtime ID, model ID and the aliases of the setting</td></tr>
+                <tr><td><code>type</code></td><td><code>CHAT</code> or <code>EMBEDDING</code> (<code>LlmRuntimeType</code>)</td></tr>
+                <tr><td><code>primary</code></td><td>A Spring <code>@Primary</code> bean, or <code>primary: true</code> in the setting</td></tr>
+                <tr><td><code>source</code></td><td><code>configured</code> (made from a setting) or <code>spring</code></td></tr>
+              </tbody>
+            </table></div>
+            <p><code>canonicalId()</code> returns the first of <code>modelId</code> → <code>runtimeId</code> → <code>beanName</code>; <code>matches(selector)</code> tells whether one of the four names is the same.</p>
+          </details>
+          <details>
+            <summary><strong><code>ModelDescriptor</code></strong> — the description of a registered model</summary>
+            <p>A <code>@Data @Builder</code> class. Its values are descriptive and are not used when call options are built.</p>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>Value</th><th>Meaning, default</th></tr></thead>
+              <tbody>
+                <tr><td><code>modelId</code> · <code>displayName</code></td><td>Model ID and display name (both the canonical ID when registered)</td></tr>
+                <tr><td><code>provider</code></td><td>The provider</td></tr>
+                <tr><td><code>tier</code></td><td>1 or 2 when registered as a layer model, otherwise <code>null</code></td></tr>
+                <tr><td><code>version</code></td><td>Version text</td></tr>
+                <tr><td><code>capabilities</code></td><td><code>ModelCapabilities</code>: <code>streaming</code> true; <code>toolCalling</code>, <code>functionCalling</code>, <code>multiModal</code> false; <code>maxTokens</code>, <code>contextWindow</code>, <code>maxOutputTokens</code> 4096</td></tr>
+                <tr><td><code>options</code></td><td><code>ModelOptions</code>: <code>temperature</code> 0.7, <code>topP</code> 0.9, <code>topK</code> null, <code>repetitionPenalty</code> 1.0</td></tr>
+                <tr><td><code>status</code></td><td><code>AVAILABLE</code> (default) or <code>UNAVAILABLE</code> (<code>ModelStatus</code>)</td></tr>
+              </tbody>
+            </table></div>
+            <p><code>supportsAdvancedFeatures()</code> is <code>true</code> when tool calling, function calling or multimodal is on.</p>
+          </details>
+          <details>
+            <summary><strong><code>DynamicModelRegistry</code></strong> — model registration and cache</summary>
+            <p>At start (<code>@PostConstruct</code>) it registers every chat binding of the catalog, then the layer and backup model names under their layer. A layer model name without a binding gets a provider guessed from words in the name (<code>llama</code>, <code>qwen</code>, <code>gemma</code>, <code>mistral</code>, <code>phi</code>, <code>exaone</code>, <code>codellama</code>, <code>deepseek</code> → ollama; <code>claude</code> → anthropic; <code>gpt</code>, <code>o1</code>, <code>davinci</code> → openai; <code>gemini</code>, <code>vertex</code> → gemini; <code>bedrock</code> → bedrock; otherwise <code>spring</code>). The <code>ApplicationContext</code> it receives in the constructor is not used, and the catalog is optional.</p>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>Method</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr><td><code>getModel(modelId)</code></td><td>The model of the binding with that name (cached once made). Without a binding, a copy of the primary chat model; if that fails too, <code>ModelSelectionException</code></td></tr>
+                <tr><td><code>getAllModels()</code></td><td>All registered descriptions (a copy)</td></tr>
+                <tr><td><code>getDescriptor(modelId)</code></td><td>The description only, without making the model</td></tr>
+                <tr><td><code>getModelsByProvider(provider)</code></td><td>That provider's <code>AVAILABLE</code> models (case ignored)</td></tr>
+                <tr><td><code>registerModel(descriptor)</code></td><td>Registers or merges. Existing layer and provider values are kept; the status takes the new value</td></tr>
+                <tr><td><code>refreshModels()</code></td><td>Clears descriptions, cache and aliases, and registers again</td></tr>
+                <tr><td><code>updateModelStatus(modelId, status)</code></td><td>Changes the status</td></tr>
+                <tr><td><code>shutdown()</code></td><td>Clears everything at shutdown (<code>@PreDestroy</code>)</td></tr>
+              </tbody>
+            </table></div>
+          </details>
+          <details>
+            <summary><strong><code>ModelSelectionStrategy</code></strong> — the model selection contract</summary>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>Method</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr><td><code>selectModel(ExecutionContext)</code></td><td>The <code>ChatModel</code> for this call; <code>null</code> when none</td></tr>
+                <tr><td><code>getSupportedModels()</code></td><td>The set of registered model IDs</td></tr>
+                <tr><td><code>isModelAvailable(modelName)</code></td><td>Whether that model can be made now</td></tr>
+              </tbody>
+            </table></div>
+            <p>The default <code>DynamicModelSelectionStrategy</code> takes the registry, <code>TieredLLMProperties</code> and the primary chat model, and <code>getModelCapabilities(modelName)</code> returns a registered model's information (<code>modelId</code>, <code>provider</code>, <code>capabilities</code>, <code>contextWindow</code>, <code>maxTokens</code>, <code>streaming</code>, <code>tier</code>, <code>status</code>), or an empty map for a model that is not registered.</p>
+          </details>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/core/pipeline.html" class="docs-nav-link prev">
+            <a href="llm-orchestrator.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">AI Pipeline</span>
+              <span class="docs-nav-title">Calling an LLM</span>
             </a>
-            <a href="../../../docs/reference/core/rag.html" class="docs-nav-link next">
+            <a href="advisor.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">RAG &amp; Vectors</span>
+              <span class="docs-nav-title">Advisors: Stepping In Before and After an LLM Call</span>
             </a>
           </div>

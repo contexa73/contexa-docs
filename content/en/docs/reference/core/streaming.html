@@ -1,4 +1,4 @@
-﻿<nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">Home</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
@@ -10,498 +10,313 @@
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
             </div>
-            <h1>Streaming</h1>
-            <p class="lead">Contexa provides real-time Server-Sent Events (SSE) streaming for AI responses. The streaming subsystem processes raw LLM chunks, detects protocol markers, extracts structured JSON payloads, and delivers them to clients through two execution paths: the Strategy/Lab path and the direct Pipeline path.</p>
+            <h1>Streaming: AI Answers on the Screen as They Are Written</h1>
+            <p class="lead">How to send the text an AI model writes to the browser sentence by sentence over SSE (Server-Sent Events), followed by a structured JSON result at the end. Covers the server code, the events that really arrive, client code, time limits and troubleshooting.</p>
           </div>
 
-          <!-- Overview: Two Streaming Paths -->
-          <section class="docs-section">
-            <h2 id="overview">Overview: Two Streaming Paths</h2>
-            <p>Streaming supports two execution paths, both producing <code>Flux&lt;ServerSentEvent&lt;String&gt;&gt;</code>:</p>
+          <div class="callout callout-info">
+            <strong>This has nothing to do with the security decision.</strong> Streaming is a way of answering of the general-purpose AI engine that application features call. The security decision (Layer 1 and Layer 2 analysis) is not streamed; the <a href="../architecture/decision-engine.html">decision engine</a> makes it separately.
+          </div>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Path</th><th>Entry Point</th><th>Use When</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><strong>Strategy/Lab</strong></td>
-                  <td><code>streamingService.stream(request, aiProcessor)</code></td>
-                  <td>Full AI Diagnosis Process with routing, audit, and distributed locking</td>
-                </tr>
-                <tr>
-                  <td><strong>Direct Pipeline</strong></td>
-                  <td><code>streamingService.stream(request, pipelineOrchestrator)</code></td>
-                  <td>Simple LLM calls or custom prompts without strategy routing</td>
-                </tr>
-              </tbody>
-            </table></div>
-
-            <p>Both paths share the same streaming protocol, marker detection, and client-side handling.</p>
-          </section>
-
-          <!-- Streaming Architecture -->
-          <section class="docs-section">
-            <h2 id="architecture">Streaming Architecture</h2>
-            <p>The data flow from LLM to client browser:</p>
-
-<svg viewBox="0 0 650 90" width="100%" style="display:block;margin:1.5rem auto;font-family:Inter,system-ui,sans-serif;" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <marker id="sm-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,1.5 L8,5 L0,8.5Z" fill="#94A3B8"/>
-    </marker>
-  </defs>
-  <style>
-    .sm-box{fill:#F8FAFC;stroke:#CBD5E1;stroke-width:1.5;}
-    .sm-box-hi{fill:#EFF6FF;stroke:#3B82F6;stroke-width:2;}
-    .sm-text{fill:#1E293B;font-size:13px;font-weight:700;}
-    .sm-line{stroke:#94A3B8;stroke-width:1.5;fill:none;}
-  </style>
-  <rect x="5" y="20" width="130" height="46" rx="7" class="sm-box"/>
-  <text x="70" y="41" text-anchor="middle" class="sm-text">LLM / Pipeline</text>
-  <text x="70" y="57" text-anchor="middle" class="sm-text">Chunks</text>
-  <rect x="153" y="20" width="120" height="46" rx="7" class="sm-box"/>
-  <text x="213" y="48" text-anchor="middle" class="sm-text">StreamingContext</text>
-  <rect x="291" y="20" width="160" height="46" rx="7" class="sm-box"/>
-  <text x="371" y="41" text-anchor="middle" class="sm-text">SentenceBuffer</text>
-  <text x="371" y="57" text-anchor="middle" class="sm-text">+ Marker State</text>
-  <rect x="469" y="20" width="90" height="46" rx="7" class="sm-box-hi"/>
-  <text x="514" y="48" text-anchor="middle" class="sm-text">SSE Events</text>
-  <rect x="577" y="20" width="68" height="46" rx="7" class="sm-box"/>
-  <text x="611" y="41" text-anchor="middle" class="sm-text">Client</text>
-  <text x="611" y="57" text-anchor="middle" class="sm-text">Browser</text>
-  <line x1="135" y1="43" x2="151" y2="43" class="sm-line" marker-end="url(#sm-arr)"/>
-  <line x1="273" y1="43" x2="289" y2="43" class="sm-line" marker-end="url(#sm-arr)"/>
-  <line x1="451" y1="43" x2="467" y2="43" class="sm-line" marker-end="url(#sm-arr)"/>
-  <line x1="559" y1="43" x2="575" y2="43" class="sm-line" marker-end="url(#sm-arr)"/>
-</svg>
-
-            <p>The <code>DefaultStandardStreamingService</code> orchestrates the SSE path:</p>
-            <ol>
-              <li>Calls <code>AICoreOperations.processStream()</code> or <code>PipelineOrchestrator.executeStream()</code> to get a <code>Flux&lt;String&gt;</code> of raw chunks and protocol markers</li>
-              <li>Appends chunks into <code>StreamingContext</code>, which keeps track of final-response markers and sentence buffering state</li>
-              <li>Narrative text is emitted progressively through <code>SentenceBuffer</code></li>
-              <li>If upstream emits <code>###GENERATING_RESULT###</code>, the service forwards it immediately to the SSE client</li>
-              <li>When accumulated data contains <code>###FINAL_RESPONSE###</code>, the service extracts that structured tail and emits it as the final SSE payload</li>
-              <li>Each outbound item is wrapped in a <code>ServerSentEvent</code> for delivery</li>
+          <h2 id="overview">What you get</h2>
+          <p>While the model analyzes, sentences appear on the screen one by one, and when the analysis ends the result JSON arrives in one piece. On the server, the controller only has to return the <code>Flux&lt;ServerSentEvent&lt;String&gt;&gt;</code> that <code>StandardStreamingService</code> gives back.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The order of events the browser receives</strong>Sentence events arrive many times; the others arrive once each.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor dg-request">Browser</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-host">Your controller</span><span class="dg-msg-text">POST request (<code>Accept: text/event-stream</code>)</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">Browser</span><span class="dg-msg-text">Analysis sentences (text without a marker), one event per sentence</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">Browser</span><span class="dg-msg-text"><code>###GENERATING_RESULT###</code>: the result JSON is being made now</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">Browser</span><span class="dg-msg-text"><code>###FINAL_RESPONSE###{…}</code>: the final JSON</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">Browser</span><span class="dg-msg-text"><code>[DONE]</code>: the end</span></li>
             </ol>
+          </figure>
 
-            <div class="callout callout-info">
-              <strong>Processor split</strong><br>
-              <code>JsonStreamingProcessor</code> still exists in the OSS core and is used by <code>DefaultStreamingHandler</code> when <code>UnifiedLLMOrchestrator.stream()</code> is called directly. The SSE service path documented on this page uses <code>StreamingContext</code> and <code>SentenceBuffer</code> to package the already-streaming chunk flow into browser-friendly events.
-            </div>
-          </section>
+          <h2 id="paths">Two paths and what they need</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Path</th><th>Method to call</th><th>What it needs</th><th>Lock and audit line</th></tr></thead>
+            <tbody>
+              <tr><td>Strategy path</td><td><code>streamingService.stream(request, aiProcessor)</code></td><td>Both the Strategy and the Lab return <code>true</code> from <code>supportsStreaming()</code>, the Lab's <code>doProcessStream()</code> calls the pipeline with a streaming configuration, and a streaming template</td><td>Yes (a second concurrent stream of the same request is refused; one start line is logged)</td></tr>
+              <tr><td>Direct pipeline</td><td><code>streamingService.stream(request, pipelineOrchestrator)</code></td><td>A streaming template (a bean with the same name as the request's template type). No Strategy or Lab needed</td><td>No</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>Both paths need the <code>StandardStreamingService</code> bean (<code>contexa.streaming.enabled</code>, on by default) and a Spring AI chat model.</li>
+            <li>Both paths use the same streaming pipeline (retrieval → preprocessing → prompt → model call) and the same event format.</li>
+            <li>Calling a Lab's <code>processStream()</code> or <code>PipelineOrchestrator.executeStream()</code> directly gives a flow of raw chunks (<code>Flux&lt;String&gt;</code>) not packaged as SSE. Grouping into sentences, <code>[DONE]</code> and the 5-minute limit are done by <code>StandardStreamingService</code>.</li>
+          </ul>
 
-          <!-- Streaming Protocol & Markers -->
-          <section class="docs-section">
-            <h2 id="streaming-protocol">Streaming Protocol &amp; Markers</h2>
-            <p>The streaming pipeline uses a marker-based protocol within the LLM output to separate narrative text from structured JSON:</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Constant</th><th>Value</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>STREAMING_MARKER</code></td><td><code>###STREAMING###</code></td><td>Prefixes narrative text chunks for progressive client display.</td></tr>
-                <tr><td><code>GENERATING_RESULT_MARKER</code></td><td><code>###GENERATING_RESULT###</code></td><td>Sent when JSON_START is detected. Signals that analysis text is complete and result generation has begun.</td></tr>
-                <tr><td><code>JSON_START_MARKER</code></td><td><code>===JSON_START===</code></td><td>Signals the beginning of a JSON payload in the stream.</td></tr>
-                <tr><td><code>JSON_END_MARKER</code></td><td><code>===JSON_END===</code></td><td>Signals the end of a JSON payload in the stream.</td></tr>
-                <tr><td><code>FINAL_RESPONSE_MARKER</code></td><td><code>###FINAL_RESPONSE###</code></td><td>Prefixes the final complete JSON response after extraction.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Streaming Output Sequence</h3>
-            <p>A typical streaming session produces events in this order:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">SSE Events</span>
-              </div>
-              <pre><code>###STREAMING###Based on the user's preferences for...
-###STREAMING###lightweight and portable devices, I recommend...
-###STREAMING###the following products:
-###GENERATING_RESULT###
-###FINAL_RESPONSE###{"recommendations":[...],"confidence":0.88,"reasoning":"..."}</code></pre>
-            </div>
-          </section>
-
-          <!-- Server-Side Implementation -->
-          <section class="docs-section">
-            <h2 id="server-side">Server-Side Implementation</h2>
-
-            <h3>Strategy/Lab Path (Full AI Diagnosis Process)</h3>
-            <p>Uses <code>AINativeProcessor</code> for routing, distributed locking, and audit logging:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@RestController
-public class MyAiController {
-
-    private final StandardStreamingService streamingService;
-    private final AINativeProcessor&lt;MyContext&gt; aiProcessor;
-
-    // Standard (non-streaming) response
-    @PostMapping("/api/analyze")
-    public Mono&lt;MyResponse&gt; analyze(@RequestBody AnalysisInput body) {
-        AIRequest&lt;MyContext&gt; request = buildRequest(body,
-            "MY_TEMPLATE");
-        return streamingService.process(
-            request, aiProcessor, MyResponse.class);
-    }
-
-    // SSE streaming response
-    @PostMapping(value = "/api/analyze/stream",
-        produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux&lt;ServerSentEvent&lt;String&gt;&gt; analyzeStream(
-            @RequestBody AnalysisInput body) {
-        AIRequest&lt;MyContext&gt; request = buildRequest(body,
-            "MY_TEMPLATE_STREAMING");
-        return streamingService.stream(request, aiProcessor);
-    }
+          <h2 id="server-side">Server code</h2>
+          <h3 id="server-controller">Controller (Strategy path)</h3>
+          <p>Use the streaming template's name as the template type when you build the request. The full example (context, response type, templates, Lab, Strategy) is in <a href="strategy.html">Build a Custom AI Feature</a>.</p>
+          <pre><code class="language-java">@PostMapping(value = "/api/recommend/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+public Flux&lt;ServerSentEvent&lt;String&gt;&gt; recommendStream(@RequestBody RecommendInput body) {
+    AIRequest&lt;ProductContext&gt; request = new AIRequest&lt;&gt;(
+            new ProductContext(body.productId(), body.category(), body.preferences()),
+            new TemplateType("PRODUCT_RECOMMENDATION_STREAMING"),
+            new DiagnosisType("PRODUCT_RECOMMENDATION"));
+    return streamingService.stream(request, aiProcessor);   // aiProcessor: AICoreOperations&lt;ProductContext&gt;
 }</code></pre>
-            </div>
 
-            <h3>Direct Pipeline Path (Simple LLM Calls)</h3>
-            <p>Bypasses the Strategy/Lab layer for simpler use cases:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@PostMapping(value = "/api/chat/stream",
-    produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-public Flux&lt;ServerSentEvent&lt;String&gt;&gt; chatStream(
-        @RequestBody ChatInput body) {
-    AIRequest&lt;ChatContext&gt; request = buildChatRequest(body);
-    return streamingService.stream(
-        request, pipelineOrchestrator);
+          <h3 id="server-direct">Direct pipeline</h3>
+          <p>For a feature that one template can answer without a Strategy or Lab. It runs with the default streaming configuration (four steps). The diagnosis type is not used, but <code>AIRequest</code> does not accept <code>null</code>, so put in any name.</p>
+          <pre><code class="language-java">@PostMapping(value = "/api/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+public Flux&lt;ServerSentEvent&lt;String&gt;&gt; chatStream(@RequestBody ChatInput body) {
+    AIRequest&lt;ChatContext&gt; request = new AIRequest&lt;&gt;(
+            new ChatContext(body.message()),
+            new TemplateType("CHAT_STREAMING"),   // a streaming template bean with this name must exist
+            new DiagnosisType("CHAT"));           // not used, but must not be null
+    request.withParameter("naturalLanguageQuery", body.message());
+    return streamingService.stream(request, pipelineOrchestrator);
 }</code></pre>
-            </div>
 
-            <h3>Lab Streaming Implementation</h3>
-            <p>In your Lab's <code>doProcessStream()</code>, configure the pipeline for streaming and call <code>orchestrator.executeStream()</code>:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Override
-protected Flux&lt;String&gt; doProcessStream(MyRequest request) {
-    AIRequest&lt;MyContext&gt; aiRequest =
-        buildAIRequest(request, "MY_TEMPLATE_STREAMING");
-
-    PipelineConfiguration config = PipelineConfiguration.builder()
-        .addStep(PipelineConfiguration.PipelineStep.CONTEXT_RETRIEVAL)
-        .addStep(PipelineConfiguration.PipelineStep.PREPROCESSING)
-        .addStep(PipelineConfiguration.PipelineStep.PROMPT_GENERATION)
-        .addStep(PipelineConfiguration.PipelineStep.LLM_EXECUTION)
-        .enableStreaming(true)
-        .timeoutSeconds(120)
-        .build();
-
-    return orchestrator.executeStream(aiRequest, config);
-}</code></pre>
-            </div>
-
-            <h3>Error Streaming</h3>
-            <p><code>StandardStreamingService</code> provides an error stream for validation failures:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">if (body.getQuery() == null || body.getQuery().isBlank()) {
-    return streamingService.errorStream(
-        "VALIDATION_ERROR", "Query is required");
-}</code></pre>
-            </div>
-          </section>
-
-          <!-- Client-Side Integration -->
-          <section class="docs-section">
-            <h2 id="client-side">Client-Side Integration</h2>
-            <p>The client receives SSE events and needs to handle the streaming protocol markers. Here is a complete JavaScript implementation using <code>fetch</code> + <code>ReadableStream</code>:</p>
-
-            <h3>Streaming Client</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">JavaScript</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-javascript">function streamRequest(url, requestData, callbacks) {
-    fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestData)
-    }).then(function(response) {
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-
-        var reader = response.body.getReader();
-        var decoder = new TextDecoder();
-        var buffer = '';
-
-        function processStream() {
-            reader.read().then(function(result) {
-                if (result.done) {
-                    if (callbacks.onComplete) callbacks.onComplete();
-                    return;
-                }
-
-                buffer += decoder.decode(result.value, { stream: true });
-                var lines = buffer.split('\n');
-                buffer = lines.pop(); // Keep incomplete line
-
-                lines.forEach(function(line) {
-                    if (!line.startsWith('data:')) return;
-                    var data = line.substring(5).trim();
-                    if (!data || data === '') return;
-
-                    handleStreamEvent(data, callbacks);
-                });
-
-                processStream(); // Continue reading
-            });
-        }
-
-        processStream();
-    }).catch(function(err) {
-        if (callbacks.onError) callbacks.onError(err.message);
-    });
+          <h3 id="server-lab">Streaming in the Lab</h3>
+          <p>On the Strategy path, the Lab must turn streaming on and call the pipeline with a streaming configuration. Without overriding <code>supportsStreaming()</code>, <code>processStream()</code> fails immediately.</p>
+          <pre><code class="language-java">@Override
+public boolean supportsStreaming() {
+    return true;
 }
 
-function handleStreamEvent(data, callbacks) {
-    if (data.startsWith('###STREAMING###')) {
-        // Progressive text chunk - display immediately
-        var text = data.substring('###STREAMING###'.length);
-        if (callbacks.onChunk) callbacks.onChunk(text);
-
-    } else if (data.startsWith('###GENERATING_RESULT###')) {
-        // Analysis complete, generating structured result
-        if (callbacks.onGenerating) callbacks.onGenerating();
-
-    } else if (data.startsWith('###FINAL_RESPONSE###')) {
-        // Final structured JSON response
-        var json = data.substring('###FINAL_RESPONSE###'.length);
-        if (callbacks.onFinalResponse) callbacks.onFinalResponse(json);
-
-    } else if (data === '[DONE]') {
-        // Stream complete
-        if (callbacks.onComplete) callbacks.onComplete();
-
-    } else if (data.startsWith('ERROR:')) {
-        // Error event
-        if (callbacks.onError) callbacks.onError(data);
-    }
+@Override
+protected Flux&lt;String&gt; doProcessStream(AIRequest&lt;ProductContext&gt; request) {
+    return orchestrator.executeStream(request, PipelineConfiguration.createStreamPipelineConfig());
 }</code></pre>
-            </div>
+          <p>In the Strategy too, override <code>supportsStreaming()</code> to return <code>true</code> and make <code>processLabExecutionStream()</code> call the Lab's <code>processStream()</code> (<a href="strategy.html#step-4">Building the Strategy</a>).</p>
 
-            <h3>Usage Example</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">JavaScript</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-javascript">var outputEl = document.getElementById('output');
-var fullText = '';
+          <h3 id="server-error">Reporting an input error right away</h3>
+          <p>If the input is wrong before you call the pipeline, you can return a stream made of one error event.</p>
+          <pre><code class="language-java">if (body.category() == null) {
+    return streamingService.errorStream("VALIDATION_ERROR", "category is required");
+}</code></pre>
+          <p>The browser receives one event, <code>ERROR: {"error":{"code":"VALIDATION_ERROR","message":"category is required"}}</code>, with no <code>[DONE]</code> after it.</p>
 
-streamRequest('/api/analyze/stream', { query: 'Analyze this...' }, {
-    onChunk: function(text) {
-        // Append text progressively
-        fullText += text;
-        outputEl.textContent = fullText;
-    },
-    onGenerating: function() {
-        // Show "generating result..." indicator
-        outputEl.textContent += '\n\nGenerating structured result...';
-    },
-    onFinalResponse: function(json) {
-        // Parse and display structured result
-        try {
-            var result = JSON.parse(json);
-            displayResult(result);
-        } catch (e) {
-            outputEl.textContent = fullText; // Keep streamed text
-        }
-    },
-    onComplete: function() {
-        // Re-enable UI controls
-        setButtonsEnabled(true);
-    },
-    onError: function(err) {
-        outputEl.textContent = 'Error: ' + err;
-        setButtonsEnabled(true);
+          <h2 id="streaming-protocol">The events that really arrive</h2>
+          <p>Received as is, the product recommendation stream looks like this (a blank line between events).</p>
+          <pre><code class="language-text">data:사용자는 가볍고 배터리가 오래가는 노트북을 찾고 있습니다.
+
+data:무게와 배터리 시간을 기준으로 노트북 후보를 비교했습니다.
+
+data:###GENERATING_RESULT###
+
+data:###FINAL_RESPONSE###{ "recommendations": [ { "productName": "…", "reason": "…", "score": 0.92 } ], "confidence": 0.88, "reasoning": "…" }
+
+data:[DONE]</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Data</th><th>Meaning</th><th>What the client does</th></tr></thead>
+            <tbody>
+              <tr><td>Text without a marker</td><td>The model's analysis, grouped into sentences</td><td>Append it to the screen</td></tr>
+              <tr><td><code>###GENERATING_RESULT###</code></td><td>The narration ended and the model started writing the result JSON</td><td>Show "making the result"</td></tr>
+              <tr><td><code>###FINAL_RESPONSE###</code> + JSON</td><td>The final result. Arrives in one piece after the model's stream ends</td><td>Remove the marker and read it as JSON</td></tr>
+              <tr><td><code>[DONE]</code></td><td>Normal end</td><td>Finish the screen</td></tr>
+              <tr><td>Starts with <code>ERROR:</code></td><td>An error (formats in <a href="#troubleshooting">Troubleshooting</a>)</td><td>Show the error and stop</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>Line breaks inside the data become spaces.</strong> So one event is always a single <code>data:</code> line. Line breaks in the final JSON also become spaces, which does not affect reading it as JSON.</li>
+            <li><strong>The narration is in Korean.</strong> A streaming template tells the model to write its narration in Korean only (<a href="strategy.html#streaming-template">Streaming template</a>).</li>
+            <li><strong>If the model ends without <code>===JSON_END===</code>,</strong> the collected JSON has its brackets balanced and is sent as the final result.</li>
+            <li><strong>Text after the final result marker is not sent.</strong> Narration still waiting in the buffer is dropped too.</li>
+          </ul>
+
+          <h3 id="markers">The five markers</h3>
+          <p>The markers are constants in <code>StreamingProtocol</code>. Three are used only inside the server and never reach the browser.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Constant</th><th>Value</th><th>Where it is used</th><th>Reaches the browser</th></tr></thead>
+            <tbody>
+              <tr><td><code>JSON_START_MARKER</code></td><td><code>===JSON_START===</code></td><td>The model writes it before the result JSON (the template tells it to)</td><td>No</td></tr>
+              <tr><td><code>JSON_END_MARKER</code></td><td><code>===JSON_END===</code></td><td>The model writes it after the result JSON</td><td>No</td></tr>
+              <tr><td><code>STREAMING_MARKER</code></td><td><code>###STREAMING###</code></td><td>Added to narration chunks inside the server and removed before sending</td><td>No</td></tr>
+              <tr><td><code>GENERATING_RESULT_MARKER</code></td><td><code>###GENERATING_RESULT###</code></td><td>Emitted when <code>===JSON_START===</code> is found in the model's text</td><td>Yes</td></tr>
+              <tr><td><code>FINAL_RESPONSE_MARKER</code></td><td><code>###FINAL_RESPONSE###</code></td><td>Put in front of the final JSON</td><td>Yes</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="client-side">Client code</h2>
+          <p>To receive a stream from a POST, read the response body with the browser's <code>fetch</code>. The key point is that <strong>data without a marker is a body sentence</strong>. Check in this order: <code>[DONE]</code> → <code>ERROR:</code> → final result → result-generation notice → sentence.</p>
+          <h3 id="client-code">Reading the stream</h3>
+          <pre><code class="language-javascript">const FINAL = '###FINAL_RESPONSE###';
+const GENERATING = '###GENERATING_RESULT###';
+
+async function streamRequest(url, body, callbacks) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    callbacks.onError?.('HTTP ' + response.status);
+    return;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();                      // the last line may not have fully arrived yet
+    for (const line of lines) {
+      if (!line.startsWith('data:')) continue;
+      const data = line.substring(5).trim();
+      if (data &amp;&amp; handleEvent(data, callbacks)) return;   // stop at [DONE] or an error
     }
-});</code></pre>
-            </div>
+  }
+  callbacks.onComplete?.();
+}
 
-            <div class="callout callout-info">
-              <strong>OSS Client Scope</strong><br>
-              The OSS core documents the streaming protocol and server-side contracts, but it does not ship a bundled browser client such as <code>contexa-streaming.js</code>. Implement the SSE client in your own frontend or reuse the protocol markers shown above.
-            </div>
-          </section>
+// Returns true when the stream has ended
+function handleEvent(data, callbacks) {
+  if (data === '[DONE]') {
+    callbacks.onComplete?.();
+    return true;
+  }
+  if (data.startsWith('ERROR:')) {
+    callbacks.onError?.(data.substring(6).trim());
+    return true;
+  }
+  if (data.startsWith(FINAL)) {
+    callbacks.onFinalResponse?.(data.substring(FINAL.length));
+    return false;
+  }
+  if (data === GENERATING) {
+    callbacks.onGenerating?.();
+    return false;
+  }
+  callbacks.onChunk?.(data);                   // data without a marker = a body sentence
+  return false;
+}</code></pre>
+          <h3 id="client-usage">Putting it on the screen</h3>
+          <pre><code class="language-javascript">const output = document.getElementById('output');
+let text = '';
 
-          <!-- Configuration -->
-          <section class="docs-section">
-            <h2 id="configuration">Configuration</h2>
+streamRequest('/api/recommend/stream',
+  { productId: 'P-100', category: 'laptop', preferences: ['light', 'long battery'] },
+  {
+    onChunk: (sentence) =&gt; { text += sentence + ' '; output.textContent = text; },
+    onGenerating: () =&gt; { output.textContent = text + '\nMaking the result…'; },
+    onFinalResponse: (json) =&gt; {
+      try { renderResult(JSON.parse(json)); }    // renderResult is your screen code (example)
+      catch (e) { output.textContent = text; }   // keep only the narration if the JSON is broken
+    },
+    onComplete: () =&gt; setBusy(false),           // setBusy is your screen code (example)
+    onError: (message) =&gt; { output.textContent = 'Error: ' + message; setBusy(false); }
+  });</code></pre>
+          <div class="callout callout-info">
+            <strong>The OSS core does not ship a browser streaming client.</strong> Read the stream in your own screens as above. The Contexa IAM admin console contains a client for its own screens (contexa-llm.bundle.js), but it is not a public API. That client also treats data without a marker as body text.
+          </div>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Description</th><th>Default</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.streaming.final-response-marker</code></td><td>Marker used to locate the final structured payload in the aggregated stream</td><td><code>###FINAL_RESPONSE###</code></td></tr>
-                <tr><td><code>contexa.streaming.streaming-marker</code></td><td>Prefix used for progressive narrative text chunks</td><td><code>###STREAMING###</code></td></tr>
-                <tr><td><code>contexa.streaming.json-start-marker</code></td><td>Marker used by JSON chunk processors when raw model output starts a structured payload</td><td><code>===JSON_START===</code></td></tr>
-                <tr><td><code>contexa.streaming.json-end-marker</code></td><td>Marker used by JSON chunk processors when raw model output ends a structured payload</td><td><code>===JSON_END===</code></td></tr>
-                <tr><td><code>contexa.streaming.timeout</code></td><td>Maximum duration for a streaming session before timeout handling applies</td><td><code>PT5M</code></td></tr>
-                <tr><td><code>contexa.streaming.max-retries</code></td><td>Maximum retry count exposed on <code>StreamingProperties</code></td><td>3</td></tr>
-                <tr><td><code>contexa.streaming.retry-delay</code></td><td>Initial retry delay exposed on <code>StreamingProperties</code></td><td><code>PT1S</code></td></tr>
-                <tr><td><code>contexa.streaming.retry-multiplier</code></td><td>Retry backoff multiplier exposed on <code>StreamingProperties</code></td><td>1.5</td></tr>
-                <tr><td><code>contexa.streaming.marker-buffer-size</code></td><td>Additional tail buffer retained while scanning for final-response markers</td><td>100</td></tr>
-                <tr><td><code>contexa.streaming.sentence-buffering-enabled</code></td><td>Controls sentence-level buffering before partial chunks are emitted</td><td>true</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="architecture">How it flows inside</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>From the model's text to browser events</strong>It flows from top to bottom. When the client disconnects, the pipeline subscription is cancelled too.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-model"><span class="dg-node-tag">AI model</span><span class="dg-node-title">Narration → JSON</span><span class="dg-node-desc">Writes Korean narration, then JSON between <code>===JSON_START===</code> … <code>===JSON_END===</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">JSON streaming processor (<code>JsonStreamingProcessor</code>)</span><span class="dg-node-desc">Adds <code>###STREAMING###</code> to narration chunks, emits <code>###GENERATING_RESULT###</code> when the JSON starts, and <code>###FINAL_RESPONSE###{json}</code> once the JSON is complete</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">Streaming model call step (<code>StreamingLLMExecutionStep</code>)</span><span class="dg-node-desc">Removes the <code>###STREAMING###</code> marker and passes the chunks to the streaming executor</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">Streaming service (<code>StandardStreamingService</code>)</span><span class="dg-node-desc">Groups the narration into sentences, sends the final JSON in one piece after the stream ends, turns line breaks into spaces, and adds <code>[DONE]</code> at the end</span></li>
+              <li class="dg-node dg-request"><span class="dg-node-tag">Browser</span><span class="dg-node-title">SSE events</span></li>
+            </ol>
+          </figure>
+          <p>The registered advisors (<code>BaseAdvisor</code> beans) are attached to the model call. In streaming, a blocking error raised by an advisor before the model call does not stop it; only that advisor is skipped (<a href="advisor.html#order-errors">advisor error handling</a>).</p>
+          <p>The rules of sentence grouping (<code>SentenceBuffer</code>):</p>
+          <ul>
+            <li>When a line ends with a period, exclamation mark, question mark or a Korean sentence ending (<code>습니다.</code>, <code>입니다.</code>, <code>다.</code>, <code>요.</code> and so on), it is sent as one sentence.</li>
+            <li>If no sentence end is found and the text passes 200 characters, what has been collected so far is sent. Text left at the end of the stream is sent too.</li>
+            <li>Chunks that look like JSON (containing <code>```json</code> or <code>===JSON</code>, or starting with <code>{"</code>) are not sent.</li>
+            <li>The <code>#</code> sign (markdown headings) and control characters are removed, and pieces shorter than 3 characters or made only of punctuation are dropped.</li>
+          </ul>
 
-            <div class="callout callout-info">
-              <strong>Full Configuration Reference</strong><br>
-              See <a href="../../../docs/install/configuration/ai.html">AI Configuration</a> for all streaming properties.
-            </div>
-          </section>
+          <h2 id="timeouts">Time limits</h2>
+          <ul>
+            <li><strong>5 minutes between events:</strong> if no event leaves for the browser within 5 minutes of the previous one (for the first event, of the start), <code>StandardStreamingService</code> ends the stream and sends <code>ERROR: {"error":{"code":"TIMEOUT","message":"Request timed out"}}</code>. This also applies when finishing the result JSON after the narration takes more than 5 minutes.</li>
+            <li><strong>No setting changes it.</strong> These 5 minutes are a constant fixed in code (<code>contexa.streaming.timeout</code> is not read).</li>
+            <li><strong>The model stream itself has no limit and no retry.</strong> The 60-second per-call limit and the up-to-4 retries of a standard call (<a href="llm-orchestrator.html#retry">Retries</a>) are not used for streaming. If you call <code>executeStream()</code> directly, there is no 5-minute limit either.</li>
+          </ul>
 
-          <!-- API Reference (collapsible) -->
-          <section class="docs-section">
-            <h2 id="api-reference">API Reference</h2>
+          <h2 id="configuration">Settings</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.streaming.enabled</code></td><td><code>true</code></td><td>Creates the <code>StandardStreamingService</code> bean</td><td>Turn it off only when you build all SSE yourself</td></tr>
+              <tr><td><code>contexa.streaming.final-response-marker</code></td><td><code>###FINAL_RESPONSE###</code></td><td>The marker the streaming service looks for to find the final JSON</td><td>Do not change it. The JSON processor emits the constant marker, so with a different value no final result event comes out</td></tr>
+              <tr><td><code>contexa.streaming.marker-buffer-size</code></td><td><code>100</code></td><td>How many extra characters are held to find a final marker split across chunks</td><td>Usually no need to change it</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>Some settings appear in auto-completion but have no effect.</strong> <code>contexa.streaming.timeout</code>, <code>contexa.streaming.streaming-marker</code>, <code>contexa.streaming.json-start-marker</code>, <code>contexa.streaming.json-end-marker</code>, <code>contexa.streaming.max-retries</code>, <code>contexa.streaming.retry-delay</code>, <code>contexa.streaming.retry-multiplier</code> and <code>contexa.streaming.sentence-buffering-enabled</code> exist only in the settings class; no code reads them. The time limit is fixed at 5 minutes, the markers are constants, sentence grouping is always on, and streaming does not retry.
+          </div>
 
-            <details>
-              <summary><strong>StandardStreamingService</strong></summary>
-              <div class="api-signature">
-                <code>public interface StandardStreamingService</code>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">stream(AIRequest&lt;C&gt; request, AICoreOperations&lt;C&gt; aiProcessor)</span>
-                  <span class="api-method-return">Flux&lt;ServerSentEvent&lt;String&gt;&gt;</span>
-                </div>
-                <div class="api-method-desc">Strategy/Lab streaming path via <code>AICoreOperations.processStream()</code>.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">stream(AIRequest&lt;C&gt; request, PipelineOrchestrator pipelineOrchestrator)</span>
-                  <span class="api-method-return">Flux&lt;ServerSentEvent&lt;String&gt;&gt;</span>
-                </div>
-                <div class="api-method-desc">Direct pipeline streaming path.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">process(AIRequest&lt;C&gt; request, AICoreOperations&lt;C&gt; aiProcessor, Class&lt;R&gt; responseType)</span>
-                  <span class="api-method-return">Mono&lt;R&gt;</span>
-                </div>
-                <div class="api-method-desc">Non-streaming single response via Strategy/Lab path.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">process(AIRequest&lt;C&gt; request, PipelineOrchestrator orchestrator, Class&lt;R&gt; responseType)</span>
-                  <span class="api-method-return">Mono&lt;R&gt;</span>
-                </div>
-                <div class="api-method-desc">Non-streaming single response via pipeline path.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">errorStream(String errorCode, String message)</span>
-                  <span class="api-method-return">Flux&lt;ServerSentEvent&lt;String&gt;&gt;</span>
-                </div>
-                <div class="api-method-desc">Creates an SSE error stream with JSON error payload.</div>
-              </div>
-            </details>
+          <p>Other AI settings, such as model connection, are in <a href="../../install/configuration/ai.html">AI model configuration</a>.</p>
 
-            <details>
-              <summary><strong>StreamingProtocol Constants</strong></summary>
-              <div class="api-signature">
-                <code>public final class StreamingProtocol</code>
-              </div>
-              <div class="table-scroll"><table class="api-table">
-                <thead>
-                  <tr><th>Constant</th><th>Value</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td><code>STREAMING_MARKER</code></td><td><code>###STREAMING###</code></td></tr>
-                  <tr><td><code>FINAL_RESPONSE_MARKER</code></td><td><code>###FINAL_RESPONSE###</code></td></tr>
-                  <tr><td><code>JSON_START_MARKER</code></td><td><code>===JSON_START===</code></td></tr>
-                  <tr><td><code>JSON_END_MARKER</code></td><td><code>===JSON_END===</code></td></tr>
-                  <tr><td><code>GENERATING_RESULT_MARKER</code></td><td><code>###GENERATING_RESULT###</code></td></tr>
-                </tbody>
-              </table></div>
-            </details>
+          <h2 id="troubleshooting">Checks and troubleshooting</h2>
+          <p>To watch the events without buffering, use <code>curl -N</code> (adjust the address to your application).</p>
+          <pre><code class="language-text">curl -N -X POST http://localhost:8080/api/recommend/stream \
+  -H "Content-Type: application/json" \
+  -d '{"productId":"P-100","category":"laptop","preferences":["light","long battery"]}'</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What you see</th><th>Cause</th><th>What to do</th></tr></thead>
+            <tbody>
+              <tr><td><code>ERROR: {"error":{"code":"AI_OPERATION_ERROR","message":"Streaming strategic operation failed: …"}}</code>, no <code>[DONE]</code></td><td>An error outside the pipeline on the Strategy path: no Strategy found, the Strategy's or Lab's <code>supportsStreaming()</code> is <code>false</code>, an input check failed, and so on</td><td>Find the cause in the server log</td></tr>
+              <tr><td><code>ERROR: {"error":{"code":"AI_OPERATION_ERROR","message":"Strategic streaming operation conflict: …"}}</code></td><td>Exactly the same request is already streaming (the Strategy path's lock)</td><td>Fill in the user and session in the context, or send again after the earlier stream ends</td></tr>
+              <tr><td><code>ERROR: Template matching failed</code> followed by <code>[DONE]</code></td><td>An error inside the pipeline arrives as text <code>ERROR: cause</code> followed by <code>[DONE]</code>. This one means no streaming template bean has the same name as the template type</td><td>Match the template's <code>getSupportedType()</code> name</td></tr>
+              <tr><td><code>ERROR: {"error":{"code":"TIMEOUT","message":"Request timed out"}}</code></td><td>More than 5 minutes passed between events</td><td>Use a faster model or a smaller result JSON</td></tr>
+              <tr><td>Only sentences arrive, no final result</td><td>The model did not write the JSON markers</td><td>Check the streaming template's JSON example and the model</td></tr>
+              <tr><td>The model or temperature put in the request is not applied</td><td>Streaming does not use request parameters and uses the default chat model</td><td>Use a standard call when you need to choose the model</td></tr>
+            </tbody>
+          </table></div>
+          <p>The error code follows the causing exception: <code>AI_OPERATION_ERROR</code> (AI processing error), <code>TIMEOUT</code> (timed out), <code>INVALID_REQUEST</code> (invalid argument), and <code>INTERNAL_ERROR</code> for anything else (message "An unexpected error occurred"). When the browser disconnects, the server's pipeline subscription is cancelled too.</p>
 
-            <details>
-              <summary><strong>ChunkProcessor Interface</strong></summary>
-              <div class="api-signature">
-                <code>public interface ChunkProcessor</code>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">process(Flux&lt;String&gt; upstream)</span>
-                  <span class="api-method-return">Flux&lt;String&gt;</span>
-                </div>
-                <div class="api-method-desc">Processes the upstream flux of raw chunks and returns transformed output.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">getProcessorType()</span>
-                  <span class="api-method-return">String</span>
-                </div>
-                <div class="api-method-desc">Returns a string identifier for this processor.</div>
-              </div>
-              <p>Built-in: <code>JsonStreamingProcessor</code> handles JSON extraction with protocol markers and includes JSON repair logic for incomplete LLM output.</p>
-            </details>
-          </section>
+          <h2 id="customization">Changing it yourself</h2>
+          <ul>
+            <li><strong>Replacing the streaming service:</strong> provide your own <code>StandardStreamingService</code> bean and it is used instead of the default implementation.</li>
+            <li><strong>Building your own SSE:</strong> create a <code>StreamingContext</code> with the injected <code>StreamingProperties</code>, collect chunks with <code>appendChunk()</code>, and use <code>isFinalResponseStarted()</code>, <code>getSentenceBuffer()</code> and <code>extractJsonPart()</code> to do what the default service does.</li>
+          </ul>
 
-          <!-- Related -->
-          <section class="docs-section">
-            <h2 id="related">Related</h2>
-            <div class="related-links">
-              <div class="related-links-grid">
-                <a href="../../../docs/reference/core/strategy.html" class="related-link-card">
-                  <h3>Building Custom AI</h3>
-                  <p>End-to-end guide including streaming Lab and Controller implementation.</p>
-                </a>
-                <a href="../../../docs/reference/core/pipeline.html" class="related-link-card">
-                  <h3>Pipeline &amp; RAG</h3>
-                  <p>Standard vs streaming pipeline configuration and the PipelineOrchestrator used as a streaming path.</p>
-                </a>
-              </div>
-            </div>
-          </section>
+          <h2 id="api-reference">API summary</h2>
+          <h3 id="api-service">StandardStreamingService</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Method</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>stream(AIRequest&lt;C&gt; request, AICoreOperations&lt;C&gt; aiProcessor)</code></td><td>Strategy path streaming (<code>processStream()</code>) → SSE</td></tr>
+              <tr><td><code>stream(AIRequest&lt;C&gt; request, PipelineOrchestrator pipelineOrchestrator)</code></td><td>Direct pipeline streaming (default streaming configuration) → SSE</td></tr>
+              <tr><td><code>process(request, aiProcessor, responseType)</code></td><td>Strategy path standard call (<code>Mono&lt;R&gt;</code>)</td></tr>
+              <tr><td><code>process(request, pipelineOrchestrator, responseType)</code></td><td>Direct pipeline standard call (default standard configuration)</td></tr>
+              <tr><td><code>errorStream(String errorCode, String message)</code></td><td>A stream made of one error event (<code>ERROR: {"error":{…}}</code>)</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="api-chunk">ChunkProcessor and JsonStreamingProcessor</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Method</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>Flux&lt;String&gt; process(Flux&lt;String&gt; upstream)</code></td><td>Takes the flow of raw chunks and returns the transformed flow</td></tr>
+              <tr><td><code>String getProcessorType()</code></td><td>The processor's name (<code>json</code> for <code>JsonStreamingProcessor</code>)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The built-in <code>JsonStreamingProcessor</code> splits narration and JSON by the markers and balances the brackets of JSON that ended without <code>===JSON_END===</code>. The default streaming handler (<code>DefaultStreamingHandler</code>) uses it for every model call.</p>
+          <h3 id="api-context">StreamingContext</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Method</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>StreamingContext(StreamingProperties properties)</code></td><td>Constructor. Creates one sentence buffer</td></tr>
+              <tr><td><code>appendChunk(String chunk)</code></td><td>Collects a chunk and checks whether the final marker has appeared</td></tr>
+              <tr><td><code>isFinalResponseStarted()</code>, <code>extractJsonPart()</code></td><td>Whether the final marker has appeared, and the text from the final marker to the end (<code>null</code> if none)</td></tr>
+              <tr><td><code>getSentenceBuffer()</code></td><td>Sentence grouping (<code>processChunk()</code>, <code>flush()</code>)</td></tr>
+            </tbody>
+          </table></div>
 
+          <h2 id="related">Where to read next</h2>
+          <ul>
+            <li><a href="strategy.html">Build a Custom AI Feature</a>: the full example of streaming template, Lab and Strategy.</li>
+            <li><a href="pipeline.html">Pipeline and RAG</a>: the streaming configuration and executor.</li>
+            <li><a href="overview.html">AI Engine overview</a></li>
+          </ul>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/core/rag.html" class="docs-nav-link prev">
+            <a href="pipeline.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">RAG &amp; Vectors</span>
+              <span class="docs-nav-title">Pipeline and RAG</span>
             </a>
-            <a href="../../../docs/reference/core/advisor.html" class="docs-nav-link next">
+            <a href="llm-orchestrator.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Advisor System</span>
+              <span class="docs-nav-title">Calling an LLM</span>
             </a>
           </div>

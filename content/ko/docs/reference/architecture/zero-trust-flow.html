@@ -1,949 +1,260 @@
-<!-- Breadcrumb -->
-          <nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">홈</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">레퍼런스</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">AI 기반 Zero Trust 파이프라인</span>
+            <span class="breadcrumb-current">요청 하나의 일생</span>
           </nav>
 
-          <!-- Page Header -->
           <div class="docs-page-header">
-            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
-              <span class="badge">contexa-core</span>
-              <span class="badge">contexa-identity</span>
-              <span class="badge">contexa-iam</span>
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-primary">contexa-identity</span>
+              <span class="badge badge-primary">contexa-iam</span>
             </div>
-            <h1>AI 기반 Zero Trust 파이프라인</h1>
-            <p class="lead">Spring Security는 <em>누구인지</em>를 결정합니다. Contexa의 AI는 <em>다음에 무엇을 할 수 있는지</em>를 결정합니다 &mdash; 행동 컨텍스트를 기반으로, 지속적으로. 규칙을 작성할 필요가 없습니다. 행동이 베이스라인에서 벗어나면 Contexa가 찾아냅니다.</p>
+            <h1>요청 하나의 일생</h1>
+            <p class="lead">요청 하나가 들어와 저장된 판정을 적용받고, 실행된 뒤 분석되어, 그 판정이 다음 요청에 적용되기까지를 차례로 따라갑니다. 판정마다 사용자가 받는 응답, 차단이 퍼지고 풀리는 길, 앱 코드에서 판정을 읽는 방법도 함께 다룹니다.</p>
           </div>
 
-
-          <!-- ============================================ -->
-          <!-- Section 1: 인증 후 사각지대 -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="blind-spot">인증 후 사각지대(Post-Authentication Blind Spot)</h2>
-            <p>기존 보안은 입구에서 멈춥니다. 방화벽, WAF, 로그인 폼은 신원을 확인합니다 — 하지만 세션이 수립되면 내부는 대부분 방어되지 않습니다. 탈취된 자격 증명, 침해된 세션, 밀리초 내에 인증을 통과하는 AI 에이전트 모두가 이 <strong>인증 후 사각지대</strong>를 악용합니다.</p>
-            <p>Contexa는 <strong>Spring Security</strong>와 <strong>Spring AI</strong>를 결합하여 인증 <em>이후</em>의 액션을 모니터링하고 제어하는 통합 제로 트러스트 레이어를 구축합니다 — 로그인 자체만이 아닌.</p>
-
-            <div class="callout-info">
-              <strong>핵심 제어 경로.</strong> 요청 시점 경로는 <code>AISessionSecurityContextRepository.loadDeferredContext(...)</code>, <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code>, <code>ZeroTrustAccessControlFilter.doFilterInternal(...)</code>, <code>ZeroTrustChallengeFilter.doFilterInternal(...)</code>로 이어집니다. 비동기 경로는 <code>ZeroTrustEventPublisher.publishMethodAuthorization(...)</code>, <code>ZeroTrustEventListener.handleZeroTrustEvent(...)</code>, <code>SecurityPlaneAgent</code>, <code>SecurityEventProcessor.process(...)</code>, <code>SecurityDecisionEnforcementHandler.handle(...)</code>로 이어집니다.
+          <h2 id="overview">한눈에 보기</h2>
+          <p>요청 시점에는 <strong>이미 저장된 판정</strong>만 적용합니다. 이 요청에 대한 새 판정은 응답이 나간 뒤 만들어지고, 같은 사용자의 <strong>다음 요청</strong>부터 적용됩니다. 두 일을 잇는 것은 사용자별 판정 저장소 하나입니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>요청 하나의 일생</strong>1~5는 요청을 처리하는 동안, 6~7은 응답이 나간 뒤 일어납니다. 7에서 저장된 판정은 다음 요청의 2에서 읽힙니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node dg-request"><span class="dg-node-title">요청 도착</span><span class="dg-node-desc">로그인한 사용자 또는 에이전트의 요청</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node dg-store"><span class="dg-node-title">저장된 판정 읽기</span><span class="dg-node-desc">이 사용자의 판정(유효 시간이 지났거나 없으면 분석 대기)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">집행</span><span class="dg-node-desc">차단 · 추가 인증 · 검토 보류면 여기서 멈춤(<code>CONTEXA_OWNED</code>는 필터와 보호 메서드, <code>HOST_OWNED</code>는 보호 메서드에서만)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node dg-host"><span class="dg-node-title">실행</span><span class="dg-node-desc">앱 로직과 보호 메서드(<code>@Protectable</code>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">분석 사건 발행</span><span class="dg-node-desc">보호 메서드가 끝난 뒤(<code>finally</code>), 실행 결과와 함께</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">6</span><div class="dg-node dg-model"><span class="dg-node-title">판정</span><span class="dg-node-desc">AI 모델이 1차 분석, 필요하면 2차 분석</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">7</span><div class="dg-node dg-store"><span class="dg-node-title">판정 저장</span><span class="dg-node-desc">집행 모드(<code>ENFORCE</code>)일 때. 차단이면 진행 중 응답을 끊는 신호도 보냄</span></div></li>
+            </ol>
+          </figure>
+          <p><strong>예.</strong> 사용자가 보호 메서드로 보고서를 내보냅니다. 응답은 바로 나가고 뒤에서 분석이 시작됩니다. AI 모델이 차단을 고르면 판정이 저장되고, 그 사용자의 다음 요청은 차단 응답을 받습니다. 모델이 허용을 고르면 그 허용은 같은 세션 · IP · 브라우저에서 15초 동안만 쓰이고, 그 뒤 요청은 다시 분석 대기가 되어 분석됩니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>소유 방식에 따라 다른 3단계</strong>기본값은 <code>HOST_OWNED</code>입니다. 자세한 비교는 개요에 있습니다.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side dg-host"><p class="dg-side-title">앱이 로그인을 맡음(<code>HOST_OWNED</code>, 기본)</p><ul><li>Contexa 필터가 어디에도 없음</li><li>권한을 바꾸지 않음</li><li>저장된 판정은 <code>@Protectable</code> 메서드 앞에서만 집행</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Contexa가 로그인을 맡음(<code>CONTEXA_OWNED</code>)</p><ul><li>보안 컨텍스트를 읽을 때 판정에 맞게 권한을 바꿈</li><li>필터 두 개가 추가 인증 · 차단 · 검토 보류 응답을 돌려줌</li><li><code>@Protectable</code> 메서드 앞에서도 한 번 더 집행</li></ul></div>
             </div>
+          </figure>
+          <p>소유 방식의 전체 비교는 <a href="overview.html#ownership">Contexa는 어떻게 동작하나</a>에 있습니다.</p>
 
-            <div class="blind-spot-compare">
-              <div class="blind-spot-side blind-spot-side--before">
-                <div class="blind-spot-title" style="color:var(--zt-block)">기존 보안</div>
-                <div class="blind-spot-gate blind-spot-gate--pass">인증 게이트 &nbsp;PASS</div>
-                <div class="blind-spot-zone blind-spot-zone--empty">
-                  <strong>모니터링 없는 영역</strong><br>
-                  한번 들어오면 완전 접근.<br>
-                  세션 탈취 = 게임 오버.
-                </div>
-              </div>
-              <div class="blind-spot-side blind-spot-side--after">
-                <div class="blind-spot-title" style="color:var(--brand-primary)">Contexa AI Zero Trust</div>
-                <div class="blind-spot-gate blind-spot-gate--pass">인증 게이트 &nbsp;PASS</div>
-                <div class="blind-spot-zone blind-spot-zone--protected">
-                  <div class="blind-spot-layer">HCAD 컨텍스트 수집 &mdash; 매 요청</div>
-                  <div class="blind-spot-layer">AI 행동 분석 &mdash; 지속적</div>
-                  <div class="blind-spot-layer">동적 권한 제어 &mdash; 요청 시점</div>
-                  <div class="blind-spot-layer">자동화된 적용 &mdash; 즉각적</div>
-                </div>
-              </div>
-            </div>
+          <h2 id="read-decision">요청 시점 ①: 판정 읽기와 권한 바꾸기</h2>
+          <p>이 단계는 <code>CONTEXA_OWNED</code>에서만 있습니다. Contexa 체인이 보안 컨텍스트를 읽는 순간 저장된 판정을 적용해, 앱의 <code>hasRole()</code> 같은 권한 검사가 판정을 따르게 합니다.</p>
+          <ul>
+            <li><strong>어디서:</strong> 세션 체인은 보안 컨텍스트 저장소(<code>AISessionSecurityContextRepository</code>)가 컨텍스트를 처음 읽을 때, 토큰 체인은 JWT 검증 바로 뒤의 필터(<code>AIOAuth2ZeroTrustFilter</code>)가 적용합니다.</li>
+            <li><strong>누구의 판정:</strong> 사용자 ID로 읽습니다. 사람 대신 일하는 에이전트는 자기 키(<code>&lt;사용자&gt;::agent::&lt;에이전트&gt;</code>)로 읽고, 위임자가 차단이면 함께 차단으로 봅니다.</li>
+            <li><strong>허용은 맥락에 묶입니다:</strong> 허용은 판정이 만들어진 세션 · IP · 브라우저(맥락 해시)에서만 허용으로 읽히고, 다른 맥락에서는 분석 대기로 읽힙니다.</li>
+            <li><strong>5초 캐시:</strong> 같은 사용자 · 맥락의 판정은 5초 동안 서버 메모리에 두고 다시 씁니다. 그래서 새 차단 직후 권한 바꾸기는 최대 5초 늦을 수 있지만, 두 필터는 캐시 없이 저장소를 직접 읽으므로 차단 응답은 늦지 않습니다.</li>
+            <li><strong>무효화된 세션 · 토큰:</strong> 무효화 목록에 있는 세션은 끝내고 로그인하지 않은 요청으로 처리합니다. JWT는 401로 거부합니다.</li>
+            <li><code>contexa.security.zerotrust.enabled=false</code>면 이 단계(판정 적용 · 권한 바꾸기 · 세션 추적)를 하지 않습니다.</li>
+            <li><strong>구현 순서:</strong> <code>AISessionSecurityContextRepository</code>의 <code>loadDeferredContext</code> → <code>AbstractZeroTrustSecurityService</code>의 <code>applyZeroTrustToContext</code> → <code>adjustAuthoritiesByAction</code>. 세션 추적과 무효화 기록은 단독 모드에서 메모리(<code>InMemoryZeroTrustSecurityService</code>), 분산 모드에서 Redis(<code>RedisZeroTrustSecurityService</code>)에 둡니다.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>판정</th><th>바뀐 권한</th></tr></thead>
+            <tbody>
+              <tr><td>허용</td><td>원래 권한</td></tr>
+              <tr><td>추가 인증</td><td><code>ROLE_MFA_REQUIRED</code> 하나만</td></tr>
+              <tr><td>차단</td><td><code>ROLE_BLOCKED</code> 하나만</td></tr>
+              <tr><td>검토 보류</td><td><code>ROLE_REVIEW_REQUIRED</code> 하나만</td></tr>
+              <tr><td>분석 대기</td><td>원래 권한 + <code>ROLE_PENDING_ANALYSIS</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>권한 집합이 실제로 바뀔 때만 로그인 객체를 바꿉니다. 세션 체인은 판정과 점수를 담은 <code>ZeroTrustAuthenticationToken</code>으로, 토큰 체인은 권한만 바꾼 새 <code>JwtAuthenticationToken</code>으로 바꿉니다. 불투명(opaque) 토큰은 권한을 바꾸지 않고 두 필터의 판정 읽기만 남습니다.</p>
 
-            <div class="comparison-grid">
-              <div class="comparison-card">
-                <h3>기존 인증</h3>
-                <p>입구만 지킵니다.</p>
-                <ul>
-                  <li>로그인 시 패스워드 / SSO / MFA</li>
-                  <li>세션 쿠키 = 영원히 신뢰됨</li>
-                  <li>인증 후 모니터링 없음</li>
-                  <li>세션 탈취 = 완전 접근</li>
-                </ul>
-                <div style="margin-top:var(--space-3);font-size:var(--text-xs);color:var(--text-tertiary)">인증 후 커버리지: <strong style="color:var(--zt-block)">없음</strong></div>
-              </div>
-              <div class="comparison-card">
-                <h3>규칙 기반 WAF</h3>
-                <p>알려진 패턴을 잡습니다.</p>
-                <ul>
-                  <li>시그니처 기반 탐지</li>
-                  <li>정적 IP / 속도 제한 규칙</li>
-                  <li>행동 이상 탐지 불가</li>
-                  <li>AI 에이전트가 쉽게 우회</li>
-                </ul>
-                <div style="margin-top:var(--space-3);font-size:var(--text-xs);color:var(--text-tertiary)">인증 후 커버리지: <strong style="color:var(--zt-challenge)">패턴 한정</strong></div>
-              </div>
-              <div class="comparison-card highlight">
-                <h3 style="color:var(--brand-primary)">Contexa AI Zero Trust</h3>
-                <p>행동 컨텍스트를 이해합니다.</p>
-                <ul>
-                  <li>LLM이 인증 후 모든 액션을 분석</li>
-                  <li>사용자별 HCAD 행동 베이스라인</li>
-                  <li>시그니처가 아닌 편차를 탐지</li>
-                  <li>Spring Security와 5가지 적용 액션</li>
-                  <li>크로스 인스턴스 실시간 차단</li>
-                </ul>
-                <div style="margin-top:var(--space-3);font-size:var(--text-xs);color:var(--text-tertiary)">인증 후 커버리지: <strong style="color:var(--zt-allow)">전면 행동 분석</strong></div>
-              </div>
-            </div>
+          <h2 id="responses">요청 시점 ②: 판정별로 사용자가 받는 것</h2>
+          <p><code>CONTEXA_OWNED</code>에서는 필터 두 개(추가 인증을 다루는 챌린지 필터, 차단 · 검토 보류를 다루는 접근 제어 필터)가 권한이 아니라 저장소의 판정을 직접 읽어 응답합니다. 브라우저 요청은 안내 화면으로 이동하고, API · AJAX 요청은 JSON 오류를 받습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>판정</th><th>브라우저</th><th>API</th><th>풀리는 방법</th></tr></thead>
+            <tbody>
+              <tr><td>허용</td><td colspan="2">그대로 진행</td><td>—</td></tr>
+              <tr><td>추가 인증</td><td><code>/contexa/zero-trust/challenge-required?mfaUrl=…</code>로 이동</td><td><code>401</code> <code>MFA_CHALLENGE_REQUIRED</code>(본문 <code>mfaUrl</code>). MFA 시작은 사용자마다 잠금(기본 임대 30초)을 잡아 한 번만 하고, 다른 요청이 시작하는 중이면 <code>503</code> <code>MFA_BUSY_RETRY</code> + <code>Retry-After: 3</code>. 앱에 MFA 흐름이 없으면 <code>401</code> <code>ZERO_TRUST_CHALLENGE</code></td><td>이 판정이 시작한 MFA를 통과하면 허용으로 바뀜(로그인 때의 MFA는 풀지 않음). 또는 1,800초 만료</td></tr>
+              <tr><td>차단</td><td><code>/contexa/zero-trust/blocked</code>로 이동</td><td><code>403</code> <code>ACCOUNT_BLOCKED</code>. 차단 해제 MFA를 시작한 뒤에는 <code>401</code> <code>BLOCK_MFA_REQUIRED</code></td><td>관리자 승인(<a href="#block">차단의 전파와 해제</a>)</td></tr>
+              <tr><td>검토 보류</td><td><code>/contexa/zero-trust/analysis-pending?returnUrl=…</code>로 이동</td><td><code>423</code> <code>SECURITY_REVIEW_IN_PROGRESS</code> + <code>Retry-After: 30</code></td><td>관리자 승인. MFA로는 풀리지 않음. 분석 판정(300초)과 첫 대기 응답부터 5분이 모두 지나면 그다음 요청에서 차단으로 올라감</td></tr>
+              <tr><td>분석 대기</td><td colspan="2">통과. 응답은 감싸져, 응답 도중 차단 신호가 오면 끊김</td><td>판정이 저장되면 바뀜</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>차단 응답은 세션을 끝내지 않습니다.</strong> 진행 중인 응답을 끊고, 이후 요청을 차단 응답으로 막습니다.</li>
+            <li>판정 때문에 멈춘 요청은 분석하지 않고 세션 사실로만 남깁니다.</li>
+            <li>필터의 위치, 제외 경로, 응답 본문 전체는 <a href="../identity/zero-trust-filters.html">요청 시점 집행</a>에 있습니다.</li>
+          </ul>
 
-            <div class="philosophy-quote">
-              <p>"규칙은 묻습니다: <em>정책을 위반했는가?</em> &mdash; 일치하는 규칙이 없으면 통과합니다.<br>
-              Contexa는 묻습니다: <em>이 사람에게 정상적인 행동인가?</em> &mdash; 행동이 벗어나면 잡아냅니다."</p>
-            </div>
-          </section>
+          <h2 id="protectable">메서드 단계: <code>@Protectable</code></h2>
+          <p>보호 메서드 앞의 가로채기(<code>AuthorizationManagerMethodInterceptor</code>)는 두 소유 방식 모두에서 돕니다. Spring의 메서드 보안(<code>@PreAuthorize</code> 등)보다 먼저 실행됩니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>보호 메서드 한 번의 호출</strong>어느 단계에서 거부되면 메서드는 실행되지 않고 분석 사건도 나가지 않습니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">로그인 확인</span><span class="dg-node-desc">익명 요청은 거부</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title">집행 모드 확인</span><span class="dg-node-desc"><code>DISABLED</code> · <code>OBSERVE</code>면 아래 정책만 보고 분석 사건을 내지 않음</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">빠른 재진입</span><span class="dg-node-desc">같은 사람 · 세션이 5초 안에 다시 들어오면 일반 메서드는 분석 없이 실행, 즉시 판정 메서드는 <code>503</code></span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">메서드 정책(XACML)</span><span class="dg-node-desc">거부면 여기서 끝. 분석하지 않고 세션 사실로 기록</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">위임자 권한</span><span class="dg-node-desc">위임 에이전트의 요청은 위임자 자격으로 정책을 한 번 더 평가</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">6</span><div class="dg-node dg-store"><span class="dg-node-title">저장된 판정</span><span class="dg-node-desc">차단 · 추가 인증 · 검토 보류가 걸려 있으면 실행 전에 거부. 즉시 판정 메서드와 판정 기록 없는 에이전트 요청은 여기서 판정</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">7</span><div class="dg-node dg-host"><span class="dg-node-title">메서드 실행</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">8</span><div class="dg-node"><span class="dg-node-title">분석 사건 발행</span><span class="dg-node-desc"><code>finally</code>에서, 요청 맥락(세션 · IP · 브라우저 · 자원 · 인증 방식)과 실행이 끝났는지 실패했는지를 담아</span></div></li>
+            </ol>
+          </figure>
+          <ul>
+            <li><strong>섀도 모드</strong>에서는 6단계의 저장된 판정과 즉시 판정을 기록만 하고 거부하지 않습니다.</li>
+            <li>앱이 자원 인증 관문(<code>ProtectableResourceCertificationGate</code>) 빈을 두면, <code>@Protectable(verificationRequired)</code>(기본 <code>true</code>)인 메서드 가운데 인증되지 않은 자원을 <code>423</code>으로 거부합니다. OSS에는 이 빈의 구현이 없습니다.</li>
+            <li>판정 기록이 없는 에이전트 요청을 그 자리에서 판정할지는 <code>contexa.security.zerotrust.protectable.unrecorded-agent-request</code>(기본 <code>DECIDE_IN_PLACE</code>, <code>PROCEED</code>면 사람처럼 통과)로 정합니다.</li>
+          </ul>
+          <p>거부는 아래 응답으로 바뀝니다. 본문은 <code>status</code> · <code>code</code>(<code>ZERO_TRUST_&lt;판정&gt;</code>) · <code>message</code> · <code>action</code> · <code>resourceId</code> · <code>riskScore</code> · <code>analysisTimeout</code> · <code>timestamp</code>입니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>HTTP 상태</th><th>언제</th></tr></thead>
+            <tbody>
+              <tr><td><code>403</code></td><td>차단</td></tr>
+              <tr><td><code>401</code></td><td>추가 인증. 그 자리에서 추가 인증 MFA를 시작하고 본문에 <code>mfaUrl</code>을 넣음. 에이전트의 추가 인증은 <code>CONTEXA_OWNED</code>에서 책임자 확인 요청으로 답함(<a href="../agent/controls.html#confirm">책임자 확인</a>)</td></tr>
+              <tr><td><code>423</code></td><td>검토 보류</td></tr>
+              <tr><td><code>503</code></td><td>분석이 필요함(빠른 재진입 중인 즉시 판정 메서드 등)</td></tr>
+              <tr><td><code>408</code></td><td>즉시 판정의 분석 시간 초과</td></tr>
+              <tr><td><code>429</code></td><td>에이전트 판정 통합이 켜져 있고 분석 자리가 없음(<code>ZERO_TRUST_ANALYSIS_BUSY</code>, <code>Retry-After</code>)</td></tr>
+            </tbody>
+          </table></div>
 
+          <h2 id="analysis">판정이 만들어지는 과정</h2>
+          <p>분석 사건이 나간 뒤의 일입니다. 요청 스레드는 기다리지 않습니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>사건에서 판정까지</strong>세부 규칙은 판정 엔진 페이지에 있습니다.</figcaption>
+            <ol class="dg-flow dg-flow-h">
+              <li class="dg-node"><span class="dg-node-title">거르기</span><span class="dg-node-desc">이미 판정이 걸려 있으면 분석 안 함</span></li>
+              <li class="dg-node"><span class="dg-node-title">줄 세우기</span><span class="dg-node-desc">사용자 · 세션마다 하나씩</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-title">1차 · 2차 분석</span><span class="dg-node-desc">AI 모델</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-title">처리 단계</span><span class="dg-node-desc">집행 · 봉인 · 감사</span></li>
+            </ol>
+          </figure>
+          <ul>
+            <li><strong>거르기:</strong> 이 사용자(에이전트는 자기 키) · 맥락의 판정이 분석 대기가 아니면 새로 분석하지 않고 "분석하지 않은 요청"으로만 기록합니다. <code>contexa.security.zerotrust.enabled=false</code>면 사건을 받아도 아무것도 하지 않습니다.</li>
+            <li><strong>전달:</strong> 단독 모드는 같은 서버 안에서, 분산 모드는 Kafka로 사건을 넘깁니다.</li>
+            <li><strong>줄 세우기:</strong> 크기 10,000의 대기열에 넣고 8건씩 꺼내, 사용자 · 세션마다 한 줄로 세워 한 번에 하나씩 처리합니다. 사건 하나의 분석 예산은 180초이고, 일시적으로 실패하면 최대 3번 다시 줄을 섭니다.</li>
+            <li><strong>판정:</strong> 1차 분석이 판정하고, 1차가 ESCALATE를 고른 경우만 2차 분석이 다시 판정합니다. 한 사건의 1차 · 2차 프롬프트는 같은 프롬프트 묶음으로 그립니다.</li>
+            <li><strong>처리 단계:</strong> 판정 만들기(50) → 집행(55) → 증거 봉인(56) → 감사(60) → SaaS 전달(65, 켰을 때만) 순서로 돕니다.</li>
+          </ul>
+          <p>어떤 요청이 분석되는지, 모델의 답이 바뀌는 경우, 층마다 다른 모델 쓰기는 <a href="decision-engine.html">판정 엔진</a>에 있습니다.</p>
 
-          <!-- ============================================ -->
-          <!-- Section 2: 두 개의 흐름, 하나의 방어 -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="two-flows">두 개의 흐름, 하나의 방어</h2>
-            <p>Contexa는 <strong>두 가지 상호 보완적 흐름</strong>으로 연속적인 제로 트러스트 방어막을 형성합니다. Flow A는 백그라운드에서 실행되어 AI로 이벤트를 분석합니다. Flow B는 HTTP 요청 시점에 실행되어 Spring Security의 권한 시스템을 통해 저장된 결정을 적용합니다. <strong>액션 저장소가 둘을 연결</strong>하며, distributed 모드에서는 Redis 기반 저장소와 Redisson 전파가 인스턴스 간 공유 상태를 담당합니다.</p>
+          <h2 id="block">차단의 전파와 해제</h2>
+          <h3 id="block-spread">차단이 퍼지는 길</h3>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>차단 판정이 저장된 뒤</strong>진행 중인 응답은 바로 끊기고, 다음 요청은 필터에서 막힙니다.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor">집행 단계</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-store">판정 저장소</span><span class="dg-msg-text">차단 저장, 기한 없는 차단 깃발, 차단 기록(사람) 또는 에이전트 정지</span></li>
+              <li class="dg-msg"><span class="dg-actor">집행 단계</span><span class="dg-msg-arrow">→</span><span class="dg-actor">모든 서버</span><span class="dg-msg-text">차단 신호 <code>BLOCK:{사용자}:{판정}</code>(분산 모드는 Redisson 채널 <code>contexa:security:block-signal</code>)</span></li>
+              <li class="dg-msg"><span class="dg-actor">각 서버</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">진행 중 응답</span><span class="dg-msg-text">응답 시작 뒤에 온 차단이면 끊음. 아직 보내지 않았으면 쓴 내용을 버리고 <code>403</code>, 이미 보내기 시작했으면 끊음 표식만 쓰고 닫음</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">다음 요청</span><span class="dg-msg-arrow">→</span><span class="dg-actor">접근 제어 필터</span><span class="dg-msg-text"><code>403</code> <code>ACCOUNT_BLOCKED</code> 또는 차단 화면</span></li>
+            </ol>
+          </figure>
+          <p>신호를 놓친 서버도 0.5초마다 저장소를 확인합니다. Contexa 자신의 거부 응답은 끊지 않습니다.</p>
+          <h3 id="unblock">차단을 푸는 길</h3>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>사용자가 해제를 요청하고 관리자가 푸는 순서</strong>MFA를 통과해도 차단은 그대로이며, 관리자의 승인으로만 풀립니다.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor dg-request">사용자</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text">차단 화면에서 <code>POST /contexa/admin/api/aiam/zero-trust/initiate-block-mfa</code>(시도 한도 확인, 10분 동안 해제 MFA 대기)</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">사용자</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text">차단 해제 MFA 통과: 1시간 동안 검증됨으로 표시, 응답을 끊는 신호만 풀림</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">사용자</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /contexa/admin/api/aiam/zero-trust/unblock-request</code>(사유 필수): 상태 <code>UNBLOCK_REQUESTED</code></span></li>
+              <li class="dg-msg"><span class="dg-actor dg-host">관리자</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text">관리 콘솔 "차단된 사용자"에서 처리: 관리자 승인(<code>AdminOverrideService</code>)으로 판정을 바꾸고 차단 깃발을 지우고 해제 신호 <code>UNBLOCK</code></span></li>
+            </ol>
+          </figure>
+          <ul>
+            <li>차단 기록의 상태는 <code>BLOCKED</code> · <code>UNBLOCK_REQUESTED</code> · <code>RESOLVED</code> · <code>TIMEOUT_RESPONDED</code> · <code>MFA_FAILED</code> 다섯 가지입니다.</li>
+            <li>차단 해제 MFA는 시도 한도(<code>contexa.security.zerotrust.max-block-mfa-attempts</code>, 기본 2)를 넘으면 더 시작할 수 없습니다. 실패 횟수는 24시간 동안 셉니다.</li>
+            <li>위임 에이전트의 차단은 MFA로 풀 수 없고 <code>403</code> <code>AGENT_BLOCKED</code>를 받습니다.</li>
+            <li>검토 보류가 풀리지 않고 차단으로 올라갈 때도 같은 차단 저장 · 깃발 · 차단 기록(사람) 또는 에이전트 정지가 일어납니다.</li>
+          </ul>
 
-            <div class="callout-info">
-              <strong>Flow A와 Flow B의 코드 연결.</strong> Flow A는 <code>ZeroTrustEventPublisher.publishMethodAuthorization(...)</code>가 <code>ZeroTrustSpringEvent</code>를 발행하면서 시작되고, <code>ZeroTrustEventListener.handleZeroTrustEvent(...)</code>가 이를 비동기 처리 경로로 넘깁니다. Flow B는 <code>AISessionSecurityContextRepository.loadDeferredContext(...)</code>가 요청 보안 컨텍스트를 읽을 때 시작되며, <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code>가 저장된 액션을 Spring Security 권한으로 반영합니다.
-            </div>
+          <h2 id="agents">에이전트 요청은 어떻게 다른가</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>항목</th><th>에이전트 요청에서</th><th>동작하는 소유 방식</th></tr></thead>
+            <tbody>
+              <tr><td>판정 키</td><td>위임 에이전트는 <code>&lt;사용자&gt;::agent::&lt;에이전트&gt;</code>에 따로 저장. 위임자가 차단이면 함께 차단으로 봄</td><td>둘 다</td></tr>
+              <tr><td>판정 기록이 없을 때</td><td>통과시키지 않고 그 자리에서 판정(기본)</td><td>둘 다(<code>@Protectable</code>)</td></tr>
+              <tr><td>차단 응답</td><td><code>403</code> <code>AGENT_BLOCKED</code>, MFA로 풀 수 없음</td><td><code>CONTEXA_OWNED</code>(필터)</td></tr>
+              <tr><td>에이전트 관문</td><td>호출 상한 · 끝난 위임 · 책임자 확인 · 좁혀진 범위</td><td><code>CONTEXA_OWNED</code>만</td></tr>
+            </tbody>
+          </table></div>
+          <p>자세한 내용은 <a href="../agent/overview.html">에이전트를 보안 주체로</a>와 <a href="../agent/controls.html">정지 · 확인 · 제한</a>에 있습니다.</p>
 
+          <h2 id="modes">집행 모드와 운영</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>집행 모드</th><th>AI 분석</th><th>판정 저장 · 적용</th><th>관찰 · 감사 기록</th><th>학습</th></tr></thead>
+            <tbody>
+              <tr><td><code>DISABLED</code> · <code>OBSERVE</code></td><td>안 함</td><td>없음</td><td>없음</td><td>없음</td></tr>
+              <tr><td><code>SHADOW</code></td><td>함</td><td>안 함. 보호 메서드의 저장된 판정도 기록만</td><td>남김</td><td>안 함</td></tr>
+              <tr><td><code>ENFORCE</code>(기본)</td><td>함</td><td>저장하고 다음 요청부터 적용</td><td>남김</td><td>실제로 적용된 허용만</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>요청 시점 필터는 집행 모드를 보지 않습니다.</strong> 집행 모드를 <code>SHADOW</code>로 바꾸거나 <code>contexa.security.zerotrust.enabled=false</code>로 꺼도, 이미 저장된 차단(기한 없음) · 추가 인증 · 검토 보류는 필터가 계속 집행합니다(<code>CONTEXA_OWNED</code>).</li>
+            <li><strong>사건은 낼 때의 모드를 가지고 다닙니다.</strong> <code>SHADOW</code>일 때 낸 사건의 판정은 그사이 <code>ENFORCE</code>로 바꿔도 저장 · 적용하지 않습니다.</li>
+            <li><strong>판정 결과는 관찰 기록과 감사 기록에 남습니다.</strong> 관찰 기록 표는 <code>ai_security_decision_observation</code>이고, 관리 콘솔 "실시간 현황"(<code>/contexa/admin/security-monitor</code>)에서 판정 기록을 봅니다.</li>
+          </ul>
+          <h3 id="settings">자주 바꾸는 설정</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>집행 모드(<code>DISABLED</code> · <code>OBSERVE</code> · <code>SHADOW</code> · <code>ENFORCE</code>)</td><td>도입 초기에 <code>SHADOW</code>로. 관리 콘솔에서 저장한 값이 우선</td></tr>
+              <tr><td><code>contexa.security.zerotrust.enabled</code></td><td><code>true</code></td><td>끄면 판정 적용 · 권한 바꾸기 · 분석 사건 처리를 하지 않음(필터의 판정 읽기는 남음)</td><td>문제를 찾는 동안 판정 흐름 전체를 멈출 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.max-block-mfa-attempts</code></td><td><code>2</code></td><td>차단 해제 MFA 시도 한도(필터 · 해제 API)</td><td>한도를 바꿀 때. MFA 실패 처리는 이 값과 상관없이 2번째 실패에서 대기 상태를 지웁니다</td></tr>
+              <tr><td><code>contexa.security.zerotrust.protectable.rapid-reentry-window-ms</code></td><td><code>5000</code></td><td>같은 사람 · 세션의 재진입을 분석하지 않는 창(ms)</td><td>한 화면이 같은 보호 메서드를 연달아 부를 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.protectable.unrecorded-agent-request</code></td><td><code>DECIDE_IN_PLACE</code></td><td>판정 기록 없는 에이전트 요청을 그 자리에서 판정</td><td>에이전트도 사람처럼 먼저 통과시킬 때 <code>PROCEED</code></td></tr>
+              <tr><td><code>contexa.security.zerotrust.redis.update-interval-seconds</code></td><td><code>30</code></td><td>같은 세션의 세션 추적 기록을 다시 쓰는 최소 간격(초)</td><td>세션 추적 쓰기를 줄일 때</td></tr>
+            </tbody>
+          </table></div>
+          <p>모든 설정은 <a href="../../install/configuration.html">설정</a>에 있습니다.</p>
 
-            <div class="dual-flow">
+          <h2 id="app-code">앱 코드에서 판정 읽기</h2>
+          <ul>
+            <li><strong>요청 속성</strong> <code>contexa.zeroTrustAction</code>: 판정을 적용한 요청에 그 판정이 남습니다(<code>CONTEXA_OWNED</code>).</li>
+            <li><strong>로그인 객체</strong> <code>ZeroTrustAuthenticationToken</code>: <code>getAction()</code> · <code>getTrustScore()</code> · <code>getThreatScore()</code>. 세션 체인에서 권한이 바뀌었을 때만 이 객체가 되고, 토큰 체인에서는 <code>JwtAuthenticationToken</code>이 남습니다.</li>
+            <li><strong>정책 식</strong> <code>#ai</code>: Contexa 정책(XACML) 식에서 씁니다. 앱의 <code>@PreAuthorize</code>에서 쓰려면 <code>CONTEXA_OWNED</code>여야 합니다.</li>
+            <li><strong>판정 값의 분류</strong>: <code>ZeroTrustAction</code>의 <code>isBlocking()</code>은 차단 · 검토 보류, <code>isAccessRestricted()</code>는 차단 · 추가 인증 · 검토 보류일 때 참입니다.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>식</th><th>참이 되는 때</th></tr></thead>
+            <tbody>
+              <tr><td><code>#ai.isAllowed()</code></td><td>현재 판정이 허용</td></tr>
+              <tr><td><code>#ai.isBlocked()</code></td><td>현재 판정이 차단</td></tr>
+              <tr><td><code>#ai.needsChallenge()</code></td><td>현재 판정이 추가 인증</td></tr>
+              <tr><td><code>#ai.needsEscalation()</code></td><td>현재 판정이 검토 보류</td></tr>
+              <tr><td><code>#ai.isPendingAnalysis()</code></td><td>현재 판정이 분석 대기</td></tr>
+              <tr><td><code>#ai.hasAction('ALLOW')</code></td><td>현재 판정이 적은 것과 같음</td></tr>
+              <tr><td><code>#ai.hasActionIn('ALLOW', 'PENDING_ANALYSIS')</code></td><td>현재 판정이 적은 것 가운데 하나</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>평소 상태는 대개 분석 대기입니다.</strong> 허용은 15초 동안 같은 맥락에서만 쓰이므로 <code>#ai.isAllowed()</code>만 요구하면 대부분의 요청이 거부됩니다. 제한 판정만 거르려면 아래처럼 허용과 분석 대기를 함께 받습니다.
+          </div>
+          <pre><code class="language-java">// CONTEXA_OWNED(@EnableAISecurity(mode = SecurityMode.FULL) 또는 contexa.bridge.ownership=CONTEXA_OWNED)에서만 #ai가 등록됩니다.
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-              <!-- Flow A -->
-              <div class="dual-flow-col dual-flow-col--a">
-                <div class="dual-flow-header">
-                  <div class="dual-flow-label dual-flow-label--a">Flow A</div>
-                  <div class="dual-flow-name">이벤트 기반 AI 분석</div>
-                  <div class="dual-flow-mode">비동기 &middot; 백그라운드</div>
-                </div>
+@RestController
+public class ReportController {
 
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--a">1</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">리소스 접근</div>
-                    <div class="dual-flow-step-desc">사용자가 <code>@Protectable</code> 메서드 또는 보호된 URL에 접근</div>
-                    <div class="dual-flow-step-impl">AuthorizationManagerMethodInterceptor</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--a">2</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">이벤트 발행</div>
-                    <div class="dual-flow-step-desc">전체 요청 컨텍스트(IP, 세션, 사용자 에이전트, 리소스, 인증 방식)가 포함된 보안 이벤트</div>
-                    <div class="dual-flow-step-impl">ZeroTrustEventPublisher</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--a">3</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">이벤트 수신 &amp; 중복 제거</div>
-                    <div class="dual-flow-step-desc">contextBindingHash를 통해 중복 이벤트를 필터링. 백그라운드 처리로 라우팅.</div>
-                    <div class="dual-flow-step-impl">ZeroTrustEventListener &rarr; SecurityPlaneAgent</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--a">4</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">계층형 AI 분석</div>
-                    <div class="dual-flow-step-desc">Layer 1 빠른 분석 (HCAD + RAG + 베이스라인 + LLM). 신뢰도가 불충분하면 Layer 2 심층 포렌식으로 에스컬레이션.</div>
-                    <div class="dual-flow-step-impl">ColdPathEventProcessor &rarr; L1/L2 Strategy</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--a">5</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">결정 &amp; 저장</div>
-                    <div class="dual-flow-step-desc">계층형 분석은 <code>SecurityDecision</code>를 만들고, 그 최종 적용 액션이 <code>ZeroTrustActionRepository</code>에 기록됩니다. BLOCK은 크로스 인스턴스 전파를 트리거할 수 있고, ALLOW는 베이스라인 학습으로 이어집니다.</div>
-                    <div class="dual-flow-step-impl">SecurityDecisionEnforcementHandler</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Bridge -->
-              <div class="dual-flow-bridge">
-                <div style="font-size:11px; font-weight:700; color:#7c3aed; text-align:center; letter-spacing:0.05em;">저장 &#10132;</div>
-                <div class="dual-flow-bridge-line"></div>
-                <div class="dual-flow-bridge-badge">액션 저장소</div>
-                <div class="dual-flow-bridge-sub">ZeroTrust<br>Action<br>Repository</div>
-                <div class="dual-flow-bridge-line"></div>
-                <div style="font-size:11px; font-weight:700; color:#0891b2; text-align:center; letter-spacing:0.05em;">&#10132; 조회</div>
-              </div>
-
-              <!-- Flow B -->
-              <div class="dual-flow-col dual-flow-col--b">
-                <div class="dual-flow-header">
-                  <div class="dual-flow-label dual-flow-label--b">Flow B</div>
-                  <div class="dual-flow-name">동적 권한 적용</div>
-                  <div class="dual-flow-mode">동기 &middot; 매 요청</div>
-                </div>
-
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--b">1</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">HTTP 요청 도착</div>
-                    <div class="dual-flow-step-desc">모든 인증된 요청이 Spring Security 필터 체인에 진입</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--b">2</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">AI 보안 컨텍스트 로딩</div>
-                    <div class="dual-flow-step-desc">Spring Security의 기본 <code>SecurityContextRepository</code>를 대체합니다. <code>ZeroTrustActionRepository</code>를 통해 현재 <code>ZeroTrustAction</code>을 조회하며, distributed 모드에서는 이 공유 상태가 Redis 기반으로 유지됩니다.</div>
-                    <div class="dual-flow-step-impl">AISessionSecurityContextRepository</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--b">3</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">권한 전환</div>
-                    <div class="dual-flow-step-desc">AI 결정에 따라 사용자의 <code>GrantedAuthority</code>를 동적으로 교체: BLOCK&rarr;<code>ROLE_BLOCKED</code>, CHALLENGE&rarr;<code>ROLE_MFA_REQUIRED</code> 등.</div>
-                    <div class="dual-flow-step-impl">adjustAuthoritiesByAction()</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--b">4</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">접근 제어 필터</div>
-                    <div class="dual-flow-step-desc">액션에 따라 라우팅: BLOCK&rarr;403/Block-MFA, ESCALATE&rarr;423 잠금, PENDING&rarr;실시간 인터럽트를 위한 응답 래핑</div>
-                    <div class="dual-flow-step-impl">ZeroTrustAccessControlFilter (Order: 45)</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--b">5</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">챌린지 필터</div>
-                    <div class="dual-flow-step-desc"><code>ROLE_MFA_REQUIRED</code>가 감지되면 분산 락과 함께 적응형 MFA 챌린지를 초기화</div>
-                    <div class="dual-flow-step-impl">ZeroTrustChallengeFilter (Order: 50)</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- 통합 결론 -->
-            <div style="text-align:center; margin:24px 0 16px;">
-              <div style="display:inline-block; padding:14px 32px; background:linear-gradient(135deg, rgba(99,102,241,0.08), rgba(6,182,212,0.08)); border:2px solid rgba(99,102,241,0.25); border-radius:12px;">
-                <div style="font-size:18px; font-weight:800; color:#4f46e5; margin-bottom:4px;">AI가 분석 &rarr; 공유 액션 상태가 연결 &rarr; Spring이 집행</div>
-                <div style="font-size:14px; color:var(--text-secondary);">이것이 Contexa가 요청 시점 제어와 비동기 분석을 결합해 연속적인 제로트러스트를 실현하는 방법입니다.</div>
-              </div>
-            </div>
-
-            <div class="callout-info">
-              <strong>Flow A가 분석합니다. Flow B가 적용합니다.</strong> 액션 저장소가 둘을 연결합니다 — 시간을 넘어 (비동기 분석이 완료되면 다음 요청이 이를 반영) 그리고 distributed 모드에서는 공간을 넘어 (모든 애플리케이션 인스턴스가 Redis 기반 저장소와 Redisson 신호를 공유).
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 3: 실제 시나리오 -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="scenario">실제 시나리오: 정상 사용자 vs. 계정 탈취</h2>
-            <p>두 사용자 모두 유효한 자격 증명으로 인증합니다. 둘 다 MFA를 통과합니다. 기존 보안은 이들을 구별할 수 없습니다. Contexa의 AI는 로그인 <em>이후</em> 무슨 일이 일어나는지를 감시합니다.</p>
-
-            <div class="scenario-split">
-              <!-- 정상 사용자 -->
-              <div class="scenario-column scenario-column--good">
-                <div class="scenario-header scenario-header--good">Sarah &mdash; 정상 사용자</div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 1 &middot; 로그인</div>
-                  <div class="scenario-step-content">
-                    IP: 재택 근무실 (알려진 범위)<br>
-                    시간: 오전 10:00 (평소 근무 시간)<br>
-                    디바이스: Windows / Chrome (등록됨)<br>
-                    <span class="scenario-badge scenario-badge--normal">인증: PASS</span>
-                  </div>
-                </div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 2 &middot; 행동 컨텍스트</div>
-                  <div class="scenario-step-content">
-                    접근 패턴: 이메일 &rarr; ERP &rarr; 보고서<br>
-                    요청 빈도: 정상 속도<br>
-                    내비게이션: 6개월 베이스라인과 일치<br>
-                    <span class="scenario-badge scenario-badge--normal">패턴: 정상</span>
-                  </div>
-                </div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 3 &middot; AI 판정</div>
-                  <div class="scenario-step-content">
-                    컨텍스트 신뢰도: <strong style="color:#16a34a">97%</strong><br>
-                    액션: <span class="badge" style="background:var(--zt-allow);color:#fff;font-size:11px">ALLOW</span>
-                  </div>
-                </div>
-                <div class="scenario-verdict scenario-verdict--allow">
-                  정상 접근 계속.<br>새 세션 데이터로 베이스라인 업데이트.
-                </div>
-              </div>
-
-              <!-- 공격자 -->
-              <div class="scenario-column scenario-column--bad">
-                <div class="scenario-header scenario-header--bad">공격자 &mdash; 탈취된 자격 증명</div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 1 &middot; 로그인</div>
-                  <div class="scenario-step-content">
-                    IP: 유사한 범위 (VPN)<br>
-                    시간: 오후 2:00 (근무 시간 내)<br>
-                    디바이스: Windows / Chrome (모방됨)<br>
-                    <span class="scenario-badge scenario-badge--normal">인증: PASS</span>
-                  </div>
-                </div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 2 &middot; 행동 컨텍스트</div>
-                  <div class="scenario-step-content">
-                    접근 패턴: 로그인 &rarr; HR 데이터베이스 직행<br>
-                    요청 빈도: 5,000건 대량 내보내기<br>
-                    내비게이션: 이전에 이 경로에 접근한 적 없음<br>
-                    <span class="scenario-badge scenario-badge--anomaly">패턴: 이상 탐지</span>
-                  </div>
-                </div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 3 &middot; AI 판정</div>
-                  <div class="scenario-step-content">
-                    컨텍스트 신뢰도: <strong style="color:#dc2626">12%</strong><br>
-                    액션: <span class="badge" style="background:var(--zt-block);color:#fff;font-size:11px">BLOCK</span>
-                  </div>
-                </div>
-                <div class="scenario-verdict scenario-verdict--block">
-                  세션 즉시 종료.<br>모든 인스턴스 통보. SSE를 통해 관리자 알림.
-                </div>
-              </div>
-            </div>
-
-            <div class="scenario-conclusion">
-              <strong>규칙이 작성되지 않았습니다. 시그니처가 매칭되지 않았습니다.</strong><br>
-              AI는 이 행동이 이 사람의 것이 아님을 인식했습니다 &mdash;<br>
-              자격 증명이 완벽하게 유효했음에도 불구하고.
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 4: 브리지 — AISecurityContextRepository -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="bridge">브리지 &mdash; AISecurityContextRepository</h2>
-            <p>이것이 AI와 Spring Security가 만나는 단일 통합 지점입니다. Spring Security의 기본 <code>HttpSessionSecurityContextRepository</code>를 <code>AISessionSecurityContextRepository</code>로 교체함으로써, Contexa는 모든 인증 객체에 후속 요청에 적용될 AI 결정을 주입합니다 &mdash; 애플리케이션 코드 한 줄의 변경 없이.</p>
-
-            <div class="callout-info">
-              <strong>정확한 메서드 체인.</strong> Spring Security는 <code>loadDeferredContext(...)</code>를 호출하고, 저장소는 요청 컨텍스트를 지연 로드한 뒤 <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code>를 통해 현재 액션을 불러옵니다. 이어서 <code>adjustAuthoritiesByAction(...)</code>가 이를 권한으로 변환하고, 필요할 때 <code>saveContext(...)</code>가 갱신된 보안 컨텍스트를 저장합니다. Standalone에서는 같은 계약을 인메모리 구현이 담당하고, distributed에서는 Redis 기반 저장소와 broadcaster가 이를 담당합니다.
-            </div>
-
-            <div class="bridge-highlight">
-              <h3>동작 원리</h3>
-              <div class="arch-flow">
-                <div class="arch-flow-node arch-flow-node--filter">Spring Security가 <code>loadDeferredContext()</code>를 호출</div>
-                <div class="arch-flow-connector"></div>
-                <div class="arch-flow-node arch-flow-node--agent">AISessionSecurityContextRepository<span class="arch-flow-detail">HttpSessionSecurityContextRepository를 대체</span></div>
-                <div class="arch-flow-connector"></div>
-                <div class="arch-flow-node arch-flow-node--secondary">ZeroTrustDeferredSecurityContext<span class="arch-flow-detail">첫 SecurityContext 접근 시 지연 로딩(Lazy-load)</span></div>
-                <div class="arch-flow-connector"></div>
-                <div class="arch-flow-node arch-flow-node--primary">applyZeroTrustToContext()<span class="arch-flow-detail">액션 저장소 조회 &rarr; adjustAuthoritiesByAction()</span></div>
-                <div class="arch-flow-connector"></div>
-                <div class="arch-flow-node arch-flow-node--agent">ZeroTrustAuthenticationToken<span class="arch-flow-detail">trustScore + threatScore + ZeroTrustAction</span></div>
-              </div>
-
-              <h3 style="margin-top:var(--space-6)">권한 변환</h3>
-              <p style="font-size:var(--text-sm);color:var(--text-secondary)">매 요청마다, <code>adjustAuthoritiesByAction()</code>은 <code>ZeroTrustActionRepository</code>에서 읽은 현재 액션에 따라 사용자의 Spring Security 권한을 동적으로 교체합니다:</p>
-
-              <div class="table-scroll">
-              <table class="authority-transform-table">
-                <thead>
-                  <tr>
-                    <th>AI 결정</th>
-                    <th></th>
-                    <th>부여 권한(Granted Authority)</th>
-                    <th></th>
-                    <th>적용 결과</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td><span class="badge" style="background:var(--zt-allow);color:#fff">ALLOW</span></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>원래 권한 유지</td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>정상 접근, 베이스라인 학습</td>
-                  </tr>
-                  <tr>
-                    <td><span class="badge" style="background:var(--zt-block);color:#fff">BLOCK</span></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td><code>ROLE_BLOCKED</code> <strong>만</strong></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>403 Forbidden, 세션 무효화</td>
-                  </tr>
-                  <tr>
-                    <td><span class="badge" style="background:var(--zt-challenge);color:#fff">CHALLENGE</span></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td><code>ROLE_MFA_REQUIRED</code> <strong>만</strong></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>MFA 챌린지, 최대 2회 시도</td>
-                  </tr>
-                  <tr>
-                    <td><span class="badge" style="background:var(--zt-escalate);color:#fff">ESCALATE</span></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td><code>ROLE_REVIEW_REQUIRED</code> <strong>만</strong></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>423 Locked, 300초 후 자동 BLOCK</td>
-                  </tr>
-                  <tr>
-                    <td><span class="badge" style="background:var(--zt-pending);color:#fff">PENDING</span></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>원래 권한 + <code>ROLE_PENDING_ANALYSIS</code></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>응답 래핑, 실시간 인터럽트</td>
-                  </tr>
-                </tbody>
-              </table>
-              </div>
-            </div>
-
-            <div class="callout-info">
-              <strong>코드 변경이 필요 없습니다.</strong> 권한 변환이 Spring Security의 <code>SecurityContextRepository</code> 내부에서 발생하므로, 기존의 모든 <code>@PreAuthorize</code>, <code>hasRole()</code>, <code>isAuthenticated()</code> 표현식이 자동으로 AI 제로 트러스트 상태를 반영합니다. <code>@Protectable</code> 메서드, URL 기반 정책, SpEL 표현식 모두가 투명하게 혜택을 받습니다.
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 5: ZeroTrustAction — 5가지 결정 -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="zero-trust-actions">ZeroTrustAction &mdash; 5가지 결정</h2>
-
-            <div class="callout-danger">
-              <strong>LLM 파이프라인은 제안 액션과 최종 적용 액션을 함께 남깁니다.</strong> 계층형 AI 분석 파이프라인은 <code>SecurityDecision</code>을 출력하며, 그 안에는 제안 액션과 실제 집행에 사용되는 액션이 함께 담깁니다. <code>riskScore</code>와 <code>confidence</code> 같은 필드는 <code>SecurityDecision</code>에 감사 로깅 및 학습 목적으로 유지됩니다.
-            </div>
-
-            <div class="table-scroll">
-            <table class="api-table" style="min-width:720px;margin:var(--space-4) 0">
-              <thead>
-                <tr>
-                  <th style="width:140px">액션</th>
-                  <th style="width:50px">HTTP</th>
-                  <th style="width:80px">TTL</th>
-                  <th style="width:170px">Authority</th>
-                  <th>의미 &amp; 후속 처리</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><span class="badge" style="background:var(--zt-allow);color:#fff">ALLOW</span></td>
-                  <td>200</td>
-                  <td>15s</td>
-                  <td>&mdash;</td>
-                  <td>요청이 신뢰됨. 정상 진행. <code>SecurityLearningService</code>를 통해 베이스라인 학습 트리거.</td>
-                </tr>
-                <tr>
-                  <td><span class="badge" style="background:var(--zt-block);color:#fff">BLOCK</span></td>
-                  <td>403</td>
-                  <td>영구</td>
-                  <td><code>ROLE_BLOCKED</code></td>
-                  <td>위협 확인됨. 세션 무효화, Redisson RTopic을 통한 크로스 인스턴스 전파. 사용자는 <code>/zero-trust/blocked</code>로 리다이렉트.</td>
-                </tr>
-                <tr>
-                  <td><span class="badge" style="background:var(--zt-challenge);color:#fff">CHALLENGE</span></td>
-                  <td>401</td>
-                  <td>1800s</td>
-                  <td><code>ROLE_MFA_REQUIRED</code></td>
-                  <td>의심스러운 활동. <code>ChallengeMfaInitializer</code>를 통해 MFA 챌린지 시작. 최대 2회 시도; 실패 시 BLOCK으로 에스컬레이션.</td>
-                </tr>
-                <tr>
-                  <td><span class="badge" style="background:var(--zt-escalate);color:#fff">ESCALATE</span></td>
-                  <td>423</td>
-                  <td>300s</td>
-                  <td><code>ROLE_REVIEW_REQUIRED</code></td>
-                  <td>인간 검토 필요. 300초 후 자동 BLOCK으로 승격. <code>SoarApprovalNotifier</code>를 통한 SOAR 통합.</td>
-                </tr>
-                <tr>
-                  <td><span class="badge" style="background:var(--zt-pending);color:#fff">PENDING_ANALYSIS</span></td>
-                  <td>503</td>
-                  <td>0s</td>
-                  <td><code>ROLE_PENDING_ANALYSIS</code></td>
-                  <td>AI 분석 진행 중. <code>BlockableResponseWrapper</code>로 응답이 래핑되어 실시간 중간 스트림 인터럽트 가능.</td>
-                </tr>
-              </tbody>
-            </table>
-            </div>
-
-            <p><code>ZeroTrustAction</code>은 유틸리티 메서드도 제공합니다: <code>isBlocking()</code>은 BLOCK과 ESCALATE에 대해 <code>true</code>를 반환하고; <code>isAccessRestricted()</code>는 BLOCK, CHALLENGE, ESCALATE에 대해 <code>true</code>를 반환합니다.</p>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 6: Flow A 상세 -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="flow-a">Flow A &mdash; 이벤트 기반 AI 분석 파이프라인</h2>
-            <p>사용자가 <code>@Protectable</code> 리소스에 접근하면, 보안 이벤트는 각각 특정 순서와 책임을 가진 3단계 핸들러 체인을 통과합니다. 전체 파이프라인은 백그라운드에서 비동기로 실행되어 분석을 사용자 요청의 직접 경로 밖에 둡니다.</p>
-
-            <h3>핸들러 체인</h3>
-            <div class="filter-chain">
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">50</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name"><span class="handler-order">ORDER 50</span> ProcessingExecutionHandler</div>
-                  <div class="filter-chain-desc">처리 전략을 선택합니다 (AI_ANALYSIS 모드). 계층형 LLM 분석을 위해 <code>ColdPathEventProcessor</code>에 위임합니다. <code>ProcessingResult</code>를 파이프라인 컨텍스트에 저장합니다.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">55</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name"><span class="handler-order">ORDER 55</span> SecurityDecisionEnforcementHandler</div>
-                  <div class="filter-chain-desc">결과에서 최종 적용 액션을 추출하고 <code>ZeroTrustActionRepository</code>에 기록합니다. BLOCK: <code>blockedFlag</code> 설정 + <code>BlockingSignalBroadcaster</code>를 통한 브로드캐스트. ALLOW: 베이스라인 학습이 예약되며 최종적으로 <code>SecurityLearningService.learnBaselineOnly(...)</code>로 이어집니다.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">60</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name"><span class="handler-order">ORDER 60</span> AuditingHandler</div>
-                  <div class="filter-chain-desc"><code>CentralAuditFacade</code>를 통해 완전한 감사 로그를 기록합니다. 결정, 리스크 점수, 신뢰도, 판단 근거, 처리 시간을 포함합니다.</div>
-                </div>
-              </div>
-            </div>
-
-            <h3>AI 분석 &mdash; Layer 1 &amp; Layer 2</h3>
-            <p><code>ColdPathEventProcessor</code>는 계층형 AI 전략을 오케스트레이션합니다. Layer 1은 빠른 Tier 1 LLM으로 ~98%의 요청을 처리합니다. 신뢰도가 불충분할 경우 Layer 2로 에스컬레이션하여 심층 포렌식 분석을 수행합니다. 두 레이어 모두 구조화된 프롬프트 엔지니어링을 위해 <code>SecurityDecisionStandardPromptTemplate</code>을 사용합니다.</p>
-
-            <div class="callout-info">
-              <strong>LLM 출력은 <code>SecurityDecision</code></strong>이며, <code>ZeroTrustAction</code>(ALLOW, BLOCK, CHALLENGE, ESCALATE)을 직접 포함합니다. <code>riskScore</code>와 <code>confidence</code> 필드는 감사 및 베이스라인 학습을 위해 기록됩니다 &mdash; 액션 결정을 주도하지 않습니다.
-            </div>
-
-            <h4>Layer 1 &mdash; 컨텍스트 분석</h4>
-            <div class="filter-chain">
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">1</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">HCAD 컨텍스트 수집</div>
-                  <div class="filter-chain-desc">세션 정보, 요청 패턴, 디바이스 핑거프린트, 행동 베이스라인 벡터로부터 <code>SessionContext</code>를 구축합니다</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">2</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">RAG 검색</div>
-                  <div class="filter-chain-desc">유사한 과거 보안 이벤트를 위해 통합 벡터 스토어(유사도 임계값 0.5, top-k 5)를 검색합니다</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">3</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">세션 이력 분석</div>
-                  <div class="filter-chain-desc">이상 패턴(비정상 시간, 낯선 경로, 급속 연속 요청)을 위해 최근 100개 액션을 분석합니다</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">4</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">LLM 평가 (Tier 1)</div>
-                  <div class="filter-chain-desc"><code>SecurityDecisionStandardPromptTemplate</code>으로 프롬프트를 구성하고 <code>UnifiedLLMOrchestrator</code>로 전송합니다. 결과는 제안 액션과 최종 적용 액션을 담은 <code>SecurityDecision</code>입니다.</div>
-                </div>
-              </div>
-            </div>
-
-            <h4>Layer 2 &mdash; 전문가 조사</h4>
-            <p>Layer 1의 신뢰도가 설정된 임계값 이하일 때 트리거됩니다. 완전한 포렌식 분석을 위해 Tier 2 LLM을 사용합니다.</p>
-            <div class="filter-chain">
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">1</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">확장 컨텍스트</div>
-                  <div class="filter-chain-desc">Layer 1 컨텍스트를 재사용 + 완전한 활동 프로파일로부터의 심층 행동 임베딩</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">2</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">확장 RAG 검색</div>
-                  <div class="filter-chain-desc">포괄적인 위협 컨텍스트를 위한 top-k 10 확장 검색</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">3</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">전문가 LLM 평가 (Tier 2)</div>
-                  <div class="filter-chain-desc">심층 포렌식 분석을 수행합니다. 최종 적용 액션은 Tier 2 분석 결과와 후속 enforcement 단계, autonomy 제약에 따라 확정됩니다.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">4</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">SOAR 통합 (선택 사항)</div>
-                  <div class="filter-chain-desc">ESCALATE 결정에 대해 <code>ApprovalService</code>가 <code>SoarApprovalNotifier</code>를 통해 인간 승인을 요청합니다</div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 7: Flow B 상세 -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="flow-b">Flow B &mdash; 동적 권한 적용</h2>
-            <p>매 HTTP 요청마다, Spring Security의 필터 체인이 <code>ZeroTrustActionRepository</code>를 통해 현재 액션을 읽어 적용합니다. 핵심 메커니즘은 <strong>권한 교체</strong>입니다 &mdash; 사용자의 <code>GrantedAuthority</code> 집합이 현재 <code>ZeroTrustAction</code>에 따라 동적으로 재작성됩니다.</p>
-
-            <h3>필터 체인 순서</h3>
-            <div class="filter-chain">
-              <div class="filter-chain-item">
-                <div class="filter-chain-order" style="background:rgba(6,182,212,0.1);color:#0891b2">30</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">HCADFilter</div>
-                  <div class="filter-chain-desc">행동 컨텍스트를 수집합니다: 디바이스 핑거프린트, 세션 메타데이터, 사용자 에이전트, IP. 다운스트림 사용을 위해 요청 속성에 저장합니다.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order" style="background:rgba(99,102,241,0.1);color:#4f46e5">40</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">AISessionSecurityContextRepository</div>
-                  <div class="filter-chain-desc">Spring Security의 기본값을 대체합니다. <code>loadDeferredContext()</code> 시 <code>ZeroTrustDeferredSecurityContext</code>로 래핑합니다. 첫 접근 시: <code>ZeroTrustActionRepository</code>에서 현재 액션을 조회하고 <code>adjustAuthoritiesByAction()</code>를 거쳐 <code>ZeroTrustAuthenticationToken</code>을 생성합니다.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">45</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">ZeroTrustAccessControlFilter</div>
-                  <div class="filter-chain-desc">
-                    <strong>BLOCK</strong>: <code>/zero-trust/blocked</code>로 리다이렉트 또는 Block-MFA 시작 (<code>ChallengeMfaInitializer</code>를 통해 최대 2회 시도).<br>
-                    <strong>ESCALATE</strong>: <code>/zero-trust/analysis-pending</code>으로 423 반환. TTL 5분; 자동으로 BLOCK으로 승격.<br>
-                    <strong>PENDING_ANALYSIS</strong>: 실시간 중간 스트림 인터럽트를 위해 <code>BlockableResponseWrapper</code>로 응답 래핑.
-                  </div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order" style="background:rgba(217,119,6,0.1);color:var(--zt-challenge)">50</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">ZeroTrustChallengeFilter</div>
-                  <div class="filter-chain-desc"><code>ROLE_MFA_REQUIRED</code>를 감지합니다. 분산 락(30초)을 획득합니다. <code>ChallengeMfaInitializer</code>를 통해 MFA 상태 머신을 초기화합니다. MFA 챌린지 페이지로 리다이렉트합니다. 실패 &rarr; 자동으로 BLOCK으로 에스컬레이션.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order" style="background:rgba(22,163,74,0.1);color:var(--zt-allow)">&#8734;</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">표준 Spring Security 필터</div>
-                  <div class="filter-chain-desc">기존의 모든 <code>@PreAuthorize</code>, <code>hasRole()</code>, URL 기반 인가가 이제 AI 조정된 권한으로 투명하게 동작합니다.</div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 8: 적용 인프라 -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="enforcement">적용 인프라</h2>
-            <p>AI가 결정을 내립니다. Spring Security의 필터 체인과 분산 인프라가 이를 적용합니다 &mdash; 밀리초 내에, 모든 인스턴스에 걸쳐, 심지어 응답 중에도.</p>
-
-            <div class="enforcement-grid">
-              <!-- BLOCK -->
-              <div class="enforcement-card" style="border-color:var(--zt-block)">
-                <h4 style="color:var(--zt-block)">BLOCK 적용</h4>
-                <p style="font-size:var(--text-sm);color:var(--text-secondary)">크로스 인스턴스 전파와 함께 즉각적인 거부.</p>
-                <div class="filter-chain" style="margin:var(--space-3) 0">
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">1</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">SecurityDecisionEnforcementHandler</div>
-                      <div class="filter-chain-desc"><code>ZeroTrustActionRepository</code>를 통해 BLOCK을 기록하고 <code>blockedFlag</code>를 설정합니다. distributed 모드에서는 이 상태가 Redis 기반으로 유지됩니다.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">2</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">BlockingSignalBroadcaster</div>
-                      <div class="filter-chain-desc">Redisson RTopic을 통해 <code>BLOCK:{userId}</code>를 발행합니다. 모든 인스턴스가 실시간으로 신호를 수신합니다.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">3</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">BlockingDecisionRegistry</div>
-                      <div class="filter-chain-desc">RTopic 신호를 수신합니다. O(1) 조회를 위해 로컬 <code>ConcurrentHashMap</code>을 업데이트합니다.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">4</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">BlockableResponseWrapper</div>
-                      <div class="filter-chain-desc"><code>BlockableServletOutputStream</code>이 모든 <code>write()</code>에서 차단 상태를 확인합니다. 전송 중인 응답도 즉시 종료됩니다.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">5</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">ZeroTrustAccessControlFilter</div>
-                      <div class="filter-chain-desc">403을 반환합니다. 인증을 삭제하고 세션을 무효화합니다. <code>IBlockedUserRecorder</code>가 DB에 영속화합니다.</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- CHALLENGE -->
-              <div class="enforcement-card" style="border-color:var(--zt-challenge)">
-                <h4 style="color:var(--zt-challenge)">CHALLENGE 적용</h4>
-                <p style="font-size:var(--text-sm);color:var(--text-secondary)">추가 인증을 요구합니다. 분산 락으로 레이스 컨디션을 방지합니다.</p>
-                <div class="filter-chain" style="margin:var(--space-3) 0">
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(217,119,6,0.1);color:var(--zt-challenge)">1</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">ZeroTrustChallengeFilter</div>
-                      <div class="filter-chain-desc"><code>ROLE_MFA_REQUIRED</code>를 감지합니다. 분산 락(30초)을 획득합니다.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(217,119,6,0.1);color:var(--zt-challenge)">2</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">ChallengeMfaInitializer</div>
-                      <div class="filter-chain-desc">MFA 상태 머신을 초기화합니다. 보안 세션 ID를 생성합니다. 자동 팩터를 결정합니다 (OTT, Passkey, TOTP). MFA 페이지로 리다이렉트합니다.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(217,119,6,0.1);color:var(--zt-challenge)">3</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">MFA 검증</div>
-                      <div class="filter-chain-desc"><code>BlockMfaStateStore</code>가 시도를 추적합니다 (1시간 내 최대 2회). 성공 시 챌린지를 해제합니다.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(217,119,6,0.1);color:var(--zt-challenge)">4</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">실패 에스컬레이션</div>
-                      <div class="filter-chain-desc">MFA 실패 또는 타임아웃 &rarr; 자동으로 <strong>BLOCK</strong>으로 승격.</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- ESCALATE -->
-              <div class="enforcement-card" style="border-color:var(--zt-escalate)">
-                <h4 style="color:var(--zt-escalate)">ESCALATE 적용</h4>
-                <p style="font-size:var(--text-sm);color:var(--text-secondary)">인간 검토를 요구합니다. 시간 제한이 있으며 자동으로 BLOCK으로 승격됩니다.</p>
-                <div class="filter-chain" style="margin:var(--space-3) 0">
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(124,58,237,0.1);color:var(--zt-escalate)">1</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">ZeroTrustAccessControlFilter</div>
-                      <div class="filter-chain-desc">423 Locked를 반환합니다. <code>ROLE_REVIEW_REQUIRED</code>를 부여합니다. TTL: 300초.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(124,58,237,0.1);color:var(--zt-escalate)">2</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">SOAR 워크플로우</div>
-                      <div class="filter-chain-desc"><code>ApprovalService.requestApproval()</code> &rarr; <code>SoarApprovalNotifier</code>가 보안 팀에 알림을 전송합니다.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(124,58,237,0.1);color:var(--zt-escalate)">3</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">관리자 오버라이드 또는 자동 승격</div>
-                      <div class="filter-chain-desc"><code>AdminOverrideService.approve()</code>가 해결합니다. TTL 만료 시 (300초) &rarr; 자동으로 <strong>BLOCK</strong>으로 승격.</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 크로스 인스턴스 + 차단 해제 -->
-              <div class="enforcement-card" style="border-color:var(--brand-primary)">
-                <h4 style="color:var(--brand-primary)">크로스 인스턴스 전파 &amp; 차단 해제</h4>
-                <p style="font-size:var(--text-sm);color:var(--text-secondary)">차단 결정이 모든 인스턴스에 실시간으로 전파됩니다. 차단된 사용자는 MFA 검증을 통해 차단 해제를 요청할 수 있습니다.</p>
-                <div class="filter-chain" style="margin:var(--space-3) 0">
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order">1</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">Redisson RTopic</div>
-                      <div class="filter-chain-desc">채널: <code>contexa:security:block-signal</code>. 신호: <code>BLOCK:{userId}</code>, <code>UNBLOCK:{userId}</code>.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order">2</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">BlockedUserService</div>
-                      <div class="filter-chain-desc">차단을 DB에 영속화합니다. 상태 추적: <code>BLOCKED</code> &rarr; <code>UNBLOCK_REQUESTED</code> &rarr; <code>RESOLVED</code>.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order">3</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">차단 해제 흐름</div>
-                      <div class="filter-chain-desc">
-                        <code>ZeroTrustUnblockController</code>: Block-MFA (최대 2회 시도) &rarr; MFA 검증 &rarr; <code>requestUnblockWithMfa()</code>.<br>
-                        관리자가 <code>BlockedUserService.resolveBlockById()</code>를 통해 승인 &rarr; Redis 키 삭제 &rarr; <code>UNBLOCK</code> 신호 브로드캐스트.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 9: 모니터링, 학습 & SSE -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="monitoring">모니터링, 학습 &amp; SSE</h2>
-            <p>모든 AI 결정은 실시간으로 대시보드에 스트리밍되고, 미래 결정을 개선하기 위해 학습 루프에 피드백됩니다.</p>
-
-            <div class="comparison-grid">
-              <div class="comparison-card">
-                <h3>실시간 스트림</h3>
-                <p>실시간 모니터링을 위한 Server-Sent Events.</p>
-                <ul>
-                  <li><code>ZeroTrustSsePublisher</code>가 결정을 브로드캐스트</li>
-                  <li>SSE 엔드포인트: <code>/api/aiam/sse/zero-trust/subscribe</code></li>
-                  <li>실시간 액션 피드: ALLOW/BLOCK/CHALLENGE/ESCALATE</li>
-                  <li>분석 완료, 차단 해제 알림</li>
-                </ul>
-              </div>
-              <div class="comparison-card">
-                <h3>관리자 대시보드</h3>
-                <p>보안 운영자를 위한 시각적 제어 센터.</p>
-                <ul>
-                  <li><code>/zero-trust/blocked</code> &mdash; 차단된 사용자 페이지</li>
-                  <li><code>/zero-trust/challenge-required</code> &mdash; MFA 챌린지</li>
-                  <li><code>/zero-trust/analysis-pending</code> &mdash; 검토 진행 중</li>
-                  <li>결정 오버라이드를 위한 <code>AdminOverrideService</code></li>
-                </ul>
-              </div>
-              <div class="comparison-card">
-                <h3>학습 루프</h3>
-                <p>모든 ALLOW 결정이 베이스라인을 개선합니다.</p>
-                <ul>
-                  <li><code>SecurityLearningService</code> &rarr; <code>BaselineLearningService</code></li>
-                  <li>EMA (지수 이동 평균) 베이스라인 업데이트</li>
-                  <li><code>SecurityDecisionPostProcessor</code> 벡터 저장</li>
-                  <li>IP/경로 빈도 맵을 위한 LFU 퇴거</li>
-                </ul>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 10: SpEL & 설정 -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="spel-config">SpEL 통합 &amp; 설정</h2>
-
-            <h3>SpEL 표현식에서의 Zero Trust</h3>
-            <p>Spring Security의 <code>@PreAuthorize</code> 및 <code>@PostAuthorize</code> 어노테이션은 <code>AbstractAISecurityExpressionRoot</code>의 커스텀 표현식 메서드를 통해 Zero Trust 상태를 참조할 수 있습니다.</p>
-
-            <table class="api-table spel-table" style="width:100%;margin:var(--space-4) 0">
-              <thead><tr><th>표현식</th><th>반환 타입</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>#ai.isAllowed()</code></td><td>boolean</td><td>현재 사용자의 ZeroTrustAction이 ALLOW</td></tr>
-                <tr><td><code>#ai.isBlocked()</code></td><td>boolean</td><td>현재 사용자의 액션이 BLOCK</td></tr>
-                <tr><td><code>#ai.needsChallenge()</code></td><td>boolean</td><td>현재 사용자의 액션이 CHALLENGE</td></tr>
-                <tr><td><code>#ai.needsEscalation()</code></td><td>boolean</td><td>현재 사용자의 액션이 ESCALATE</td></tr>
-                <tr><td><code>#ai.isPendingAnalysis()</code></td><td>boolean</td><td>현재 사용자의 액션이 PENDING_ANALYSIS</td></tr>
-                <tr><td><code>#ai.hasAction("ALLOW")</code></td><td>boolean</td><td>현재 액션이 지정한 ZeroTrustAction과 일치하는지 확인</td></tr>
-                <tr><td><code>#ai.hasActionIn("ALLOW", "CHALLENGE")</code></td><td>boolean</td><td>현재 액션이 허용 목록 중 하나인지 확인</td></tr>
-              </tbody>
-            </table>
-
-            <h4>SpEL 활용 컨트롤러 예제</h4>
-            <p>보호하려는 REST API 컨트롤러의 메소드 레벨에서 다음과 같이 활용할 수 있습니다:</p>
-            <pre><code class="language-java">@RestController
-@RequestMapping("/api/v1/financial")
-public class FinancialController {
-
-    // AI 제로 트러스트 허가(ALLOW)를 획득하고 ADMIN 역할인 경우에만 접근 허용
     @GetMapping("/reports")
-    @PreAuthorize("#ai.isAllowed() and hasRole('ADMIN')")
-    public ResponseEntity<List<Report>> getFinancialReports() {
-        return ResponseEntity.ok(financeService.getReports());
-    }
-
-    // AI 제로 트러스트에서 ALLOW 또는 분석 진행 중(PENDING)인 경우에만 실행
-    @PostMapping("/transfer")
-    @PreAuthorize("#ai.hasActionIn('ALLOW', 'PENDING_ANALYSIS')")
-    public ResponseEntity<Void> executeTransfer(@RequestBody TransferRequest request) {
-        financeService.transfer(request);
-        return ResponseEntity.ok().build();
+    @PreAuthorize("#ai.hasActionIn('ALLOW', 'PENDING_ANALYSIS') and hasRole('ADMIN')")
+    public String reports() {
+        return "ok";
     }
 }</code></pre>
+          <p>에이전트용 식(<code>isAgent()</code> 등)은 <a href="../agent/controls.html#expressions">정지 · 확인 · 제한</a>, 정책 식 전체는 <a href="../iam/ai-security-expressions.html">AI 보안 표현식</a>에 있습니다.</p>
 
-            <h3>설정 레퍼런스</h3>
-            <table class="api-table" style="width:100%;margin:var(--space-4) 0">
-              <thead><tr><th>프로퍼티</th><th>기본값</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.security.zerotrust.enabled</code></td><td><code>true</code></td><td>Zero Trust 파이프라인 활성화/비활성화</td></tr>
-                <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>SHADOW (로그만) 또는 ENFORCE (완전 적용)</td></tr>
-                <tr><td><code>contexa.security.zerotrust.sampling.rate</code></td><td><code>1.0</code></td><td>분석할 요청 비율 (0.0-1.0)</td></tr>
-                <tr><td><code>contexa.security.zerotrust.hotpath.enabled</code></td><td><code>true</code></td><td>Layer 1 hot-path 분석 활성화</td></tr>
-                <tr><td><code>contexa.security.zerotrust.redis.updateIntervalSeconds</code></td><td><code>30</code></td><td>Redis 액션 업데이트 간격</td></tr>
-                <tr><td><code>contexa.infrastructure.mode</code></td><td><code>STANDALONE</code></td><td>STANDALONE (인메모리) 또는 DISTRIBUTED (Redis+Kafka)</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- 관련 문서 -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="related">관련 문서</h2>
-            <div class="related-links-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--space-3);margin:var(--space-4) 0">
-              <a href="../../../docs/reference/architecture/overview.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;transition:box-shadow 0.2s">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">플랫폼 아키텍처</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">모듈 개요 및 요청 흐름</span>
-              </a>
-              <a href="../../../docs/reference/identity/dsl.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;transition:box-shadow 0.2s">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Identity DSL</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">인증 플로우 및 보안 설정</span>
-              </a>
-              <a href="../../../docs/reference/iam/protectable.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;transition:box-shadow 0.2s">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">@Protectable</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">메서드 수준 제로 트러스트 보호 어노테이션</span>
-              </a>
-              <a href="../../../docs/install/shadow-mode.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;transition:box-shadow 0.2s">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Shadow Mode</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">안전한 점진적 도입 전략</span>
-              </a>
-            </div>
-          </section>
-
-
+          <h2 id="learning-sse">학습과 실시간 알림</h2>
+          <ul>
+            <li><strong>학습:</strong> 실제로 적용된 허용 판정만 행위 기준선에 배웁니다. 섀도 모드의 판정은 배우지 않습니다. 학습 서비스(<code>SecurityLearningService</code>)가 기준선 학습(<code>BaselineLearningService</code>, 지수 이동 평균)으로 넘기고, 자주 쓰는 IP 대역은 덜 쓰인 것부터 밀어내며 일정 개수만 남깁니다. 자세한 조건은 <a href="decision-engine.html#learning">판정 엔진의 "무엇을 배우나"</a>에 있습니다.</li>
+            <li><strong>실시간 알림(SSE):</strong> <code>GET /contexa/admin/api/aiam/sse/zero-trust/subscribe</code>를 구독하면 로그인한 사용자 <strong>자신의</strong> 판정 · 분석 진행 · 오류 알림을 받습니다(<code>ZeroTrustSsePublisher</code>). 관리자에게 모든 판정을 보내는 통로가 아닙니다.</li>
+            <li><strong>안내 화면:</strong> <code>/contexa/zero-trust/blocked</code> · <code>/contexa/zero-trust/challenge-required</code> · <code>/contexa/zero-trust/analysis-pending</code>는 판정을 받은 사용자가 보는 화면입니다.</li>
+          </ul>
           <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/architecture/overview.html" class="docs-nav-link prev">
+            <a href="overview.html" class="docs-nav-link prev">
               <span class="docs-nav-label">이전</span>
-              <span class="docs-nav-title">플랫폼 아키텍처</span>
+              <span class="docs-nav-title">Contexa는 어떻게 동작하나</span>
             </a>
-            <a href="../../../docs/reference/identity/dsl.html" class="docs-nav-link next">
+            <a href="decision-engine.html" class="docs-nav-link next">
               <span class="docs-nav-label">다음</span>
-              <span class="docs-nav-title">Identity DSL</span>
+              <span class="docs-nav-title">판정 엔진: 판정은 어떻게 만들어지나</span>
             </a>
           </div>

@@ -1,0 +1,204 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Decision Engine</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+            </div>
+            <h1>Decision Engine: How a Decision Is Made</h1>
+            <p class="lead">How Contexa looks at a request again after it was handled, makes a decision and stores it. You will learn which requests are analyzed, when the AI model decides a second time, when the model's answer is changed, when a decision starts to apply, and what is learned.</p>
+          </div>
+
+          <h2 id="overview">At a glance</h2>
+          <p>A decision is not made while the request waits. It is made <strong>in the background</strong> after a protected method (<code>@Protectable</code>) has run, stored, and applied <strong>from the same user's next request</strong>. Only a method that needs a decision inside the request itself uses <code>@Protectable(sync=true)</code> for an immediate decision.</p>
+          <p>The AI model chooses the action (allow, step-up authentication, block, hold for review). The engine gathers facts such as what differs from usual, the company's records (<a href="company-records.html">Company Records</a>) and past decisions, and sends them to the model; it does not choose the action.</p>
+
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The path of one decision</strong>Steps 1–5 happen after the response has left; step 6 happens on the same user's next request.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">Create an analysis event</span><span class="dg-node-desc">When a protected method finishes, the request's facts are sent as an event (<code>ZeroTrustEventPublisher</code>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title">Filter</span><span class="dg-node-desc">If this user already has a decision in force, nothing new is analyzed (<code>ZeroTrustEventListener</code>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Queue</span><span class="dg-node-desc">One line per user and session, handled one at a time (<code>SecurityPlaneAgent</code>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node dg-model"><span class="dg-node-title">Make the decision</span><span class="dg-node-desc">Layer 1 decides; if it cannot, Layer 2 decides again (AI model)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">Enforce and record</span><span class="dg-node-desc">Store the decision, seal the evidence, write the audit record</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">6</span><div class="dg-node dg-store"><span class="dg-node-title">Apply on the next request</span><span class="dg-node-desc">The stored decision changes that user's authorities (<a href="../identity/zero-trust-filters.html">request-time enforcement</a>)</span></div></li>
+            </ol>
+          </figure>
+
+          <h2 id="what-is-analyzed">Which requests are analyzed</h2>
+          <p>Not every request goes to the AI model. Only the cases marked "analyzed" below produce a decision.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Case</th><th>What happens</th></tr></thead>
+            <tbody>
+              <tr><td>A protected method call (default)</td><td>Analyzed after the method has run. The method does not wait for the decision.</td></tr>
+              <tr><td>An immediate-decision method (<code>@Protectable(sync=true)</code>)</td><td>Decided right inside the request by the same engine, without the queue.</td></tr>
+              <tr><td>Enforcement mode is disabled or observe (<code>DISABLED</code> · <code>OBSERVE</code>), or <code>contexa.security.zerotrust.enabled=false</code></td><td>Not analyzed. The AI model is not called.</td></tr>
+              <tr><td>The user already has a block, step-up or hold in force</td><td>Refused before the method runs, not analyzed.</td></tr>
+              <tr><td>A stored decision is still valid (not pending analysis)</td><td>Not analyzed again; recorded only as a request that was not analyzed.</td></tr>
+              <tr><td>The same user calls the same scope again within 5 seconds</td><td>Let through, not analyzed (<code>contexa.security.zerotrust.protectable.rapid-reentry-window-ms</code>, default 5000).</td></tr>
+              <tr><td>An authorization policy (XACML · URL) denies</td><td>Not analyzed; recorded only as a session fact.</td></tr>
+              <tr><td>The same event is about to be processed twice (several servers, requeued)</td><td>Each event's processing right is claimed once (an identity made of tenant, user, context, event, resource and method). An event already processed, or being processed elsewhere, is skipped.</td></tr>
+              <tr><td>One agent sends the same request many times at once</td><td>With <a href="../agent/controls.html#flight">decision merging</a> on, the same question is analysed once (off by default).</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="layers">The order of a decision: Layer 1 and Layer 2</h2>
+          <p>A decision is made in two layers. Most end in Layer 1; only a request Layer 1 answered with "these facts cannot decide it (ESCALATE)" goes to Layer 2.</p>
+
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Layer 1 and Layer 2</strong>Layer 2 runs only when Layer 1 answered ESCALATE.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node"><span class="dg-node-title">Gather facts</span><span class="dg-node-desc">Session flow, differences from the behavioral baseline, company records, past decision records (the search starts first and is awaited)</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">Layer 1</span><span class="dg-node-title">The AI model decides</span><span class="dg-node-desc">Time limit 90 s (<code>contexa.security.tiered.layer1.timeout.llm-ms</code>)</span></li>
+              <li class="dg-edge">Only when the answer is ESCALATE ↓ (any other answer is the final decision)</li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">Layer 2</span><span class="dg-node-title">The same request is decided again</span><span class="dg-node-desc">Gets Layer 1's prompt and first decision and asks again. Time limit 30 s (<code>contexa.security.tiered.layer2.timeout-ms</code>)</span></li>
+            </ol>
+            <p class="dg-outcomes-title">Final decision</p>
+            <ul class="dg-outcomes">
+              <li class="dg-node dg-allow"><span class="dg-node-title">Allow</span><span class="dg-node-desc">ALLOW</span></li>
+              <li class="dg-node dg-challenge"><span class="dg-node-title">Step-up authentication</span><span class="dg-node-desc">CHALLENGE</span></li>
+              <li class="dg-node dg-block"><span class="dg-node-title">Block</span><span class="dg-node-desc">BLOCK</span></li>
+              <li class="dg-node dg-escalate"><span class="dg-node-title">Held for review</span><span class="dg-node-desc">ESCALATE</span></li>
+            </ul>
+          </figure>
+
+          <p>Past decision records are found differently by prompt bundle.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Bundle</th><th>Layer 1</th><th>Layer 2</th></tr></thead>
+            <tbody>
+              <tr><td>v19 (build default)</td><td>Up to 12 records similar in meaning (<code>contexa.security.tiered.layer1.vector-search-limit</code>), relevance 0.5 or more (<code>layer1.rag.similarity-threshold</code>)</td><td>Reuses the records Layer 1 found, and searches again only when there are none (up to 5, <code>layer2.rag-top-k</code>, relevance 0.5 or more)</td></tr>
+              <tr><td>v20 · v21</td><td>Instead of a similarity search, the records of the same person and the same target are looked up exactly</td><td>Reuses the records Layer 1 found, and looks up again only when there are none</td></tr>
+            </tbody>
+          </table></div>
+
+          <div class="callout callout-info">
+            <strong>Overload protection.</strong> When the last 100 Layer 1 decisions of the same scope (the organization, else the user) hold at least 11 decisions and more than half of them are ESCALATE, Layer 2 is not called and the request ends with step-up authentication. It keeps Layer 2 calls from surging when the model answers "I cannot tell" for everything. The ratio and count are fixed in the code.
+          </div>
+
+          <h3 id="layer-models">A different model for each layer</h3>
+          <p>Layer 1 and Layer 2 can use different models, for example a fast, inexpensive model for Layer 1 and a more careful one for Layer 2.</p>
+          <pre><code class="language-yaml">contexa:
+  security:
+    tiered:
+      llm:
+        layer1:
+          model: gpt-4o-mini   # empty: the primary chat model
+        layer2:
+          model: gpt-4o        # empty: the primary chat model</code></pre>
+          <p>The example works as is when the primary chat model is OpenAI (only the name changes within the same provider).</p>
+          <ul>
+            <li>Model order: the layer's model → (if set) the layer's backup model (<code>layerN.backup.model</code>) → the primary chat model.</li>
+            <li>A model name with no connection setting (<code>contexa.llm.bindings.chat</code>) runs on a copy of the primary chat model with only the name changed. Only models that can copy themselves (<code>mutate()</code>), such as OpenAI, allow this. A model that cannot be copied, such as an Anthropic model, needs its own connection setting.</li>
+            <li>If a layer model cannot be made, the application does not start, so a wrong model name never turns silently into another model in production.</li>
+          </ul>
+
+          <h2 id="handlers">After the decision: five steps</h2>
+          <p>Once a decision is made, five steps follow in a fixed order. The numbers are the execution order.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Handler order</strong>If a step fails, the steps after it do not run.</figcaption>
+            <ol class="dg-flow dg-flow-h">
+              <li class="dg-node dg-model"><span class="dg-node-tag">50</span><span class="dg-node-title">Make the decision</span></li>
+              <li class="dg-node"><span class="dg-node-tag">55</span><span class="dg-node-title">Enforce</span></li>
+              <li class="dg-node"><span class="dg-node-tag">56</span><span class="dg-node-title">Seal evidence</span></li>
+              <li class="dg-node"><span class="dg-node-tag">60</span><span class="dg-node-title">Audit</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">65</span><span class="dg-node-title">SaaS forwarding</span></li>
+            </ol>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Order</th><th>Step</th><th>What it does</th><th>When it runs</th></tr></thead>
+            <tbody>
+              <tr><td>50</td><td>Make the decision (<code>ProcessingExecutionHandler</code>)</td><td>Makes the decision with Layer 1 and Layer 2.</td><td>Always. Without a chat model and a vector store no decision can be made and the user stays pending.</td></tr>
+              <tr><td>55</td><td>Enforce (<code>SecurityDecisionEnforcementHandler</code>)</td><td>Writes the observation record for the audit first, then stores the decision in enforce mode. On a block it signals in-flight responses to stop.</td><td>When there is a decision result</td></tr>
+              <tr><td>56</td><td>Seal evidence (<code>SealedEvidenceCaptureHandler</code>)</td><td>Seals the prompt exactly as sent to the model, with the decision. It never changes the decision. By default the first 1,000 after startup or a prompt bundle change are all sealed, then 1%, kept 90 days. <a href="evidence.html">Sealed evidence and official verification</a></td><td>When the AI model decided (<code>contexa.pqa.oss.sealed-evidence.capture-enabled</code>, on by default)</td></tr>
+              <tr><td>60</td><td>Audit (<code>AuditingHandler</code>)</td><td>Writes the decision to the audit log (<code>audit_log</code>), in shadow mode too.</td><td>When there is a decision result</td></tr>
+              <tr><td>65</td><td>SaaS forwarding (<code>SaasForwardingHandler</code>)</td><td>Puts decisions other than allow and pending into the box sent to Contexa SaaS. <a href="../core/saas.html">Connecting Contexa SaaS</a></td><td>Only with <code>contexa.saas.enabled=true</code> (off by default)</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="storage">How a decision is stored and applied</h2>
+          <p>In enforce mode (<code>ENFORCE</code>) the decision is stored in the user decision store: memory in standalone mode, Redis in distributed mode. Each decision has a fixed lifetime.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Decision</th><th>Lifetime</th><th>Where it applies</th></tr></thead>
+            <tbody>
+              <tr><td>Allow (ALLOW)</td><td>15 seconds</td><td>Only in the same session, IP and browser it was made for</td></tr>
+              <tr><td>Step-up authentication (CHALLENGE)</td><td>1,800 seconds (30 minutes)</td><td>Every session of the user</td></tr>
+              <tr><td>Held for review (ESCALATE)</td><td>300 seconds (5 minutes)</td><td>Every session of the user</td></tr>
+              <tr><td>Block (BLOCK)</td><td>No expiry (until an administrator releases it or the block-release MFA is passed)</td><td>Every session of the user</td></tr>
+              <tr><td>Pending analysis (PENDING_ANALYSIS)</td><td>No stored decision</td><td>The request goes through and analysis starts</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>A stricter decision is never overwritten by a weaker one.</strong> In the order block &gt; hold &gt; step-up, a weaker new decision is not stored while a stricter one is in force.</li>
+            <li><strong>Shadow mode (<code>SHADOW</code>) stores nothing.</strong> Only the observation record is written; no block signal and no learning.</li>
+            <li><strong>An event carries the enforcement mode it was made under</strong> (<code>decisionBoundaryMode</code>). An event made in shadow mode is not enforced even if the mode became <code>ENFORCE</code> by the time its decision is ready.</li>
+            <li><strong>Without the observation record (database) nothing is enforced.</strong> The decision stays pending, and new analyses of the same context pause for 30 seconds (<code>contexa.security.zerotrust.analysis.audit-failure-cooldown-ms</code>).</li>
+          </ul>
+          <p>How a stored decision changes authorities on the next request is described in <a href="../identity/zero-trust-filters.html">request-time enforcement</a>.</p>
+
+          <h2 id="overrides">When the model's answer is changed</h2>
+          <p>The action the model chose is the final decision except in the cases below.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Case</th><th>Final decision</th></tr></thead>
+            <tbody>
+              <tr><td>No answer from the model (provider outage, call timeout, output or context limit)</td><td>Step-up authentication. Even in Layer 1 it is not sent to Layer 2.</td></tr>
+              <tr><td>No action value, or an unknown one</td><td>Step-up authentication; DENY-like values are read as block and REVIEW as hold.</td></tr>
+              <tr><td>The answer breaks the output contract and still does after one corrective retry</td><td>Held for review (from Layer 1 it goes to Layer 2). With the v19 and v20 bundles the broken boundary rule can turn it into block or allow.</td></tr>
+              <tr><td>Layer 1 itself fails (no result, Layer 1 time limit exceeded)</td><td>Turned into hold and sent to Layer 2.</td></tr>
+              <tr><td>Layer 2 chooses hold (ESCALATE)</td><td>Replaced with <code>contexa.security.tiered.layer2.escalate-fallback-action</code> (default CHALLENGE).</td></tr>
+              <tr><td>Layer 2 fails technically (exception, over 30 seconds)</td><td>Hold is stored as the final decision (5 minutes).</td></tr>
+              <tr><td>Overload protection (the box above)</td><td>Step-up authentication</td></tr>
+              <tr><td>With the v19 or v20 bundle, the minimum-action rule in enforce mode (<code>contexa.security.zerotrust.minimum-action.mode=ENFORCE</code>) and an answer weaker than the floor</td><td>One corrective retry, then hold if still weaker. The default <code>OBSERVE</code> only records it, and the v21 bundle does not evaluate the rule.</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="learning">What is learned</h2>
+          <p>The engine learns two things from decisions: each person's <strong>behavioral baseline</strong> (usual hours, devices, networks, targets and so on) and <strong>past decision records</strong>. Both become facts of the prompt in later analyses.</p>
+          <ul>
+            <li><strong>Only allow decisions that were actually applied are learned into the baseline.</strong> Decisions in shadow mode, an allow not stored because a stricter decision was in force, and late results of deleted accounts are not learned. Learning is an exponential moving average (factor 0.1); for a person's request the organization baseline is updated too.</li>
+            <li><strong>When a baseline counts as established:</strong> a personal baseline needs 20 or more learned requests, on 5 or more different days, with no more than 20% unseen values in its last 10 learnings. An organization baseline must learn from 3 or more people. Items that keep several values, such as IP ranges, push out the least used value when full (older values count less, with a 14-day half-life).</li>
+            <li><strong>An unexplained new value is held, not learned at once.</strong> For a resource of sensitive class or above, an unexplained difference in hour, day, network or device is held until the same value is seen at least twice on at least two days, or is verified. For agents a first-seen value is held whatever the resource class.</li>
+            <li><strong>Requests that passed a check are learned too.</strong> A request stopped by step-up, hold or block is kept, and learned with weight 0.5 once the user passes MFA or an administrator releases the block.</li>
+            <li><strong>Past decision records</strong> are stored in the vector store only for decisions that were applied; records older than 90 days (<code>contexa.rag.etl.behavior.retention-days</code>) are deleted every day at 03:45. Zero or less keeps them forever.</li>
+            <li><strong>The behavioral baseline</strong> is deleted after 30 days (<code>contexa.security.zerotrust.baseline.retention</code>) without new learning.</li>
+          </ul>
+
+          <h2 id="settings">Settings you will change most</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>Whether decisions are made and applied (<code>DISABLED</code> · <code>OBSERVE</code> · <code>SHADOW</code> · <code>ENFORCE</code>)</td><td>Start with <code>SHADOW</code>, then switch to <code>ENFORCE</code>. <a href="../../install/shadow-mode.html">Enforcement modes</a></td></tr>
+              <tr><td><code>contexa.security.tiered.llm.layer1.model</code><br><code>contexa.security.tiered.llm.layer2.model</code></td><td>none (primary chat model)</td><td>The model of each layer</td><td>To use a fast model for Layer 1 and a careful one for Layer 2</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.timeout.llm-ms</code></td><td><code>90000</code></td><td>Layer 1 time limit (ms)</td><td>When a slow model often exceeds Layer 1's limit</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.timeout-ms</code></td><td><code>30000</code></td><td>Layer 2 time limit (ms)</td><td>When a slow Layer 2 model leaves holds</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.escalate-fallback-action</code></td><td><code>CHALLENGE</code></td><td>The action used when Layer 2 also chooses hold</td><td>To treat undecided requests more strictly (<code>BLOCK</code>)</td></tr>
+              <tr><td><code>contexa.security.plane.agent.event-timeout-ms</code></td><td><code>180000</code></td><td>The whole budget for analyzing one event (ms)</td><td>When long model calls end events without a decision</td></tr>
+              <tr><td><code>contexa.rag.etl.behavior.retention-days</code></td><td><code>90</code></td><td>Retention of past decision records (days)</td><td>When your retention policy differs</td></tr>
+            </tbody>
+          </table></div>
+          <p>Every setting is listed in <a href="../../install/configuration.html">Configuration</a>.</p>
+
+          <h2 id="operations">Good to know in operation</h2>
+          <ul>
+            <li><strong>Seeing decisions:</strong> decisions are kept in the observation table (<code>ai_security_decision_observation</code>) and the audit log, and shown in the admin console's security monitor (<code>/contexa/admin/security-monitor</code>).</li>
+            <li><strong>If no decision appears and users stay pending</strong>, check first: the enforcement mode is not <code>OBSERVE</code> or <code>DISABLED</code>, chat model and vector store beans exist, and the observation record database can be written.</li>
+            <li><strong>The analysis queue</strong> holds up to 10,000 events (<code>contexa.security.plane.monitor.queue-size</code>).</li>
+            <li><strong>One event has a 180-second budget.</strong> Waiting more than 60 seconds in the analysis thread pool (default core 32, max 64, queue 256) or exceeding the budget ends the event without a decision; it is queued again at most 3 times.</li>
+            <li><strong>In distributed mode</strong> (<code>contexa.infrastructure.mode=distributed</code>) events go to the Kafka topic <code>security.events.&lt;category&gt;.&lt;type&gt;</code> (for example <code>security.events.authorization.method</code>), and events that could not be handled go to the DLQ topic.</li>
+            <li><code>contexa.security.tiered.layer2.enable-soar</code> has no effect in the OSS today: no code fills the playbook a blocking decision would carry, so no SOAR runs (<a href="../soar/index.html">SOAR</a>).</li>
+          </ul>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="zero-trust-flow.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">The Life of a Request</span>
+            </a>
+            <a href="company-records.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Company Records: Telling Decisions What the Company Knows</span>
+            </a>
+          </div>

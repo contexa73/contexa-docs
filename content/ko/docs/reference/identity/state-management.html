@@ -3,246 +3,207 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">레퍼런스</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">상태 관리</span>
+            <span class="breadcrumb-current">세션과 토큰</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-info">contexa-identity</span>
             </div>
-            <h1>상태 관리</h1>
-            <p class="lead">인증 후 상태 관리 전략입니다. Session(서버 메모리/Redis) 또는 OAuth2(JWT Stateless) 중 선택할 수 있습니다. 각 인증 방식은 서로 다른 상태로 독립적으로 구성할 수 있습니다.</p>
+            <h1>세션과 토큰</h1>
+            <p class="lead">로그인한 뒤 그 상태를 서버 세션에 둘지(<code>.session()</code>), 토큰(JWT)으로 주고받을지(<code>.oauth2()</code>) 고르는 방법입니다. 켜는 데 꼭 필요한 설정과 확인 방법, 사람은 세션 · 에이전트는 토큰으로 나누는 방법, 토큰 검사와 위임 토큰을 설명합니다.</p>
           </div>
 
-          <!-- Overview -->
-          <section class="docs-section">
-            <h2 id="overview">개요</h2>
-            <p>DSL에서 인증 방식 뒤에 <code>.session()</code> 또는 <code>.oauth2()</code>를 호출하여 상태를 구성합니다. <code>AbstractFlowRegistrar.StateSetter</code>는 가장 최근에 추가된 플로우에 상태를 적용합니다.</p>
+          <div class="callout callout-info">
+            <strong>Contexa가 로그인을 맡을 때(<code>CONTEXA_OWNED</code>)의 기능입니다.</strong> 기본값 <code>HOST_OWNED</code>에서는 앱의 Spring Security가 세션 · 토큰을 맡고, Contexa 인가 서버와 리소스 서버 구성은 만들어지지 않습니다. 앱의 기존 로그인을 그대로 쓰려면 <a href="../common/bridge.html">기존 로그인과 연결하기</a>를 보세요.
+          </div>
 
-<pre><code class="language-java">registry
-    .form(f -&gt; f.loginPage("/login"))
-    .session(Customizer.withDefaults())      // form -&gt; Session
+          <h2 id="choose">세션과 토큰 중 고르기</h2>
+          <p>흐름마다 인증 방법 다음에 상태를 하나 고릅니다(<a href="dsl.html#flows">인증 방법과 상태 고르기</a>). 흐름마다 다르게 고를 수 있습니다.</p>
+          <pre><code class="language-java">registry
+        .form(form -&gt; form.defaultSuccessUrl("/home"))
+        .session(Customizer.withDefaults())       // 사람: 세션
+        .rest(rest -&gt; rest.order(50))
+        .oauth2(Customizer.withDefaults())        // API 클라이언트: 토큰
+        .build();</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>항목</th><th><code>.session()</code></th><th><code>.oauth2()</code></th></tr></thead>
+            <tbody>
+              <tr><td>로그인 저장</td><td>서블릿 컨테이너의 HTTP 세션. 여러 서버가 세션을 나누려면 앱이 Spring Session 등을 직접 구성합니다</td><td>저장하지 않고 요청마다 토큰을 검증합니다(<code>STATELESS</code>). 인가 정보 · 갱신 토큰은 Contexa DB에 둡니다</td></tr>
+              <tr><td>맞는 곳</td><td>서버가 그리는 화면</td><td>SPA · 모바일 앱 · API · 에이전트</td></tr>
+              <tr><td>세션 고정 방지</td><td>로그인할 때 세션 ID를 바꿈</td><td>해당 없음</td></tr>
+              <tr><td>CSRF</td><td>Spring 기본대로 켜짐</td><td><code>HEADER</code> 전송은 <code>contexa.auth.oauth2-csrf</code>(기본 꺼짐), <code>COOKIE</code> 전송은 늘 켜짐</td></tr>
+              <tr><td>로그아웃</td><td>세션 무효화 · 로그인 지움 · 토큰 쿠키 지움 · Contexa 정리</td><td><code>POST /logout</code>: Contexa 로그아웃 처리기가 토큰의 인가 정보를 무효화하고 토큰 쿠키를 지움(인가 서버를 포함하는 모드)</td></tr>
+              <tr><td>Zero Trust 판정 적용</td><td>세션 로그인 저장소가 로그인 정보를 꺼낼 때</td><td>토큰 검증 바로 뒤 <code>AIOAuth2ZeroTrustFilter</code></td></tr>
+              <tr><td>꼭 할 설정</td><td>없음</td><td><code>contexa.auth.oauth2.client-secret</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>Contexa의 Redis(분산 모드)는 판정 저장소 · MFA 세션 · 세션 추적에 쓰이며, 앱의 HTTP 세션을 Redis에 두지는 않습니다.</p>
 
-    .rest(r -&gt; r.loginProcessingUrl("/api/auth"))
-    .oauth2(Customizer.withDefaults())        // rest -&gt; OAuth2
+          <h2 id="session">세션 상태</h2>
+          <p><code>.session(Customizer.withDefaults())</code>로 켭니다.</p>
+          <ul>
+            <li>로그인할 때 세션 ID를 바꿉니다(<code>changeSessionId</code>).</li>
+            <li>로그아웃 주소는 <code>/logout</code>입니다. 접두사가 있는 MFA 흐름은 <code>&lt;접두사&gt;/logout</code>입니다.</li>
+            <li>로그아웃하면 세션을 무효화하고 로그인을 지운 뒤, Contexa 로그아웃 처리기(<code>compositeLogoutHandler</code>)가 Contexa 쪽 정리와 토큰 쿠키 지우기를 합니다.</li>
+            <li>로그아웃 뒤 이동: 접두사가 있는 MFA 흐름은 <code>&lt;접두사&gt;/mfa/login</code>, 그 밖의 세션 흐름은 <code>/contexa/admin/login</code>으로 정해져 있습니다.</li>
+          </ul>
+          <p><code>.session(...)</code>에 넘기는 구성자에는 바꿀 옵션이 없습니다. 동시 세션 수 같은 세션 설정은 흐름 옵션 <code>sessionManagement(...)</code>로 합니다.</p>
+          <pre><code class="language-java">registry
+        .form(form -&gt; form.sessionManagement(session -&gt; session.maximumSessions(1)))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <h3 id="session-verify">확인하기</h3>
+          <ul>
+            <li>로그인 전후로 세션 쿠키 값이 바뀝니다.</li>
+            <li><code>POST /logout</code> 뒤에는 세션이 끝나고 위의 로그아웃 뒤 주소로 이동합니다.</li>
+          </ul>
 
-    .mfa(m -&gt; m.primaryAuthentication(...).passkey(...))
-    .session(Customizer.withDefaults())        // mfa -&gt; Session
-
-    .build();</code></pre>
-          </section>
-
-          <!-- Comparison Table -->
-          <section class="docs-section">
-            <h2 id="comparison">Session vs OAuth2 비교</h2>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>항목</th><th>Session</th><th>OAuth2</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>상태 저장소</td><td>기본은 서버 메모리이며, 분산 배포에서는 Redis 기반 공유 저장소를 선택적으로 사용할 수 있음</td><td>JWT 토큰 (Stateless)</td></tr>
-                <tr><td>적합한 용도</td><td>전통적인 웹 앱, SSR</td><td>SPA, API, 마이크로서비스</td></tr>
-                <tr><td>확장성</td><td>기본적으로는 인메모리 세션 상태로 동작하며, 다중 인스턴스 공유가 필요할 때 Redis 연동을 선택할 수 있습니다</td><td>Stateless (수평 확장 용이)</td></tr>
-                <tr><td>내장 보안</td><td>세션 고정 공격 보호 (sessionFixation().changeSessionId())</td><td>JWT + OIDC + Zero Trust Filter</td></tr>
-                <tr><td>CSRF</td><td>필수 (쿠키 기반)</td><td>불필요 (토큰 기반)</td></tr>
-                <tr><td>로그아웃</td><td>세션 무효화 + 쿠키 삭제</td><td><code>CompositeLogoutHandler</code>와 <code>DeviceAwareOAuth2AuthorizationService</code>를 통한 인가 정보 무효화</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- Session-Based -->
-          <section class="docs-section">
-            <h2 id="session">Session 기반</h2>
-            <p><code>.session(Customizer.withDefaults())</code>로 구성합니다. 전통적인 웹 애플리케이션 및 서버 사이드 렌더링에 적합합니다.</p>
-
-            <h3>자동 적용 항목</h3>
-            <ul>
-              <li><code>sessionFixation().changeSessionId()</code> -- 세션 고정 공격 보호</li>
-              <li>로그아웃 시 세션 무효화 + 쿠키 삭제</li>
-              <li><code>CompositeLogoutHandler</code> 통합 (Strategy 패턴)</li>
-            </ul>
-
-            <h3>rawHttp를 통한 추가 구성</h3>
-<pre><code class="language-java">.form(f -&gt; f
-    .rawHttp(http -&gt; http.sessionManagement(s -&gt; s
-        .maximumSessions(1)
-        .maxSessionsPreventsLogin(true)))
-)
-.session(Customizer.withDefaults())</code></pre>
-          </section>
-
-          <!-- OAuth2-Based -->
-          <section class="docs-section">
-            <h2 id="oauth2">OAuth2 기반</h2>
-            <p><code>.oauth2(Customizer.withDefaults())</code>로 구성합니다. SPA, 마이크로서비스, API 서버에 적합합니다.</p>
-
-            <h3>자동 적용 항목</h3>
-            <ul>
-              <li><strong>Resource Server</strong>: JWT 인증 컨버터, 인증 실패/접근 거부 핸들러, <code>SessionCreationPolicy.STATELESS</code></li>
-              <li><strong>Authorization Server</strong>: <code>AuthorizationService</code>, <code>ClientRepository</code>, 토큰 엔드포인트, <code>authenticated_user</code> grant type, OIDC 지원</li>
-              <li>OAuth2 CSRF: <code>spring.auth.oauth2-csrf</code> 설정으로 제어</li>
-            </ul>
-
-            <h3>authenticated_user Grant Type</h3>
-            <p>Identity 인증(Form, REST, MFA)을 완료한 사용자에게 OAuth2 토큰을 발급하는 커스텀 grant type입니다. 전통적인 인증과 OAuth2 토큰 발급을 연결하는 브릿지 역할을 합니다.</p>
-
-<pre class="arch-diagram"><code>
-  authenticated_user Grant Flow
-  ===============================
-
-  [Form/REST/MFA Authentication Complete]
-           |
-           v
-  [AuthenticatedUserGrantAuthenticationProvider]
-           |
-           +-- Client Verification
-           +-- User Lookup (UserRepository)
-           +-- Scope Resolution
-           +-- Access Token Generation (JWT)
-           +-- Refresh Token Generation (optional)
-           +-- Authorization Persistence (transactional)
-           |
-           v
-  [JWT Token Issuance Complete]
-</code></pre>
-          </section>
-
-          <!-- Configuration Properties -->
-          <section class="docs-section">
-            <h2 id="config-properties">설정 속성</h2>
-            <p><code>AuthContextProperties</code> (<code>spring.auth.*</code>)의 핵심 설정입니다.</p>
-
-            <h3 id="core-settings">핵심 설정 (spring.auth.*)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>state-type</code></td><td>enum</td><td><code>OAUTH2</code></td><td>인증 상태 타입 (OAUTH2, SESSION)</td></tr>
-                <tr><td><code>token-transport-type</code></td><td>enum</td><td><code>HEADER</code></td><td>토큰 전송 방식 (HEADER, COOKIE, HEADER_COOKIE)</td></tr>
-                <tr><td><code>token-issuer</code></td><td>enum</td><td><code>INTERNAL</code></td><td>토큰 발급자 (INTERNAL, AUTHORIZATION_SERVER)</td></tr>
-                <tr><td><code>factor-selection-type</code></td><td>enum</td><td><code>SELECT</code></td><td>MFA 인증 요소 선택 전략</td></tr>
-                <tr><td><code>access-token-validity</code></td><td>long (ms)</td><td>3600000 (1시간)</td><td>Access 토큰 유효 기간</td></tr>
-                <tr><td><code>refresh-token-validity</code></td><td>long (ms)</td><td>604800000 (7일)</td><td>Refresh 토큰 유효 기간</td></tr>
-                <tr><td><code>refresh-rotate-threshold</code></td><td>long (ms)</td><td>43200000 (12시간)</td><td>Refresh 토큰 회전 임계값</td></tr>
-                <tr><td><code>enable-refresh-token</code></td><td>boolean</td><td>true</td><td>Refresh 토큰 활성화</td></tr>
-                <tr><td><code>allow-multiple-logins</code></td><td>boolean</td><td>false</td><td>동시 다중 로그인 허용</td></tr>
-                <tr><td><code>max-concurrent-logins</code></td><td>int</td><td>3</td><td>최대 동시 로그인 수</td></tr>
-                <tr><td><code>cookie-secure</code></td><td>boolean</td><td>true</td><td>Cookie Secure 플래그</td></tr>
-                <tr><td><code>token-persistence</code></td><td>String</td><td>"memory"</td><td>생성된 로그인/MFA 페이지와 SDK에 전달되는 기본 토큰 저장 방식</td></tr>
-                <tr><td><code>token-prefix</code></td><td>String</td><td>"Bearer "</td><td>토큰 접두사</td></tr>
-                <tr><td><code>roles-claim</code></td><td>String</td><td>"roles"</td><td>JWT roles claim</td></tr>
-                <tr><td><code>scopes-claim</code></td><td>String</td><td>"scopes"</td><td>JWT scopes claim</td></tr>
-                <tr><td><code>oauth2-csrf</code></td><td>boolean</td><td>false</td><td>OAuth2 CSRF 보호</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>TokenTransportType 상세</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>값</th><th>accessToken</th><th>refreshToken</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>HEADER</code></td><td>HTTP Header</td><td>HTTP Header</td></tr>
-                <tr><td><code>COOKIE</code></td><td>Cookie</td><td>Cookie</td></tr>
-                <tr><td><code>HEADER_COOKIE</code> (권장)</td><td>HTTP Header</td><td>Cookie</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="oauth2-settings">OAuth2 설정 (spring.auth.oauth2.*)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>client-id</code></td><td><code>default-client</code></td><td>OAuth2 클라이언트 ID</td></tr>
-                <tr><td><code>client-secret</code></td><td><code>173f8245-5f7d-4623-a612-aa0c68f6da4a</code></td><td>클라이언트 시크릿</td></tr>
-                <tr><td><code>issuer-uri</code></td><td><code>http://localhost:9000</code></td><td>토큰 발급자 URI</td></tr>
-                <tr><td><code>token-endpoint</code></td><td><code>/oauth2/token</code></td><td>Authorization Server 토큰 엔드포인트</td></tr>
-                <tr><td><code>scope</code></td><td><code>read</code></td><td>기본 요청 scope</td></tr>
-                <tr><td><code>redirect-uri</code></td><td><code>http://localhost:8080</code></td><td>클라이언트 리다이렉트 URI</td></tr>
-                <tr><td><code>authorized-uri</code></td><td>미설정</td><td>선택적 사전 승인 리다이렉트 URI</td></tr>
-                <tr><td><code>jwk-key-store-path</code></td><td>미설정</td><td>JWK 키스토어 경로</td></tr>
-                <tr><td><code>jwk-key-store-password</code></td><td>미설정</td><td>키스토어 비밀번호</td></tr>
-                <tr><td><code>jwk-key-alias</code></td><td>미설정</td><td>키 별칭</td></tr>
-                <tr><td><code>jwk-key-password</code></td><td>미설정</td><td>키 비밀번호</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="mfa-settings">MFA 설정 (spring.auth.mfa.*)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>session-timeout-ms</code></td><td>600000 (10분)</td><td>MFA 세션 타임아웃</td></tr>
-                <tr><td><code>challenge-timeout-ms</code></td><td>300000 (5분)</td><td>챌린지 타임아웃</td></tr>
-                <tr><td><code>inactivity-timeout</code></td><td>900000 (15분)</td><td>비활성 MFA 세션 타임아웃</td></tr>
-                <tr><td><code>cache-ttl</code></td><td>300000 (5분)</td><td>MFA 상태 캐시 TTL</td></tr>
-                <tr><td><code>session-refresh-interval-ms</code></td><td>30000 (30초)</td><td>활성 MFA 세션 갱신 주기</td></tr>
-                <tr><td><code>state-machine-timeout-ms</code></td><td>10000 (10초)</td><td>상태 머신 실행 타임아웃</td></tr>
-                <tr><td><code>max-retry-attempts</code></td><td>5</td><td>최대 재시도 횟수</td></tr>
-                <tr><td><code>account-lockout-duration-ms</code></td><td>900000 (15분)</td><td>계정 잠금 기간</td></tr>
-                <tr><td><code>minimum-delay-ms</code></td><td>500</td><td>민감한 MFA 동작 사이의 최소 지연</td></tr>
-                <tr><td><code>otp-token-validity-seconds</code></td><td>300</td><td>OTP 유효 기간 (초)</td></tr>
-                <tr><td><code>otp-token-length</code></td><td>6</td><td>OTP 코드 길이</td></tr>
-                <tr><td><code>sms-resend-interval-seconds</code></td><td>60</td><td>SMS 재전송 최소 간격</td></tr>
-                <tr><td><code>email-resend-interval-seconds</code></td><td>120</td><td>이메일 재전송 최소 간격</td></tr>
-                <tr><td><code>device-remember-duration-ms</code></td><td>2592000000 (30일)</td><td>기기 신뢰 유지 기간</td></tr>
-                <tr><td><code>state-machine-pool-size</code></td><td>100</td><td>상태 머신 작업 풀 크기</td></tr>
-                <tr><td><code>state-machine-cache-ttl-ms</code></td><td>300000 (5분)</td><td>상태 머신 캐시 TTL</td></tr>
-                <tr><td><code>circuit-breaker-failure-threshold</code></td><td>5</td><td>서킷 브레이커 실패 임계값</td></tr>
-                <tr><td><code>circuit-breaker-timeout-seconds</code></td><td>30</td><td>서킷 브레이커 타임아웃</td></tr>
-                <tr><td><code>detailed-logging-enabled</code></td><td>false</td><td>상세 MFA 디버그 로그 활성화</td></tr>
-                <tr><td><code>metrics-enabled</code></td><td>true</td><td>MFA 메트릭 활성화</td></tr>
-                <tr><td><code>audit-logging-enabled</code></td><td>true</td><td>MFA 감사 로그 활성화</td></tr>
-                <tr><td><code>session-storage-type</code></td><td>http-session</td><td>MFA 세션 저장소 기본 유형</td></tr>
-                <tr><td><code>auto-select-repository</code></td><td>false</td><td>세션 저장소 자동 선택 여부</td></tr>
-                <tr><td><code>repository-priority</code></td><td><code>redis,memory,http-session</code></td><td>저장소 선택 우선순위</td></tr>
-                <tr><td><code>fallback-repository-type</code></td><td><code>http-session</code></td><td>대체 저장소 유형</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>MFA 하위 설정 그룹</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Prefix</th><th>설명</th><th>대표 기본값</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>spring.auth.mfa.http-session.*</code></td><td>HTTP Session 기반 MFA 저장소 설정</td><td><code>enabled=true</code>, <code>session-attribute-name=MFA_SESSION_ID</code></td></tr>
-                <tr><td><code>spring.auth.mfa.redis.*</code></td><td>분산 배포용 Redis 기반 MFA 저장소 설정</td><td><code>key-prefix=mfa:session:</code>, <code>cookie-name=MFA_SID</code>, <code>same-site=Strict</code></td></tr>
-                <tr><td><code>spring.auth.mfa.memory.*</code></td><td>인메모리 MFA 저장소 튜닝</td><td><code>cleanup-interval-minutes=5</code>, <code>max-sessions=10000</code></td></tr>
-                <tr><td><code>spring.auth.mfa.sms-factor.*</code></td><td>SMS 요소 전송 설정</td><td><code>provider=default</code>, <code>template-id=mfa_sms_template</code>, <code>enabled=true</code></td></tr>
-                <tr><td><code>spring.auth.mfa.email-factor.*</code></td><td>이메일 요소 전송 설정</td><td><code>from-address=noreply@company.com</code>, <code>template-id=mfa_email_template</code>, <code>enabled=true</code></td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>application.yml 예제</h3>
-<pre><code class="language-yaml">spring:
+          <h2 id="oauth2">토큰 상태(OAuth2)</h2>
+          <p><code>.oauth2(Customizer.withDefaults())</code>로 켭니다. Contexa가 Spring Authorization Server와 Spring 리소스 서버를 그 체인에 구성합니다.</p>
+          <h3 id="oauth2-required">꼭 필요한 설정</h3>
+          <ul>
+            <li><strong>조건:</strong> <code>CONTEXA_OWNED</code>, Contexa DB(<code>contexaJdbcTemplate</code> · <code>contexaTransactionTemplate</code> 빈), 클래스패스의 Spring Authorization Server.</li>
+            <li><strong><code>contexa.auth.oauth2.client-secret</code>:</strong> 토큰 흐름이 하나라도 있고 서버 모드가 인가 서버를 포함하면(기본 <code>COMBINED</code>) 꼭 있어야 합니다. 비어 있으면 시작이 실패합니다. 예전 기본값(<code>173f8245-…</code>)은 거부되고, DB에 이미 저장된 클라이언트의 비밀값이 이 값과 맞지 않아도 시작이 실패합니다. 재시작 뒤에도 같은 값을 쓰세요.</li>
+            <li><strong>서명 키스토어:</strong> <code>contexa.auth.oauth2.jwk-key-store-path</code>를 두지 않으면 시작할 때마다 바뀌는 임시 RSA 키로 서명하므로, 재시작하면 기존 토큰이 모두 무효가 됩니다(시작 때 오류 로그). 경로는 클래스패스에서 찾고, 파일이면 <code>file:</code>을 붙입니다. 키스토어 형식은 PKCS12이고, 파일이 없으면 시작이 실패합니다.</li>
+          </ul>
+          <pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+    username: contexa
+    password: contexa
+  bridge:
+    ownership: CONTEXA_OWNED
   auth:
-    state-type: OAUTH2
-    token-transport-type: header_cookie
-    access-token-validity: 3600000
-    enable-refresh-token: true
     oauth2:
-      client-id: my-client
-      issuer-uri: https://auth.example.com
-      jwk-key-store-path: classpath:keystore.jks
-    mfa:
-      session-timeout-ms: 600000
-      otp-token-validity-seconds: 300
-      session-storage-type: redis
-      redis:
-        key-prefix: mfa:session:
-        cookie-name: MFA_SID</code></pre>
+      client-secret: replace-with-a-long-random-secret
+      jwk-key-store-path: file:/etc/contexa/jwk.p12
+      jwk-key-store-password: change-me
+      jwk-key-alias: contexa
+      jwk-key-password: change-me</code></pre>
+          <h3 id="oauth2-applied">자동으로 붙는 것</h3>
+          <ul>
+            <li><strong>리소스 서버:</strong> JWT 검증, Contexa 토큰 변환기, 401 · 403 처리기, 상태 없음(<code>STATELESS</code>).</li>
+            <li><strong>인가 서버:</strong> <code>OAuth2AuthorizationService</code>, <code>RegisteredClientRepository</code>, 토큰 엔드포인트, OIDC, 로그인한 사용자에게 토큰을 주는 그랜트(<a href="#authenticated-user-grant">아래</a>).</li>
+            <li><strong>서버 모드</strong> <code>contexa.auth.oauth2-server-mode</code>: <code>RESOURCE_SERVER</code>(검증만) · <code>AUTHORIZATION_SERVER</code>(발급만) · <code>COMBINED</code>(둘 다, 기본).</li>
+            <li>앱이 <code>OAuth2TokenGenerator</code> 빈이나 <code>BearerTokenResolver</code> 빈을 하나 두면 Contexa는 그 빈을 그대로 씁니다.</li>
+          </ul>
+          <h3 id="transport">토큰 전달 방식</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>contexa.auth.token-transport-type</code></th><th>접근 토큰</th><th>갱신 토큰</th><th>맞는 곳</th></tr></thead>
+            <tbody>
+              <tr><td><code>HEADER</code>(기본)</td><td>응답 본문 → 요청의 <code>Authorization</code> 헤더</td><td>응답 본문</td><td>SPA · 모바일 · API</td></tr>
+              <tr><td><code>COOKIE</code></td><td>쿠키 <code>accessToken</code></td><td>쿠키 <code>refreshToken</code></td><td>서버가 그리는 화면. CSRF가 늘 켜지고, 쿠키 토큰을 읽고 갱신하는 필터가 붙습니다</td></tr>
+              <tr><td><code>HEADER_COOKIE</code></td><td>응답 본문 → 헤더</td><td>쿠키 <code>refreshToken</code></td><td>갱신 토큰을 스크립트에서 감추고 싶을 때</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>서버가 그리는 화면에는 <code>COOKIE</code> 전송을 쓰세요.</strong> <code>HEADER</code> · <code>HEADER_COOKIE</code> 전송에 토큰 보관이 메모리(<code>contexa.auth.token-persistence: memory</code>, 기본)이면, 브라우저가 화면을 이동할 때 접근 토큰이 실리지 않아 로그인 뒤 화면이 로그인 안 된 상태로 보입니다. Contexa는 시작할 때 이 조합을 오류 로그로 알립니다.
+          </div>
+          <h3 id="authenticated-user-grant">로그인 뒤 토큰 발급</h3>
+          <p>폼 · REST · MFA 로그인을 마친 사용자에게 토큰을 주는 그랜트 <code>urn:ietf:params:oauth:grant-type:authenticated-user</code>가 있습니다. 로그인이 성공하면 Contexa가 같은 앱 안에서 내부 클라이언트로 이 그랜트를 요청해 토큰을 받고, 성공 응답에 싣습니다. <code>contexaTransactionTemplate</code> 빈이 있을 때 구성됩니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>authenticated-user 그랜트</strong>로그인을 마친 사용자에게 토큰을 발급하는 단계입니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">로그인 완료</span><span class="dg-node-desc">폼 · REST · MFA</span></li>
+              <li class="dg-node"><span class="dg-node-title">클라이언트 확인 · 사용자 조회</span><span class="dg-node-desc">등록된 클라이언트인지, 사용자와 역할 · 권한</span></li>
+              <li class="dg-node"><span class="dg-node-title">범위 정하기 · 접근 토큰(JWT) 만들기</span><span class="dg-node-desc">클라이언트에 등록된 범위 안에서</span></li>
+              <li class="dg-node"><span class="dg-node-title">갱신 토큰</span><span class="dg-node-desc">클라이언트가 <code>refresh_token</code> 그랜트를 가질 때만</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-title">인가 정보 저장</span><span class="dg-node-desc">트랜잭션 안에서 Contexa DB에</span></li>
+            </ol>
+          </figure>
+          <h3 id="oauth2-verify">확인하기</h3>
+          <pre><code class="language-http">POST /api/login
+Content-Type: application/json
 
+{"username": "alice", "password": "s3cret"}</code></pre>
+          <p>응답의 <code>accessToken</code>을 <code>Authorization: Bearer …</code>로 실어 보호된 API를 부르면 응답하고, 빼면 401이 옵니다. 갱신은 <code>POST /api/refresh</code>(<code>contexa.auth.internal.refresh-uri</code>)입니다.</p>
+
+          <h2 id="request-scope">사람은 세션, 에이전트는 토큰(요청 범위)</h2>
+          <p>한 앱에서 사람은 세션 흐름으로 쓰고, 에이전트와 API 클라이언트는 토큰으로 부르게 할 수 있습니다. 기본으로 토큰 흐름의 체인은 그 흐름이 맡는 요청을 모두 받습니다(모든 요청, 또는 <code>urlPrefix</code> 아래). 요청 범위를 <code>TOKEN_REQUESTS</code>로 두면 토큰에 속한 요청만 받고 나머지는 다음 흐름으로 넘깁니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>요청 범위로 나누기</strong>토큰 흐름을 세션 흐름보다 앞(더 작은 order)에 둡니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">요청</span></li>
+              <li class="dg-node"><span class="dg-node-tag">order 50</span><span class="dg-node-title">토큰 흐름(<code>TOKEN_REQUESTS</code>)</span><span class="dg-node-desc">접근 토큰을 실었거나 토큰 · 인증 주소면 여기서 처리</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">order 100</span><span class="dg-node-title">세션 흐름</span><span class="dg-node-desc">나머지 요청(사람의 화면)</span></li>
+            </ol>
+          </figure>
+          <p><code>TOKEN_REQUESTS</code> 흐름이 받는 요청:</p>
+          <ul>
+            <li>체인이 읽는 방식 그대로 접근 토큰을 실은 요청: <code>Authorization: Bearer</code> 헤더, <code>COOKIE</code> 전송이면 접근 토큰 쿠키(앱이 <code>BearerTokenResolver</code> 빈을 두었으면 그 빈). 형식이 잘못된 토큰도 여기로 와서 401로 거부됩니다.</li>
+            <li><code>Authorization</code> 헤더를 보내겠다고 알리는 CORS 사전 요청.</li>
+            <li>그 체인의 인가 서버 엔드포인트(토큰, JWK 세트, 검사, 폐기, 메타데이터, OIDC)와 갱신 주소.</li>
+            <li>그 흐름의 인증 주소(로그인 처리 주소, 일회용 코드 · 패스키 엔드포인트, MFA 흐름의 화면과 엔드포인트)와 <code>urlPrefix</code>.</li>
+            <li><code>tokenScopeRequests(...)</code>로 더한 요청. 예: 클라이언트가 토큰을 받기 전에 읽는 메타데이터 경로.</li>
+          </ul>
+          <pre><code class="language-java">registry
+        .rest(rest -&gt; rest
+                .loginProcessingUrl("/api/agent/login")
+                .order(50))
+        .oauth2(oauth2 -&gt; oauth2.requestScope(OAuth2RequestScope.TOKEN_REQUESTS))
+        .form(form -&gt; form.defaultSuccessUrl("/home"))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <ul>
+            <li>순서가 같은 흐름은 적은 순서를 따릅니다. 모든 요청을 받는 흐름 뒤의 흐름은 요청을 받지 못하며, Contexa가 시작할 때 오류 로그로 알립니다.</li>
+            <li><code>urlPrefix</code>가 없으면 MFA 흐름들의 주소가 모두 같으므로, 토큰 범위 MFA 흐름에는 자기 접두사를 주세요.</li>
+            <li>요청 범위가 체인의 요청 매처를 정하므로 <code>rawHttp</code>로 매처를 따로 정하지 말고, 경로는 <code>tokenScopeRequests(...)</code>로 더하세요.</li>
+            <li>토큰 범위 흐름에서 로그아웃할 때는 접근 토큰을 실어 보내세요. 토큰 없는 로그아웃은 세션 흐름으로 갑니다.</li>
+          </ul>
+
+          <h2 id="token-checks">토큰 검사와 판정</h2>
+          <p>Contexa 리소스 서버는 Contexa가 요청을 읽기 전에 Spring 검증기로 모든 접근 토큰을 검사합니다: 서명, 유효 기간, 발급자(<code>contexa.auth.oauth2.issuer-validation-enabled</code>, 기본 켜짐), 그리고 <code>contexa.auth.oauth2.audiences</code>를 정했으면 대상(<code>aud</code>). Contexa 인가 서버는 토큰을 받은 클라이언트의 ID를 대상으로 적으므로, 이 앱이 받아 줄 클라이언트를 적으세요. 검사에 실패한 토큰은 401로 거부되고, 그 요청에는 Contexa 필터도 판정도 돌지 않습니다.</p>
+          <p>Contexa 판정은 권한을 더하지 않습니다. ALLOW는 토큰이 준 권한을 그대로 두고, CHALLENGE · BLOCK · ESCALATE는 원래 권한을 지우고 판정 표시 권한 하나만 남깁니다(<a href="zero-trust-filters.html#authorities">권한이 바뀌는 방식</a>). 작업을 범위에 묶으려면 <code>hasAuthority("SCOPE_reports.write")</code> 같은 Spring 규칙을 쓰세요. 그 범위가 없는 토큰은 판정과 상관없이 거부됩니다.</p>
+          <p>앱이 자기 리소스 서버로 토큰을 검증한다면 그 디코더에 같은 검사를 거세요.</p>
+          <pre><code class="language-java">@Bean
+JwtDecoder jwtDecoder() {
+    NimbusJwtDecoder decoder = NimbusJwtDecoder.withIssuerLocation("https://idp.example.com").build();
+    decoder.setJwtValidator(JwtValidators.createDefaultWithValidators(
+            new JwtIssuerValidator("https://idp.example.com"),
+            new JwtAudienceValidator("https://api.example.com")));
+    return decoder;
+}</code></pre>
+
+          <h2 id="token-exchange">위임 토큰(토큰 교환)</h2>
+          <p>사람을 대신해 일하는 에이전트는 둘을 모두 밝힌 토큰을 받습니다. 사람은 <code>sub</code>, 에이전트는 행위자(<code>act</code>, RFC 8693)입니다. <code>contexa.auth.oauth2.token-exchange-enabled: true</code>로 이 그랜트를 켭니다. 기본은 꺼져 있고, 꺼져 있는 동안 토큰 엔드포인트는 모든 클라이언트의 교환 요청을 <code>unsupported_grant_type</code>으로 거부합니다.</p>
+          <p>에이전트의 클라이언트를 Spring의 <code>RegisteredClientRepository</code> 빈에 <code>client_credentials</code>와 <code>urn:ietf:params:oauth:grant-type:token-exchange</code> 그랜트, 에이전트가 받을 수 있는 범위로 등록하고, 그 클라이언트 ID로 에이전트를 등록하세요(<a href="../agent/overview.html#register">에이전트 등록</a>). 그러면 에이전트가 자기 토큰을 행위자 토큰으로 내고 사람의 토큰을 교환합니다.</p>
+          <pre><code class="language-http">POST /oauth2/token
+Authorization: Basic (에이전트 클라이언트 자격 증명)
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+&amp;subject_token=(사람의 접근 토큰)
+&amp;subject_token_type=urn:ietf:params:oauth:token-type:access_token
+&amp;actor_token=(에이전트 자신의 접근 토큰)
+&amp;actor_token_type=urn:ietf:params:oauth:token-type:access_token
+&amp;scope=reports.read</code></pre>
+          <ul>
+            <li>두 토큰 모두 이 인가 서버가 발급했고 아직 유효해야 합니다. 사람의 토큰에 <code>may_act</code>가 있으면 거기 적힌 행위자만 교환할 수 있습니다.</li>
+            <li>범위는 요청한 범위이며 에이전트 클라이언트에 등록된 범위 안이어야 합니다.</li>
+            <li>발급된 토큰은 <code>sub</code> = 사람, <code>act.sub</code> = 에이전트 클라이언트, <code>client_id</code> = 에이전트 클라이언트입니다. 리소스 서버는 이 요청을 사람으로 인증하고(사람의 권한과 토큰 범위), 판정은 그 사람을 대신하는 등록 에이전트를 기록합니다.</li>
+            <li>Contexa가 발급하는 토큰은 Spring Authorization Server의 토큰 생성기로 만들어지며, 이 생성기가 Contexa 클레임(<code>client_id</code>, 로그인 사실, 역할)보다 먼저 토큰 교환의 <code>act</code>와 DPoP · mTLS 클라이언트의 <code>cnf</code> 결속을 넣습니다. 그래서 DPoP 증명을 보낸 토큰 요청은 보낸 쪽에 묶인 토큰(<code>token_type</code> <code>DPoP</code>)을 받습니다. <code>OAuth2TokenGenerator</code> 빈을 직접 두면 그 빈을 그대로 쓰므로 이 클레임은 그 빈이 넣어야 합니다.</li>
+          </ul>
+
+          <h2 id="settings">자주 바꾸는 설정</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻 · 언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.oauth2.client-secret</code></td><td>없음</td><td>토큰 흐름이 있으면 꼭 적어야 함. 재시작 뒤에도 같은 값</td></tr>
+              <tr><td><code>contexa.auth.oauth2.jwk-key-store-path</code></td><td>없음</td><td>토큰 서명 키스토어. 운영과 여러 서버에서는 꼭 지정</td></tr>
+              <tr><td><code>contexa.auth.token-transport-type</code></td><td><code>HEADER</code></td><td>토큰 전달 방식. 서버가 그리는 화면은 <code>COOKIE</code></td></tr>
+              <tr><td><code>contexa.auth.oauth2-server-mode</code></td><td><code>COMBINED</code></td><td>이 앱이 토큰을 발급만 · 검증만 할 때</td></tr>
+              <tr><td><code>contexa.auth.oauth2.token-exchange-enabled</code></td><td><code>false</code></td><td>에이전트 위임 토큰 교환을 켤 때</td></tr>
+            </tbody>
+          </table></div>
+          <p>토큰 유효 시간 · 쿠키 · 발급자 · 대상 등 설정 전체는 <a href="../../install/configuration/identity.html">Contexa가 로그인을 맡을 때의 설정</a>에 있습니다.</p>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/identity/asep.html" class="docs-nav-link prev">
+            <a href="asep.html" class="docs-nav-link prev">
               <span class="docs-nav-label">이전</span>
-              <span class="docs-nav-title">ASEP 어노테이션</span>
+              <span class="docs-nav-title">ASEP 보안 예외 처리</span>
             </a>
-            <a href="../../../docs/reference/iam/xacml.html" class="docs-nav-link next">
+            <a href="../iam/xacml.html" class="docs-nav-link next">
               <span class="docs-nav-label">다음</span>
               <span class="docs-nav-title">인가 개요</span>
             </a>

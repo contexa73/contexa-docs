@@ -1,0 +1,124 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Connecting Contexa SaaS</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-secondary">Optional</span>
+            </div>
+            <h1>Connecting Contexa SaaS (Optional)</h1>
+            <p class="lead">An optional feature with which a Contexa application sends decision results and statistics to Contexa SaaS and receives threat signals, detection strategies and baseline seeds to use in decisions. It is off by default; every decision feature of Contexa works without it.</p>
+          </div>
+
+          <div class="callout callout-info">
+            <strong>Know this first.</strong> The sending side (client) of this feature is all in the OSS, but the receiving server is not. The default target is <code>https://saas.ctxa.ai</code>, run by Contexa, and you need OAuth2 client credentials issued by that service to actually send.
+          </div>
+
+          <h2 id="overview">At a glance</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>What is sent and what is received</strong>Each sending and receiving channel is turned on separately. Only decision forwarding comes on with <code>contexa.saas.enabled=true</code>.</figcaption>
+            <div class="dg-lanes">
+              <section class="dg-lane"><h4 class="dg-lane-title">Send<span class="dg-lane-sub">Queued in a database outbox first, sent asynchronously</span></h4>
+                <ul class="dg-stack">
+                  <li class="dg-node"><span class="dg-node-title">Decision forwarding</span><span class="dg-node-desc">Decisions other than allow and pending (pseudonymized)</span></li>
+                  <li class="dg-node"><span class="dg-node-title">Decision feedback · threat outcomes</span><span class="dg-node-desc">When an administrator releases a block</span></li>
+                  <li class="dg-node"><span class="dg-node-title">Prompt context audit</span><span class="dg-node-desc">Hashes only, no prompt text</span></li>
+                  <li class="dg-node"><span class="dg-node-title">Baseline statistics · performance telemetry</span><span class="dg-node-desc">Aggregated periodically</span></li>
+                </ul>
+              </section>
+              <div class="dg-bridge"><span class="dg-bridge-arrow">OAuth2 client_credentials</span><div class="dg-node dg-host"><span class="dg-node-title">Contexa SaaS</span><span class="dg-node-desc">saas.ctxa.ai</span></div></div>
+              <section class="dg-lane"><h4 class="dg-lane-title">Receive<span class="dg-lane-sub">Pulled every hour, used in prompts</span></h4>
+                <ul class="dg-stack">
+                  <li class="dg-node dg-model"><span class="dg-node-title">Threat signals</span><span class="dg-node-desc">At most 3 in a prompt</span></li>
+                  <li class="dg-node dg-model"><span class="dg-node-title">Detection strategy packs</span></li>
+                  <li class="dg-node dg-model"><span class="dg-node-title">Baseline seeds</span><span class="dg-node-desc">Fill in when personal or organization baselines are thin</span></li>
+                </ul>
+              </section>
+            </div>
+          </figure>
+
+          <h2 id="enable">Turning it on</h2>
+          <pre><code class="language-yaml">contexa:
+  saas:
+    enabled: true
+    pseudonymization-secret: ${CONTEXA_SAAS_PSEUDONYM_SECRET}     # at least 32 bytes
+    global-correlation-secret: ${CONTEXA_SAAS_CORRELATION_SECRET} # at least 32 bytes
+    oauth2:
+      client-id: ${CONTEXA_SAAS_CLIENT_ID}
+      client-secret: ${CONTEXA_SAAS_CLIENT_SECRET}</code></pre>
+          <ul>
+            <li>When on, the endpoint, secrets, OAuth2 settings and scopes are checked at startup; the application does not start if they are wrong. The two secrets are refused when empty, left at the development defaults, or shorter than 32 bytes.</li>
+            <li>Decision forwarding first stores to the outbox table of the Contexa database, then sends. Without the outbox repository nothing is sent.</li>
+            <li>A failed send never stops decision processing.</li>
+          </ul>
+
+          <h2 id="what-is-sent">What leaves the application</h2>
+          <ul>
+            <li><strong>Pseudonymization:</strong> user, session and IP are replaced by tenant-scoped HMAC-SHA256 pseudonyms. For the IP a global correlation key is also made so the same IP can be linked across tenants.</li>
+            <li><strong>Sent as is:</strong> the request path, country and city, new-device and impossible-travel flags, Layer 1 and Layer 2 evaluations, the resource ID, user roles, prompt hashes and token counts, and so on.</li>
+            <li><strong>Left out by default:</strong> the reasoning text (<code>include-reasoning</code>, default false) and the raw analysis data (<code>include-raw-analysis-data</code>, default false). The prompt context audit sends hashes only, never the prompt text.</li>
+          </ul>
+
+          <h2 id="delivery">Delivery and retries</h2>
+          <p>Decision forwarding prevents duplicates by correlation ID, stores the item as pending in the outbox and sends it after the transaction ends (<code>POST {endpoint}/api/saas/runtime/xai/decision-ingestions</code>, Bearer token).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Result</th><th>Handling</th></tr></thead>
+            <tbody>
+              <tr><td>Success</td><td>Delivered</td></tr>
+              <tr><td>429 · 5xx · connection failure</td><td>Sent again with exponential backoff (from 1 second up to <code>retry-max-backoff-ms</code> 60000)</td></tr>
+              <tr><td>A 4xx other than 429</td><td>DEAD_LETTER (not sent again)</td></tr>
+              <tr><td>Attempts reach <code>max-retry-attempts</code> (10)</td><td>DEAD_LETTER</td></tr>
+            </tbody>
+          </table></div>
+          <p>Retries run every <code>dispatch-interval-ms</code> (30 seconds) for <code>outbox-batch-size</code> (50) items, and only one server runs them in a cluster.</p>
+
+          <h2 id="channels">Turning on each channel</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Channel</th><th>Setting</th><th>When it sends or receives</th></tr></thead>
+            <tbody>
+              <tr><td>Decision forwarding</td><td><code>contexa.saas.enabled</code></td><td>For each decision (except allow and pending)</td></tr>
+              <tr><td>Decision feedback</td><td><code>contexa.saas.decision-feedback.enabled</code></td><td>When an administrator releases a block</td></tr>
+              <tr><td>Threat outcomes</td><td><code>contexa.saas.threat-outcome.enabled</code></td><td>When an administrator releases a block</td></tr>
+              <tr><td>Prompt context audit</td><td><code>contexa.saas.prompt-context-audit.enabled</code></td><td>When Layer 1 or Layer 2 builds the prompt context</td></tr>
+              <tr><td>Performance telemetry</td><td><code>contexa.saas.performance-telemetry.enabled</code></td><td>Aggregated and sent hourly</td></tr>
+              <tr><td>Baseline statistics · seeds</td><td><code>contexa.saas.baseline-signal.enabled</code></td><td>Organization baseline distributions aggregated per week (starting Monday); each finished week is sent (not with fewer than 3 organization or 25 user baselines). Aggregation and sending run every <code>contexa.saas.baseline-signal.publish-interval-ms</code>, which is 1 day when you do not set it (the 7-day default shown in the Settings Index is not used for this schedule). Seeds received hourly</td></tr>
+              <tr><td>Threat signals</td><td><code>contexa.saas.threat-intelligence.enabled</code></td><td>Received hourly, cached 90 minutes</td></tr>
+              <tr><td>Detection strategies</td><td><code>contexa.saas.detection-strategy.enabled</code></td><td>Received hourly</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>A limit of the current version.</strong> Receiving threat knowledge (<code>contexa.saas.threat-knowledge.enabled</code>) does not pull anything even when on, because the setting is not passed to the decision engine.
+          </div>
+
+          <h2 id="settings">Main settings</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.saas.enabled</code></td><td><code>false</code></td><td>Turns the SaaS connection on</td><td><code>true</code> to send to the SaaS</td></tr>
+              <tr><td><code>contexa.saas.endpoint</code></td><td><code>https://saas.ctxa.ai</code></td><td>The receiving server</td><td>When given another endpoint</td></tr>
+              <tr><td><code>contexa.saas.pseudonymization-secret</code></td><td>development value (refused when on)</td><td>Pseudonym HMAC key (at least 32 bytes)</td><td>Always when on (32 bytes or more)</td></tr>
+              <tr><td><code>contexa.saas.global-correlation-secret</code></td><td>development value (refused when on)</td><td>Global IP correlation key (at least 32 bytes)</td><td>Always when on (32 bytes or more)</td></tr>
+              <tr><td><code>contexa.saas.oauth2.token-uri</code></td><td><code>https://saas.ctxa.ai/oauth2/token</code></td><td>Token endpoint</td><td>When given another token endpoint</td></tr>
+              <tr><td><code>contexa.saas.oauth2.client-id</code> / <code>client-secret</code></td><td><code>dev-client</code> / <code>dev-secret</code></td><td>Replace with the issued credentials</td><td>Always when on</td></tr>
+              <tr><td><code>contexa.saas.include-reasoning</code></td><td><code>false</code></td><td>Also send the reasoning text</td><td>When you decided to send the reasoning too</td></tr>
+              <tr><td><code>contexa.saas.max-retry-attempts</code></td><td><code>10</code></td><td>DEAD_LETTER from this many attempts</td><td>Raise it on unstable networks</td></tr>
+              <tr><td><code>contexa.saas.dispatch-interval-ms</code></td><td><code>30000</code></td><td>Retry interval</td><td>To retry sooner or later</td></tr>
+            </tbody>
+          </table></div>
+          <p>Every <code>contexa.saas.*</code> setting (64), including the paths and intervals of the other channels, is in the <a href="../../install/configuration/index-all.html#contexa-saas">Settings Index</a>.</p>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="rag.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">RAG: Storing and Searching Documents</span>
+            </a>
+            <a href="../soar/index.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">SOAR Extension Points: What the OSS Has and What You Build</span>
+            </a>
+          </div>

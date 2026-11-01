@@ -1,0 +1,204 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">레퍼런스</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">판정 엔진</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+            </div>
+            <h1>판정 엔진: 판정은 어떻게 만들어지나</h1>
+            <p class="lead">요청이 처리된 뒤 Contexa가 그 요청을 다시 살펴 판정을 만들고 저장하는 과정을 설명합니다. 어떤 요청이 분석되는지, AI 모델이 언제 한 번 더 판정하는지, 모델의 답이 언제 바뀌는지, 판정이 언제부터 적용되고 무엇을 배우는지 알 수 있습니다.</p>
+          </div>
+
+          <h2 id="overview">한눈에 보기</h2>
+          <p>판정은 요청을 붙잡아 두고 만드는 것이 아닙니다. 보호 메서드(<code>@Protectable</code>)가 실행된 뒤 <strong>뒤에서</strong> 만들어져 저장되고, <strong>같은 사용자의 다음 요청부터</strong> 적용됩니다. 그 요청 안에서 바로 판정이 필요한 메서드만 <code>@Protectable(sync=true)</code>로 즉시 판정합니다.</p>
+          <p>판정의 대응(허용 · 추가 인증 · 차단 · 검토 보류)은 AI 모델이 고릅니다. 엔진은 평소와 다른 점, 회사 기록(<a href="company-records.html">업무 기록</a>), 과거 판정 같은 사실을 모아 모델에게 보낼 뿐 대응을 정하지 않습니다.</p>
+
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>판정 하나가 만들어지는 길</strong>1~5는 응답이 나간 뒤에 일어나고, 6은 같은 사용자의 다음 요청에서 일어납니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">분석 사건 만들기</span><span class="dg-node-desc">보호 메서드가 끝나면 요청의 사실을 사건으로 냅니다 (<code>ZeroTrustEventPublisher</code>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title">거르기</span><span class="dg-node-desc">이 사용자에게 이미 판정이 걸려 있으면 새로 분석하지 않습니다 (<code>ZeroTrustEventListener</code>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">줄 세우기</span><span class="dg-node-desc">사용자 · 세션마다 한 줄로 세워 한 번에 하나씩 처리합니다 (<code>SecurityPlaneAgent</code>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node dg-model"><span class="dg-node-title">판정 만들기</span><span class="dg-node-desc">1차 분석이 판정하고, 정하지 못하면 2차 분석이 다시 판정합니다 (AI 모델)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">집행 · 기록</span><span class="dg-node-desc">판정을 저장하고, 증거를 봉인하고, 감사 기록을 남깁니다</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">6</span><div class="dg-node dg-store"><span class="dg-node-title">다음 요청에 적용</span><span class="dg-node-desc">저장된 판정이 그 사용자의 권한을 바꿉니다 (<a href="../identity/zero-trust-filters.html">요청 시점 집행</a>)</span></div></li>
+            </ol>
+          </figure>
+
+          <h2 id="what-is-analyzed">어떤 요청이 분석되나</h2>
+          <p>모든 요청이 AI 모델에게 가지는 않습니다. 아래 표에서 "분석"이라고 된 경우만 판정을 만듭니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>경우</th><th>어떻게 되나</th></tr></thead>
+            <tbody>
+              <tr><td>보호 메서드 호출(기본)</td><td>메서드를 실행한 뒤 분석합니다. 메서드는 판정을 기다리지 않습니다.</td></tr>
+              <tr><td>즉시 판정 메서드(<code>@Protectable(sync=true)</code>)</td><td>그 요청 안에서 같은 엔진으로 바로 판정합니다. 줄 세우기를 거치지 않습니다.</td></tr>
+              <tr><td>집행 모드가 끔 · 관찰(<code>DISABLED</code> · <code>OBSERVE</code>)이거나 <code>contexa.security.zerotrust.enabled=false</code></td><td>분석하지 않습니다. AI 모델을 부르지 않습니다.</td></tr>
+              <tr><td>이 사용자에게 차단 · 추가 인증 · 검토 보류가 걸려 있음</td><td>메서드 실행 전에 거부하고 분석하지 않습니다.</td></tr>
+              <tr><td>저장된 판정이 아직 살아 있음(분석 대기가 아님)</td><td>새로 분석하지 않고 "분석하지 않은 요청"으로만 기록합니다.</td></tr>
+              <tr><td>같은 사용자가 같은 범위를 5초 안에 다시 호출</td><td>통과시키되 분석하지 않습니다(<code>contexa.security.zerotrust.protectable.rapid-reentry-window-ms</code>, 기본 5000).</td></tr>
+              <tr><td>인가 정책(XACML · URL)이 거부</td><td>분석하지 않고 세션 사실로만 기록합니다.</td></tr>
+              <tr><td>같은 사건이 두 번 처리되려 함(여러 서버, 다시 줄 서기)</td><td>사건마다 처리 권리를 한 번만 잡습니다(테넌트 · 사용자 · 맥락 · 사건 · 자원 · 메서드로 만든 식별자). 이미 처리됐거나 다른 곳에서 처리 중인 사건은 건너뜁니다.</td></tr>
+              <tr><td>한 에이전트가 같은 요청을 한꺼번에 보냄</td><td><a href="../agent/controls.html#flight">판정 통합</a>을 켜면 같은 질문은 한 번만 분석합니다(기본 꺼짐).</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="layers">판정이 만들어지는 순서: 1차 분석과 2차 분석</h2>
+          <p>판정은 두 단계로 만들어집니다. 대부분은 1차 분석에서 끝나고, 1차가 "이 사실로는 정할 수 없다(ESCALATE)"고 답한 요청만 2차 분석으로 갑니다.</p>
+
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>1차 분석과 2차 분석</strong>2차 분석은 1차가 ESCALATE라고 답했을 때만 실행됩니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node"><span class="dg-node-title">사실 모으기</span><span class="dg-node-desc">세션 흐름, 행위 기준선과 다른 점, 회사 기록, 과거 판정 기록(검색은 먼저 시작해 두고 함께 기다림)</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">1차 분석 · Layer 1</span><span class="dg-node-title">AI 모델이 판정</span><span class="dg-node-desc">제한 시간 90초 (<code>contexa.security.tiered.layer1.timeout.llm-ms</code>)</span></li>
+              <li class="dg-edge">답이 ESCALATE일 때만 ↓ (그 밖의 답은 그대로 최종 판정)</li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">2차 분석 · Layer 2</span><span class="dg-node-title">같은 요청을 다시 판정</span><span class="dg-node-desc">1차의 프롬프트와 첫 판정을 받아 다시 묻습니다. 제한 시간 30초 (<code>contexa.security.tiered.layer2.timeout-ms</code>)</span></li>
+            </ol>
+            <p class="dg-outcomes-title">최종 판정</p>
+            <ul class="dg-outcomes">
+              <li class="dg-node dg-allow"><span class="dg-node-title">허용</span><span class="dg-node-desc">ALLOW</span></li>
+              <li class="dg-node dg-challenge"><span class="dg-node-title">추가 인증</span><span class="dg-node-desc">CHALLENGE</span></li>
+              <li class="dg-node dg-block"><span class="dg-node-title">차단</span><span class="dg-node-desc">BLOCK</span></li>
+              <li class="dg-node dg-escalate"><span class="dg-node-title">검토 보류</span><span class="dg-node-desc">ESCALATE</span></li>
+            </ul>
+          </figure>
+
+          <p>과거 판정 기록은 프롬프트 묶음에 따라 다르게 찾습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>묶음</th><th>1차 분석</th><th>2차 분석</th></tr></thead>
+            <tbody>
+              <tr><td>v19(빌드 기본)</td><td>뜻이 비슷한 기록을 최대 12건(<code>contexa.security.tiered.layer1.vector-search-limit</code>), 관련도 0.5 이상(<code>layer1.rag.similarity-threshold</code>)</td><td>1차가 찾은 기록을 그대로 쓰고, 없을 때만 다시 찾습니다(최대 5건 <code>layer2.rag-top-k</code>, 관련도 0.5 이상)</td></tr>
+              <tr><td>v20 · v21</td><td>비슷한 기록 검색 대신 같은 사람 · 같은 대상의 기록을 정확히 조회</td><td>1차가 찾은 기록을 그대로 쓰고, 없을 때만 다시 조회</td></tr>
+            </tbody>
+          </table></div>
+
+          <div class="callout callout-info">
+            <strong>과부하 보호.</strong> 같은 범위(조직, 없으면 사용자)의 최근 1차 판정 100건 가운데 11건 이상이 쌓였고 그중 ESCALATE가 절반을 넘으면, 2차 분석을 부르지 않고 추가 인증으로 끝냅니다. 모델이 모두 "모르겠다"고 답하는 상황에서 2차 분석 호출이 폭증하지 않게 하는 장치입니다. 비율과 건수는 코드에 정해져 있습니다.
+          </div>
+
+          <h3 id="layer-models">층마다 다른 모델 쓰기</h3>
+          <p>1차와 2차에 서로 다른 모델을 쓸 수 있습니다. 예를 들어 1차는 빠르고 싼 모델, 2차는 더 신중한 모델로 둡니다.</p>
+          <pre><code class="language-yaml">contexa:
+  security:
+    tiered:
+      llm:
+        layer1:
+          model: gpt-4o-mini   # 비우면 기본 채팅 모델
+        layer2:
+          model: gpt-4o        # 비우면 기본 채팅 모델</code></pre>
+          <p>위 예는 기본 채팅 모델이 OpenAI일 때 그대로 동작합니다(같은 공급자 안에서 이름만 바꿈).</p>
+          <ul>
+            <li>모델을 고르는 순서: 그 층의 모델 → (있으면) 그 층의 백업 모델(<code>layerN.backup.model</code>) → 기본 채팅 모델.</li>
+            <li>모델 이름에 맞는 연결 설정(<code>contexa.llm.bindings.chat</code>)이 없으면 기본 채팅 모델을 복사해 이름만 바꿔 씁니다. 이 복사는 OpenAI처럼 복사(<code>mutate()</code>)를 지원하는 모델만 됩니다. Anthropic 모델처럼 복사할 수 없는 모델은 연결 설정을 따로 두어야 합니다.</li>
+            <li>층 모델을 만들 수 없으면 애플리케이션이 시작하지 않습니다. 잘못된 모델 이름이 운영 중에 조용히 다른 모델로 바뀌는 일을 막기 위해서입니다.</li>
+          </ul>
+
+          <h2 id="handlers">판정 뒤에 하는 일: 다섯 단계</h2>
+          <p>판정이 만들어지면 정해진 순서로 다섯 단계가 이어집니다. 번호는 실행 순서입니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>처리 단계(핸들러) 순서</strong>앞 단계가 실패하면 뒤 단계는 실행되지 않습니다.</figcaption>
+            <ol class="dg-flow dg-flow-h">
+              <li class="dg-node dg-model"><span class="dg-node-tag">50</span><span class="dg-node-title">판정 만들기</span></li>
+              <li class="dg-node"><span class="dg-node-tag">55</span><span class="dg-node-title">집행</span></li>
+              <li class="dg-node"><span class="dg-node-tag">56</span><span class="dg-node-title">증거 봉인</span></li>
+              <li class="dg-node"><span class="dg-node-tag">60</span><span class="dg-node-title">감사</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">65</span><span class="dg-node-title">SaaS 전달</span></li>
+            </ol>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>순서</th><th>단계</th><th>하는 일</th><th>언제 실행되나</th></tr></thead>
+            <tbody>
+              <tr><td>50</td><td>판정 만들기 (<code>ProcessingExecutionHandler</code>)</td><td>1차 · 2차 분석으로 판정을 만듭니다.</td><td>항상. 채팅 모델 · 벡터 저장소가 없으면 판정을 만들지 못해 사용자는 분석 대기로 남습니다.</td></tr>
+              <tr><td>55</td><td>집행 (<code>SecurityDecisionEnforcementHandler</code>)</td><td>감사용 관찰 기록을 먼저 쓰고, 집행 모드면 판정을 저장합니다. 차단이면 진행 중인 응답을 끊는 신호를 보냅니다.</td><td>판정 결과가 있을 때</td></tr>
+              <tr><td>56</td><td>증거 봉인 (<code>SealedEvidenceCaptureHandler</code>)</td><td>모델에 보낸 그대로의 프롬프트와 판정을 봉인합니다. 판정은 바꾸지 않습니다. 기본은 기동 · 프롬프트 묶음 변경 뒤 1,000건은 모두, 그 뒤 1%를 봉인하고 90일 보관합니다. <a href="evidence.html">봉인 증거와 공식 검증</a></td><td>AI 모델이 판정한 경우(<code>contexa.pqa.oss.sealed-evidence.capture-enabled</code>, 기본 켜짐)</td></tr>
+              <tr><td>60</td><td>감사 (<code>AuditingHandler</code>)</td><td>감사 기록(<code>audit_log</code>)에 판정을 남깁니다. 섀도 모드에서도 남깁니다.</td><td>판정 결과가 있을 때</td></tr>
+              <tr><td>65</td><td>SaaS 전달 (<code>SaasForwardingHandler</code>)</td><td>허용 · 분석 대기가 아닌 판정을 Contexa SaaS로 보낼 상자에 담습니다. <a href="../core/saas.html">Contexa SaaS 연결</a></td><td><code>contexa.saas.enabled=true</code>일 때만(기본 꺼짐)</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="storage">판정이 저장되고 적용되는 방법</h2>
+          <p>집행 모드(<code>ENFORCE</code>)에서 판정은 사용자 판정 저장소에 저장됩니다. 저장소는 단독 모드에서는 메모리, 분산 모드에서는 Redis입니다. 판정마다 유효 시간이 정해져 있습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>판정</th><th>유효 시간</th><th>어디에 적용되나</th></tr></thead>
+            <tbody>
+              <tr><td>허용(ALLOW)</td><td>15초</td><td>판정이 만들어진 같은 세션 · IP · 브라우저에서만</td></tr>
+              <tr><td>추가 인증(CHALLENGE)</td><td>1,800초(30분)</td><td>그 사용자의 모든 세션</td></tr>
+              <tr><td>검토 보류(ESCALATE)</td><td>300초(5분)</td><td>그 사용자의 모든 세션</td></tr>
+              <tr><td>차단(BLOCK)</td><td>기한 없음(관리자가 풀거나 차단 해제 MFA를 거칠 때까지)</td><td>그 사용자의 모든 세션</td></tr>
+              <tr><td>분석 대기(PENDING_ANALYSIS)</td><td>저장된 판정이 없는 상태</td><td>요청은 통과하고 분석이 시작됩니다</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>더 엄격한 판정은 약한 판정에 덮이지 않습니다.</strong> 차단 &gt; 검토 보류 &gt; 추가 인증 순서로, 이미 더 엄격한 판정이 걸려 있으면 약한 새 판정은 저장하지 않습니다.</li>
+            <li><strong>섀도 모드(<code>SHADOW</code>)에서는 저장하지 않습니다.</strong> 감사용 관찰 기록만 남기고, 차단 신호 · 학습도 하지 않습니다.</li>
+            <li><strong>사건은 만들어질 때의 집행 모드를 지니고 다닙니다</strong>(<code>decisionBoundaryMode</code>). 섀도 모드에서 만들어진 사건은, 판정이 나올 무렵 집행 모드가 <code>ENFORCE</code>로 바뀌었어도 집행하지 않습니다.</li>
+            <li><strong>감사용 관찰 기록(DB)을 쓰지 못하면 집행하지 않습니다.</strong> 판정은 분석 대기로 남고, 같은 맥락의 새 분석은 30초 멈춥니다(<code>contexa.security.zerotrust.analysis.audit-failure-cooldown-ms</code>).</li>
+          </ul>
+          <p>저장된 판정이 다음 요청에서 권한을 어떻게 바꾸는지는 <a href="../identity/zero-trust-filters.html">요청 시점 집행</a>에서 설명합니다.</p>
+
+          <h2 id="overrides">모델의 답이 바뀌는 경우</h2>
+          <p>모델이 고른 대응은 아래 경우가 아니면 그대로 최종 판정이 됩니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>경우</th><th>최종 판정</th></tr></thead>
+            <tbody>
+              <tr><td>모델의 답을 받지 못함(공급자 장애, 호출 시간 초과, 출력 · 컨텍스트 한도 초과)</td><td>추가 인증. 1차에서 일어나도 2차로 넘기지 않습니다.</td></tr>
+              <tr><td>대응 값이 없거나 알 수 없는 값</td><td>추가 인증. 단 DENY 계열은 차단, REVIEW는 검토 보류로 읽습니다.</td></tr>
+              <tr><td>답의 형식이 계약에 맞지 않고, 한 번 고쳐 묻고도 그대로임</td><td>검토 보류(1차라면 2차로 넘어감). v19 · v20 묶음에서는 위반한 경계 규칙에 따라 차단이나 허용이 될 수 있습니다.</td></tr>
+              <tr><td>1차 분석 자체가 실패(결과 없음, 1차 제한 시간 초과)</td><td>검토 보류로 바꿔 2차 분석으로 넘깁니다.</td></tr>
+              <tr><td>2차 분석이 검토 보류(ESCALATE)를 고름</td><td><code>contexa.security.tiered.layer2.escalate-fallback-action</code>(기본 CHALLENGE)으로 바꿉니다.</td></tr>
+              <tr><td>2차 분석이 기술적으로 실패(예외, 30초 초과)</td><td>검토 보류가 최종 판정으로 저장됩니다(5분).</td></tr>
+              <tr><td>과부하 보호 조건(위 상자)</td><td>추가 인증</td></tr>
+              <tr><td>v19 · v20 묶음에서 최소 대응 규칙을 집행 모드(<code>contexa.security.zerotrust.minimum-action.mode=ENFORCE</code>)로 켰고 답이 하한보다 약함</td><td>한 번 고쳐 묻고, 그래도 약하면 검토 보류. 기본값 <code>OBSERVE</code>는 기록만 하고, v21 묶음은 이 규칙을 평가하지 않습니다.</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="learning">무엇을 배우나</h2>
+          <p>판정 엔진은 판정 결과로 두 가지를 배웁니다: 사람마다의 <strong>행위 기준선</strong>(평소 일하는 시간 · 단말 · 네트워크 · 대상 등)과 <strong>과거 판정 기록</strong>입니다. 둘 다 다음 분석에서 프롬프트의 사실이 됩니다.</p>
+          <ul>
+            <li><strong>실제로 적용된 허용 판정만 기준선에 배웁니다.</strong> 섀도 모드의 판정, 더 엄격한 판정이 걸려 있어 저장되지 않은 허용, 삭제된 계정의 늦은 결과는 배우지 않습니다. 학습은 지수 이동 평균(계수 0.1)이고, 사람의 요청이면 조직 기준선도 함께 갱신합니다.</li>
+            <li><strong>기준선이 "확립"되는 조건:</strong> 개인 기준선은 학습한 요청이 20건 이상, 서로 다른 날이 5일 이상, 최근 10번의 학습에서 처음 보는 값이 20% 이하일 때입니다. 조직 기준선은 3명 이상의 요청에서 배워야 확립됩니다. IP 대역처럼 값을 여러 개 기억하는 항목은 자리가 차면 가장 덜 쓰인 값을 밀어냅니다(오래된 값은 반감기 14일로 덜 셉니다).</li>
+            <li><strong>설명 안 된 새 값은 바로 배우지 않고 보류합니다.</strong> 민감 등급 이상의 자원에서 시간 · 요일 · 네트워크 · 단말 가운데 설명되지 않는 차이가 있으면 보류했다가, 같은 값이 2일 이상에 걸쳐 2번 이상 보이거나 검증되면 배웁니다. 에이전트는 자원 등급과 상관없이 처음 보는 값을 보류합니다.</li>
+            <li><strong>확인을 거친 요청도 배웁니다.</strong> 추가 인증 · 검토 보류 · 차단으로 막힌 요청은 보관했다가, 사용자가 MFA를 통과하거나 관리자가 차단을 풀면 가중치 0.5로 배웁니다.</li>
+            <li><strong>과거 판정 기록</strong>은 실제로 적용된 판정만 벡터 저장소에 저장하고, 90일(<code>contexa.rag.etl.behavior.retention-days</code>)이 지난 기록은 매일 03:45에 지웁니다. 0 이하로 두면 지우지 않습니다.</li>
+            <li><strong>행위 기준선</strong>은 마지막 학습 뒤 30일(<code>contexa.security.zerotrust.baseline.retention</code>) 동안 새 학습이 없으면 지웁니다.</li>
+          </ul>
+
+          <h2 id="settings">자주 바꾸는 설정</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>판정을 만들고 적용할지(<code>DISABLED</code> · <code>OBSERVE</code> · <code>SHADOW</code> · <code>ENFORCE</code>)</td><td>처음 도입할 때 <code>SHADOW</code>로 지켜보다가 <code>ENFORCE</code>로. <a href="../../install/shadow-mode.html">집행 모드</a></td></tr>
+              <tr><td><code>contexa.security.tiered.llm.layer1.model</code><br><code>contexa.security.tiered.llm.layer2.model</code></td><td>없음(기본 채팅 모델)</td><td>층마다 쓸 모델</td><td>1차는 빠른 모델, 2차는 신중한 모델로 나눌 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.timeout.llm-ms</code></td><td><code>90000</code></td><td>1차 분석 제한 시간(ms)</td><td>모델이 느려 1차 시간 초과가 잦을 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.timeout-ms</code></td><td><code>30000</code></td><td>2차 분석 제한 시간(ms)</td><td>2차 모델이 느려 검토 보류가 남을 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.escalate-fallback-action</code></td><td><code>CHALLENGE</code></td><td>2차도 검토 보류를 고를 때 바꿀 대응</td><td>정하지 못한 요청을 더 엄격하게(<code>BLOCK</code>) 다룰 때</td></tr>
+              <tr><td><code>contexa.security.plane.agent.event-timeout-ms</code></td><td><code>180000</code></td><td>사건 하나를 분석하는 전체 예산(ms)</td><td>모델 호출이 길어 판정 없이 끝나는 사건이 있을 때</td></tr>
+              <tr><td><code>contexa.rag.etl.behavior.retention-days</code></td><td><code>90</code></td><td>과거 판정 기록 보관 기간(일)</td><td>보관 정책이 다를 때</td></tr>
+            </tbody>
+          </table></div>
+          <p>모든 설정은 <a href="../../install/configuration.html">설정</a>에 있습니다.</p>
+
+          <h2 id="operations">운영할 때 알아 둘 것</h2>
+          <ul>
+            <li><strong>판정 결과 보기:</strong> 판정은 관찰 기록 표(<code>ai_security_decision_observation</code>)와 감사 기록에 남고, 관리 콘솔의 보안 모니터(<code>/contexa/admin/security-monitor</code>)에서 봅니다.</li>
+            <li><strong>판정이 나오지 않고 계속 분석 대기라면</strong> 먼저 확인합니다: 집행 모드가 <code>OBSERVE</code> · <code>DISABLED</code>가 아닌지, 채팅 모델과 벡터 저장소 빈이 있는지, 감사용 관찰 기록 DB에 쓸 수 있는지.</li>
+            <li><strong>분석 대기열</strong>은 10,000건까지입니다(<code>contexa.security.plane.monitor.queue-size</code>).</li>
+            <li><strong>사건 하나의 예산은 180초</strong>입니다. 분석 스레드 풀(기본 코어 32 · 최대 64 · 대기 256)에서 60초 넘게 기다리거나 예산을 넘기면 판정 없이 끝나고, 최대 3번 다시 줄을 섭니다.</li>
+            <li><strong>분산 모드</strong>(<code>contexa.infrastructure.mode=distributed</code>)에서는 사건을 Kafka 토픽 <code>security.events.&lt;범주&gt;.&lt;유형&gt;</code>(예: <code>security.events.authorization.method</code>)으로 보내고, 처리하지 못한 사건은 DLQ 토픽으로 보냅니다.</li>
+            <li><code>contexa.security.tiered.layer2.enable-soar</code>는 현재 OSS에서 효과가 없습니다. 차단 판정에 붙일 플레이북을 채우는 코드가 없어 SOAR가 실행되지 않습니다(<a href="../soar/index.html">SOAR</a>).</li>
+          </ul>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="zero-trust-flow.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">요청 하나의 일생</span>
+            </a>
+            <a href="company-records.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">업무 기록: 판정에 회사 사정 알려 주기</span>
+            </a>
+          </div>

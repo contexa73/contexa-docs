@@ -1,753 +1,225 @@
-<!-- Breadcrumb -->
-          <nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">홈</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">레퍼런스</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">프롬프트 엔지니어링</span>
+            <span class="breadcrumb-current">판정 프롬프트와 묶음</span>
           </nav>
 
-          <!-- Page Header -->
           <div class="docs-page-header">
-            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
-              <span class="badge">contexa-common</span>
-              <span class="badge">contexa-core</span>
-              <span class="badge">autonomous</span>
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-primary">contexa-common</span>
             </div>
-            <h1>보안 판단 프롬프트 파이프라인</h1>
-            <p class="lead">Contexa의 프롬프트는 단순 문자열 조립이 아니라, 고객 시스템의 인증/인가/위임 증거를 수집하고, CanonicalSecurityContext로 표준화한 뒤, 신뢰도와 누락 지식을 함께 포함하여 LLM이 보안 판단을 내릴 수 있도록 구성됩니다. 요청 하나가 프롬프트가 되기까지는 <strong>수집 → 가공 → 정제 → 표준화 → 조립 → 검사</strong> 여섯 단계를 거칩니다. 조립 단계는 두 프롬프트 번들 가운데 하나로 그립니다. 빌드 기본인 v19 섹션 프롬프트, 또는 사실 ID 와 출력 계약 v3 을 쓰는 v20 사전 프롬프트입니다. 이 문서는 그 흐름을 처음부터 끝까지 한 줄로 이어 보여 드립니다.</p>
+            <h1>판정 프롬프트와 묶음</h1>
+            <p class="lead">판정할 때 AI 모델에 보내는 글(판정 프롬프트)이 무엇으로 만들어지는지 설명합니다. 빌드에 든 프롬프트 묶음 세 개의 차이와 고르는 법, 모델에 건네는 사실, 최소 대응 규칙과 예산, 모델 답의 형식과 검사를 다룹니다.</p>
           </div>
 
+          <h2 id="overview">한눈에 보기</h2>
+          <p>판정 프롬프트는 요청의 사실을 모아 <strong>표준 맥락</strong> 하나로 정리한 뒤, 고른 <strong>프롬프트 묶음</strong>의 모양으로 시스템 글과 사용자 글을 그린 것입니다. 모델의 답은 판정이 되기 전에 묶음별 규칙으로 한 번 더 검사합니다. 엔진은 사실만 말하고, 대응(허용 · 추가 인증 · 차단 · 검토 보류)은 모델이 고릅니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>사실이 판정이 되기까지</strong>왼쪽부터 차례로 지나갑니다. 묶음은 사건마다 처음 한 번 정해지고, 같은 사건의 2차 분석도 같은 묶음을 씁니다.</figcaption>
+            <ol class="dg-flow dg-flow-h">
+              <li class="dg-node dg-request"><span class="dg-node-title">사실 모으기</span><span class="dg-node-desc">인증 · 인가 · 위임 도장</span></li>
+              <li class="dg-node"><span class="dg-node-title">표준 맥락</span><span class="dg-node-desc">한 형식으로 정리 · 정제</span></li>
+              <li class="dg-node"><span class="dg-node-title">판정 사실</span><span class="dg-node-desc">평소와 다른 점, 회사 기록</span></li>
+              <li class="dg-node"><span class="dg-node-title">프롬프트 그리기</span><span class="dg-node-desc">묶음 v19 · v20 · v21</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-title">AI 모델</span><span class="dg-node-desc">대응을 고름</span></li>
+              <li class="dg-node"><span class="dg-node-title">응답 검사</span><span class="dg-node-desc">형식 · 인용 확인</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-title">판정 기록</span><span class="dg-node-desc">제안 대응 · 최종 대응</span></li>
+            </ol>
+          </figure>
+          <div class="callout callout-info">
+            <strong>빠진 사실 하나가 판정을 막지 않습니다.</strong> v19 묶음은 증거가 없는 구역을 빼고, v20 · v21 묶음은 모르는 사실마다 UNKNOWN 블록에 이름을 적습니다. 시스템 글은 모르는 사실이 평소와 같지도 다르지도 않다고 밝힙니다.
+          </div>
 
-          <!-- Section 1: 6단계 파이프라인 -->
-          <section>
-            <h2 id="pipeline">여섯 단계 파이프라인</h2>
-            <p>프롬프트는 즉석에서 만들어지지 않습니다. 여섯 단계를 거치며 요청 주변의 모든 사실을 수집·정리·검증한 뒤에야 LLM 에 전달됩니다. 각 단계는 독립된 패키지로 구현되어 있고, 이전 단계의 출력이 다음 단계의 입력이 됩니다.</p>
+          <h2 id="bundles">묶음 세 개</h2>
+          <p><strong>프롬프트 묶음</strong>은 버전이 붙은 프롬프트 한 벌입니다. 시스템 글, 사용자 글의 모양, 모델 답의 형식(출력 계약), 응답 검사가 함께 정해집니다. 이 빌드는 프롬프트 키 <code>cortex.security-decision</code>의 묶음 <strong>세 개</strong>를 돌립니다. 아무것도 고르지 않으면 v19.21이 돕니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>항목</th><th>v19(빌드 기본)</th><th>v20</th><th>v21</th></tr></thead>
+            <tbody>
+              <tr><td>버전</td><td><code>2026.10.24-v19.21</code></td><td><code>2026.10.24-v20.26</code></td><td><code>2026.10.30-v21.19</code></td></tr>
+              <tr><td>기술자 상태</td><td><code>PRODUCTION</code></td><td><code>DRAFT</code>(평가 전)</td><td><code>DRAFT</code>(평가 전)</td></tr>
+              <tr><td>사용자 글</td><td>이름 붙은 구역 16개(<code>V19_SECTIONS</code>)</td><td>사전 블록 8종, 항목 76개(<code>V20_BLOCKS</code>)</td><td>사전 블록, 항목 85개(<code>V21_BLOCKS</code>). 결론 없이 기록 · 측정 · 비교로만 씀</td></tr>
+              <tr><td>시스템 글</td><td>판단 경계 · 판단 절차 · 증거 규칙 · 라벨 보존</td><td>역할 · 블록 읽는 법 · 대응 네 가지 · 켜진 최소 대응 규칙 · 경계 · 판단 절차 · 증거 규칙</td><td>임무 · 증거 읽는 법 · 설명 비교(H1~H4) · 대응의 뜻 · 정직. 규칙 · 임계값 · 하한 없음</td></tr>
+              <tr><td>과거 판정 기록 읽기</td><td>유사도 검색</td><td>정확 조회</td><td>정확 조회</td></tr>
+              <tr><td>출력 계약</td><td>v2(<code>CORTEX_PROMPT_CONTRACT_V2</code>)</td><td>v3(<code>CORTEX_PROMPT_CONTRACT_V3</code>)</td><td>v4(<code>CORTEX_PROMPT_CONTRACT_V4</code>)</td></tr>
+              <tr><td>응답 검사</td><td>라벨 검사</td><td>경계 · 근거 문장 · 근거 코드를 프롬프트를 그린 사실과 대조</td><td>형식 · 인용 · 줄과 어긋난 말만. 대응은 검사하지 않음</td></tr>
+              <tr><td>최소 대응 규칙</td><td>시스템 글에 없음. 다만 <code>ENFORCE</code>로 켜면 응답 검사에는 걸림</td><td>시스템 글에 씀. 기본은 기록만</td><td>평가 · 기록하지 않음</td></tr>
+              <tr><td>에이전트 요청</td><td>자동화 클라이언트 차단 경계를 뺌</td><td>자동화 범주를 뺌</td><td>에이전트 사실 줄이 더해짐</td></tr>
+              <tr><td>롤백 대상(기술자)</td><td>없음</td><td><code>2026.10.24-v19.21</code></td><td><code>2026.10.24-v20.26</code></td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="choose">묶음 고르기</h3>
+          <pre><code class="language-yaml">contexa:
+  security:
+    tiered:
+      prompt-bundle:
+        active: 2026.10.30-v21.19   # 비우면 빌드 기본(2026.10.24-v19.21)</code></pre>
+          <ul>
+            <li><code>contexa.security.tiered.prompt-bundle.active</code>의 버전이 모든 요청에 쓰입니다(선택기 <code>CONFIGURATION</code>, 기본).</li>
+            <li><code>contexa.security.tiered.prompt-bundle.selector: registry</code>로 두면 관리 콘솔의 프롬프트 버전 레지스트리가 상태 · 범위 · 카나리 비율로 고릅니다(<a href="prompt-inspection.html#selection">요청마다 묶음이 정해지는 법</a>).</li>
+            <li>이 빌드가 돌리지 않는 버전을 고르면 빌드 기본 묶음이 돌고, 버전마다 한 번 오류 로그를 남깁니다. 지난 버전의 매니페스트는 기록으로만 남아 있어 실행할 수 없습니다.</li>
+            <li>사건의 첫 프롬프트가 묶음을 사건에 적어 두고, 같은 사건의 2차 분석 프롬프트는 같은 묶음을 씁니다.</li>
+          </ul>
 
-            <div class="pipeline-six">
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">1</span>
-                <div class="pipeline-stage-name">수집</div>
-                <div class="pipeline-stage-pkg">common/security</div>
-                <div class="pipeline-stage-desc">증거 도장 세 가지 추출</div>
-              </div>
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">2</span>
-                <div class="pipeline-stage-name">가공</div>
-                <div class="pipeline-stage-pkg">autonomous/context</div>
-                <div class="pipeline-stage-desc">세션·업무·역할 프로필 확장</div>
-              </div>
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">3</span>
-                <div class="pipeline-stage-name">정제</div>
-                <div class="pipeline-stage-pkg">context/hardener</div>
-                <div class="pipeline-stage-desc">주입 방어 · 형식 강제</div>
-              </div>
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">4</span>
-                <div class="pipeline-stage-name">표준화</div>
-                <div class="pipeline-stage-pkg">CanonicalSecurityContext</div>
-                <div class="pipeline-stage-desc">22 필드 + 7 프로필 단일 레코드</div>
-              </div>
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">5</span>
-                <div class="pipeline-stage-name">조립</div>
-                <div class="pipeline-stage-pkg">tiered/prompt</div>
-                <div class="pipeline-stage-desc">v19 섹션 또는 v20 사전 블록</div>
-              </div>
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">6</span>
-                <div class="pipeline-stage-name">검사</div>
-                <div class="pipeline-stage-pkg">pipeline/processor</div>
-                <div class="pipeline-stage-desc">응답 검사, 최소 대응 규칙</div>
-              </div>
+          <h2 id="facts">사실 모으기: 도장과 증거 품질</h2>
+          <p>판정의 원재료는 인증 브리지가 요청마다 만드는 도장 세 장입니다. 브리지는 앱의 로그인 · 권한 · 위임 정보를 정해진 순서로 읽습니다(<a href="../common/bridge.html#order">인증 브리지의 읽는 순서</a>).</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>도장 세 장</strong>세 도장이 표준 맥락의 주체 · 세션 · 인가 · 위임 구역의 원천입니다.</figcaption>
+            <div class="dg-grid">
+              <div class="dg-node dg-host"><span class="dg-node-tag">인증 도장</span><span class="dg-node-title"><code>AuthenticationStamp</code></span><span class="dg-node-desc">principalId · principalType · authenticationType · authenticationSource · authenticationAssurance · mfaCompleted · authenticationTime · sessionId · authorities</span></div>
+              <div class="dg-node dg-host"><span class="dg-node-tag">인가 도장</span><span class="dg-node-title"><code>AuthorizationStamp</code></span><span class="dg-node-desc">effect(ALLOW · DENY · UNKNOWN) · privileged · scopeTags · policyId · policyVersion · decisionSource · effectiveRoles · effectiveAuthorities</span></div>
+              <div class="dg-node dg-request"><span class="dg-node-tag">위임 도장</span><span class="dg-node-title"><code>DelegationStamp</code></span><span class="dg-node-desc">subjectId · agentId · delegated · objectiveId · objectiveFamily · allowedOperations · allowedResources · approvalRequired · containmentOnly · expiresAt</span></div>
             </div>
+          </figure>
+          <ul>
+            <li>위임 도장의 <code>subjectId</code>는 사람 대신 일하는 에이전트면 위임자이고, 자기 이름으로 일하는 에이전트면 에이전트 자신(<code>delegated=false</code>)입니다.</li>
+            <li>클라이언트가 보낸 헤더를 그대로 믿지 않습니다. 헤더 통로는 기본 꺼져 있고, 켜도 신뢰하는 프록시에서 왔고 헤더의 주체가 로그인한 주체와 같을 때만 받습니다.</li>
+          </ul>
+          <h3 id="quality">증거 품질 라벨</h3>
+          <p>모은 값마다 어디서 왔는지를 라벨로 붙입니다. 라벨은 출처를 밝힐 뿐 강하고 약한 순위가 아닙니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>라벨</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>EXPLICIT_CUSTOMER_SIGNAL</code></td><td>앱(호스트)이 준 값. 어느 통로로든 값이 있으면 붙음</td></tr>
+              <tr><td><code>STRUCTURAL_DISCOVERY_ONLY</code></td><td>브리지가 구조를 살펴 찾아낸 값</td></tr>
+              <tr><td><code>DERIVED_RUNTIME_FALLBACK</code></td><td>실행 중 이어지는 정보로 대신 채운 값</td></tr>
+              <tr><td><code>HEURISTIC_HINT_ONLY</code></td><td>힌트일 뿐, 의미 있는 결론으로 올리면 안 되는 값</td></tr>
+              <tr><td><code>BRIDGE_COMPLETENESS_ONLY</code></td><td>브리지가 얼마나 읽었는지(완성도) 보고용</td></tr>
+              <tr><td><code>UNAVAILABLE</code></td><td>증거 없음</td></tr>
+              <tr><td><code>DERIVED_FROM_AMR</code></td><td>앱이 밝힌 값이 아니라 토큰의 <code>amr</code> 클레임에서 읽은 값</td></tr>
+              <tr><td><code>CLASS_NAME_FALLBACK</code></td><td>앱이 밝히지 않은 사실 대신 쓴 자바 클래스 이름. 로그인 사실이 아님</td></tr>
+              <tr><td><code>SIGNED_TOKEN_CLAIM</code></td><td>인가 서버가 서명한 접근 토큰의 클레임에서 읽은 값</td></tr>
+              <tr><td><code>AGENT_REGISTRY_RECORD</code></td><td>운영자가 등록 · 승인한 에이전트의 등록부 기록</td></tr>
+            </tbody>
+          </table></div>
 
-            <div class="callout-info">
-              <strong>설계 원칙.</strong> 빠진 사실 하나가 다음 단계를 막지 않습니다. v19 레이아웃은 증거가 없는 섹션을 빼고, v20 레이아웃은 모르는 사실마다 UNKNOWN 블록에 이름을 적으며, 시스템 글에서 모르는 사실은 일치도 불일치도 아니라고 밝힙니다.
-            </div>
-          </section>
+          <h2 id="canonical">표준 맥락과 판정 사실</h2>
+          <p>도장과 수집기 · 보강기가 모은 사실은 <strong>표준 맥락</strong>(<code>CanonicalSecurityContext</code>) 하나로 묶입니다. 수집기는 세션 흐름 · 업무 프로필 · 역할 범위를, 보강기는 인증 강도 · 위임 · 동료 그룹 · 마찰(승인 이력) · 조직 · 추론 메모리를 더하고, 추론기는 관찰 범위와 위임 범위 이탈 여부를 계산하고 완성도를 매깁니다. 최상위 칸은 25개입니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>칸</th><th>담는 것(예)</th></tr></thead>
+            <tbody>
+              <tr><td>주체 <code>actor</code></td><td>userId · organizationId · tenantId · principalType · roleSet · authoritySet</td></tr>
+              <tr><td>세션 <code>session</code></td><td>sessionId · clientIp · userAgent · authenticationType · mfaVerified · concurrentSessions</td></tr>
+              <tr><td>기기 <code>device</code></td><td>운영체제 · 브라우저 · 기기 지문 일치</td></tr>
+              <tr><td>의도 <code>intent</code></td><td>botUserAgent · impossibleTravel · missingReferer</td></tr>
+              <tr><td>위치 <code>location</code></td><td>country · city · ipBand · asn · networkZone</td></tr>
+              <tr><td>자원 <code>resource</code></td><td>resourceType · businessLabel · sensitivity · resourceClass · actionFamily</td></tr>
+              <tr><td>인가 <code>authorization</code></td><td>effectiveRoles · effectivePermissions · scopeTags · authorizationEffect · policyId · policyVersion</td></tr>
+              <tr><td>위임 <code>delegation</code></td><td>delegated · agentId · objectiveId · allowedOperations · allowedResources · objectiveDrift · maxItemsPerRequest · standing</td></tr>
+              <tr><td>실행 주체 · 실행 봉투</td><td>요청하는 주체의 종류(사람 · 서비스 · 에이전트)와 위임 실행의 목표 · 범위 · 기간</td></tr>
+              <tr><td>브리지 · 관찰 범위</td><td>브리지가 읽은 범위(완성도), 최근 보호 자원 접근으로 본 범위</td></tr>
+              <tr><td>프로필 6종</td><td>세션 흐름 · 업무 · 역할 범위 · 동료 그룹 · 마찰 · 추론 메모리</td></tr>
+              <tr><td>그 밖 7칸</td><td>완성도 보고, 추가 속성, 신뢰 프로필, 데이터 충돌, 수집 시각, 요청 관찰 시각, 판정 사실</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>정제:</strong> 정제기(<code>CanonicalSecurityContextHardener</code>)는 비어 있는 구역을 채우고, 문자열을 다듬고, 대문자 · 범위 · 순서를 정리합니다. 프롬프트 주입은 정제기가 아니라 렌더 규칙이 막습니다: 누구나 쓸 수 있는 글은 UNTRUSTED TEXT로 따로 그립니다.</li>
+            <li>요청 페이로드를 풀어 출력 가능한 문자가 80% 이상인지 보는 검사는 정제기가 아니라 사건 보강기가 합니다.</li>
+          </ul>
+          <h3 id="coverage">완성도 네 단계</h3>
+          <p>완성도 평가기(<code>ContextCoverageEvaluator</code>)가 채워진 사실로 등급을 매깁니다. 등급이 낮으면 업무 패턴으로 결론을 내리지 말라는 경고가 프롬프트에 들어갑니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>등급</th><th>확보한 사실</th></tr></thead>
+            <tbody>
+              <tr><td><code>BUSINESS_AWARE</code></td><td>신원 · 세션 · 범위 · 자원 · 관찰 패턴 모두</td></tr>
+              <tr><td><code>SCOPE_AWARE</code></td><td>신원과 범위. 관찰 프로필 없음</td></tr>
+              <tr><td><code>IDENTITY_AWARE</code></td><td>신원만. 범위 · 프로필 없음</td></tr>
+              <tr><td><code>ENVIRONMENT_ONLY</code></td><td>IP · 시간 같은 환경만</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="decision-facts">판정 사실</h3>
+          <p>판정 사실 계산기(<code>DecisionFactsResolver</code>)가 평소 행동과 다른 점, 요청 시점의 회사 규정 충족, 승인 · 담당 · 티켓 · 당번 · 출장 기록, 세션 안 반복, 범위 집단 비교, 데이터 충돌을 한 번 계산합니다. 엔진이 확정하지 못한 사실은 값 대신 "모름"으로 이름만 남깁니다. 같은 계산이 표준 맥락에 남아, 프롬프트 · 봉인 증거 · 응답 검사 · 검수가 모두 한 계산을 읽습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>차원</th><th>근거 코드</th><th>차이를 설명할 수 있는 기록</th></tr></thead>
+            <tbody>
+              <tr><td>time · day</td><td><code>DEVIATION_TIME</code> · <code>DEVIATION_DAY</code></td><td>그 작업을 덮는 유효한 승인 · 티켓</td></tr>
+              <tr><td>network</td><td><code>DEVIATION_NETWORK</code></td><td>요청 주소를 담은 등록된 출장</td></tr>
+              <tr><td>device · login method</td><td><code>DEVIATION_DEVICE</code> · <code>DEVIATION_LOGIN_METHOD</code></td><td>없음</td></tr>
+              <tr><td>target · action · class · rate</td><td><code>DEVIATION_TARGET</code> · <code>DEVIATION_ACTION</code> · <code>DEVIATION_RESOURCE_CLASS</code> · <code>DEVIATION_RATE</code></td><td>그 작업을 덮는 유효한 승인 · 티켓</td></tr>
+              <tr><td>size</td><td><code>DEVIATION_SIZE</code></td><td>그 작업을 덮는 유효한 승인 · 티켓, 또는 충족된 배정 예외의 수량 한도</td></tr>
+            </tbody>
+          </table></div>
+          <p>확립되지 않은 기준선과의 차이나 비교하지 않은 차원은 "설명되지 않음"이 아니라 모름입니다. v21 묶음은 같은 사실을 결론 없이 기록 · 비교로만 다시 씁니다(규정 충족 줄이 없고, "덮는다" · "설명됨" 같은 판단을 적지 않음).</p>
 
-
-          <!-- Section 2: 수집 -->
-          <section>
-            <h2 id="stage-1-collect">Stage 1 · 수집</h2>
-            <p>요청이 Spring Security 필터 체인(Filter Chain)에 들어오면 <code>AuthBridge</code> 구현체가 헤더·세션·속성 등 다양한 출처에서 주체를 추출합니다. 추출된 정보는 세 종류의 <strong>증거 도장(Stamp)</strong> 으로 포장됩니다. 이 세 도장이 이후 모든 단계의 원천 입력입니다.</p>
-
-            <div class="stamp-trio">
-              <div class="stamp-card stamp-card--auth">
-                <div class="stamp-card-icon">AU</div>
-                <div class="stamp-card-title">인증 도장</div>
-                <div class="stamp-card-sub">AuthenticationStamp</div>
-                <ul>
-                  <li>principalType · 주체 유형</li>
-                  <li>authenticationType</li>
-                  <li>authenticationAssurance</li>
-                  <li>mfaCompleted</li>
-                  <li>authenticationSource</li>
-                  <li>sessionId · authenticationTime</li>
-                </ul>
-              </div>
-              <div class="stamp-card stamp-card--authz">
-                <div class="stamp-card-icon">AZ</div>
-                <div class="stamp-card-title">인가 도장</div>
-                <div class="stamp-card-sub">AuthorizationStamp</div>
-                <ul>
-                  <li>effect (ALLOW · DENY · UNKNOWN)</li>
-                  <li>privileged · 특권 동작</li>
-                  <li>policyId · policyVersion</li>
-                  <li>decisionSource</li>
-                  <li>effectiveRoles · effectiveAuthorities</li>
-                </ul>
-              </div>
-              <div class="stamp-card stamp-card--deleg">
-                <div class="stamp-card-icon">DG</div>
-                <div class="stamp-card-title">위임 도장</div>
-                <div class="stamp-card-sub">DelegationStamp</div>
-                <ul>
-                  <li>subjectId · 위임자 (사람)</li>
-                  <li>agentId · 대리 주체</li>
-                  <li>objectiveId · objectiveFamily</li>
-                  <li>allowedOperations</li>
-                  <li>allowedResources</li>
-                  <li>containmentOnly · expiresAt</li>
-                </ul>
-              </div>
-            </div>
-
-            <h3 style="margin-top:var(--space-8)">증거 품질 여섯 등급</h3>
-            <p>모든 증거가 같은 신뢰도를 가지지는 않습니다. 고객이 명시적으로 보낸 신호가 가장 강하고, 플랫폼이 구조적으로 관찰한 신호가 그 다음, 런타임 연속성으로 추정한 신호는 약합니다. <code>BridgeSemanticBoundaryPolicy</code> 는 모든 수집 시점에 다음 여섯 등급 중 하나를 붙입니다.</p>
-
-            <div class="quality-ladder">
-              <div class="quality-rung quality-rung--best">
-                <div class="quality-rung-rank">1</div>
-                <div>
-                  <div class="quality-rung-name">EXPLICIT_CUSTOMER_SIGNAL</div>
-                  <div class="quality-rung-desc">고객이 헤더·파라미터에 명시적으로 보낸 신호</div>
-                </div>
-                <span class="quality-rung-score">최상</span>
-              </div>
-              <div class="quality-rung quality-rung--high">
-                <div class="quality-rung-rank">2</div>
-                <div>
-                  <div class="quality-rung-name">STRUCTURAL_DISCOVERY_ONLY</div>
-                  <div class="quality-rung-desc">플랫폼이 구조적 패턴을 관찰해서 자동 감지한 신호</div>
-                </div>
-                <span class="quality-rung-score">높음</span>
-              </div>
-              <div class="quality-rung quality-rung--med">
-                <div class="quality-rung-rank">3</div>
-                <div>
-                  <div class="quality-rung-name">DERIVED_RUNTIME_FALLBACK</div>
-                  <div class="quality-rung-desc">런타임 연속성으로 대체 추정한 신호</div>
-                </div>
-                <span class="quality-rung-score">보통</span>
-              </div>
-              <div class="quality-rung quality-rung--low">
-                <div class="quality-rung-rank">4</div>
-                <div>
-                  <div class="quality-rung-name">HEURISTIC_HINT_ONLY</div>
-                  <div class="quality-rung-desc">힌트 수준. 의미론적 결론은 금지</div>
-                </div>
-                <span class="quality-rung-score">낮음</span>
-              </div>
-              <div class="quality-rung" style="border-left: 4px solid var(--color-info, #0ea5e9); background: rgba(14, 165, 233, 0.05);">
-                <div class="quality-rung-rank">5</div>
-                <div>
-                  <div class="quality-rung-name">BRIDGE_COMPLETENESS_ONLY</div>
-                  <div class="quality-rung-desc">브릿지 커버리지 분석 및 전체 보고 완성도 수준 식별을 위한 특수 품질 신호</div>
-                </div>
-                <span class="quality-rung-score" style="color: var(--color-info, #0ea5e9)">완성도 전용</span>
-              </div>
-              <div class="quality-rung quality-rung--none">
-                <div class="quality-rung-rank">6</div>
-                <div>
-                  <div class="quality-rung-name">UNAVAILABLE</div>
-                  <div class="quality-rung-desc">해당 영역에 대한 증거 없음</div>
-                </div>
-                <span class="quality-rung-score">없음</span>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- Section 3: 가공 -->
-          <section>
-            <h2 id="stage-2-process">Stage 2 · 가공</h2>
-            <p>수집된 증거만으로는 LLM 이 이 사람이 평소와 다르게 행동하는지 판단할 수 없습니다. 2 단계는 세 종류의 구성요소가 원시 증거를 관찰 가능한 패턴으로 확장합니다.</p>
-
-            <div class="process-trio">
-              <div class="process-col process-col--collect">
-                <div class="process-col-head">
-                  <span class="process-col-dot"></span>
-                  <span class="process-col-title">수집기 (Collector)</span>
-                </div>
-                <ul>
-                  <li>SessionNarrativeCollector — 세션 내 행동 시퀀스</li>
-                  <li>ProtectableWorkProfileCollector — <a href="../../iam/protectable.html">@Protectable</a> 어노테이션 리소스의 평소 업무 프로필</li>
-                  <li>RoleScopeCollector — 역할 범위 스냅샷</li>
-                </ul>
-              </div>
-              <div class="process-col process-col--enrich">
-                <div class="process-col-head">
-                  <span class="process-col-dot"></span>
-                  <span class="process-col-title">보강기 (Enricher)</span>
-                </div>
-                <ul>
-                  <li>AuthenticationContextProvider — 인증 강도</li>
-                  <li>DelegationContextProvider — 위임 범위 확장</li>
-                  <li>PeerCohortContextProvider — 동료 그룹 이상치</li>
-                  <li>FrictionContextProvider — 마찰·승인 이력</li>
-                  <li>OrganizationContextProvider — 조직 계층</li>
-                  <li>ReasoningMemoryContextProvider — 과거 강화 사례</li>
-                </ul>
-              </div>
-              <div class="process-col process-col--infer">
-                <div class="process-col-head">
-                  <span class="process-col-dot"></span>
-                  <span class="process-col-title">추론기 (Inference)</span>
-                </div>
-                <ul>
-                  <li>ObjectiveDriftEvaluator — Agent 목표 이탈</li>
-                  <li>ObservedScopeInferenceService — 관찰 범위</li>
-                  <li>ContextCoverageEvaluator — 완성도 평가</li>
-                </ul>
-              </div>
-            </div>
-
-            <div class="callout-info">
-              <strong>Agent 전용 추론.</strong> 사람과 달리 Agent 는 허용된 목표 안에서만 움직여야 합니다. <code>ObjectiveDriftEvaluator</code> 는 현재 요청의 리소스·액션이 <code>DelegationStamp</code> 의 <code>allowedOperations</code>·<code>allowedResources</code> 범위를 벗어나는지 실시간으로 판정합니다.
-            </div>
-          </section>
-
-
-          <!-- Section 4: 정제 -->
-          <section>
-            <h2 id="stage-3-harden">Stage 3 · 정제</h2>
-            <p>프롬프트 주입(Prompt Injection) · 필드 스푸핑 · 신호 위조는 LLM 기반 보안 시스템이 가장 경계해야 할 위협입니다. <code>CanonicalSecurityContextHardener</code> 는 모든 필드를 LLM 에 넘기기 전에 필드별 정규화 절차를 거칩니다.</p>
-
-            <div class="anatomy-split">
-              <div class="anatomy-panel">
-                <div class="anatomy-head anatomy-head--sys">입력 검증</div>
-                <div class="anatomy-body">
-                  <ol>
-                    <li>Null 필드 기본값 치환</li>
-                    <li>문자열 트림 · 길이 제한</li>
-                    <li>열거형 값 정규화</li>
-                    <li>시간 · 좌표 범위 검증</li>
-                    <li>언어 · 국가 코드 ISO 정규화</li>
-                    <li>페이로드 디코딩 후 출력 가능 문자 80% 이상 필터</li>
-                  </ol>
-                </div>
-              </div>
-              <div class="anatomy-panel">
-                <div class="anatomy-head anatomy-head--usr">프로필 강화</div>
-                <div class="anatomy-body">
-                  <ol>
-                    <li>세션 이야기 버스트 플래그 유지</li>
-                    <li>업무 프로필 음수 값 제거</li>
-                    <li>역할 범위 중복 제거 · 순서 보존</li>
-                    <li>마찰 프로필 승인 이력 순서 고정</li>
-                    <li>추론 메모리 가드레일 정제</li>
-                    <li>신뢰 프로필 결정 상태 정규화</li>
-                  </ol>
-                </div>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- Section 5: 표준화 -->
-          <section>
-            <h2 id="stage-4-standardise">Stage 4 · 표준화</h2>
-            <p>3 단계를 거친 모든 정보는 <code>CanonicalSecurityContext</code> 라는 단일 표준 컨텍스트 모델로 집약됩니다. 현재 구현은 Lombok 기반의 클래스이며, hardener가 필드 정규화와 기본값 보정을 수행한 뒤 프롬프트 조립 단계에 전달합니다. 22 개 필드와 7 개 프로필이 정해진 자리에 담기므로, 이후 프롬프트 조립 단계는 어떤 필드가 어디 있는지 예측 가능합니다.</p>
-
-            <div class="canonical-layout">
-              <div class="canonical-cell">
-                <h4>주체</h4>
-                <ul>
-                  <li>userId</li>
-                  <li>organizationId</li>
-                  <li>tenantId</li>
-                  <li>principalType</li>
-                  <li>roleSet</li>
-                  <li>authoritySet</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>세션</h4>
-                <ul>
-                  <li>sessionId</li>
-                  <li>clientIp</li>
-                  <li>userAgent</li>
-                  <li>authenticationType</li>
-                  <li>mfaVerified</li>
-                  <li>concurrentSessions</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>위임</h4>
-                <ul>
-                  <li>delegated</li>
-                  <li>agentId</li>
-                  <li>objectiveId</li>
-                  <li>allowedOperations</li>
-                  <li>allowedResources</li>
-                  <li>objectiveDrift</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>인가</h4>
-                <ul>
-                  <li>effectiveRoles</li>
-                  <li>effectivePermissions</li>
-                  <li>scopeTags</li>
-                  <li>authorizationEffect</li>
-                  <li>policyId</li>
-                  <li>policyVersion</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>의도</h4>
-                <ul>
-                  <li>botUserAgent</li>
-                  <li>impossibleTravel</li>
-                  <li>missingReferer</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>위치 · IP</h4>
-                <ul>
-                  <li>country · city</li>
-                  <li>IP band · ASN</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>리소스</h4>
-                <ul>
-                  <li>resourceType</li>
-                  <li>businessLabel</li>
-                  <li>sensitivity</li>
-                  <li>actionFamily</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>프로필 7 종</h4>
-                <ul>
-                  <li>SessionNarrative</li>
-                  <li>Work</li>
-                  <li>RoleScope</li>
-                  <li>PeerCohort</li>
-                  <li>Friction</li>
-                  <li>ReasoningMemory</li>
-                  <li>ObservedScope</li>
-                </ul>
-              </div>
-            </div>
-
-            <h4>CanonicalSecurityContext Java 클래스 구조</h4>
-            <p>플랫폼 내부적으로 22개 기본 보안 필드와 7가지 행동 프로필을 단일 레코드로 담아 정규화하는 <code>CanonicalSecurityContext</code>의 실제 구조는 다음과 같습니다:</p>
-            <pre><code class="language-java">@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-public class CanonicalSecurityContext {
-    private Actor actor;                             // 주체 신원 (userId, tenantId, roleSet 등)
-    private Session session;                         // 세션/인증 상태 (sessionId, clientIp, mfaVerified 등)
-    private Device device;                           // 기기 핑거프린트 (os, browser 등)
-    private Intent intent;                           // 행위 의도 분석 (botUserAgent, impossibleTravel 등)
-    private Location location;                       // 지리/네트워크 위치 (country, city, ipBand, asn 등)
-    private Resource resource;                       // 대상 리소스 정보 (resourceId, sensitivity, actionFamily 등)
-    private Authorization authorization;             // 기존 인가 결과 (effectiveRoles, policyId 등)
-    private Delegation delegation;                   // 대리 위임 증거 (delegated, agentId, allowedOperations 등)
-    private ExecutionSubject executionSubject;
-    private ExecutionEnvelope executionEnvelope;
-    private Bridge bridge;                           // 브릿지 탐지/커버리지 정보
-    private ObservedScope observedScope;             // 자율적으로 관찰된 범위 스냅샷
-    
-    // 7종 자율 행동/보안 프로필
-    private SessionNarrativeProfile sessionNarrativeProfile;  // 세션 내 행동 시퀀스
-    private WorkProfile workProfile;                          // 평소 개인 업무 프로필
-    private RoleScopeProfile roleScopeProfile;                // 역할 범위 프로필
-    private PeerCohortProfile peerCohortProfile;              // 동료 그룹(Cohort) 프로필
-    private FrictionProfile frictionProfile;                  // 마찰 및 승인 이력 프로필
-    private ReasoningMemoryProfile reasoningMemoryProfile;    // RAG/과거 사례 분석 메모리 프로필
-    
-    private ContextCoverageReport coverage;          // 정보 완성도 분석 보고서
-    @Builder.Default
-    private Map&lt;String, Object&gt; attributes = new LinkedHashMap&lt;&gt;();
-    @Builder.Default
-    private List&lt;ContextTrustProfile&gt; contextTrustProfiles = new ArrayList&lt;&gt;();
-    @Builder.Default
-    private Instant collectedAt = Instant.now();
-
-    // 내부 정적 도메인 모델 클래스 예시
-    @Data public static class Actor {
-        private String userId;
-        private String organizationId;
-        private String tenantId;
-        private String principalType;
-        private List&lt;String&gt; roleSet;
-        private List&lt;String&gt; authoritySet;
-    }
-
-    @Data public static class Session {
-        private String sessionId;
-        private String clientIp;
-        private String userAgent;
-        private String authenticationType;
-        private Boolean mfaVerified;
-        private Integer concurrentSessions;
-    }
-
-    @Data public static class Delegation {
-        private Boolean delegated;
-        private String agentId;
-        private String objectiveId;
-        private List&lt;String&gt; allowedOperations;
-        private List&lt;String&gt; allowedResources;
-        private Boolean objectiveDrift;              // 대리 위임 목표 이탈 여부
-    }
-}</code></pre>
-
-            <h3 style="margin-top:var(--space-8)">정보 완성도 네 단계</h3>
-            <p>채워진 필드 수와 프로필 유무를 종합해 <code>ContextCoverageEvaluator</code> 가 완성도 등급을 매깁니다. 등급이 낮으면 LLM 에게 업무 패턴 기반 결론을 내리지 말라는 경고 문구가 자동 삽입됩니다.</p>
-
-            <div class="coverage-meter">
-              <div class="coverage-row">
-                <span class="coverage-label">BUSINESS_AWARE</span>
-                <div class="coverage-bar"><div class="coverage-fill coverage-fill--best"></div></div>
-                <span class="coverage-note">신원 · 세션 · 범위 · 리소스 · 관찰 패턴 모두 확보</span>
-              </div>
-              <div class="coverage-row">
-                <span class="coverage-label">SCOPE_AWARE</span>
-                <div class="coverage-bar"><div class="coverage-fill coverage-fill--good"></div></div>
-                <span class="coverage-note">신원 · 범위만. 관찰 프로필 부재</span>
-              </div>
-              <div class="coverage-row">
-                <span class="coverage-label">IDENTITY_AWARE</span>
-                <div class="coverage-bar"><div class="coverage-fill coverage-fill--ok"></div></div>
-                <span class="coverage-note">신원만. 범위 · 프로필 부재</span>
-              </div>
-              <div class="coverage-row">
-                <span class="coverage-label">ENVIRONMENT_ONLY</span>
-                <div class="coverage-bar"><div class="coverage-fill coverage-fill--poor"></div></div>
-                <span class="coverage-note">IP · 시간 등 환경만 확보</span>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- Section 6: 조립 -->
-          <section>
-            <h2 id="stage-5-compose">Stage 5 · 조립</h2>
-            <p>표준화된 컨텍스트는 이제 프롬프트가 됩니다. <code>SecurityDecisionPromptSections</code> 가 시스템 글과 사용자 글을 만들고, 요청에 고른 <strong>프롬프트 번들</strong>이 사용자 글을 어떤 모양으로 그릴지 정합니다. 한 빌드는 프롬프트 키 <code>cortex.security-decision</code> 의 번들 두 개를 실행합니다. 이름 붙은 섹션을 그리는 v19 번들이 빌드 기본이고, 프롬프트 사전의 블록을 그리는 v20 번들이 함께 들어 있습니다. 같은 이벤트의 뒤 프롬프트(Layer2 프롬프트나 2차 분석)는 첫 프롬프트를 그린 번들로 그립니다.</p>
-
-            <div class="anatomy-split">
-              <div class="anatomy-panel">
-                <div class="anatomy-head anatomy-head--sys">v19 번들 · 빌드 기본</div>
-                <div class="anatomy-body">
-                  <p>선택기가 다른 번들을 고르지 않으면 실행됩니다. 디스크립터의 릴리스 상태는 <code>PRODUCTION</code> 입니다.</p>
-                  <ol>
-                    <li>레이아웃 <code>V19_SECTIONS</code></li>
-                    <li>시스템 섹션 2 개 + 사용자 섹션 16 개</li>
-                    <li>계약 <code>CORTEX_PROMPT_CONTRACT_V2</code></li>
-                    <li>응답 검사는 v19 라벨을 읽음</li>
-                  </ol>
-                </div>
-              </div>
-              <div class="anatomy-panel">
-                <div class="anatomy-head anatomy-head--usr">v20 번들 · 사전 블록</div>
-                <div class="anatomy-body">
-                  <p>초안(<code>DRAFT</code>)으로 함께 배포되며, 선택기가 고를 때만 실행됩니다.</p>
-                  <ol>
-                    <li>레이아웃 <code>V20_BLOCKS</code> (<code>v20-dictionary-blocks</code>)</li>
-                    <li>자체 시스템 글 + 사용자 블록 최대 7 개, Layer2 2차 분석에는 SECOND PASS</li>
-                    <li>계약 <code>CORTEX_PROMPT_CONTRACT_V3</code> (출력 계약 v3)</li>
-                    <li>응답 검사는 프롬프트를 그린 사실을 읽음</li>
-                  </ol>
-                </div>
-              </div>
-            </div>
-
-            <div class="callout-info">
-              <strong>번들 선택.</strong> <code>contexa.security.tiered.prompt-bundle.active</code> 에 실행할 번들 버전을 적습니다. 비워 두면 빌드 기본 번들이 실행됩니다. <code>contexa.security.tiered.prompt-bundle.selector=registry</code> 로 두면 프롬프트 릴리스 레지스트리가 상태·범위·카나리 비율로 고릅니다. 이 빌드가 실행할 수 없는 버전을 고르면 빌드 기본 번들로 돌아갑니다. 자세한 내용은 <a href="../../../docs/reference/architecture/prompt-inspection.html">프롬프트 검수와 번들 버전</a>을 참고하세요.
-            </div>
-
-            <h3 style="margin-top:var(--space-8)">v19: 18 개 섹션 계획</h3>
-            <p>v19 번들은 시스템 섹션 2 개와 사용자 섹션 16 개를 아래 순서로 그립니다. 섹션 계획마다 우선순위 등급이 있습니다. 빌더가 아무것도 내지 않은 섹션은 빠지고, 빠짐을 기록하는 섹션이면 생략 원장(omission ledger)에 <code>NOT_COLLECTED</code> 와 그 등급의 의미 위험도가 남습니다.</p>
-            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-4);font-size:var(--text-xs);font-weight:600">
-              <span style="padding:2px 8px;background:#ef4444;color:white;border-radius:4px">P0 (필수)</span>
-              <span style="padding:2px 8px;background:#f59e0b;color:white;border-radius:4px">P1 (높은 가치)</span>
-              <span style="padding:2px 8px;background:#10b981;color:white;border-radius:4px">P2 (참조 정보)</span>
-            </div>
-
-            <div class="builder-grid">
-              <div class="builder-tile builder-tile--system">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--sys">시스템</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">SYSTEM_INSTRUCTION</div>
-                <div class="builder-tile-desc">정책 · 형식 지시</div>
-              </div>
-              <div class="builder-tile builder-tile--system">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--sys">시스템</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">DECISION_CONTRACT</div>
-                <div class="builder-tile-desc">JSON 스키마 강제</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">CURRENT_REQUEST_AND_EVENT</div>
-                <div class="builder-tile-desc">현재 요청 · 페이로드</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">BRIDGE_AND_COVERAGE</div>
-                <div class="builder-tile-desc">브릿지 보정 · 완성도</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">IDENTITY_AND_ROLE</div>
-                <div class="builder-tile-desc">신원 · 권한 집합</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">DEVICE_CONTEXT</div>
-                <div class="builder-tile-desc">운영체제 · 브라우저</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">LOCATION_CONTEXT</div>
-                <div class="builder-tile-desc">국가 · 도시 · IP 대역</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">RESOURCE_AND_ACTION</div>
-                <div class="builder-tile-desc">리소스 · 액션 의미</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">SESSION_NARRATIVE</div>
-                <div class="builder-tile-desc">세션 상태 · MFA</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">OBSERVED_AND_PERSONAL_WORK_PATTERN</div>
-                <div class="builder-tile-desc">개인 · 조직 평소 패턴</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">RAG_EVIDENCE_CONTEXT</div>
-                <div class="builder-tile-desc">RAG 로 조회된 보안 컨텍스트 문서</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">SUPPORTING_LEARNING_CONTEXT</div>
-                <div class="builder-tile-desc">참조 학습 · 보조 근거</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">ROLE_SCOPE</div>
-                <div class="builder-tile-desc">역할 범위 · 기대 패밀리</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">FRICTION_AND_APPROVAL</div>
-                <div class="builder-tile-desc">MFA · 승인 이력</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">DELEGATED_OBJECTIVE</div>
-                <div class="builder-tile-desc">위임 범위 · 목표 이탈</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#10b981;color:white;border-radius:2px;font-weight:700">P2</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">THREAT_LEARNING_AND_MEMORY</div>
-                <div class="builder-tile-desc">위협 인텔리전스 · 조직 학습</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">EXPLICIT_MISSING_KNOWLEDGE</div>
-                <div class="builder-tile-desc">누락 지식 · 신뢰 한계</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">INTENT_SIGNAL_CONTEXT</div>
-                <div class="builder-tile-desc">요청 의도 · 참조 신호</div>
-              </div>
-            </div>
-
-            <div class="callout-info">
-              <strong>증거 완전성.</strong> 프롬프트마다 증거 완전성을 <code>SUFFICIENT</code>, <code>PARTIAL</code>, <code>INCOMPLETE</code> 가운데 하나로 기록합니다. 행위자·세션·자원 식별이 없거나 막는 생략이 있으면 <code>INCOMPLETE</code> 입니다. v20 프롬프트는 UNKNOWN 블록이 사실을 하나라도 적으면 <code>PARTIAL</code> 이고, v19 프롬프트는 역할·인가 범위·자원 민감도·MFA 상태가 없을 때 등에 <code>PARTIAL</code> 입니다(<code>CanonicalContextFieldPolicy</code> 로 확인). <code>PromptGovernanceDescriptor</code> 가 번들의 프롬프트 키·템플릿 키·버전을 프롬프트와 함께 기록합니다.
-            </div>
-
-            <h3 style="margin-top:var(--space-8)">v19: 명시적 누락 지식</h3>
-            <p><strong>명시적 누락 지식</strong>(내부 섹션 키: <code>EXPLICIT_MISSING_KNOWLEDGE</code>)은 LLM 이 증거 공백을 확신으로 오해하지 않도록 하는 P0 섹션입니다. <code>SecurityContextQualityUserSectionBuilder</code> 가 <code>PromptContextComposer.composeMissingKnowledgeSection()</code> 을 호출하며, 커버리지 보고서나 신뢰 프로필이 공백을 말할 때만 출력됩니다. 공백 신호가 없으면 섹션은 비어 있으며, 이는 “명시할 지식 공백 없음”을 뜻합니다.</p>
-
-            <ul class="calib-list">
-              <li><strong>커버리지 공백</strong> — <code>missingCriticalFacts</code>, <code>remediationHints</code>, <code>confidenceWarnings</code> 가 있으면 누락 지식 섹션을 만듭니다.</li>
-              <li><strong>신뢰 한계</strong> — <code>ContextEvidenceLimitation</code>, <code>ContextTrustLimitation</code>, <code>ContextTrustWarning</code> 을 별도 항목으로 보여 줍니다.</li>
-              <li><strong>오탐 방지</strong> — 인가 효과(authorization effect)가 이미 정해졌으면 <code>AUTHORIZATION_EFFECT</code> 누락 항목을 빼고 씁니다.</li>
-              <li><strong>기준선 공백 보조</strong> — 기준선에 공백이 있으면 같은 섹션에 <code>BaselineGapSupport</code> 블록을 붙이고, 다른 내용이 없으면 섹션 머리도 함께 씁니다.</li>
-            </ul>
-
-            <h3 style="margin-top:var(--space-8)">v20: 사전 블록</h3>
-            <p>v20 사용자 프롬프트는 <code>SecurityDecisionPromptDictionary</code>(버전 <code>v20</code>, 항목 76 개)에 있는 줄만 씁니다. 항목마다 줄의 뜻, 값의 원천, 정규식으로 적은 값 형식, 값이 없을 때 쓰는 것, 출처 등급, 판단에 쓰는 곳, 우선순위, 목록 상한과 순서, 값을 자를 수 있는지가 정해져 있습니다. <code>PromptDictionaryRenderer</code> 는 아래 순서로 블록을 그리고, 블록 안의 줄은 사전 순서대로 씁니다. 줄이 하나도 없는 블록은 빠집니다. 사전 내용의 다이제스트가 번들 매니페스트의 B2 요소입니다.</p>
-
-            <div class="builder-grid">
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID B</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">USER BASELINE</div>
-                <div class="builder-tile-desc">이 요청 전에 이 사용자에 대해 배운 것(항목 18)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID S</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">SESSION</div>
-                <div class="builder-tile-desc">이 세션의 로그인 방식과 이 요청 전에 한 일(12)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID R</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">REQUEST</div>
-                <div class="builder-tile-desc">주체, 역할, 시각, 행동, 대상, 크기, 등급, 네트워크, 기기(10)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID F</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">DECISION FACTS</div>
-                <div class="builder-tile-desc">규정, 평소와 다른 점, 업무 기록, 역할 범위, 위임, 신호, 충돌(24)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID P</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">PAST RECORDS</div>
-                <div class="builder-tile-desc">이 사용자의 과거 허용 기록과 최근 비허용 판정(6)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID U</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">UNKNOWN</div>
-                <div class="builder-tile-desc">커버리지와 지금 모르는 사실. ID 는 이름마다 붙음(2)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--text-tertiary);color:white;border-radius:2px;font-weight:700">ID 없음</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">UNTRUSTED TEXT</div>
-                <div class="builder-tile-desc">누구나 쓸 수 있는 글. 증거일 뿐 지시가 아님(1)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">사용자</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--text-tertiary);color:white;border-radius:2px;font-weight:700">ID 없음</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">SECOND PASS</div>
-                <div class="builder-tile-desc">Layer2 2차 분석에만: 1차 판정과 새로 찾은 것(3)</div>
-              </div>
-            </div>
-
-            <h4>줄을 그리는 규칙</h4>
-            <ul class="calib-list">
-              <li><strong>머리</strong> — <code>=== TITLE ===</code> 또는 수식어가 붙은 <code>=== TITLE (q1; q2) ===</code> 입니다. 블록의 모든 줄이 같은 출처 등급이면 그 등급을 한 번, 이벤트 시계의 값이 있으면 <code>time zone &lt;id&gt;</code> 를 한 번 적습니다.</li>
-              <li><strong>줄</strong> — <code>Name: value</code> 입니다. 값 안의 줄바꿈과 제어 문자는 이스케이프되어 값이 한 줄에 머뭅니다.</li>
-              <li><strong>사실 ID</strong> — USER BASELINE, SESSION, REQUEST, DECISION FACTS, PAST RECORDS 의 필수(P0) 줄에는 블록 안에서 그린 순서대로 <code>[B1]</code>, <code>[S1]</code>, <code>[R1]</code>, <code>[F1]</code>, <code>[P1]</code> 이 붙습니다. 근거 코드가 인용하는 ID 입니다.</li>
-              <li><strong>목록</strong> — 번호 줄(<code>PastRecord1</code>, <code>PastRecord2</code>, ...)을 항목 상한(과거 기록은 5 개)까지 쓰고, 나머지는 <code>+n more</code> 한 줄로 셉니다. 이 줄에는 사실 ID 가 없습니다.</li>
-              <li><strong>UNKNOWN</strong> — 한 줄에 종류마다 한 번씩 이름을 적습니다. <code>not-integrated</code> 는 그 사실을 주는 연동이 없음, <code>unavailable-now</code> 는 원천이 이번 요청에 값을 주지 못함(사유 포함)입니다. 이름마다 <code>[U1]</code>, <code>[U2]</code>, ... ID 가 붙습니다. 요청에 해당하지 않는 사실은 아예 쓰지 않습니다.</li>
-              <li><strong>UNTRUSTED TEXT</strong> — <code>source=...; "..."</code> 형식으로, 따옴표 안의 따옴표와 역슬래시를 이스케이프합니다. 긴 글은 앞부분만 남기고 <code>… [+n chars cut]</code> 로 끝납니다. 자를 수 있는 값은 신뢰하지 않는 글뿐입니다. 대상의 업무 라벨(문서 제목, 반출 설명)은 호스트가 받은 자유 글이므로 <code>source=business label (host text)</code> 인 UNTRUSTED TEXT 줄로 그리고, REQUEST의 <code>Target</code> 줄은 라벨 원문 대신 그 자리를 <code>(business label in UNTRUSTED TEXT)</code> 로만 적습니다.</li>
-            </ul>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>출처 등급</th><th>뜻</th></tr></thead>
-              <tbody>
-                <tr><td><code>host</code></td><td>호스트 애플리케이션이 준 값: 업무 공급자, 브리지 도장, 공식 요청 필드, 자원 설명자.</td></tr>
-                <tr><td><code>learned</code></td><td>Contexa 가 허용된 요청에서 배운 값: 기준선, 작업 프로필, 과거 기록.</td></tr>
-                <tr><td><code>computed</code></td><td>코어가 요청과 기록으로 계산한 값.</td></tr>
-                <tr><td><code>inferred</code></td><td>명시 값이 없어 대체 규칙으로 추정한 값.</td></tr>
-                <tr><td><code>untrusted</code></td><td>누구나 쓸 수 있는 글.</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>결측 표기</th><th>값이 없을 때 프롬프트에 나오는 것</th></tr></thead>
-              <tbody>
-                <tr><td><code>RENDERED_VALUE</code></td><td>항목의 결측 문구로 줄을 씁니다. 예: <code>not learned</code>, <code>none</code>.</td></tr>
-                <tr><td><code>LINE_OMITTED</code></td><td>줄을 쓰지 않습니다.</td></tr>
-                <tr><td><code>UNKNOWN_BLOCK</code></td><td>줄을 쓰지 않고, 사실 이름과 종류를 UNKNOWN 블록에 적습니다.</td></tr>
-                <tr><td><code>BLOCK_OMITTED</code></td><td>블록 전체를 뺍니다.</td></tr>
-                <tr><td><code>ALWAYS_PRESENT</code></td><td>요청이 늘 말해 주는 값입니다. 값이 없으면 이름을 UNKNOWN 블록에 적습니다.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>예시 발췌</h4>
-            <p>v20 사용자 프롬프트의 세 블록에서 일부 줄만 옮긴 것입니다. 값은 사전에 적힌 형식 예시입니다.</p>
-            <pre><code class="language-text">=== USER BASELINE (learned; time zone Asia/Seoul) ===
+          <h2 id="rendering">프롬프트 그리기</h2>
+          <h3 id="v19-sections">v19: 이름 붙은 구역 18개</h3>
+          <p>v19 묶음은 시스템 구역 2개와 사용자 구역 16개를 아래 순서로 그립니다. 구역마다 우선순위 등급(P0 필수 · P1 높은 가치 · P2 참조)이 있습니다. 아무것도 내지 않은 구역은 빠지고, 빠짐을 기록하는 구역이면 생략 원장에 <code>NOT_COLLECTED</code>와 그 등급이 남습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>구역</th><th>등급</th><th>담는 것</th></tr></thead>
+            <tbody>
+              <tr><td><code>SYSTEM_INSTRUCTION</code>(시스템)</td><td>P0</td><td>정책 · 형식 지시</td></tr>
+              <tr><td><code>DECISION_CONTRACT</code>(시스템)</td><td>P0</td><td>JSON 스키마 강제</td></tr>
+              <tr><td><code>CURRENT_REQUEST_AND_EVENT</code></td><td>P0</td><td>현재 요청 · 페이로드</td></tr>
+              <tr><td><code>BRIDGE_AND_COVERAGE</code></td><td>P0</td><td>브리지 보정 · 완성도</td></tr>
+              <tr><td><code>IDENTITY_AND_ROLE</code></td><td>P0</td><td>신원 · 권한 집합</td></tr>
+              <tr><td><code>DEVICE_CONTEXT</code></td><td>P1</td><td>운영체제 · 브라우저</td></tr>
+              <tr><td><code>LOCATION_CONTEXT</code></td><td>P1</td><td>국가 · 도시 · IP 대역</td></tr>
+              <tr><td><code>RESOURCE_AND_ACTION</code></td><td>P0</td><td>자원 · 행동의 의미</td></tr>
+              <tr><td><code>SESSION_NARRATIVE</code></td><td>P1</td><td>세션 상태 · MFA</td></tr>
+              <tr><td><code>OBSERVED_AND_PERSONAL_WORK_PATTERN</code></td><td>P1</td><td>개인 · 조직의 평소 패턴</td></tr>
+              <tr><td><code>RAG_EVIDENCE_CONTEXT</code></td><td>P1</td><td>검색으로 찾은 과거 판정 기록</td></tr>
+              <tr><td><code>SUPPORTING_LEARNING_CONTEXT</code></td><td>P1</td><td>참조 학습 · 보조 근거</td></tr>
+              <tr><td><code>ROLE_SCOPE</code></td><td>P1</td><td>역할 범위 · 기대 작업 계열</td></tr>
+              <tr><td><code>FRICTION_AND_APPROVAL</code></td><td>P1</td><td>MFA · 승인 이력</td></tr>
+              <tr><td><code>DELEGATED_OBJECTIVE</code></td><td>P1</td><td>위임 범위 · 목표 이탈</td></tr>
+              <tr><td><code>THREAT_LEARNING_AND_MEMORY</code></td><td>P2</td><td>위협 정보 · 조직 학습</td></tr>
+              <tr><td><code>EXPLICIT_MISSING_KNOWLEDGE</code></td><td>P0</td><td>누락 지식 · 신뢰 한계</td></tr>
+              <tr><td><code>INTENT_SIGNAL_CONTEXT</code></td><td>P1</td><td>요청 의도 · 참조 신호</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>누락 지식 구역</strong>(<code>EXPLICIT_MISSING_KNOWLEDGE</code>)은 모델이 증거 공백을 확신으로 오해하지 않게 하는 필수 구역입니다. 완성도 보고의 빠진 핵심 사실 · 보완 힌트 · 신뢰 경고, 신뢰 프로필의 한계(<code>ContextEvidenceLimitation</code> · <code>ContextTrustLimitation</code> · <code>ContextTrustWarning</code> 줄), 기준선 공백(<code>BaselineGapSupport</code>)을 적고, 인가 효과가 이미 정해졌으면 그 누락 항목은 뺍니다. 공백 신호가 없으면 비어 있습니다.</li>
+            <li><strong>증거 완전성</strong>을 프롬프트마다 <code>SUFFICIENT</code> · <code>PARTIAL</code> · <code>INCOMPLETE</code>로 기록합니다. 주체 · 세션 · 자원을 알 수 없거나 막는 생략이 있으면 <code>INCOMPLETE</code>입니다. v19 프롬프트는 역할 · 인가 범위 · 자원 민감도 · MFA 상태가 없을 때 등에 <code>PARTIAL</code>이고(<code>CanonicalContextFieldPolicy</code>), v20 · v21 프롬프트는 UNKNOWN 블록에 사실이 하나라도 있으면 <code>PARTIAL</code>입니다. 기술자(<code>PromptGovernanceDescriptor</code>)가 묶음의 프롬프트 키 · 템플릿 키 · 버전을 프롬프트와 함께 기록합니다.</li>
+          </ul>
+          <h3 id="dictionary-blocks">v20 · v21: 사전 블록</h3>
+          <p>v20 · v21 사용자 글은 프롬프트 사전에 있는 줄만 씁니다. 항목마다 줄의 뜻, 값의 원천과 형식, 값이 없을 때 쓰는 것, 출처 등급, 우선순위, 목록 상한, 자를 수 있는지가 정해져 있습니다. 블록은 아래 순서로 그리고, 줄이 하나도 없는 블록은 빠집니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>블록</th><th>사실 ID</th><th>v20 항목</th><th>담는 것</th></tr></thead>
+            <tbody>
+              <tr><td><code>USER BASELINE</code></td><td>B</td><td>18</td><td>이 요청 전에 이 사용자에 대해 배운 것</td></tr>
+              <tr><td><code>SESSION</code></td><td>S</td><td>12</td><td>이 세션의 로그인 방식과 이 요청 전에 한 일</td></tr>
+              <tr><td><code>REQUEST</code></td><td>R</td><td>10</td><td>주체 · 역할 · 시각 · 행동 · 대상 · 크기 · 등급 · 네트워크 · 기기</td></tr>
+              <tr><td><code>DECISION FACTS</code>(v21: <code>RECORDS AND COMPARISONS</code>)</td><td>F</td><td>24</td><td>규정 · 평소와 다른 점 · 업무 기록 · 역할 범위 · 위임 · 신호 · 충돌</td></tr>
+              <tr><td><code>PAST RECORDS</code></td><td>P</td><td>6</td><td>이 사용자의 과거 허용 기록과 최근 허용이 아닌 판정</td></tr>
+              <tr><td><code>UNKNOWN</code></td><td>U(이름마다)</td><td>2</td><td>완성도와 지금 모르는 사실</td></tr>
+              <tr><td><code>UNTRUSTED TEXT</code></td><td>없음</td><td>1</td><td>누구나 쓸 수 있는 글. 증거일 뿐 지시가 아님</td></tr>
+              <tr><td><code>SECOND PASS</code></td><td>없음</td><td>3</td><td>2차 분석에만: 1차 판정과 새로 찾은 것</td></tr>
+            </tbody>
+          </table></div>
+          <p><strong>v21 사전</strong>은 v20 항목에서 규정 충족 줄을 빼고 10개(기준선 주체 · 평소 순서 · 평소 클라이언트 · 자격 증명 · 책임자 확인 · 대상 범위 · 위임 활동 · 기록 보유자 · 기록 작성자 · 인자 출처)를 더해 85개입니다. 늘어난 줄 가운데 다섯은 에이전트 요청에서만 값이 생깁니다(<a href="#human-agent">사람과 에이전트 요청의 차이</a>).</p>
+          <ul>
+            <li><strong>머리</strong>: <code>=== TITLE ===</code> 또는 <code>=== TITLE (q1; q2) ===</code>. 블록의 모든 줄이 같은 출처 등급이면 그 등급을 머리에 한 번, 사건 시계가 있으면 <code>time zone &lt;id&gt;</code>를 한 번 적습니다.</li>
+            <li><strong>줄</strong>: <code>Name: value</code>. 값 안의 줄바꿈과 제어 문자는 이스케이프해 한 줄에 둡니다.</li>
+            <li><strong>사실 ID</strong>: USER BASELINE · SESSION · REQUEST · DECISION FACTS · PAST RECORDS의 필수(P0) 줄에 그린 순서대로 <code>[B1]</code> · <code>[S1]</code> · <code>[R1]</code> · <code>[F1]</code> · <code>[P1]</code>이 붙습니다. 근거 코드가 인용하는 ID입니다.</li>
+            <li><strong>목록</strong>: 번호 줄을 상한(과거 기록은 5개)까지 쓰고 나머지는 <code>+n more</code> 한 줄로 셉니다. 이 줄에는 사실 ID가 없습니다.</li>
+            <li><strong>UNKNOWN</strong>: 종류마다 이름을 적습니다. <code>not-integrated</code>는 그 사실을 주는 연동이 없음, <code>unavailable-now</code>는 원천이 이번 요청에 값을 주지 못함(사유 포함)입니다. 이름마다 <code>[U1]</code> · <code>[U2]</code>가 붙습니다.</li>
+            <li><strong>SECOND PASS</strong>: 2차 분석은 첫 사용자 글 뒤에 이 블록을 붙여 1차 판정과 1차가 몰랐던 과거 기록을 적습니다. 1차가 과거 기록을 이미 가져왔으면 v21은 "새로 안 것 없음"을 적고, v20은 블록 없이 첫 사용자 글만으로 다시 묻습니다.</li>
+            <li><strong>UNTRUSTED TEXT</strong>: <code>source=...; "..."</code> 형식이고, 자를 수 있는 값은 이 글뿐입니다(<code>… [+n chars cut]</code>). 자원의 업무 라벨(문서 제목 등)도 앱이 받은 자유 글이라 여기에 그리고, REQUEST의 대상 줄은 그 자리를 <code>(business label in UNTRUSTED TEXT)</code>로만 적습니다.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>출처 등급</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>host</code></td><td>앱이 준 값: 업무 기록 공급자, 브리지 도장, 요청 필드, 자원 설명</td></tr>
+              <tr><td><code>learned</code></td><td>허용된 요청에서 배운 값: 기준선, 업무 프로필, 과거 기록</td></tr>
+              <tr><td><code>computed</code></td><td>엔진이 요청과 기록으로 계산한 값</td></tr>
+              <tr><td><code>inferred</code></td><td>명시 값이 없어 대체 규칙으로 추정한 값</td></tr>
+              <tr><td><code>untrusted</code></td><td>누구나 쓸 수 있는 글</td></tr>
+            </tbody>
+          </table></div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>결측 표기</th><th>값이 없을 때 프롬프트에 나오는 것</th></tr></thead>
+            <tbody>
+              <tr><td><code>RENDERED_VALUE</code></td><td>항목의 결측 문구로 줄을 씀(예: <code>not learned</code>, <code>none</code>)</td></tr>
+              <tr><td><code>LINE_OMITTED</code></td><td>줄을 쓰지 않음</td></tr>
+              <tr><td><code>UNKNOWN_BLOCK</code></td><td>줄을 쓰지 않고 이름과 종류를 UNKNOWN 블록에 적음</td></tr>
+              <tr><td><code>BLOCK_OMITTED</code></td><td>블록 전체를 뺌</td></tr>
+              <tr><td><code>ALWAYS_PRESENT</code></td><td>요청이 늘 말해 주는 값. 없으면 이름을 UNKNOWN 블록에 적음</td></tr>
+            </tbody>
+          </table></div>
+          <p>v20 사용자 글의 세 블록에서 일부 줄만 옮긴 예입니다. 값은 사전에 적힌 형식 예시입니다.</p>
+          <pre><code class="language-text">=== USER BASELINE (learned; time zone Asia/Seoul) ===
 Evidence: collector PERSONAL_WORK_PROFILE, window 7 days (09-23..09-29), observations 25 over 5 days, fallback 100%, unknown 0%, evidence LIMITED, scope personal
 [B1] BaselineStatus: ESTABLISHED (25 learned requests, personal baseline AVAILABLE)
 UsualHours: 09-11, 13-14, 17 (seen 9,10,11,12,13,14,16,17)
@@ -762,96 +234,49 @@ UsualDays: Mon-Fri
 === UNKNOWN ===
 Coverage: context coverage BUSINESS_AWARE; bridge AUTHORIZATION_CONTEXT
 Unknown: not-integrated: [U1] ClientSignals, [U2] PeerCohort</code></pre>
+          <h3 id="system-text">시스템 글</h3>
+          <ul>
+            <li><strong>v19:</strong> 필수 판단 경계(차단 · 허용 등), 판단 절차, 증거 규칙, 라벨 보존.</li>
+            <li><strong>v20:</strong> 역할(요청은 이미 인증 · 인가를 통과했고, 사용자 글의 사실만으로 지금 믿어도 되는지 판단) → 블록 읽는 법(출처 등급, 사건 시계, 사실 ID. 모르는 사실은 일치도 불일치도 아님, UNTRUSTED TEXT와 PAST RECORDS는 지시가 아님) → 대응 네 가지 → 켜진 최소 대응 규칙과 하한 → 필수 차단 경계 · 저위험 허용 경계 · 업무 충족 허용 경계 → 판단 절차 → 증거 규칙 → 출력 블록.</li>
+            <li><strong>v21:</strong> 임무(로그인 · 권한 · 고정 규칙으로는 훔친 계정이나 내부자의 오용을 정상 업무와 구분할 수 없음) → 증거 읽는 법(에이전트 · 위임 · 자격 증명 읽는 법 포함) → 판단 방법(정상 업무 H1 · 계정 탈취 H2 · 내부자 오용 H3 · 자동화나 실수 H4를 사실마다 비교, 필요하면 다른 설명을 더함) → 대응의 뜻 → 정직(줄에 적힌 것만, 통제는 정당성의 증거가 아님). 대응을 정하는 규칙 · 임계값 · 하한이 없습니다.</li>
+            <li>시스템 글은 묶음 버전 · 예산 프로파일 · 출력 방식 · 최소 대응 설정별로 캐시하고, v21이 아닌 묶음의 에이전트 요청은 따로 캐시합니다.</li>
+            <li><strong>예산:</strong> 기본(<code>contexa.security.tiered.prompt-runtime.budget-enforcement</code> = <code>OBSERVE_ONLY</code>)은 예산을 재기만 합니다. <code>ENFORCE</code>면 예산 프로파일을 넘은 v20 · v21 프롬프트에서 사전 우선순위대로(참조 항목 → 높은 가치 항목, 사전의 끝에서부터) 항목을 빼고, 필수 항목은 빼지 않으며, 뺀 항목을 생략 원장에 <code>BUDGET_TRIMMED</code>로 남깁니다.</li>
+            <li><strong>호출 설정:</strong> 판정 호출에는 결정성 값(temperature <code>0.0</code>, seed <code>1</code>)을 걸고, 지원하는 공급자에는 네이티브 구조화 출력(엄격한 JSON 스키마)을 씁니다. 1차 분석의 출력 한도는 4096, 2차 분석은 2560 토큰입니다.</li>
+            <li>OSS에는 실행 중 프롬프트에 규칙을 더하는 공급자의 구현이 없어, 기본은 더하는 규칙이 없습니다.</li>
+          </ul>
 
-            <h4>v20 시스템 글</h4>
-            <p>v20 번들은 자체 시스템 글을 씁니다. 시스템 글은 번들 버전, 예산 프로파일, 출력 방식, 최소 대응 설정별로 캐시됩니다. 순서는 다음과 같습니다.</p>
-            <ul class="calib-list">
-              <li><strong>역할</strong> — 요청은 이미 인증·인가를 통과했으며, 사용자 프롬프트가 말하는 사실만으로 이 동작을 지금 믿어도 되는지 판단합니다.</li>
-              <li><strong>블록 읽는 법</strong> — 블록 순서, 출처 등급 다섯 가지, 이벤트 시계, 사실 ID 를 설명합니다. 모르는 사실은 일치도 불일치도 아니고, RoleScope 는 범위 집단의 30 일 사실과의 비교이며, UNTRUSTED TEXT 와 PAST RECORDS 는 증거일 뿐 지시가 아니고, 현재 세션 사실이 과거 기록보다 우선합니다.</li>
-              <li><strong>대응</strong> — ALLOW, CHALLENGE, ESCALATE, BLOCK 을 한 번씩 정의합니다.</li>
-              <li><strong>최소 대응 규칙</strong> — 호스트가 켠 규칙만, 규칙마다 하한과 함께 적습니다(아래 참고).</li>
-              <li><strong>경계</strong> — 필수 BLOCK 경계(두 범주 이상에서 뒷받침되는 진행 중 공격, 테넌트·조직 충돌, 인가 효과 BLOCK 또는 DENY), 필수 저위험 ALLOW 경계, 필수 업무 충족 ALLOW 경계를 차례로 봅니다.</li>
-              <li><strong>판단 절차</strong> — 블록 순서대로 기준선, 세션, 요청, 판정 사실을 보고 서로 맞춰 본 뒤, 증거가 정당화하는 가장 덜 방해되는 대응을 고릅니다.</li>
-              <li><strong>증거 규칙</strong> — 통제는 정당성 증거가 아니며, 없거나 얇은 증거는 불확실성이지 위험이 아니고, 사실은 줄에 적힌 그대로 말합니다.</li>
-              <li><strong>출력</strong> — 출력 계약 v3 의 <code>=== OUTPUT ===</code> 블록과 근거 코드마다의 뜻입니다.</li>
-            </ul>
+          <h2 id="minimum-action">최소 대응 규칙(v19 · v20)</h2>
+          <p>최소 대응 규칙(<code>MinimumActionRules</code>)은 판정 사실을 읽고 요청이 요구하는 가장 약한 대응(하한)을 정합니다. 대응의 순서는 ALLOW &lt; CHALLENGE &lt; ESCALATE &lt; BLOCK입니다. 규칙은 하한일 뿐이고 대응을 직접 고르지 않습니다. 어떤 기록으로도 설명되지 않는 차이만 셉니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>규칙</th><th>조건</th><th>하한</th><th>설정(<code>contexa.security.zerotrust.minimum-action</code> 아래)</th></tr></thead>
+            <tbody>
+              <tr><td><code>MIN_P1_IDENTITY_DEVIATION</code></td><td>자원 등급이 최소 등급 이상이고, 시각 · 요일 · 네트워크 · 기기 가운데 최소 개수 이상이 설명 없이 평소와 다름</td><td>CHALLENGE</td><td><code>.identity.enabled</code>(<code>true</code>), <code>.identity.min-deviations</code>(<code>2</code>), <code>.identity.min-resource-class</code>(<code>SENSITIVE</code>)</td></tr>
+              <tr><td><code>MIN_P2_NEW_DEVICE_OR_NETWORK_EXPORT</code></td><td>행동이 EXPORT, 자원 등급이 SENSITIVE 또는 CRITICAL, 기기나 네트워크가 설명 없이 평소와 다름</td><td>CHALLENGE</td><td><code>.new-device-export.enabled</code>(<code>true</code>)</td></tr>
+              <tr><td><code>MIN_P3_POLICY_NOT_SATISFIED</code></td><td>회사 규정이 요구하는 것을 덮는 유효한 기록이 없음</td><td><code>.policy-satisfaction.action</code>(<code>ESCALATE</code>)</td><td><code>.policy-satisfaction.enabled</code>(<code>true</code>). 하한은 CHALLENGE 또는 ESCALATE만 되고, 다른 값이면 시작하지 않음</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>관찰(기본, <code>contexa.security.zerotrust.minimum-action.mode</code> = <code>OBSERVE</code>):</strong> 걸린 규칙과 판정이 그보다 약했는지를 사건 메타데이터(<code>minimumActionFindings</code>)에 기록만 하고 판정은 그대로 둡니다.</li>
+            <li><strong>집행(<code>ENFORCE</code>):</strong> 응답 검사가 하한보다 약한 답을 위반(<code>MINIMUM_ACTION_VIOLATION</code>)으로 보고 한 번 고쳐 묻고, 그래도 약하면 검토 보류로 끝냅니다. 이 검사는 묶음 모양을 보지 않아 v19 답에도 걸립니다.</li>
+            <li><strong>v21 묶음</strong>은 이 규칙을 평가하지도 기록하지도 않습니다.</li>
+            <li>v20 시스템 글은 켜진 규칙만 하한과 함께 적고, 켜진 규칙이 없으면 규칙 문단을 뺍니다.</li>
+            <li>2차 분석이 끝까지 ESCALATE를 고르면 하한과 상관없이 대체 대응(아래 <a href="#checks">응답 검사</a>)으로 끝납니다.</li>
+          </ul>
 
-            <div class="callout-info">
-              <strong>예산.</strong> 기본값(<code>contexa.security.tiered.prompt-runtime.budget-enforcement=OBSERVE_ONLY</code>)에서는 예산을 관측만 합니다. <code>ENFORCE</code> 로 두면 예산 프로파일을 넘은 v20 프롬프트가 사전 우선순위대로 항목을 뺍니다. 참조 항목을 먼저, 그다음 높은 가치 항목을, 각각 사전의 마지막 항목부터 빼며, 예산에 맞으면 바로 멈춥니다. 필수(P0) 항목은 빠지지 않고, 사실 값은 잘리지 않으며, 뺀 항목은 생략 원장에 <code>BUDGET_TRIMMED</code> 로 남습니다.
-            </div>
-          </section>
-
-
-          <!-- Section 6b: 판정 사실 -->
-          <section>
-            <h2 id="decision-facts">판정 사실</h2>
-            <p><code>DecisionFactsResolver</code> 가 요청의 DECISION FACTS 를 계산합니다. 차원별로 평소 행동과 어떻게 다른지, 요청 시점에 회사 규정이 충족되는지, 승인·담당·티켓·당번·출장 기록, 세션 안 반복, 범위 집단 비교, 데이터 충돌, 집단 비교가 들어갑니다. 엔진이 확정하지 못한 사실은 줄을 쓰지 않고 모름으로 이름만 남깁니다. 엔진은 사실을 말할 뿐 판정하지 않습니다. 같은 <code>DecisionFacts</code> 가 프롬프트가 붙인 ID 와 함께 표준 컨텍스트에 남으므로, 프롬프트·봉인 기록·응답 검사·프롬프트 검수기가 한 계산을 읽습니다.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>차원</th><th>근거 코드</th><th>차이를 설명할 수 있는 것</th></tr></thead>
-              <tbody>
-                <tr><td><code>time</code>, <code>day</code></td><td><code>DEVIATION_TIME</code>, <code>DEVIATION_DAY</code></td><td>그 작업을 덮는 유효한 승인이나 티켓</td></tr>
-                <tr><td><code>network</code></td><td><code>DEVIATION_NETWORK</code></td><td>등록된 출장</td></tr>
-                <tr><td><code>device</code>, <code>login method</code></td><td><code>DEVIATION_DEVICE</code>, <code>DEVIATION_LOGIN_METHOD</code></td><td>없음</td></tr>
-                <tr><td><code>target</code>, <code>action</code>, <code>class</code>, <code>size</code>, <code>rate</code></td><td><code>DEVIATION_TARGET</code>, <code>DEVIATION_ACTION</code>, <code>DEVIATION_RESOURCE_CLASS</code>, <code>DEVIATION_SIZE</code>, <code>DEVIATION_RATE</code></td><td>그 작업을 덮는 유효한 승인이나 티켓</td></tr>
-              </tbody>
-            </table></div>
-            <p>최소 대응 규칙은 어떤 기록으로도 설명되지 않는 차이만 셉니다. 확립되지 않은 기준선과의 차이나 비교하지 않은 차원은 "설명되지 않음"이 아니라 모름입니다.</p>
-          </section>
-
-
-          <!-- Section 6c: 최소 대응 규칙 -->
-          <section>
-            <h2 id="minimum-action-rules">최소 대응 규칙</h2>
-            <p><code>MinimumActionRules</code> 는 판정 사실을 읽고 요청이 요구하는 가장 약한 대응을 정합니다. 대응의 순서는 ALLOW &lt; CHALLENGE &lt; ESCALATE &lt; BLOCK 입니다. 규칙은 하한일 뿐 더 강한 대응을 고를 이유가 아니며, 코드가 대응을 직접 고르지는 않습니다.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>규칙</th><th>조건</th><th>하한</th><th>설정 (<code>contexa.security.zerotrust.minimum-action</code>)</th></tr></thead>
-              <tbody>
-                <tr><td><code>MIN_P1_IDENTITY_DEVIATION</code></td><td>ResourceClass 가 최소 등급 이상이고, 시각·요일·네트워크·기기 가운데 최소 개수 이상이 설명 없이 평소와 다름(기기는 하나로 셈)</td><td>CHALLENGE</td><td><code>.identity.enabled</code> (<code>true</code>), <code>.identity.min-deviations</code> (<code>2</code>), <code>.identity.min-resource-class</code> (<code>SENSITIVE</code>)</td></tr>
-                <tr><td><code>MIN_P2_NEW_DEVICE_OR_NETWORK_EXPORT</code></td><td>행동이 EXPORT 이고, ResourceClass 가 SENSITIVE 또는 CRITICAL 이며, 기기나 네트워크가 설명 없이 평소와 다름</td><td>CHALLENGE</td><td><code>.new-device-export.enabled</code> (<code>true</code>)</td></tr>
-                <tr><td><code>MIN_P3_POLICY_NOT_SATISFIED</code></td><td>PolicySatisfied 가 no: 회사 규정이 요구하는 것을 덮는 유효한 기록이 없음</td><td><code>.policy-satisfaction.action</code> (<code>ESCALATE</code>)</td><td><code>.policy-satisfaction.enabled</code> (<code>true</code>). 대응은 CHALLENGE 또는 ESCALATE 만 되며, 다른 값이면 기동이 멈춥니다</td></tr>
-              </tbody>
-            </table></div>
-
-            <ul class="calib-list">
-              <li><strong>프롬프트에서</strong> — v20 시스템 글은 켜진 규칙만 하한과 함께 적습니다. 켜진 규칙이 없으면 규칙 문단이 빠집니다.</li>
-              <li><strong>OBSERVE(기본)</strong> — <code>.mode=OBSERVE</code> 는 요청이 걸린 규칙과 판정이 그보다 약했는지를 이벤트 메타데이터(<code>minimumActionFindings</code>)에 기록만 하고, 판정은 그대로 둡니다.</li>
-              <li><strong>ENFORCE</strong> — <code>.mode=ENFORCE</code> 이면 응답 검사가 걸린 규칙보다 약한 답을 위반(<code>MINIMUM_ACTION_VIOLATION</code>)으로 보고 교정 재시도로 보냅니다.</li>
-              <li><strong>Layer2</strong> — 풀리지 않은 Layer2 ESCALATE 는, 대체 대응이 걸린 규칙의 하한보다 약하면 대체 대응으로 바꾸지 않습니다.</li>
-            </ul>
-          </section>
-
-
-          <!-- Section 6d: 출력 계약 v3 -->
-          <section>
-            <h2 id="output-contract">출력 계약 v3</h2>
-            <p><code>SecurityDecisionOutputContract</code> 가 v20 응답의 단일 원천입니다. 제공자 스키마, 시스템 글의 출력 블록, 파서가 모두 이것을 읽습니다. 네이티브 구조화 출력을 지원하는 제공자는 엄격한 JSON 스키마를 받고, 그렇지 않은 제공자는 같은 스키마를 시스템 프롬프트의 글로 받습니다.</p>
-
-            <div class="outcome-frame">
-              <h3>응답 필드</h3>
-              <div class="outcome-matrix">
-                <div class="outcome-field">
-                  <div class="outcome-field-name">action</div>
-                  <div class="outcome-field-desc">ALLOW, CHALLENGE, ESCALATE, BLOCK 가운데 하나</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">reasonCodes</div>
-                  <div class="outcome-field-desc"><code>{"code", "fact"}</code> 객체 1~5 개. fact 는 <code>^[BSRFPU][0-9]{1,2}$</code> 에 맞는 ID</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">reason</div>
-                  <div class="outcome-field-desc">모델이 자기 말로 쓴 한 문장. 응답 처리기가 200 자 이내로 유지</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">riskScore · confidence · mitre</div>
-                  <div class="outcome-field-desc">0~1 또는 null, MITRE ATT&amp;CK ID 목록 또는 null. 감사용으로만 남고 판정에 쓰이지 않음</div>
-                </div>
-              </div>
-            </div>
-
-            <p>근거 코드 53 개는 11 개 묶음으로 나뉩니다: 최소 대응, 규정, 업무 기록, 평소와 다름, 평소와 같음, 범위·권한, 위임, 세션, 과거 기록, 차단 근거, 검토 넘김. 코드마다 인용하는 사전 줄이 정해져 있고, <code>MATERIAL_MISSING_EVIDENCE</code> 는 UNKNOWN 줄이 모르는 사실에 붙인 <code>U</code> ID 를 인용합니다.</p>
-            <pre><code class="language-json">{
+          <h2 id="output">모델 답의 형식과 검사</h2>
+          <p>출력 계약은 모델 답의 형식입니다. 공급자 스키마, 시스템 글의 출력 블록, 답을 읽는 파서가 모두 같은 계약을 씁니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>칸</th><th>v2(v19)</th><th>v3(v20)</th><th>v4(v21)</th></tr></thead>
+            <tbody>
+              <tr><td><code>action</code></td><td colspan="3">ALLOW · CHALLENGE · ESCALATE · BLOCK 가운데 하나</td></tr>
+              <tr><td>이유</td><td><code>reasoning</code> 한 문장(180자 이하), 참조 <code>evidenceRefs</code></td><td><code>reason</code> 한 문장(200자 이하) + <code>reasonCodes</code> 1~5개(<code>{"code", "fact"}</code>)</td><td><code>reason</code>(300자 이하) + <code>reasonCodes</code> 1~5개</td></tr>
+              <tr><td>근거 코드</td><td>없음</td><td>53개 · 11묶음</td><td>51개 · 9묶음</td></tr>
+              <tr><td>가설</td><td>없음</td><td>없음</td><td><code>hypotheses</code>: H1~H5마다 <code>MOST_LIKELY</code> · <code>POSSIBLE</code> · <code>UNLIKELY</code> · <code>NO_EVIDENCE</code></td></tr>
+              <tr><td><code>riskScore</code> · <code>confidence</code> · <code>mitre</code></td><td colspan="3">감사용으로만 남고 판정에 쓰이지 않음</td></tr>
+            </tbody>
+          </table></div>
+          <p>v3의 <code>fact</code>는 <code>^[BSRFPU][0-9]{1,2}$</code> 형식의 사실 ID입니다. 근거 코드마다 인용할 수 있는 사전 줄이 정해져 있고, <code>MATERIAL_MISSING_EVIDENCE</code>는 UNKNOWN 블록의 <code>U</code> ID를 인용합니다.</p>
+          <pre><code class="language-json">{
   "action": "ESCALATE",
   "reasonCodes": [
     {"code": "MIN_P3_POLICY_NOT_SATISFIED", "fact": "F4"},
@@ -862,80 +287,35 @@ Unknown: not-integrated: [U1] ClientSignals, [U2] PeerCohort</code></pre>
   "confidence": null,
   "mitre": null
 }</code></pre>
-          </section>
-
-
-          <!-- Section 7: 검사 -->
-          <section>
-            <h2 id="stage-6-check">Stage 6 · 검사</h2>
-            <p>LLM 이 응답을 돌려주면 끝이 아닙니다. 응답 검사가 답을 판정으로 만들기 전에 읽습니다. v20 프롬프트라면 근거 문장의 주장(예: LoginMethod 는 MFA 미확인인데 확인됐다고 쓴 경우), 필수 경계, 근거 코드 하나하나를 프롬프트를 그린 사실과 대조하고, ENFORCE 모드에서는 최소 대응 규칙도 적용합니다. v19 프롬프트는 라벨로 검사합니다.</p>
-
-            <div class="guardrail-flow">
-              <div class="guardrail-track">
-                <div class="guardrail-node guardrail-node--allow">
-                  <span class="guardrail-action">ANSWER</span>
-                  <span class="guardrail-label">모델 응답</span>
-                </div>
-                <div class="guardrail-arrow">→</div>
-                <div class="guardrail-node guardrail-node--chall">
-                  <span class="guardrail-action">RETRY</span>
-                  <span class="guardrail-label">교정 재시도 1 회</span>
-                </div>
-                <div class="guardrail-arrow">→</div>
-                <div class="guardrail-node guardrail-node--escal">
-                  <span class="guardrail-action">FALLBACK</span>
-                  <span class="guardrail-label">계약 대체 대응</span>
-                </div>
-              </div>
-              <div class="guardrail-caption">위반은 한 번 재시도하고, 그래도 남으면 계약의 대체 대응으로 끝납니다.</div>
+          <h3 id="checks">응답 검사</h3>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>묶음에 따라 다른 응답 검사</strong>둘 다 고쳐 묻기는 한 번이고, 출력 한도에서 잘린 답은 한도를 두 배로 늘려 다시 묻습니다.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side"><p class="dg-side-title">v19 · v20</p><ul><li>v19는 라벨, v20은 근거 문장 · 필수 경계 · 근거 코드를 프롬프트를 그린 사실과 대조</li><li>위반이면 무엇이 틀렸는지 붙여 한 번 고쳐 물음</li><li>그래도 위반이면 검토 보류로 끝남. 차단 경계를 어기면 차단, 저위험 · 업무 충족 경계를 어기면 허용</li></ul></div>
+              <div class="dg-side dg-model"><p class="dg-side-title">v21</p><ul><li>형식 · 인용 · 줄과 어긋난 말만 보고, 고른 대응은 검사하지 않음</li><li>근거 코드만 틀린 답은 고쳐 묻지 않고 그대로 두고 기록(고쳐 묻기가 대응을 바꾼 사례 때문)</li><li>고쳐 물은 뒤에도 쓸 수 있는 형식이 없을 때만 검토 보류</li></ul></div>
             </div>
+          </figure>
+          <ul>
+            <li><strong>2차 분석의 ESCALATE:</strong> <code>contexa.security.tiered.layer2.allow-escalate-final-action</code>이 <code>true</code>가 아니면, 2차 분석 뒤에도 남은 ESCALATE는 <code>contexa.security.tiered.layer2.escalate-fallback-action</code>(기본 <code>CHALLENGE</code>)으로 바뀌고 판정에 <code>LAYER2_ESCALATE_TERMINALIZED</code>가 남습니다. 모든 묶음에 같습니다.</li>
+            <li>모델의 답을 받지 못한 경우(공급자 장애 · 시간 초과)의 처리는 <a href="decision-engine.html#overrides">판정 엔진의 "모델의 답이 바뀌는 경우"</a>에 있습니다.</li>
+          </ul>
 
-            <ul class="calib-list">
-              <li><strong>교정 재시도</strong> — 같은 프롬프트에 앞의 답과 무엇이 틀렸는지를 붙여 다시 보냅니다. 출력 한도에서 잘린 답은 한도를 두 배로 늘려 다시 묻습니다.</li>
-              <li><strong>대체 대응</strong> — 재시도 뒤에도 남은 위반은 ESCALATE 로 갑니다. BLOCK 경계를 어긴 경우는 BLOCK, 저위험 경계나 업무 충족 경계를 어긴 경우는 ALLOW 입니다.</li>
-              <li><strong>Layer2 ESCALATE</strong> — <code>contexa.security.tiered.layer2.allow-escalate-final-action</code> 이 <code>true</code> 가 아니면, 풀리지 않은 ESCALATE 는 <code>contexa.security.tiered.layer2.escalate-fallback-action</code>(기본 CHALLENGE)으로 바뀌고 판정에 <code>LAYER2_ESCALATE_TERMINALIZED</code> 가 남습니다.</li>
-            </ul>
-          </section>
-
-
-          <!-- Section 8: 최종 결정 -->
-          <section>
-            <h2 id="final-decision">최종 결정 레코드</h2>
-            <p>모든 단계를 통과한 뒤 만들어지는 <code>SecurityDecision</code> 은 단순히 ALLOW · BLOCK 한 값이 아닙니다. LLM 이 제안한 대응, 최종 집행 대응, 둘이 다른 이유가 함께 남습니다.</p>
-
-            <div class="outcome-frame">
-              <h3>SecurityDecision 필드</h3>
-              <div class="outcome-matrix">
-                <div class="outcome-field">
-                  <div class="outcome-field-name">action</div>
-                  <div class="outcome-field-desc">LLM 이 제안한 대응</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">autonomousAction</div>
-                  <div class="outcome-field-desc">자율성 제약을 거친 뒤 집행되는 대응</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">llmAuditRiskScore / llmAuditConfidence</div>
-                  <div class="outcome-field-desc">자율성 제약 전 LLM 원시 점수, 감사용</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">reasonCodes</div>
-                  <div class="outcome-field-desc">출력 계약 v3 인용. v19 판정에는 비어 있음</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">autonomyConstraintApplied</div>
-                  <div class="outcome-field-desc">제약이 대응을 바꿨는지와 그 사유·요약</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">processingLayer</div>
-                  <div class="outcome-field-desc">1 = 빠른 계층 · 2 = 전문가 계층 (에스컬레이션)</div>
-                </div>
-              </div>
-            </div>
-
-            <h4>SecurityDecision 발췌</h4>
-            <p>Layer2 판정의 발췌입니다. 모델은 모르는 사실을 인용해 <code>ESCALATE</code> 를 제안했고, 계층 전략이 풀리지 않은 ESCALATE 를 설정된 대체 대응 <code>CHALLENGE</code> 로 바꿨습니다.</p>
-            <pre><code class="language-json">{
+          <h2 id="decision-record">최종 판정 기록</h2>
+          <p>판정 기록(<code>SecurityDecision</code>)에는 모델이 제안한 대응과 실제로 집행한 대응, 둘이 다른 이유가 함께 남습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>칸</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>action</code></td><td>모델이 제안한 대응</td></tr>
+              <tr><td><code>autonomousAction</code></td><td>제약을 거쳐 실제로 집행하는 대응</td></tr>
+              <tr><td><code>llmAuditRiskScore</code> · <code>llmAuditConfidence</code></td><td>제약 전 모델의 점수(감사용)</td></tr>
+              <tr><td><code>reasonCodes</code></td><td>인용한 근거 코드(v20 · v21). v19 판정에는 비어 있음</td></tr>
+              <tr><td><code>hypotheses</code></td><td>v21 판정의 가설 평가</td></tr>
+              <tr><td><code>autonomyConstraintApplied</code></td><td>제약이 대응을 바꿨는지와 그 사유 · 요약</td></tr>
+              <tr><td><code>processingLayer</code></td><td>1 = 1차 분석, 2 = 2차 분석</td></tr>
+            </tbody>
+          </table></div>
+          <p>2차 분석 판정의 발췌입니다. 모델은 모르는 사실을 인용해 ESCALATE를 제안했고, 남은 ESCALATE가 설정된 대체 대응 CHALLENGE로 바뀌었습니다.</p>
+          <pre><code class="language-json">{
   "eventId": "evt_8a9f3b2c1d",
   "action": "ESCALATE",
   "autonomousAction": "CHALLENGE",
@@ -950,93 +330,51 @@ Unknown: not-integrated: [U1] ClientSignals, [U2] PeerCohort</code></pre>
   "autonomyConstraintSummary": "Layer2 returned ESCALATE, so final autonomous action was terminalized to CHALLENGE by tiered strategy policy.",
   "technicalFallbackApplied": false
 }</code></pre>
-          </section>
 
+          <h2 id="human-agent">사람과 에이전트 요청의 차이</h2>
+          <p>프롬프트가 에이전트 요청으로 다루는 것은 실행 주체가 <code>DELEGATED_AGENT</code>(또는 위임이 <code>delegated=true</code>)이거나 <code>AUTONOMOUS_AGENT</code>이고 에이전트 ID가 있을 때입니다. 서비스 클라이언트(<code>SERVICE_CLIENT</code>)는 에이전트가 아닙니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>묶음</th><th>사람 요청</th><th>에이전트 요청</th></tr></thead>
+            <tbody>
+              <tr><td>v19</td><td>자동화 클라이언트(봇 UA · TLS 지문 · 헤더 순서) 차단 경계가 시스템 글에 있음. 위임 권한이 있으면 <code>DELEGATED_OBJECTIVE</code> 구역</td><td>그 차단 경계를 뺀 시스템 글(따로 캐시). <code>DELEGATED_OBJECTIVE</code> 구역</td></tr>
+              <tr><td>v20</td><td>차단 경계에 자동화 범주가 있음. 위임 권한이 있으면 DECISION FACTS의 Delegation 줄</td><td>자동화 범주를 뺀 시스템 글, 응답 검사도 에이전트의 클라이언트 신호를 공격 범주로 세지 않음. Delegation 줄</td></tr>
+              <tr><td>v21</td><td colspan="2">시스템 글은 하나이고 에이전트 · 위임 · 자격 증명 읽는 법이 늘 들어 있음. 에이전트 요청에서만 값이 생기는 줄: 에이전트 형식의 주체 줄, 기준선 주체 · 평소 순서 · 평소 클라이언트, 위임 활동, 기록 보유자. 원천이 있으면 사람에게도 생기는 줄: 자격 증명, 책임자 확인, 위임, 기록 작성자, 인자 출처</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>위임 범위를 벗어났는지는 엔진이 <strong>사실</strong>로만 계산합니다. 허용 · 추가 확인 · 차단은 모델이 정합니다(<a href="../agent/delegation.html#drift">범위 이탈</a>).</li>
+            <li>에이전트는 MFA를 하지 않습니다. 에이전트의 추가 인증은 <code>CONTEXA_OWNED</code>에서 책임자 확인으로 대신합니다(<a href="../agent/controls.html#confirm">책임자 확인</a>).</li>
+            <li>v21 에이전트 줄을 쓰려면 묶음을 <code>2026.10.30-v21.19</code>로 골라야 합니다(<a href="../agent/overview.html#prompt-facts">판정 모델이 받는 사실</a>).</li>
+          </ul>
 
-          <!-- Section 9: 사람 vs Agent -->
-          <section>
-            <h2 id="persona-compare">사람과 Agent 의 프롬프트 차이</h2>
-            <p>같은 파이프라인을 통과해도 주체 유형에 따라 프롬프트의 무게 중심이 달라집니다. 사람은 평소 행동 기준과의 편차가 핵심이고, Agent 는 허용된 목표 범위의 이탈이 핵심입니다.</p>
+          <h2 id="trust">무엇을 믿을 수 있는가</h2>
+          <ul>
+            <li>모델에 보낸 그대로의 시스템 · 사용자 글은 판정 뒤 봉인 증거로 남습니다(표본, <a href="evidence.html">봉인 증거와 공식 검증</a>). 표준 맥락도 함께 봉인됩니다.</li>
+            <li>봉인된 프롬프트는 판정과 떨어져 검수기 10종이 사실과 대조합니다. 검수는 프롬프트 · 판정 · 규칙을 바꾸지 않습니다(<a href="prompt-inspection.html#inspection">봉인된 프롬프트 검수</a>).</li>
+            <li>새 묶음은 섀도 · 카나리 · 활성 단계를 거쳐 내보내고, 문제가 있으면 되돌립니다(<a href="prompt-inspection.html">프롬프트 거버넌스와 검수</a>).</li>
+          </ul>
 
-            <div class="persona-compare">
-              <div class="persona-col persona-col--human">
-                <div class="persona-col-title">
-                  <span class="persona-col-icon">H</span>
-                  <span class="persona-col-name">사람 (Human)</span>
-                </div>
-                <table class="persona-table">
-                  <tr><th>주체 유형</th><td>HUMAN</td></tr>
-                  <tr><th>위임 도장</th><td>일반적으로 부재</td></tr>
-                  <tr><th>핵심 프로필</th><td>Work · PeerCohort · Friction</td></tr>
-                  <tr><th>핵심 v20 줄</th><td>USER BASELINE · DeviationsFromBaseline</td></tr>
-                  <tr><th>판정 축</th><td>평소 행동 기준과의 편차</td></tr>
-                  <tr><th>MFA 신호</th><td>로그인 시점 검증</td></tr>
-                </table>
-              </div>
-              <div class="persona-col persona-col--agent">
-                <div class="persona-col-title">
-                  <span class="persona-col-icon">A</span>
-                  <span class="persona-col-name">Agent</span>
-                </div>
-                <table class="persona-table">
-                  <tr><th>주체 유형</th><td>AGENT · SERVICE_ACCOUNT</td></tr>
-                  <tr><th>위임 도장</th><td>필수. delegated = true + agentId</td></tr>
-                  <tr><th>핵심 프로필</th><td>ObservedScope · RoleScope</td></tr>
-                  <tr><th>핵심 v20 줄</th><td>Delegation (DECISION FACTS) · DELEGATION_SCOPE_DRIFT</td></tr>
-                  <tr><th>판정 축</th><td>허용된 목표 범위 이탈 여부</td></tr>
-                  <tr><th>MFA 신호</th><td>위임 토큰 발급 시점 검증</td></tr>
-                </table>
-              </div>
-            </div>
-          </section>
-
-          <!-- Section 10: 프롬프트 검수 -->
-          <section>
-            <h2 id="prompt-inspection">프롬프트 검수</h2>
-            <p>프롬프트 검수기는 판정 경로와 떨어져 봉인된 프롬프트를 읽고, 각 줄을 그 줄을 그린 봉인 사실과 대조합니다. 봉인 무결성, 번들 대조, 사전 계약, 판정 사실 일치, 사실 정확성, 모름 표기, 과거 기록 표기, 원천 진실성, 같은 사실, 근거 일치를 봅니다. 사람이 검토할 문제를 가리킬 뿐 프롬프트·판정·규칙은 바꾸지 않습니다. 번들 버전은 릴리스 게이트를 거쳐 레지스트리 상태를 옮겨 가며, 섀도 실행·카나리·롤백을 지원합니다.</p>
-            <div class="callout-info">
-              <strong>더 보기.</strong> 검사 목록, 레지스트리 상태, 릴리스 게이트와 설정은 <a href="../../../docs/reference/architecture/prompt-inspection.html">프롬프트 검수와 번들 버전</a>에서 설명합니다.
-            </div>
-          </section>
-
-
-          <!-- 관련 문서 -->
-          <section>
-            <h2 id="related">관련 문서</h2>
-            <div class="related-links-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--space-3);margin:var(--space-4) 0">
-              <a href="../../../docs/reference/architecture/overview.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">플랫폼 아키텍처</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">모듈 개요 및 요청 흐름</span>
-              </a>
-              <a href="../../../docs/reference/architecture/hcad-early-detection.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">HCAD 조기 위협 탐지</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">행동 신호 수집과 조기 분석 개시</span>
-              </a>
-              <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Zero Trust 흐름</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">결정 집행과 권한 교체</span>
-              </a>
-              <a href="../../../docs/reference/iam/protectable.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">@Protectable</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">보호 대상 어노테이션</span>
-              </a>
-              <a href="../../../docs/reference/architecture/prompt-inspection.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">프롬프트 검수와 번들 버전</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">검수기 검사, 레지스트리 상태, 릴리스 게이트, 롤백</span>
-              </a>
-            </div>
-          </section>
-
-
-          
-<!-- Navigation Footer -->
+          <h2 id="settings">자주 바꾸는 설정</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.active</code></td><td>비어 있음(빌드 기본 v19.21)</td><td>모든 요청에 쓸 묶음 버전</td><td>v20 · v21 묶음을 쓸 때</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.selector</code></td><td><code>CONFIGURATION</code></td><td>묶음을 설정으로 고를지(<code>CONFIGURATION</code>), 레지스트리로 고를지(<code>REGISTRY</code>)</td><td>섀도 · 카나리로 새 묶음을 내보낼 때 <code>registry</code></td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.mode</code></td><td><code>OBSERVE</code></td><td>최소 대응 규칙을 기록만 할지, 응답 검사에서 집행할지(<code>ENFORCE</code>)</td><td>규칙 위반 기록을 충분히 본 뒤 하한을 강제할 때</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-runtime.budget-enforcement</code></td><td><code>OBSERVE_ONLY</code></td><td>예산을 넘은 사전 프롬프트의 항목을 뺄지(<code>ENFORCE</code>)</td><td>모델의 입력 한도 · 비용을 지켜야 할 때</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.escalate-fallback-action</code></td><td><code>CHALLENGE</code></td><td>2차 분석 뒤에도 남은 ESCALATE를 바꿀 대응</td><td>정하지 못한 요청을 더 엄격하게(<code>BLOCK</code>) 다룰 때</td></tr>
+              <tr><td><code>contexa.security.tiered.argument-origin.max-excerpt-chars</code></td><td><code>300</code></td><td>v21 인자 출처 줄에 인용할 도구 출력 문장의 최대 길이(0~300)</td><td>인용을 짧게 줄일 때. 인용을 끄려면 <code>contexa.security.tiered.argument-origin.quote-excerpt: false</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>모든 설정은 <a href="../../install/configuration/ai.html">AI 모델 연결 설정</a>과 <a href="../../install/configuration.html">설정</a>에 있습니다.</p>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="docs-nav-link prev">
+            <a href="../identity/zero-trust-filters.html" class="docs-nav-link prev">
               <span class="docs-nav-label">이전</span>
-              <span class="docs-nav-title">Zero Trust 흐름</span>
+              <span class="docs-nav-title">요청 시점 집행</span>
             </a>
-            <a href="../../../docs/reference/architecture/prompt-inspection.html" class="docs-nav-link next">
+            <a href="prompt-inspection.html" class="docs-nav-link next">
               <span class="docs-nav-label">다음</span>
-              <span class="docs-nav-title">프롬프트 검수와 번들 버전</span>
+              <span class="docs-nav-title">프롬프트 거버넌스와 검수</span>
             </a>
           </div>

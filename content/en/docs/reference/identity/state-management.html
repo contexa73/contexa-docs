@@ -3,246 +3,207 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">State Management</span>
+            <span class="breadcrumb-current">Sessions and Tokens</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-info">contexa-identity</span>
             </div>
-            <h1>State Management</h1>
-            <p class="lead">Post-authentication state management strategy. Choose between Session (server memory/Redis) or OAuth2 (JWT Stateless). Each authentication method can be independently configured with a different state.</p>
+            <h1>Sessions and Tokens</h1>
+            <p class="lead">How to choose whether the state after login lives in a server session (<code>.session()</code>) or travels as tokens (JWT, <code>.oauth2()</code>). It covers the settings required to turn it on and how to check it, how to give people sessions and agents tokens, token checks and delegated tokens.</p>
           </div>
 
-          <!-- Overview -->
-          <section class="docs-section">
-            <h2 id="overview">Overview</h2>
-            <p>Configure state by calling <code>.session()</code> or <code>.oauth2()</code> after an authentication method in the DSL. The <code>AbstractFlowRegistrar.StateSetter</code> applies the state to the most recently added flow.</p>
+          <div class="callout callout-info">
+            <strong>This is a feature for when Contexa owns login (<code>CONTEXA_OWNED</code>).</strong> With the default <code>HOST_OWNED</code>, your application's Spring Security handles sessions and tokens, and Contexa's authorization server and resource server configuration are not built. To keep your application's existing login, see <a href="../common/bridge.html">Connecting Your Existing Login</a>.
+          </div>
 
-<pre><code class="language-java">registry
-    .form(f -&gt; f.loginPage("/login"))
-    .session(Customizer.withDefaults())      // form -&gt; Session
+          <h2 id="choose">Choosing between sessions and tokens</h2>
+          <p>Each flow picks one state after its authentication method (<a href="dsl.html#flows">Choosing methods and states</a>). Each flow can pick differently.</p>
+          <pre><code class="language-java">registry
+        .form(form -&gt; form.defaultSuccessUrl("/home"))
+        .session(Customizer.withDefaults())       // people: session
+        .rest(rest -&gt; rest.order(50))
+        .oauth2(Customizer.withDefaults())        // API clients: tokens
+        .build();</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Item</th><th><code>.session()</code></th><th><code>.oauth2()</code></th></tr></thead>
+            <tbody>
+              <tr><td>Where the login lives</td><td>The servlet container's HTTP session. To share sessions across servers, the application sets up Spring Session or similar itself</td><td>Not stored; the token is validated on every request (<code>STATELESS</code>). Authorizations and refresh tokens are kept in the Contexa database</td></tr>
+              <tr><td>Fits</td><td>Server-rendered pages</td><td>SPAs, mobile apps, APIs, agents</td></tr>
+              <tr><td>Session fixation protection</td><td>Changes the session ID at login</td><td>Not applicable</td></tr>
+              <tr><td>CSRF</td><td>On, as in Spring's default</td><td><code>HEADER</code> transport follows <code>contexa.auth.oauth2-csrf</code> (off by default); <code>COOKIE</code> transport is always on</td></tr>
+              <tr><td>Logout</td><td>Invalidates the session, clears the login, clears token cookies, Contexa cleanup</td><td><code>POST /logout</code>: Contexa's logout handler invalidates the token's authorization and clears token cookies (in a mode that includes the authorization server)</td></tr>
+              <tr><td>Where the Zero Trust decision applies</td><td>When the session login repository reads the login</td><td><code>AIOAuth2ZeroTrustFilter</code> right after token validation</td></tr>
+              <tr><td>Required setting</td><td>none</td><td><code>contexa.auth.oauth2.client-secret</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>Contexa's Redis (distributed mode) is used for the decision store, MFA sessions and session tracking; it does not hold the application's HTTP sessions.</p>
 
-    .rest(r -&gt; r.loginProcessingUrl("/api/auth"))
-    .oauth2(Customizer.withDefaults())        // rest -&gt; OAuth2
+          <h2 id="session">Session state</h2>
+          <p>Turned on with <code>.session(Customizer.withDefaults())</code>.</p>
+          <ul>
+            <li>Changes the session ID at login (<code>changeSessionId</code>).</li>
+            <li>The logout address is <code>/logout</code>; for an MFA flow with a prefix it is <code>&lt;prefix&gt;/logout</code>.</li>
+            <li>Logout invalidates the session and clears the login, and Contexa's logout handler (<code>compositeLogoutHandler</code>) does Contexa's cleanup and clears token cookies.</li>
+            <li>After logout: an MFA flow with a prefix goes to <code>&lt;prefix&gt;/mfa/login</code>; every other session flow goes to <code>/contexa/admin/login</code>, which is fixed.</li>
+          </ul>
+          <p>The configurer passed to <code>.session(...)</code> has no options to change. Session settings such as the number of concurrent sessions go in the flow option <code>sessionManagement(...)</code>.</p>
+          <pre><code class="language-java">registry
+        .form(form -&gt; form.sessionManagement(session -&gt; session.maximumSessions(1)))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <h3 id="session-verify">Checking it</h3>
+          <ul>
+            <li>The session cookie value changes between before and after login.</li>
+            <li>After <code>POST /logout</code> the session ends and the browser moves to the address above.</li>
+          </ul>
 
-    .mfa(m -&gt; m.primaryAuthentication(...).passkey(...))
-    .session(Customizer.withDefaults())        // mfa -&gt; Session
-
-    .build();</code></pre>
-          </section>
-
-          <!-- Comparison Table -->
-          <section class="docs-section">
-            <h2 id="comparison">Session vs OAuth2 Comparison</h2>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Category</th><th>Session</th><th>OAuth2</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>State Storage</td><td>Server memory by default, with optional shared Redis-backed storage in distributed deployments</td><td>JWT token (Stateless)</td></tr>
-                <tr><td>Suitable For</td><td>Traditional web apps, SSR</td><td>SPA, API, Microservices</td></tr>
-                <tr><td>Scalability</td><td>Works with in-memory session state by default; Redis-backed sharing is optional for multi-instance deployments</td><td>Stateless (easy horizontal scaling)</td></tr>
-                <tr><td>Built-in Security</td><td>Session fixation protection (sessionFixation().changeSessionId())</td><td>JWT + OIDC + Zero Trust Filter</td></tr>
-                <tr><td>CSRF</td><td>Required (cookie-based)</td><td>Not required (token-based)</td></tr>
-                <tr><td>Logout</td><td>Session invalidation + cookie deletion</td><td>Authorization invalidation via <code>CompositeLogoutHandler</code> and <code>DeviceAwareOAuth2AuthorizationService</code></td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- Session-Based -->
-          <section class="docs-section">
-            <h2 id="session">Session-Based</h2>
-            <p>Configured via <code>.session(Customizer.withDefaults())</code>. Suitable for traditional web applications and server-side rendering.</p>
-
-            <h3>Auto-Applied</h3>
-            <ul>
-              <li><code>sessionFixation().changeSessionId()</code> — Session fixation attack protection</li>
-              <li>Session invalidation + cookie deletion on logout</li>
-              <li><code>CompositeLogoutHandler</code> integration (Strategy pattern)</li>
-            </ul>
-
-            <h3>Additional Configuration via rawHttp</h3>
-<pre><code class="language-java">.form(f -&gt; f
-    .rawHttp(http -&gt; http.sessionManagement(s -&gt; s
-        .maximumSessions(1)
-        .maxSessionsPreventsLogin(true)))
-)
-.session(Customizer.withDefaults())</code></pre>
-          </section>
-
-          <!-- OAuth2-Based -->
-          <section class="docs-section">
-            <h2 id="oauth2">OAuth2-Based</h2>
-            <p>Configured via <code>.oauth2(Customizer.withDefaults())</code>. Suitable for SPA, microservices, and API servers.</p>
-
-            <h3>Auto-Applied</h3>
-            <ul>
-              <li><strong>Resource Server</strong>: JWT authentication converter, authentication failure/access denied handlers, <code>SessionCreationPolicy.STATELESS</code></li>
-              <li><strong>Authorization Server</strong>: <code>AuthorizationService</code>, <code>ClientRepository</code>, token endpoint, <code>authenticated_user</code> grant type, OIDC support</li>
-              <li>OAuth2 CSRF: Controlled by the <code>spring.auth.oauth2-csrf</code> configuration</li>
-            </ul>
-
-            <h3>authenticated_user Grant Type</h3>
-            <p>A custom grant type that issues OAuth2 tokens to users who have completed Identity authentication (Form, REST, MFA). It bridges traditional authentication with OAuth2 token issuance.</p>
-
-<pre class="arch-diagram"><code>
-  authenticated_user Grant Flow
-  ===============================
-
-  [Form/REST/MFA Authentication Complete]
-           |
-           v
-  [AuthenticatedUserGrantAuthenticationProvider]
-           |
-           +-- Client Verification
-           +-- User Lookup (UserRepository)
-           +-- Scope Resolution
-           +-- Access Token Generation (JWT)
-           +-- Refresh Token Generation (optional)
-           +-- Authorization Persistence (transactional)
-           |
-           v
-  [JWT Token Issuance Complete]
-</code></pre>
-          </section>
-
-          <!-- Configuration Properties -->
-          <section class="docs-section">
-            <h2 id="config-properties">Configuration Properties</h2>
-            <p>Core settings from <code>AuthContextProperties</code> (<code>spring.auth.*</code>).</p>
-
-            <h3 id="core-settings">Core Settings (spring.auth.*)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>state-type</code></td><td>enum</td><td><code>OAUTH2</code></td><td>Authentication state type (OAUTH2, SESSION)</td></tr>
-                <tr><td><code>token-transport-type</code></td><td>enum</td><td><code>HEADER</code></td><td>Token transport method (HEADER, COOKIE, HEADER_COOKIE)</td></tr>
-                <tr><td><code>token-issuer</code></td><td>enum</td><td><code>INTERNAL</code></td><td>Token issuer (INTERNAL, AUTHORIZATION_SERVER)</td></tr>
-                <tr><td><code>factor-selection-type</code></td><td>enum</td><td><code>SELECT</code></td><td>MFA factor selection strategy</td></tr>
-                <tr><td><code>access-token-validity</code></td><td>long (ms)</td><td>3600000 (1h)</td><td>Access token validity period</td></tr>
-                <tr><td><code>refresh-token-validity</code></td><td>long (ms)</td><td>604800000 (7d)</td><td>Refresh token validity period</td></tr>
-                <tr><td><code>refresh-rotate-threshold</code></td><td>long (ms)</td><td>43200000 (12h)</td><td>Refresh-token rotation threshold</td></tr>
-                <tr><td><code>enable-refresh-token</code></td><td>boolean</td><td>true</td><td>Enable refresh token</td></tr>
-                <tr><td><code>allow-multiple-logins</code></td><td>boolean</td><td>false</td><td>Allow concurrent multiple logins</td></tr>
-                <tr><td><code>max-concurrent-logins</code></td><td>int</td><td>3</td><td>Maximum concurrent login count</td></tr>
-                <tr><td><code>cookie-secure</code></td><td>boolean</td><td>true</td><td>Cookie Secure flag</td></tr>
-                <tr><td><code>token-persistence</code></td><td>String</td><td>"memory"</td><td>Preferred token persistence mode exposed to generated login and MFA pages / SDK</td></tr>
-                <tr><td><code>token-prefix</code></td><td>String</td><td>"Bearer "</td><td>Token prefix</td></tr>
-                <tr><td><code>roles-claim</code></td><td>String</td><td>"roles"</td><td>JWT roles claim</td></tr>
-                <tr><td><code>scopes-claim</code></td><td>String</td><td>"scopes"</td><td>JWT scopes claim</td></tr>
-                <tr><td><code>oauth2-csrf</code></td><td>boolean</td><td>false</td><td>OAuth2 CSRF protection</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>TokenTransportType Details</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Value</th><th>accessToken</th><th>refreshToken</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>HEADER</code></td><td>HTTP Header</td><td>HTTP Header</td></tr>
-                <tr><td><code>COOKIE</code></td><td>Cookie</td><td>Cookie</td></tr>
-                <tr><td><code>HEADER_COOKIE</code> (recommended)</td><td>HTTP Header</td><td>Cookie</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="oauth2-settings">OAuth2 Settings (spring.auth.oauth2.*)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>client-id</code></td><td><code>default-client</code></td><td>OAuth2 client ID</td></tr>
-                <tr><td><code>client-secret</code></td><td><code>173f8245-5f7d-4623-a612-aa0c68f6da4a</code></td><td>Client secret</td></tr>
-                <tr><td><code>issuer-uri</code></td><td><code>http://localhost:9000</code></td><td>Token issuer URI</td></tr>
-                <tr><td><code>token-endpoint</code></td><td><code>/oauth2/token</code></td><td>Authorization Server token endpoint</td></tr>
-                <tr><td><code>scope</code></td><td><code>read</code></td><td>Default requested scope</td></tr>
-                <tr><td><code>redirect-uri</code></td><td><code>http://localhost:8080</code></td><td>Client redirect URI</td></tr>
-                <tr><td><code>authorized-uri</code></td><td>Unset</td><td>Optional pre-authorized redirect URI</td></tr>
-                <tr><td><code>jwk-key-store-path</code></td><td>Unset</td><td>JWK keystore path</td></tr>
-                <tr><td><code>jwk-key-store-password</code></td><td>Unset</td><td>Keystore password</td></tr>
-                <tr><td><code>jwk-key-alias</code></td><td>Unset</td><td>Key alias</td></tr>
-                <tr><td><code>jwk-key-password</code></td><td>Unset</td><td>Key password</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="mfa-settings">MFA Settings (spring.auth.mfa.*)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>session-timeout-ms</code></td><td>600000 (10min)</td><td>MFA session timeout</td></tr>
-                <tr><td><code>challenge-timeout-ms</code></td><td>300000 (5min)</td><td>Challenge timeout</td></tr>
-                <tr><td><code>inactivity-timeout</code></td><td>900000 (15min)</td><td>Inactive MFA session timeout</td></tr>
-                <tr><td><code>cache-ttl</code></td><td>300000 (5min)</td><td>Cached MFA state TTL</td></tr>
-                <tr><td><code>session-refresh-interval-ms</code></td><td>30000 (30s)</td><td>Interval for refreshing active MFA session state</td></tr>
-                <tr><td><code>state-machine-timeout-ms</code></td><td>10000 (10s)</td><td>State machine execution timeout</td></tr>
-                <tr><td><code>max-retry-attempts</code></td><td>5</td><td>Maximum retry attempts</td></tr>
-                <tr><td><code>account-lockout-duration-ms</code></td><td>900000 (15min)</td><td>Account lockout duration</td></tr>
-                <tr><td><code>minimum-delay-ms</code></td><td>500</td><td>Minimum delay between sensitive MFA operations</td></tr>
-                <tr><td><code>otp-token-validity-seconds</code></td><td>300</td><td>OTP validity period (seconds)</td></tr>
-                <tr><td><code>otp-token-length</code></td><td>6</td><td>OTP code length</td></tr>
-                <tr><td><code>sms-resend-interval-seconds</code></td><td>60</td><td>Minimum interval between SMS resends</td></tr>
-                <tr><td><code>email-resend-interval-seconds</code></td><td>120</td><td>Minimum interval between email resends</td></tr>
-                <tr><td><code>device-remember-duration-ms</code></td><td>2592000000 (30d)</td><td>Device trust retention period</td></tr>
-                <tr><td><code>state-machine-pool-size</code></td><td>100</td><td>State machine worker pool size</td></tr>
-                <tr><td><code>state-machine-cache-ttl-ms</code></td><td>300000 (5min)</td><td>Cached state machine state TTL</td></tr>
-                <tr><td><code>circuit-breaker-failure-threshold</code></td><td>5</td><td>Circuit breaker failure threshold</td></tr>
-                <tr><td><code>circuit-breaker-timeout-seconds</code></td><td>30</td><td>Circuit breaker timeout</td></tr>
-                <tr><td><code>detailed-logging-enabled</code></td><td>false</td><td>Enable verbose MFA debug logging</td></tr>
-                <tr><td><code>metrics-enabled</code></td><td>true</td><td>Enable MFA metrics</td></tr>
-                <tr><td><code>audit-logging-enabled</code></td><td>true</td><td>Enable MFA audit logging</td></tr>
-                <tr><td><code>session-storage-type</code></td><td>http-session</td><td>Preferred MFA session storage type</td></tr>
-                <tr><td><code>auto-select-repository</code></td><td>false</td><td>Automatically choose the session repository</td></tr>
-                <tr><td><code>repository-priority</code></td><td><code>redis,memory,http-session</code></td><td>Repository selection priority order</td></tr>
-                <tr><td><code>fallback-repository-type</code></td><td><code>http-session</code></td><td>Fallback repository type</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>MFA Nested Settings</h4>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Prefix</th><th>Description</th><th>Representative Defaults</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>spring.auth.mfa.http-session.*</code></td><td>HTTP-session-backed MFA storage options</td><td><code>enabled=true</code>, <code>session-attribute-name=MFA_SESSION_ID</code></td></tr>
-                <tr><td><code>spring.auth.mfa.redis.*</code></td><td>Redis-backed MFA storage options for distributed deployments</td><td><code>key-prefix=mfa:session:</code>, <code>cookie-name=MFA_SID</code>, <code>same-site=Strict</code></td></tr>
-                <tr><td><code>spring.auth.mfa.memory.*</code></td><td>In-memory MFA storage tuning</td><td><code>cleanup-interval-minutes=5</code>, <code>max-sessions=10000</code></td></tr>
-                <tr><td><code>spring.auth.mfa.sms-factor.*</code></td><td>SMS factor delivery settings</td><td><code>provider=default</code>, <code>template-id=mfa_sms_template</code>, <code>enabled=true</code></td></tr>
-                <tr><td><code>spring.auth.mfa.email-factor.*</code></td><td>Email factor delivery settings</td><td><code>from-address=noreply@company.com</code>, <code>template-id=mfa_email_template</code>, <code>enabled=true</code></td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>application.yml Example</h3>
-<pre><code class="language-yaml">spring:
+          <h2 id="oauth2">Token state (OAuth2)</h2>
+          <p>Turned on with <code>.oauth2(Customizer.withDefaults())</code>. Contexa configures Spring Authorization Server and a Spring resource server in that chain.</p>
+          <h3 id="oauth2-required">What it needs</h3>
+          <ul>
+            <li><strong>Conditions:</strong> <code>CONTEXA_OWNED</code>, the Contexa database (the <code>contexaJdbcTemplate</code> and <code>contexaTransactionTemplate</code> beans), and Spring Authorization Server on the class path.</li>
+            <li><strong><code>contexa.auth.oauth2.client-secret</code>:</strong> required when there is at least one token flow and the server mode includes the authorization server (default <code>COMBINED</code>). When empty, startup fails. The old default value (<code>173f8245-…</code>) is refused, and startup also fails when a client already stored in the database has a secret that does not match this value. Keep the same value across restarts.</li>
+            <li><strong>Signing key store:</strong> without <code>contexa.auth.oauth2.jwk-key-store-path</code>, tokens are signed with a temporary RSA key that changes at every start, so a restart invalidates every existing token (an error is logged at startup). The path is looked up on the class path; for a file, prefix <code>file:</code>. The key store format is PKCS12, and a missing file makes startup fail.</li>
+          </ul>
+          <pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+    username: contexa
+    password: contexa
+  bridge:
+    ownership: CONTEXA_OWNED
   auth:
-    state-type: OAUTH2
-    token-transport-type: header_cookie
-    access-token-validity: 3600000
-    enable-refresh-token: true
     oauth2:
-      client-id: my-client
-      issuer-uri: https://auth.example.com
-      jwk-key-store-path: classpath:keystore.jks
-    mfa:
-      session-timeout-ms: 600000
-      otp-token-validity-seconds: 300
-      session-storage-type: redis
-      redis:
-        key-prefix: mfa:session:
-        cookie-name: MFA_SID</code></pre>
+      client-secret: replace-with-a-long-random-secret
+      jwk-key-store-path: file:/etc/contexa/jwk.p12
+      jwk-key-store-password: change-me
+      jwk-key-alias: contexa
+      jwk-key-password: change-me</code></pre>
+          <h3 id="oauth2-applied">What is attached automatically</h3>
+          <ul>
+            <li><strong>Resource server:</strong> JWT validation, Contexa's token converter, 401 and 403 handlers, stateless (<code>STATELESS</code>).</li>
+            <li><strong>Authorization server:</strong> <code>OAuth2AuthorizationService</code>, <code>RegisteredClientRepository</code>, the token endpoint, OIDC, and a grant that gives tokens to a logged-in user (<a href="#authenticated-user-grant">below</a>).</li>
+            <li><strong>Server mode</strong> <code>contexa.auth.oauth2-server-mode</code>: <code>RESOURCE_SERVER</code> (validate only), <code>AUTHORIZATION_SERVER</code> (issue only), <code>COMBINED</code> (both, default).</li>
+            <li>When the application defines one <code>OAuth2TokenGenerator</code> bean or one <code>BearerTokenResolver</code> bean, Contexa uses it as it is.</li>
+          </ul>
+          <h3 id="transport">Token transport</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>contexa.auth.token-transport-type</code></th><th>Access token</th><th>Refresh token</th><th>Fits</th></tr></thead>
+            <tbody>
+              <tr><td><code>HEADER</code> (default)</td><td>Response body → the request's <code>Authorization</code> header</td><td>Response body</td><td>SPAs, mobile apps, APIs</td></tr>
+              <tr><td><code>COOKIE</code></td><td>Cookie <code>accessToken</code></td><td>Cookie <code>refreshToken</code></td><td>Server-rendered pages. CSRF is always on, and filters that read and refresh cookie tokens are attached</td></tr>
+              <tr><td><code>HEADER_COOKIE</code></td><td>Response body → header</td><td>Cookie <code>refreshToken</code></td><td>When the refresh token should be hidden from scripts</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>Use the <code>COOKIE</code> transport for server-rendered pages.</strong> With the <code>HEADER</code> or <code>HEADER_COOKIE</code> transport and in-memory token storage (<code>contexa.auth.token-persistence: memory</code>, default), the browser's page navigations carry no access token, so pages after login look logged out. Contexa reports this combination with an error log at startup.
+          </div>
+          <h3 id="authenticated-user-grant">Tokens after login</h3>
+          <p>There is a grant, <code>urn:ietf:params:oauth:grant-type:authenticated-user</code>, that gives tokens to a user who finished form, REST or MFA login. When a login succeeds, Contexa requests this grant with its internal client inside the same application, receives the tokens and puts them in the success response. It is configured when the <code>contexaTransactionTemplate</code> bean exists.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The authenticated-user grant</strong>The steps that issue tokens to a user who finished login.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">Login finished</span><span class="dg-node-desc">Form, REST or MFA</span></li>
+              <li class="dg-node"><span class="dg-node-title">Check the client · look up the user</span><span class="dg-node-desc">A registered client; the user with roles and permissions</span></li>
+              <li class="dg-node"><span class="dg-node-title">Decide the scope · create the access token (JWT)</span><span class="dg-node-desc">Within the scopes registered for the client</span></li>
+              <li class="dg-node"><span class="dg-node-title">Refresh token</span><span class="dg-node-desc">Only when the client has the <code>refresh_token</code> grant</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-title">Store the authorization</span><span class="dg-node-desc">In the Contexa database, inside a transaction</span></li>
+            </ol>
+          </figure>
+          <h3 id="oauth2-verify">Checking it</h3>
+          <pre><code class="language-http">POST /api/login
+Content-Type: application/json
 
+{"username": "alice", "password": "s3cret"}</code></pre>
+          <p>Send the response's <code>accessToken</code> as <code>Authorization: Bearer …</code> and the protected API answers; without it you get 401. Refresh is <code>POST /api/refresh</code> (<code>contexa.auth.internal.refresh-uri</code>).</p>
+
+          <h2 id="request-scope">People on sessions, agents on tokens (request scope)</h2>
+          <p>One application can let people use a session flow while agents and API clients call with tokens. By default a token flow's chain takes every request the flow covers (all requests, or those under its <code>urlPrefix</code>). With the request scope <code>TOKEN_REQUESTS</code> it takes only requests that belong to tokens and passes the rest to the next flow.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Splitting by request scope</strong>Put the token flow before the session flow (smaller order).</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">Request</span></li>
+              <li class="dg-node"><span class="dg-node-tag">order 50</span><span class="dg-node-title">Token flow (<code>TOKEN_REQUESTS</code>)</span><span class="dg-node-desc">Handled here when it carries an access token or is a token or authentication address</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">order 100</span><span class="dg-node-title">Session flow</span><span class="dg-node-desc">Remaining requests (people's pages)</span></li>
+            </ol>
+          </figure>
+          <p>Requests a <code>TOKEN_REQUESTS</code> flow takes:</p>
+          <ul>
+            <li>Requests carrying an access token the way the chain reads it: the <code>Authorization: Bearer</code> header, or with the <code>COOKIE</code> transport the access token cookie (or the application's <code>BearerTokenResolver</code> bean when it defines one). A malformed token also comes here and is refused with 401.</li>
+            <li>CORS preflight requests announcing an <code>Authorization</code> header.</li>
+            <li>The chain's authorization server endpoints (token, JWK set, introspection, revocation, metadata, OIDC) and the refresh address.</li>
+            <li>The flow's authentication addresses (login processing path, one-time code and passkey endpoints, an MFA flow's pages and endpoints) and its <code>urlPrefix</code>.</li>
+            <li>Requests added with <code>tokenScopeRequests(...)</code>, for example a metadata path clients read before they hold a token.</li>
+          </ul>
+          <pre><code class="language-java">registry
+        .rest(rest -&gt; rest
+                .loginProcessingUrl("/api/agent/login")
+                .order(50))
+        .oauth2(oauth2 -&gt; oauth2.requestScope(OAuth2RequestScope.TOKEN_REQUESTS))
+        .form(form -&gt; form.defaultSuccessUrl("/home"))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <ul>
+            <li>Flows with the same order follow the order they are written in. A flow after a flow that takes every request receives none, and Contexa logs an error at startup.</li>
+            <li>Without <code>urlPrefix</code> all MFA flows share the same addresses, so give a token-scoped MFA flow its own prefix.</li>
+            <li>The request scope sets the chain's request matcher, so do not set a matcher with <code>rawHttp</code>; add paths with <code>tokenScopeRequests(...)</code>.</li>
+            <li>Log out of a token-scoped flow with the access token attached. A logout without a token goes to the session flow.</li>
+          </ul>
+
+          <h2 id="token-checks">Token checks and decisions</h2>
+          <p>Contexa's resource server checks every access token with Spring validators before Contexa reads the request: signature, lifetime, issuer (<code>contexa.auth.oauth2.issuer-validation-enabled</code>, on by default), and the audience (<code>aud</code>) when <code>contexa.auth.oauth2.audiences</code> is set. Contexa's authorization server names the ID of the client a token was issued to as the audience, so list the clients whose tokens this application accepts. A token that fails these checks is refused with 401, and no Contexa filter or decision runs for that request.</p>
+          <p>A Contexa decision never adds authorities. ALLOW keeps the token's authorities; CHALLENGE, BLOCK and ESCALATE remove the original authorities and leave only the decision's marker authority (<a href="zero-trust-filters.html#authorities">How authorities change</a>). To tie an operation to a scope, use a Spring rule such as <code>hasAuthority("SCOPE_reports.write")</code>; a token without that scope is refused whatever the decision.</p>
+          <p>If the application validates tokens with its own resource server, put the same checks on its decoder.</p>
+          <pre><code class="language-java">@Bean
+JwtDecoder jwtDecoder() {
+    NimbusJwtDecoder decoder = NimbusJwtDecoder.withIssuerLocation("https://idp.example.com").build();
+    decoder.setJwtValidator(JwtValidators.createDefaultWithValidators(
+            new JwtIssuerValidator("https://idp.example.com"),
+            new JwtAudienceValidator("https://api.example.com")));
+    return decoder;
+}</code></pre>
+
+          <h2 id="token-exchange">Delegated tokens (token exchange)</h2>
+          <p>An agent working for a person gets a token that names both: the person as <code>sub</code> and the agent as the actor (<code>act</code>, RFC 8693). Turn this grant on with <code>contexa.auth.oauth2.token-exchange-enabled: true</code>. It is off by default, and while off the token endpoint refuses every client's exchange request with <code>unsupported_grant_type</code>.</p>
+          <p>Register the agent's client in Spring's <code>RegisteredClientRepository</code> bean with the <code>client_credentials</code> and <code>urn:ietf:params:oauth:grant-type:token-exchange</code> grants and the scopes the agent may receive, and register the agent with that client ID (<a href="../agent/overview.html#register">Registering an agent</a>). The agent then presents its own token as the actor token and exchanges the person's token.</p>
+          <pre><code class="language-http">POST /oauth2/token
+Authorization: Basic (the agent client's credentials)
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+&amp;subject_token=(the person's access token)
+&amp;subject_token_type=urn:ietf:params:oauth:token-type:access_token
+&amp;actor_token=(the agent's own access token)
+&amp;actor_token_type=urn:ietf:params:oauth:token-type:access_token
+&amp;scope=reports.read</code></pre>
+          <ul>
+            <li>Both tokens must have been issued by this authorization server and still be valid. If the person's token has <code>may_act</code>, only the actor named there can exchange it.</li>
+            <li>The scope is the requested scope and must be within the scopes registered for the agent client.</li>
+            <li>The issued token has <code>sub</code> = the person, <code>act.sub</code> = the agent client and <code>client_id</code> = the agent client. The resource server authenticates the request as the person (the person's authorities and the token's scopes), and every decision records the registered agent acting for that person.</li>
+            <li>Every token Contexa issues is made by Spring Authorization Server's token generator, which adds the token exchange <code>act</code> and the <code>cnf</code> binding of DPoP and mTLS clients before Contexa's claims (<code>client_id</code>, login facts, roles). So a token request with a DPoP proof receives a sender-bound token (<code>token_type</code> <code>DPoP</code>). When you define your own <code>OAuth2TokenGenerator</code> bean it is used as it is, and that bean must add these claims itself.</li>
+          </ul>
+
+          <h2 id="settings">Settings you often change</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning · when to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.oauth2.client-secret</code></td><td>none</td><td>Required when there is a token flow. Keep the same value across restarts</td></tr>
+              <tr><td><code>contexa.auth.oauth2.jwk-key-store-path</code></td><td>none</td><td>Token signing key store. Required for production and for several servers</td></tr>
+              <tr><td><code>contexa.auth.token-transport-type</code></td><td><code>HEADER</code></td><td>Token transport. <code>COOKIE</code> for server-rendered pages</td></tr>
+              <tr><td><code>contexa.auth.oauth2-server-mode</code></td><td><code>COMBINED</code></td><td>When this application only issues or only validates tokens</td></tr>
+              <tr><td><code>contexa.auth.oauth2.token-exchange-enabled</code></td><td><code>false</code></td><td>To turn on the agent's delegated token exchange</td></tr>
+            </tbody>
+          </table></div>
+          <p>All settings, including token lifetimes, cookies, issuer and audiences, are in <a href="../../install/configuration/identity.html">Settings when Contexa owns login</a>.</p>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/identity/asep.html" class="docs-nav-link prev">
+            <a href="asep.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">ASEP Annotations</span>
+              <span class="docs-nav-title">ASEP Security Exception Handling</span>
             </a>
-            <a href="../../../docs/reference/iam/xacml.html" class="docs-nav-link next">
+            <a href="../iam/xacml.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
               <span class="docs-nav-title">Authorization Overview</span>
             </a>

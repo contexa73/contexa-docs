@@ -1,366 +1,203 @@
-<style>
-  /* ── Before / After Compare ── */
-  .sb-compare { display:grid; grid-template-columns:1fr 1fr; gap:var(--space-6); margin:var(--space-8) 0; }
-  @media(max-width:768px){ .sb-compare { grid-template-columns:1fr; } }
-  .sb-side { border-radius:var(--radius-lg); padding:var(--space-6); }
-  .sb-side--before { background:var(--bg-secondary); border:1px solid var(--border-light); }
-  .sb-side--after  { background:linear-gradient(135deg,rgba(99,102,241,.06),rgba(59,130,246,.06)); border:1px solid var(--brand-primary); }
-  .sb-side-title { font-weight:700; font-size:var(--text-lg); margin-bottom:var(--space-4); }
-  .sb-side-items { display:flex; flex-direction:column; gap:var(--space-2); }
-  .sb-item { padding:var(--space-2) var(--space-3); background:var(--bg-primary); border-radius:var(--radius-sm); font-size:var(--text-sm); }
-  .sb-divider { border-top:1px dashed var(--border-light); margin:var(--space-3) 0; }
-
-  /* ── Action Cards ── */
-  .sb-actions { display:grid; grid-template-columns:repeat(4,1fr); gap:var(--space-4); margin:var(--space-6) 0; }
-  @media(max-width:768px){ .sb-actions { grid-template-columns:repeat(2,1fr); } }
-  .sb-action { border-radius:var(--radius-lg); padding:var(--space-5); text-align:center; color:#fff; }
-  .sb-action-icon { font-size:1.5rem; margin-bottom:var(--space-2); }
-  .sb-action-name { font-weight:700; font-size:var(--text-base); margin-bottom:var(--space-1); }
-  .sb-action-desc { font-size:var(--text-sm); opacity:.9; }
-
-  /* ── Mode Compare Cards ── */
-  .sb-modes { display:grid; grid-template-columns:1fr 1fr; gap:var(--space-6); margin:var(--space-6) 0; }
-  @media(max-width:768px){ .sb-modes { grid-template-columns:1fr; } }
-  .sb-mode { border-radius:var(--radius-lg); padding:var(--space-6); border:1px solid var(--border-light); }
-  .sb-mode--highlight { border-color:var(--brand-primary); background:linear-gradient(135deg,rgba(99,102,241,.04),rgba(59,130,246,.04)); }
-  .sb-mode h3 { margin-top:0; }
-  .sb-mode ul { padding-left:var(--space-5); margin:var(--space-3) 0 0; }
-  .sb-mode li { margin-bottom:var(--space-2); font-size:var(--text-sm); }
-
-  /* ── Tighter section spacing ── */
-  .section-sm { padding:var(--space-6) 0; }
-  .section-sm:first-child { padding-top:0; }
-</style>
-
 <!-- Breadcrumb -->
           <nav class="breadcrumb">
             <a href="../../index.html">Home</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../docs/install/index.html">Install</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Spring Boot Integration</span>
+            <span class="breadcrumb-current">Add to an Existing Spring Security Application</span>
           </nav>
 
           <!-- Page Header -->
           <div class="docs-page-header">
-            <h1>Integrating Contexa into Your Spring Boot Application</h1>
-            <p class="lead">You already have a Spring Boot application with Spring Security. Adding Contexa doesn't replace your security setup — it wraps around it. This page explains exactly what changes, what stays the same, and how to go live safely.</p>
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-autoconfigure</span>
+              <span class="badge badge-secondary">contexa-identity</span>
+            </div>
+            <h1>Add to an Existing Spring Security Application</h1>
+            <p class="lead">When you add Contexa to an application that already uses Spring Security, choose who owns sign-in and check what changes and what stays as a result. This page also covers where decisions are enforced, which answers go out, and how to build the chain yourself when Contexa owns sign-in.</p>
           </div>
 
           <div class="callout callout-warning">
-            <p><strong>Spring Boot 4.x is NOT supported</strong> — Contexa supports Spring Boot 3.x (3.0.x ~ 3.4.x) only, and <strong>does not support Spring Boot 4.x.</strong> If <code>@EnableAISecurity</code> is declared in a 4.x environment, application startup will be blocked immediately with an <code>IllegalStateException</code> and error log.</p>
+            <p><strong>Spring Boot version.</strong> Contexa is built and tested with Spring Boot 3.5.4. With <code>@EnableAISecurity</code> on Spring Boot 4.x it logs an ERROR and stops the startup with an <code>IllegalStateException</code>.</p>
           </div>
 
-          <!-- Section 1: What Happens Under the Hood -->
-          <section class="section-sm">
-            <h2 id="what-happens-under-the-hood">What Happens Under the Hood</h2>
-            <p>When Contexa owns authentication (<code>CONTEXA_OWNED</code>, the default for <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>), a four-layer pipeline transforms your declarative configuration into Spring Security filter chains.</p>
-
-            <div class="callout callout-info">
-              <p><strong>Default SANDBOX mode (HOST_OWNED)</strong> &mdash; <code>@EnableAISecurity</code> without attributes uses <code>SANDBOX</code> mode, which runs as <code>HOST_OWNED</code> unless <code>contexa.bridge.ownership</code> is set explicitly. In that case the chain-building steps below do not run: Contexa does not build an authentication <code>SecurityFilterChain</code>, and your own Spring Security configuration keeps owning authentication and authorization. Contexa's bridge filter runs after your filter chain and reads evidence from authenticated requests, and <code>@Protectable</code> analysis happens at the annotated methods. See <a href="installation-guide.html#legacy-integration">Legacy System Integration</a> for details.</p>
+          <h2 id="overview">At a glance</h2>
+          <p>There are two ways to add Contexa: your application keeps owning sign-in (default), or you leave sign-in to Contexa. Requests take different paths.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Request path by ownership</strong>The text in parentheses is what decides at that step.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side dg-host"><p class="dg-side-title">Your application owns sign-in (<code>HOST_OWNED</code>, default)</p><ul><li>Your security chain checks sign-in and access (your rules)</li><li>The authentication bridge reads the sign-in result (read only)</li><li>Stored decisions are enforced before <code>@Protectable</code> methods (Contexa)</li><li>AI decision after the response (decision engine)</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Contexa owns sign-in (<code>CONTEXA_OWNED</code>)</p><ul><li>The Contexa security chain handles sign-in, MFA and sessions (Contexa)</li><li>Request-time filters enforce stored decisions at the URL (Contexa)</li><li>The agent request gate, and enforcement before <code>@Protectable</code> methods (Contexa)</li><li>AI decision after the response (decision engine)</li></ul></div>
             </div>
+          </figure>
 
-            <div class="steps">
-              <div class="step">
-                <div class="step-number">1</div>
-                <div>
-                  <h3 class="step-title">Import &amp; Detect</h3>
-                  <p class="step-desc"><code>@EnableAISecurity</code> imports <code>AiSecurityImportSelector</code>, which loads <code>AiSecurityConfiguration</code>. If no custom <code>PlatformConfig</code> bean exists (<code>@ConditionalOnMissingBean</code>), a default one is created automatically.</p>
-                </div>
-              </div>
-              <div class="step">
-                <div class="step-number">2</div>
-                <div>
-                  <h3 class="step-title">Create Flows</h3>
-                  <p class="step-desc"><code>FlowContextFactory</code> reads the <code>PlatformConfig</code> and creates an independent <code>HttpSecurity</code> instance for each authentication flow — Form, REST, MFA, OTT, or Passkey.</p>
-                </div>
-              </div>
-              <div class="step">
-                <div class="step-number">3</div>
-                <div>
-                  <h3 class="step-title">Apply Adapters</h3>
-                  <p class="step-desc"><code>SecurityConfigurerOrchestrator</code> runs a chain of adapters that call the Spring Security methods you already know: <code>http.formLogin()</code>, <code>http.webAuthn()</code> (invoked by the DSL&#39;s <code>passkey()</code>), <code>http.oneTimeTokenLogin()</code>. Zero Trust filters are added at this stage.</p>
-                </div>
-              </div>
-              <div class="step">
-                <div class="step-number">4</div>
-                <div>
-                  <h3 class="step-title">Register Chains</h3>
-                  <p class="step-desc"><code>SecurityFilterChainRegistrar</code> wraps each built <code>HttpSecurity</code> into an <code>OrderedSecurityFilterChain</code> and registers it as a Spring bean via <code>BeanDefinitionRegistry</code> — alongside your existing filter chains, never replacing them.</p>
-                </div>
-              </div>
-            </div>
+          <h2 id="choose">Choose first: who owns sign-in</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>When you write</th><th>Authentication ownership</th><th>Also decided</th></tr></thead>
+            <tbody>
+              <tr><td><code>@EnableAISecurity</code> (no attributes = <code>SANDBOX</code>)</td><td><code>HOST_OWNED</code></td><td>The Contexa-owned application flag (<code>contexa.datasource.isolation.contexa-owned-application</code>) is <code>false</code></td></tr>
+              <tr><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code></td><td><code>CONTEXA_OWNED</code></td><td>The Contexa-owned application flag is <code>true</code> (when you did not set it)</td></tr>
+              <tr><td>The setting <code>contexa.bridge.ownership: CONTEXA_OWNED</code> (or <code>HOST_OWNED</code>)</td><td>The value you set</td><td>The value in the configuration wins over the annotation's default. The default chain shape still follows <code>mode</code>.</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>If you already have sign-in and want to keep it,</strong> choose the default (<code>HOST_OWNED</code>). A few tasks remain for your application (<a href="#host-owned">below</a>).</li>
+            <li><strong>To leave sign-in, MFA, request-time enforcement and the agent request gate to Contexa,</strong> choose <code>FULL</code>. The Contexa chain then receives requests first, so your existing chain may no longer be used (<a href="#contexa-owned">below</a>).</li>
+          </ul>
 
-            <p>The default <code>PlatformConfig</code> gives you <strong>Form Login + OTT</strong> as the MFA flow, <strong>session management</strong>, and <strong><code>AISessionSecurityContextRepository</code></strong> for AI trust scores — all without writing a single configuration class.</p>
+          <h2 id="ownership">What works under each ownership</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What</th><th><code>HOST_OWNED</code> (default)</th><th><code>CONTEXA_OWNED</code></th></tr></thead>
+            <tbody>
+              <tr><td>Sign-in and sessions</td><td>Your application's Spring Security</td><td>The Contexa chain (form, passkey, one-time-token MFA, sessions)</td></tr>
+              <tr><td>Does Contexa build a security chain</td><td>No</td><td>Yes</td></tr>
+              <tr><td>When your application has no chain</td><td>Spring Boot's default security (every request asks for sign-in) and a Contexa ERROR log</td><td>The Contexa chain receives requests</td></tr>
+              <tr><td>URL protection of the admin console <code>/contexa/admin/**</code></td><td><strong>Your chain must do it</strong></td><td>The Contexa chain (<code>SANDBOX</code> shape: ADMIN role, <code>FULL</code> shape: dynamic authorization policies)</td></tr>
+              <tr><td>Method security (<code>@EnableMethodSecurity</code>), the admin console's <code>@PreAuthorize</code></td><td><strong>Your application must turn it on</strong></td><td>Contexa turns it on</td></tr>
+              <tr><td>Method policies with AI security expressions (<code>#ai</code>)</td><td>None</td><td>Available</td></tr>
+              <tr><td>Enforcing stored decisions (BLOCK, CHALLENGE, ESCALATE)</td><td>Before <code>@Protectable</code> methods only</td><td>URL-level filters (request time) and before <code>@Protectable</code> methods</td></tr>
+              <tr><td>Agent request gate (call limits, confirmation by the accountable person, narrowed scope)</td><td>None</td><td>Available (<a href="../reference/agent/controls.html#ownership">Agent controls</a>)</td></tr>
+              <tr><td>Reading your sign-in (authentication bridge)</td><td>Yes (read only)</td><td>Yes</td></tr>
+              <tr><td>Contexa user lookup and authentication provider</td><td>Not registered</td><td>Registered. If your application has a <code>UserDetailsService</code>, that one is used</td></tr>
+              <tr><td>Contexa authorization server (OAuth2) auto-configuration</td><td>None</td><td>Available</td></tr>
+              <tr><td>AI decision after the response, decision and audit records</td><td>Yes</td><td>Yes</td></tr>
+            </tbody>
+          </table></div>
 
-            <div class="callout callout-info">
-              <p><strong>This is not magic.</strong> Internally, Contexa calls the same Spring Security methods you would. It abstracts them through a declarative DSL and adds Zero Trust filters on top. You can bypass the DSL anytime via <code>rawHttp()</code>.</p>
-            </div>
-          </section>
+          <h2 id="host-owned">When your application owns sign-in (default)</h2>
+          <p>Contexa does not change your <code>SecurityFilterChain</code>, <code>UserDetailsService</code>, authentication providers or <code>spring.security.*</code> settings, and it does not put its own security chain, request-time filters or AI session repository on your request path. Instead your application must do the four things below. The example code is in <a href="installation-guide.html#legacy-integration">Connect your existing sign-in in the installation guide</a>.</p>
+          <ol>
+            <li>Declare your own <code>SecurityFilterChain</code>.</li>
+            <li>Protect <code>/contexa/admin/**</code> with the ADMIN role in your chain.</li>
+            <li>Turn on method security with <code>@EnableMethodSecurity</code>.</li>
+            <li>Put the signed-in user into the <code>SecurityContext</code> as an authenticated <code>Authentication</code>.</li>
+          </ol>
+          <p>Decisions are enforced at <code>@Protectable</code> methods. Before running a method Contexa checks the user's stored decision and does not run it on BLOCK, CHALLENGE or ESCALATE; a refusal thrown from a controller is answered by Contexa's exception handler with the status code of the decision (<a href="#responses">Decisions and answers</a>). The URL-level filters live only in the Contexa chain, so they do not work in this way.</p>
 
-          <!-- Section 2: Your Existing Security Stays Intact -->
-          <section class="section-sm">
-            <h2 id="existing-security-stays-intact">Your Existing Security Stays Intact</h2>
-            <p>The most common concern when adopting a new security framework: <em>"Will it break what I already have?"</em></p>
+          <h2 id="contexa-owned">When Contexa owns sign-in</h2>
+          <h3 id="default-chain">The default chain shape</h3>
+          <p>When your application declares no <code>PlatformConfig</code> bean, Contexa builds a default one, shaped by <code>mode</code>.</p>
+          <ul>
+            <li><strong><code>SANDBOX</code> shape:</strong> CSRF, CORS and security headers off; only <code>/contexa/admin/**</code> is protected with the ADMIN role (<code>/contexa/admin/login</code> allowed; self-service paths such as asking to release a block, <code>/contexa/admin/api/aiam/zero-trust/**</code> and <code>/contexa/admin/api/aiam/sse/zero-trust/**</code>, need sign-in only). Every other request is allowed, and the form login processing address is chosen at random at each start.</li>
+            <li><strong><code>FULL</code> shape:</strong> every request except static resources (<code>/contexa/css/**</code> and so on) goes through the dynamic authorization policies (<code>CustomDynamicAuthorizationManager</code>).</li>
+            <li><strong>Both:</strong> form login + passkey + one-time token (OTT) MFA (one factor, then <code>/</code>) and session state management.</li>
+          </ul>
+          <p>The reference for the annotation attributes and the configuration of each mode is <a href="../reference/autoconfigure/ai-security.html#full">the <code>@EnableAISecurity</code> reference</a>.</p>
 
-            <!-- Before / After Comparison -->
-            <div class="sb-compare">
-              <div class="sb-side sb-side--before">
-                <div class="sb-side-title">Before Contexa</div>
-                <div class="sb-side-items">
-                  <div class="sb-item">Your SecurityFilterChain</div>
-                  <div class="sb-item">Your UserDetailsService</div>
-                  <div class="sb-item">Your AuthenticationProvider</div>
-                  <div class="sb-item">spring.security.* properties</div>
-                </div>
-              </div>
-              <div class="sb-side sb-side--after">
-                <div class="sb-side-title">After Contexa</div>
-                <div class="sb-side-items">
-                  <div class="sb-item">Your SecurityFilterChain <strong>(unchanged)</strong></div>
-                  <div class="sb-item">Your UserDetailsService <strong>(unchanged)</strong></div>
-                  <div class="sb-item">Your AuthenticationProvider <strong>(unchanged)</strong></div>
-                  <div class="sb-item">spring.security.* properties <strong>(unchanged)</strong></div>
-                  <div class="sb-divider"></div>
-                  <div class="sb-item">+ Contexa SecurityFilterChains <strong>(added separately)</strong></div>
-                  <div class="sb-item">+ Zero Trust filters <strong>(added separately)</strong></div>
-                  <div class="sb-item">+ AI Session Context <strong>(added separately)</strong></div>
-                </div>
-              </div>
-            </div>
+          <h3 id="chain-order">Relation to your existing chain</h3>
+          <p>The Contexa chain is registered first in order (<code>Ordered.HIGHEST_PRECEDENCE</code> + the flow's order), and the default flow has no path scope (<code>urlPrefix</code>), so it matches every request. Spring Security uses only the first chain that matches a request, so a chain your application declared separately receives no requests. When you give the MFA flow a <code>urlPrefix</code>, that flow's chain matches only <code>&lt;urlPrefix&gt;/**</code> requests (<a href="../reference/identity/dsl.html">Identity DSL</a>).</p>
 
-            <p>The "added separately" items describe <code>CONTEXA_OWNED</code>. In the default SANDBOX mode (<code>HOST_OWNED</code>), Contexa adds no SecurityFilterChain, so the Zero Trust filters and AI session context that are attached to Contexa chains are not added to the host request path either.</p>
+          <h3 id="existing-beans">Relation to existing beans</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What your application had</th><th>Under <code>CONTEXA_OWNED</code></th></tr></thead>
+            <tbody>
+              <tr><td><code>SecurityFilterChain</code></td><td>Not removed or changed; the Contexa chains are registered as separate beans. Because of the order above it may not receive requests.</td></tr>
+              <tr><td><code>UserDetailsService</code></td><td>Yours is used when present; Contexa's user lookup (Contexa database) is registered only when there is none.</td></tr>
+              <tr><td><code>AuthenticationProvider</code></td><td>Contexa registers its own authentication provider (<code>CustomAuthenticationProvider</code>) as well.</td></tr>
+              <tr><td>CSRF and CORS settings</td><td>Your chain's settings stay; the Contexa chain's are changed with <code>global()</code>.</td></tr>
+              <tr><td><code>spring.security.*</code></td><td>Unchanged. Contexa uses <code>contexa.*</code> (the defaults Contexa adds are only <code>spring.ai.*</code> and <code>management.*</code>).</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3 id="why-nothing-breaks">Why Nothing Breaks</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr>
-                  <th>Your Existing Bean</th>
-                  <th>After Adding Contexa</th>
-                  <th>Mechanism</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>SecurityFilterChain</code></td>
-                  <td>Unchanged — Contexa chains are added separately in <code>CONTEXA_OWNED</code>; in the default <code>HOST_OWNED</code>, Contexa builds no chain</td>
-                  <td><code>BeanDefinitionRegistry</code> + <code>OrderedSecurityFilterChain</code></td>
-                </tr>
-                <tr>
-                  <td><code>UserDetailsService</code></td>
-                  <td>Unchanged — yours takes priority</td>
-                  <td><code>@ConditionalOnMissingBean</code></td>
-                </tr>
-                <tr>
-                  <td><code>AuthenticationProvider</code></td>
-                  <td>Unchanged — Contexa adds its own to the chain</td>
-                  <td><code>AuthenticationManager</code> chain coexistence</td>
-                </tr>
-                <tr>
-                  <td>CSRF / CORS settings</td>
-                  <td>Unchanged — override via <code>global()</code> only if needed</td>
-                  <td>Existing config preserved by default</td>
-                </tr>
-                <tr>
-                  <td><code>spring.security.*</code></td>
-                  <td>Unchanged — no namespace conflict</td>
-                  <td>Contexa uses <code>contexa.*</code> and <code>contexa.security.zerotrust.*</code></td>
-                </tr>
-              </tbody>
-            </table></div>
-          </section>
+          <h3 id="full-datasource">What <code>FULL</code> does on top</h3>
+          <p><code>FULL</code> sets the Contexa-owned application flag (<code>contexa.datasource.isolation.contexa-owned-application</code>) to <code>true</code>. Then:</p>
+          <ul>
+            <li>Unless your application declares a DataSource bean itself, your application's default database connection (<code>dataSource</code>) becomes the Contexa database. The default <code>JdbcTemplate</code> and <code>TransactionTemplate</code> use the Contexa database too.</li>
+            <li>The capability check becomes <code>FAIL_FAST</code>, so the startup stops when a required part such as the chat model or the vector store is missing (<a href="installation-guide.html#capability">Capability check</a>).</li>
+          </ul>
+          <p>To leave sign-in to Contexa without these two, keep <code>mode</code> at its default and set only <code>contexa.bridge.ownership: CONTEXA_OWNED</code> (the chain then has the <code>SANDBOX</code> shape).</p>
 
-          <!-- Section 3: Start Safe with Shadow Mode -->
-          <section class="section-sm">
-            <h2 id="start-safe-shadow-mode">Start Safe with Shadow Mode</h2>
-            <p>Shadow Mode runs the entire Zero Trust pipeline — behavioral analysis, risk scoring, AI decisions — but <strong>never enforces</strong> those decisions.</p>
-
-            <!-- Shadow vs Enforce Comparison -->
-            <div class="sb-modes">
-              <div class="sb-mode sb-mode--highlight">
-                <h3>Shadow Mode</h3>
-                <p>Start here. Zero risk to existing behavior.</p>
-                <ul>
-                  <li>AI analyzes every request</li>
-                  <li>Decisions are logged only</li>
-                  <li>No user is ever blocked or challenged</li>
-                  <li>Behavioral baselines are built from real traffic</li>
-                  <li>Minimal request overhead &mdash; analysis runs asynchronously by default</li>
-                </ul>
-              </div>
-              <div class="sb-mode">
-                <h3>Enforce Mode</h3>
-                <p>Switch when baselines are established.</p>
-                <ul>
-                  <li>AI analyzes every request</li>
-                  <li>Decisions are enforced in real-time</li>
-                  <li><span class="badge" style="background:var(--zt-allow);color:#fff">ALLOW</span> proceeds normally</li>
-                  <li><span class="badge" style="background:var(--zt-challenge);color:#fff">CHALLENGE</span> triggers MFA</li>
-                  <li><span class="badge" style="background:var(--zt-block);color:#fff">BLOCK</span> denies access</li>
-                </ul>
-              </div>
-            </div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
+          <h2 id="modes">Enforcement mode</h2>
+          <p>Whether decisions are made and applied is set by the enforcement mode (<code>contexa.security.zerotrust.mode</code>), separately from who owns sign-in.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Mode</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>ENFORCE</code> (default)</td><td>The AI decides, and the decision is stored and applied from the next request.</td></tr>
+              <tr><td><code>SHADOW</code></td><td>The AI decides and the decision goes to the decision and audit records, but it is not stored, applied or learned from.</td></tr>
+              <tr><td><code>OBSERVE</code>, <code>DISABLED</code></td><td>No AI analysis (the two behave the same).</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-yaml">contexa:
   security:
     zerotrust:
-      mode: SHADOW   # AI analyzes every request, enforces nothing</code></pre>
-            </div>
+      mode: SHADOW   # only watch at first</code></pre>
+          <p>A change made in the admin console at <code>/contexa/admin/system-settings</code> applies without restart, and once saved, the value stored in the database wins over YAML. What happens in SHADOW and when to move to ENFORCE is in <a href="shadow-mode.html">Start safely with enforcement modes</a>.</p>
 
-            <p>The <code>contexa.security.zerotrust.mode</code> property is bound to <code>SecurityZeroTrustProperties</code> (values: <code>SHADOW</code>, <code>ENFORCE</code>; default <code>ENFORCE</code>). <code>SecurityZeroTrustProperties.isEnforcementEnabled()</code> returns <code>true</code> only when <code>mode == ENFORCE</code>. In SHADOW mode, <code>SecurityDecisionEnforcementHandler</code> skips decision persistence and blocking side-effects, and <code>AuthorizationManagerMethodInterceptor</code> treats <code>@Protectable(sync = true)</code> BLOCK/CHALLENGE/ESCALATE decisions as observation-only (the method proceeds instead of throwing <code>ZeroTrustAccessDeniedException</code>). Because the property is bound via <code>@ConfigurationProperties</code>, a restart is required after changing the YAML value.</p>
+          <h2 id="responses">Decisions and answers</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>By the stored decision</strong>With the <code>ENFORCE</code> enforcement mode.</figcaption>
+            <p class="dg-outcomes-title">When a request comes in and the user's decision is</p>
+            <ul class="dg-outcomes">
+              <li class="dg-node dg-allow"><span class="dg-node-title">ALLOW</span><span class="dg-node-desc">Goes on (valid for 15 seconds)</span></li>
+              <li class="dg-node dg-challenge"><span class="dg-node-title">CHALLENGE</span><span class="dg-node-desc">Step-up authentication (MFA) required, <code>401</code></span></li>
+              <li class="dg-node dg-block"><span class="dg-node-title">BLOCK</span><span class="dg-node-desc">Blocked, <code>403</code>. Released by an administrator or by block-release MFA</span></li>
+              <li class="dg-node dg-escalate"><span class="dg-node-title">ESCALATE</span><span class="dg-node-desc">Held for review, <code>423</code> (valid for 5 minutes)</span></li>
+              <li class="dg-node dg-pending"><span class="dg-node-title">No decision</span><span class="dg-node-desc">Goes on and analysis starts (<code>PENDING_ANALYSIS</code>)</span></li>
+            </ul>
+          </figure>
+          <ul>
+            <li><strong><code>@Protectable</code> methods (both ways):</strong> on BLOCK, CHALLENGE or ESCALATE the method does not run; a refusal thrown from a controller is answered by Contexa's exception handler with the status codes above.</li>
+            <li><strong>At the URL (<code>CONTEXA_OWNED</code> only):</strong> request-time filters handle BLOCK (for a person, block-release MFA is offered first), ESCALATE and CHALLENGE; when there is no decision they wrap the response so it can be cut if a block decision arrives during analysis. Details are in <a href="../reference/identity/zero-trust-filters.html">Request-time enforcement</a>.</li>
+          </ul>
 
-            <div class="callout callout-info">
-              <p><strong>Safe for production.</strong> Shadow Mode does not alter any request or response. AI analysis runs asynchronously after the request completes, adding no latency. <a href="shadow-mode.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Shadow Mode Guide &rarr;</a></p>
-            </div>
-          </section>
+          <h2 id="custom-chain">Build the chain yourself (<code>CONTEXA_OWNED</code>)</h2>
+          <p>When you declare a <code>PlatformConfig</code> bean, Contexa builds its chain from it instead of the default. The bean becomes a chain only under <code>CONTEXA_OWNED</code>; under <code>HOST_OWNED</code> your Spring Security configuration is used as is.</p>
 
-          <!-- Section 4: Going Live -->
-          <section class="section-sm">
-            <h2 id="going-live">Going Live — Shadow to Enforce</h2>
-            <p>When your behavioral baselines are established, switch to Enforce mode with a single property change:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  security:
-    zerotrust:
-      mode: ENFORCE   # AI decisions are now enforced</code></pre>
-            </div>
-
-            <p>In Enforce mode, the AI's decisions become real:</p>
-
-            <div class="sb-actions">
-              <div class="sb-action" style="background:var(--zt-allow)">
-                <div class="sb-action-icon">&#10003;</div>
-                <div class="sb-action-name">ALLOW</div>
-                <div class="sb-action-desc">Request proceeds normally</div>
-              </div>
-              <div class="sb-action" style="background:var(--zt-challenge)">
-                <div class="sb-action-icon">!</div>
-                <div class="sb-action-name">CHALLENGE</div>
-                <div class="sb-action-desc">MFA re-authentication required</div>
-              </div>
-              <div class="sb-action" style="background:var(--zt-block)">
-                <div class="sb-action-icon">&times;</div>
-                <div class="sb-action-name">BLOCK</div>
-                <div class="sb-action-desc">Access denied immediately</div>
-              </div>
-              <div class="sb-action" style="background:var(--zt-escalate)">
-                <div class="sb-action-icon">&uarr;</div>
-                <div class="sb-action-name">ESCALATE</div>
-                <div class="sb-action-desc">Held for administrator review</div>
-              </div>
-            </div>
-
-            <p>To roll back, change <code>ENFORCE</code> back to <code>SHADOW</code>. Because the property is bound via <code>@ConfigurationProperties</code>, an application restart is required for the change to take effect.</p>
-
-            <p>
-              <a href="../reference/architecture/zero-trust-flow.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">How AI Makes These Decisions &rarr;</a> &nbsp;|&nbsp;
-              <a href="shadow-mode.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Migration Strategy &rarr;</a>
-            </p>
-          </section>
-
-          <!-- Section 5: When You Need Custom Configuration -->
-          <section class="section-sm">
-            <h2 id="custom-configuration">When You Need Custom Configuration</h2>
-            <p>The default <code>PlatformConfig</code> includes Form Login + OTT MFA + Session management. Define your own <code>PlatformConfig</code> bean when you need a different setup (a <code>PlatformConfig</code> is built into security filter chains only in <code>CONTEXA_OWNED</code>; in <code>HOST_OWNED</code>, your own Spring Security configuration is used as is):</p>
-
-            <h3 id="scenario-rest-only">Scenario A: REST API Only</h3>
-            <p>Your application exposes only REST APIs — no Form Login needed.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Bean
+          <h3 id="scenario-rest-only">Example A: REST API only</h3>
+          <pre><code class="language-java">@Bean
 public PlatformConfig platformConfig(IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
     return registry
-        .global(globalHttpCustomizer)
+        .global(http -&gt; http
+            .authorizeHttpRequests(auth -&gt; auth
+                .requestMatchers("/api/auth/**").permitAll()
+                .anyRequest().authenticated()))
         .rest(rest -&gt; rest.order(10))
         .session(Customizer.withDefaults())
         .build();
 }</code></pre>
-            </div>
 
-            <h3 id="scenario-existing-form-login">Scenario B: Existing Form Login + Zero Trust</h3>
-            <p>Keep your existing authentication and add AI-driven security on top. The critical step: register <code>AISessionSecurityContextRepository</code>.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Bean
-public PlatformConfig platformConfig(IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
+          <h3 id="scenario-existing-form-login">Example B: form login + dynamic authorization</h3>
+          <pre><code class="language-java">@Bean
+public PlatformConfig platformConfig(IdentityDslRegistry&lt;HttpSecurity&gt; registry,
+                                     CustomDynamicAuthorizationManager customDynamicAuthorizationManager) throws Exception {
     return registry
         .global(http -&gt; http
-            .authorizeHttpRequests(authReq -&gt; authReq
+            .authorizeHttpRequests(auth -&gt; auth
                 .requestMatchers("/css/**", "/js/**", "/images/**").permitAll()
-                .anyRequest().access(customDynamicAuthorizationManager))
-            .securityContext(sc -&gt; sc
-                .securityContextRepository(aiSessionSecurityContextRepository)))
+                .anyRequest().access(customDynamicAuthorizationManager)))
         .form(form -&gt; form.defaultSuccessUrl("/dashboard"))
         .session(Customizer.withDefaults())
         .build();
 }</code></pre>
-            </div>
+          <p>Contexa registers the session security context repository used for AI trust scores (<code>AISessionSecurityContextRepository</code>) on every flow automatically, so you do not put it in <code>global()</code> yourself.</p>
 
-            <h3 id="scenario-raw-http">Scenario C: Complex Setup — rawHttp() Escape Hatch</h3>
-            <p>When the DSL doesn't cover your needs — custom filters, custom <code>AuthenticationEntryPoint</code>, or advanced configuration — drop down to Spring Security's <code>HttpSecurity</code> directly:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">.form(form -&gt; form
+          <h3 id="scenario-raw-http">Example C: direct access to the Spring Security configuration</h3>
+          <p>When the DSL is not enough (custom filters, an <code>AuthenticationEntryPoint</code> and so on), reach Spring Security's configuration objects directly: <code>rawFormLogin</code> for form login, <code>rawHttp()</code> for the flow's whole <code>HttpSecurity</code>. Contexa's configuration (request-time filters and so on) is still applied to each flow.</p>
+          <pre><code class="language-java">.form(form -&gt; form
     .rawFormLogin(formLogin -&gt; formLogin
         .authenticationDetailsSource(customDetailsSource)
-        .successHandler(customSuccessHandler))
-)</code></pre>
-            </div>
-            <p>This gives you full access to Spring Security's <code>FormLoginConfigurer</code> while still benefiting from Contexa's Zero Trust pipeline.</p>
+        .successHandler(customSuccessHandler)))</code></pre>
 
-            <div class="callout callout-warning">
-              <p><strong>Required for Zero Trust.</strong> When defining a custom <code>PlatformConfig</code>, you must register <code>AISessionSecurityContextRepository</code> in the <code>global()</code> customizer. Without it, AI trust scores are not injected into sessions and Zero Trust will not function.</p>
-            </div>
+          <div class="callout callout-info">
+            <p><strong>For reference: how Contexa builds the chains.</strong> <code>@EnableAISecurity</code> imports the Contexa configuration (<code>AiSecurityImportSelector</code> → <code>AiSecurityConfiguration</code>), which builds the default configuration when your application has no <code>PlatformConfig</code>. Contexa creates an <code>HttpSecurity</code> per flow (<code>FlowContextFactory</code>), applies the Spring Security configuration for each authentication method (<code>formLogin</code>, <code>webAuthn</code>, <code>oneTimeTokenLogin</code>) and the request-time filters (<code>SecurityConfigurerOrchestrator</code>), then registers each chain as a bean (<code>SecurityFilterChainRegistrar</code>). Contexa calls the same Spring Security methods you would call yourself.</p>
+          </div>
+          <p>The whole DSL is in <a href="../reference/identity/dsl.html">Identity DSL</a>, authentication flows in <a href="../reference/identity/authentication.html">Authentication</a>, MFA in <a href="../reference/identity/mfa.html">Adaptive MFA</a>.</p>
 
-            <p>
-              <a href="../reference/identity/dsl.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Identity DSL Reference &rarr;</a> &nbsp;|&nbsp;
-              <a href="../reference/identity/authentication.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Authentication Flows &rarr;</a> &nbsp;|&nbsp;
-              <a href="../reference/identity/mfa.html" style="font-weight:var(--weight-semibold);color:var(--brand-primary);">Adaptive MFA &rarr;</a>
-            </p>
-          </section>
-
+          <h2 id="next">Where to go next</h2>
+          <ul>
+            <li><a href="shadow-mode.html">Start safely with enforcement modes</a></li>
+            <li><a href="../reference/common/bridge.html">Connect your existing sign-in (authentication bridge)</a></li>
+            <li><a href="../reference/agent/overview.html">Agent security</a> · <a href="../reference/architecture/decision-engine.html">Decision engine</a></li>
+            <li><a href="configuration.html">Configuration guide</a></li>
+          </ul>
           <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="/get-started.html" class="docs-nav-link prev">
+            <a href="installation-guide.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Get Started</span>
+              <span class="docs-nav-title">Installation Guide</span>
             </a>
-            <a href="configuration.html" class="docs-nav-link next">
+            <a href="shadow-mode.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Configuration</span>
+              <span class="docs-nav-title">Start Safely with Enforcement Modes</span>
             </a>
           </div>

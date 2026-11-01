@@ -1,945 +1,260 @@
-<!-- Breadcrumb -->
-          <nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">Home</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">AI-Driven Zero Trust Pipeline</span>
+            <span class="breadcrumb-current">The Life of a Request</span>
           </nav>
 
-          <!-- Page Header -->
           <div class="docs-page-header">
-            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
-              <span class="badge">contexa-core</span>
-              <span class="badge">contexa-identity</span>
-              <span class="badge">contexa-iam</span>
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-primary">contexa-identity</span>
+              <span class="badge badge-primary">contexa-iam</span>
             </div>
-            <h1>AI-Driven Zero Trust Pipeline</h1>
-            <p class="lead">Spring Security decides <em>who</em> you are. Contexa adds post-authentication runtime control through continuous analysis and enforcement based on behavioral context.</p>
+            <h1>The Life of a Request</h1>
+            <p class="lead">Follows one request in order: it arrives, the stored decision is applied, it runs, it is analyzed, and that decision applies to the next request. It also covers the responses users get for each decision, how a block spreads and is released, and how application code reads the decision.</p>
           </div>
 
-
-          <!-- ============================================ -->
-          <!-- Section 1: The Post-Authentication Blind Spot -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="blind-spot">The Post-Authentication Blind Spot</h2>
-            <p>Traditional security stops at the gate. Firewalls, WAFs, and login forms verify identity &mdash; but once a session is established, the interior is often under-monitored. Stolen credentials, compromised sessions, and AI agents that pass authentication quickly all exploit this <strong>post-authentication blind spot</strong>.</p>
-            <p>Contexa combines <strong>Spring Security</strong> with <strong>Spring AI</strong> to build a unified zero-trust layer that continues operating <em>after</em> authentication, not just at login.</p>
-
-            <div class="blind-spot-compare">
-              <div class="blind-spot-side blind-spot-side--before">
-                <div class="blind-spot-title" style="color:var(--zt-block)">Traditional Security</div>
-                <div class="blind-spot-gate blind-spot-gate--pass">Authentication Gate &nbsp;PASS</div>
-                <div class="blind-spot-zone blind-spot-zone--empty">
-                  <strong>No monitoring zone</strong><br>
-                  Once inside, full access.<br>
-                  Stolen session = game over.
-                </div>
-              </div>
-              <div class="blind-spot-side blind-spot-side--after">
-                <div class="blind-spot-title" style="color:var(--brand-primary)">Contexa AI Zero Trust</div>
-                <div class="blind-spot-gate blind-spot-gate--pass">Authentication Gate &nbsp;PASS</div>
-                <div class="blind-spot-zone blind-spot-zone--protected">
-                  <div class="blind-spot-layer">HCAD Context Collection &mdash; request-time</div>
-                  <div class="blind-spot-layer">AI Behavioral Analysis &mdash; continuous</div>
-                  <div class="blind-spot-layer">Dynamic Authority Control &mdash; request-time authority switching</div>
-                  <div class="blind-spot-layer">Automated Enforcement &mdash; active and next request paths</div>
-                </div>
-              </div>
+          <h2 id="overview">At a glance</h2>
+          <p>At request time only <strong>the decision already stored</strong> is applied. The new decision about this request is made after the response has left and applies from the same user's <strong>next request</strong>. One per-user decision store links the two.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The life of one request</strong>Steps 1–5 happen while the request is handled, steps 6–7 after the response has left. The decision stored in step 7 is read in step 2 of the next request.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node dg-request"><span class="dg-node-title">Request arrives</span><span class="dg-node-desc">from a signed-in user or agent</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node dg-store"><span class="dg-node-title">Read the stored decision</span><span class="dg-node-desc">this user's decision (pending analysis when there is none or its lifetime is over)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Enforce</span><span class="dg-node-desc">stops here on block, step-up or hold (<code>CONTEXA_OWNED</code>: filters and protected methods; <code>HOST_OWNED</code>: protected methods only)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node dg-host"><span class="dg-node-title">Run</span><span class="dg-node-desc">application logic and protected methods (<code>@Protectable</code>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">Publish an analysis event</span><span class="dg-node-desc">after the protected method has finished (<code>finally</code>), with its outcome</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">6</span><div class="dg-node dg-model"><span class="dg-node-title">Decide</span><span class="dg-node-desc">the AI model runs Layer 1, and Layer 2 when needed</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">7</span><div class="dg-node dg-store"><span class="dg-node-title">Store the decision</span><span class="dg-node-desc">in enforcement mode (<code>ENFORCE</code>). A block also sends a signal that cuts responses in flight</span></div></li>
+            </ol>
+          </figure>
+          <p><strong>Example.</strong> A user exports a report through a protected method. The response leaves at once and analysis starts in the background. If the AI model chooses block, the decision is stored and the user's next request gets the block response. If the model chooses allow, that allow is used only for 15 seconds in the same session, IP and browser; after that, requests are pending analysis again and are analyzed.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Step 3 depends on the ownership mode</strong>The default is <code>HOST_OWNED</code>. The full comparison is in the overview.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side dg-host"><p class="dg-side-title">The application keeps sign-in (<code>HOST_OWNED</code>, default)</p><ul><li>no Contexa filter on any chain</li><li>authorities are not changed</li><li>stored decisions are enforced only in front of <code>@Protectable</code> methods</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Contexa owns sign-in (<code>CONTEXA_OWNED</code>)</p><ul><li>authorities are changed to match the decision when the security context is read</li><li>two filters return the step-up, block and hold responses</li><li>enforced once more in front of <code>@Protectable</code> methods</li></ul></div>
             </div>
+          </figure>
+          <p>The full comparison of the ownership modes is in <a href="overview.html#ownership">How Contexa Works</a>.</p>
 
-            <div class="comparison-grid">
-              <div class="comparison-card">
-                <h3>Traditional Auth</h3>
-                <p>Guards the gate only.</p>
-                <ul>
-                  <li>Password / SSO / MFA at login</li>
-                  <li>Session cookie = trusted forever</li>
-                  <li>No post-auth monitoring</li>
-                  <li>Stolen session = full access</li>
-                </ul>
-                <div style="margin-top:var(--space-3);font-size:var(--text-xs);color:var(--text-tertiary)">Post-Auth Coverage: <strong style="color:var(--zt-block)">None</strong></div>
-              </div>
-              <div class="comparison-card">
-                <h3>Rule-Based WAF</h3>
-                <p>Catches known patterns.</p>
-                <ul>
-                  <li>Signature-based detection</li>
-                  <li>Static IP / rate-limit rules</li>
-                  <li>Cannot detect behavioral anomaly</li>
-                  <li>AI agents bypass easily</li>
-                </ul>
-                <div style="margin-top:var(--space-3);font-size:var(--text-xs);color:var(--text-tertiary)">Post-Auth Coverage: <strong style="color:var(--zt-challenge)">Pattern-only</strong></div>
-              </div>
-              <div class="comparison-card highlight">
-                <h3 style="color:var(--brand-primary)">Contexa AI Zero Trust</h3>
-                <p>Understands behavioral context.</p>
-                <ul>
-                  <li>LLM-backed analysis evaluates post-authentication security events</li>
-                  <li>HCAD behavioral baseline per user</li>
-                  <li>Detects deviation, not just signatures</li>
-                  <li>5 enforcement actions with Spring Security</li>
-                  <li>Cross-instance decision sharing through the runtime action store</li>
-                </ul>
-                <div style="margin-top:var(--space-3);font-size:var(--text-xs);color:var(--text-tertiary)">Post-Auth Coverage: <strong style="color:var(--zt-allow)">Full behavioral</strong></div>
-              </div>
-            </div>
+          <h2 id="read-decision">Request time ①: reading the decision and changing authorities</h2>
+          <p>This step exists only under <code>CONTEXA_OWNED</code>. When the Contexa chain reads the security context, it applies the stored decision so that the application's authority checks such as <code>hasRole()</code> follow the decision.</p>
+          <ul>
+            <li><strong>Where:</strong> in the session chain, the security context repository (<code>AISessionSecurityContextRepository</code>) applies it when it first reads the context; in the token chain, the filter right after JWT validation (<code>AIOAuth2ZeroTrustFilter</code>) does.</li>
+            <li><strong>Whose decision:</strong> it is read by user ID. An agent acting for a person reads its own key (<code>&lt;user&gt;::agent::&lt;agent&gt;</code>), and a block of the delegator counts as its block too.</li>
+            <li><strong>Allow is bound to its context:</strong> an allow reads as allow only in the session, IP and browser it was made for (the context hash), and as pending analysis anywhere else.</li>
+            <li><strong>5-second cache:</strong> the decision of the same user and context is kept in server memory for 5 seconds. Changing authorities right after a new block can be up to 5 seconds late, but the two filters read the store directly without the cache, so the block response is not late.</li>
+            <li><strong>Invalidated sessions and tokens:</strong> a session on the invalidation list is ended and the request goes on as not signed in. A JWT is refused with 401.</li>
+            <li>With <code>contexa.security.zerotrust.enabled=false</code>, this step (applying the decision, changing authorities, session tracking) does not run.</li>
+            <li><strong>Implementation order:</strong> <code>AISessionSecurityContextRepository</code>'s <code>loadDeferredContext</code> → <code>AbstractZeroTrustSecurityService</code>'s <code>applyZeroTrustToContext</code> → <code>adjustAuthoritiesByAction</code>. Session tracking and invalidation records are kept in memory in standalone mode (<code>InMemoryZeroTrustSecurityService</code>) and in Redis in distributed mode (<code>RedisZeroTrustSecurityService</code>).</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Decision</th><th>Authorities after the change</th></tr></thead>
+            <tbody>
+              <tr><td>Allow</td><td>the original authorities</td></tr>
+              <tr><td>Step-up authentication</td><td>only <code>ROLE_MFA_REQUIRED</code></td></tr>
+              <tr><td>Block</td><td>only <code>ROLE_BLOCKED</code></td></tr>
+              <tr><td>Held for review</td><td>only <code>ROLE_REVIEW_REQUIRED</code></td></tr>
+              <tr><td>Pending analysis</td><td>the original authorities + <code>ROLE_PENDING_ANALYSIS</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>The authentication object is replaced only when the set of authorities actually changes. The session chain uses a <code>ZeroTrustAuthenticationToken</code> that carries the decision and the scores; the token chain uses a new <code>JwtAuthenticationToken</code> with only the authorities changed. Opaque tokens get no authority change; only the two filters' reads of the decision remain.</p>
 
-            <div class="philosophy-quote">
-              <p>"Rules ask: <em>Does this violate a policy?</em> &mdash; If no rule matches, it passes.<br>
-              Contexa asks: <em>Is this normal for this person?</em> &mdash; If behavior deviates, it's caught."</p>
-            </div>
-          </section>
+          <h2 id="responses">Request time ②: what users get for each decision</h2>
+          <p>Under <code>CONTEXA_OWNED</code>, two filters (the challenge filter for step-up, the access control filter for block and hold) read the decision from the store, not from the authorities, and answer. A browser request is sent to a notice page; an API or AJAX request gets a JSON error.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Decision</th><th>Browser</th><th>API</th><th>How it ends</th></tr></thead>
+            <tbody>
+              <tr><td>Allow</td><td colspan="2">goes on</td><td>—</td></tr>
+              <tr><td>Step-up authentication</td><td>sent to <code>/contexa/zero-trust/challenge-required?mfaUrl=…</code></td><td><code>401</code> <code>MFA_CHALLENGE_REQUIRED</code> (body <code>mfaUrl</code>). The MFA is started once per user under a lock (default lease 30 s); while another request is starting it, <code>503</code> <code>MFA_BUSY_RETRY</code> + <code>Retry-After: 3</code>. If the application has no MFA flow, <code>401</code> <code>ZERO_TRUST_CHALLENGE</code></td><td>becomes allow after passing the MFA this decision started (a sign-in MFA does not release it), or after 1,800 s</td></tr>
+              <tr><td>Block</td><td>sent to <code>/contexa/zero-trust/blocked</code></td><td><code>403</code> <code>ACCOUNT_BLOCKED</code>. After the unblock MFA has started, <code>401</code> <code>BLOCK_MFA_REQUIRED</code></td><td>an administrator's approval (<a href="#block">How a block spreads and is released</a>)</td></tr>
+              <tr><td>Held for review</td><td>sent to <code>/contexa/zero-trust/analysis-pending?returnUrl=…</code></td><td><code>423</code> <code>SECURITY_REVIEW_IN_PROGRESS</code> + <code>Retry-After: 30</code></td><td>an administrator's approval. MFA does not release it. When both the analysis decision (300 s) and 5 minutes from the first hold response have passed, the next request turns it into a block</td></tr>
+              <tr><td>Pending analysis</td><td colspan="2">goes on. The response is wrapped and cut if a block signal arrives while it is being written</td><td>changes when a decision is stored</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>A block response does not end the session.</strong> It cuts the response in flight and stops later requests with the block response.</li>
+            <li>A request stopped by a decision is not analyzed; it is kept only as a session fact.</li>
+            <li>The filters' positions, excluded paths and full response bodies are in <a href="../identity/zero-trust-filters.html">Request-time enforcement</a>.</li>
+          </ul>
 
+          <h2 id="protectable">The method step: <code>@Protectable</code></h2>
+          <p>The interception in front of a protected method (<code>AuthorizationManagerMethodInterceptor</code>) runs under both ownership modes. It runs before Spring's method security (<code>@PreAuthorize</code> and the like).</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>One call of a protected method</strong>When a step refuses, the method does not run and no analysis event is published.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">Sign-in check</span><span class="dg-node-desc">an anonymous request is refused</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title">Enforcement mode check</span><span class="dg-node-desc">under <code>DISABLED</code> · <code>OBSERVE</code>, only the policy below is checked and no analysis event is published</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Rapid re-entry</span><span class="dg-node-desc">when the same person and session enter again within 5 seconds, an ordinary method runs without analysis and an immediate-decision method gets <code>503</code></span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">Method policy (XACML)</span><span class="dg-node-desc">a denial ends here, recorded as a session fact without analysis</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">Delegator authority</span><span class="dg-node-desc">a delegated agent's request is evaluated once more as the delegator</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">6</span><div class="dg-node dg-store"><span class="dg-node-title">Stored decision</span><span class="dg-node-desc">refused before running when a block, step-up or hold is in force. An immediate-decision method and an agent request with no decision on record are decided here</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">7</span><div class="dg-node dg-host"><span class="dg-node-title">The method runs</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">8</span><div class="dg-node"><span class="dg-node-title">Publish an analysis event</span><span class="dg-node-desc">in <code>finally</code>, with the request context (session, IP, browser, resource, authentication method) and whether the method completed or failed</span></div></li>
+            </ol>
+          </figure>
+          <ul>
+            <li><strong>In shadow mode</strong>, the stored decision and the immediate decision of step 6 are recorded only, not refused.</li>
+            <li>If the application declares a resource certification gate (<code>ProtectableResourceCertificationGate</code>) bean, a method with <code>@Protectable(verificationRequired)</code> (default <code>true</code>) on an uncertified resource is refused with <code>423</code>. OSS has no implementation of this bean.</li>
+            <li>Whether an agent request with no decision on record is decided on the spot is set by <code>contexa.security.zerotrust.protectable.unrecorded-agent-request</code> (default <code>DECIDE_IN_PLACE</code>; <code>PROCEED</code> lets it through like a person).</li>
+          </ul>
+          <p>A refusal becomes one of the responses below. The body has <code>status</code> · <code>code</code> (<code>ZERO_TRUST_&lt;decision&gt;</code>) · <code>message</code> · <code>action</code> · <code>resourceId</code> · <code>riskScore</code> · <code>analysisTimeout</code> · <code>timestamp</code>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>HTTP status</th><th>When</th></tr></thead>
+            <tbody>
+              <tr><td><code>403</code></td><td>block</td></tr>
+              <tr><td><code>401</code></td><td>step-up. The step-up MFA starts on the spot and the body carries <code>mfaUrl</code>. An agent's step-up is answered with a confirmation request to the accountable person under <code>CONTEXA_OWNED</code> (<a href="../agent/controls.html#confirm">Confirmation</a>)</td></tr>
+              <tr><td><code>423</code></td><td>held for review</td></tr>
+              <tr><td><code>503</code></td><td>analysis is needed (an immediate-decision method during rapid re-entry and the like)</td></tr>
+              <tr><td><code>408</code></td><td>the immediate decision's analysis timed out</td></tr>
+              <tr><td><code>429</code></td><td>agent decision merging is on and there is no analysis slot (<code>ZERO_TRUST_ANALYSIS_BUSY</code>, <code>Retry-After</code>)</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- ============================================ -->
-          <!-- Section 2: Two Flows, One Defense -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="two-flows">Two Flows, One Defense</h2>
-            <p>Contexa operates <strong>two complementary flows</strong> that together form a continuous zero-trust shield. Flow A runs in the background &mdash; analyzing events asynchronously. Flow B runs on every HTTP request &mdash; enforcing decisions through Spring Security's authority system. <strong>The action repository bridges the two</strong>; in distributed mode Redis and Redisson back the shared action state and cross-instance propagation.</p>
+          <h2 id="analysis">How the decision is made</h2>
+          <p>This is what happens after the analysis event has been published. The request thread does not wait.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>From event to decision</strong>The detailed rules are on the Decision Engine page.</figcaption>
+            <ol class="dg-flow dg-flow-h">
+              <li class="dg-node"><span class="dg-node-title">Filter</span><span class="dg-node-desc">no analysis if a decision is in force</span></li>
+              <li class="dg-node"><span class="dg-node-title">Queue</span><span class="dg-node-desc">one at a time per user and session</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-title">Layer 1 · Layer 2</span><span class="dg-node-desc">AI model</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-title">Processing steps</span><span class="dg-node-desc">enforce · seal · audit</span></li>
+            </ol>
+          </figure>
+          <ul>
+            <li><strong>Filter:</strong> if the decision of this user (an agent's own key for an agent) and context is not pending analysis, nothing new is analyzed; the request is recorded only as "not analyzed". With <code>contexa.security.zerotrust.enabled=false</code>, received events do nothing.</li>
+            <li><strong>Delivery:</strong> standalone mode passes events inside one server; distributed mode passes them through Kafka.</li>
+            <li><strong>Queue:</strong> events go into a queue of 10,000 and are taken 8 at a time, then lined up per user and session and handled one at a time. Each event has an analysis budget of 180 seconds, and a temporary failure goes back to the line up to 3 times.</li>
+            <li><strong>Decision:</strong> Layer 1 decides, and only when Layer 1 chooses ESCALATE does Layer 2 decide again. The Layer 1 and Layer 2 prompts of one event are drawn with the same prompt bundle.</li>
+            <li><strong>Processing steps:</strong> make the decision (50) → enforce (55) → seal evidence (56) → audit (60) → SaaS forwarding (65, only when turned on).</li>
+          </ul>
+          <p>Which requests are analyzed, when the model's answer is changed, and using a different model per layer: <a href="decision-engine.html">Decision Engine</a>.</p>
 
-            <div class="callout-info">
-              <strong>Code anchors.</strong> Flow A begins when <code>ZeroTrustEventPublisher.publishMethodAuthorization(...)</code> emits a <code>ZeroTrustSpringEvent</code>, and <code>ZeroTrustEventListener.handleZeroTrustEvent(...)</code> forwards it into the background processor. Flow B begins when <code>AISessionSecurityContextRepository.loadDeferredContext(...)</code> loads the request security context and <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code> maps the stored action into Spring Security authorities.
-            </div>
+          <h2 id="block">How a block spreads and is released</h2>
+          <h3 id="block-spread">How a block spreads</h3>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>After a block decision is stored</strong>Responses in flight are cut at once; the next request is stopped by the filter.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor">Enforcement step</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-store">Decision store</span><span class="dg-msg-text">stores the block, a block flag with no expiry, and a block record (person) or stops the agent</span></li>
+              <li class="dg-msg"><span class="dg-actor">Enforcement step</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Every server</span><span class="dg-msg-text">block signal <code>BLOCK:{user}:{decision}</code> (distributed mode: Redisson channel <code>contexa:security:block-signal</code>)</span></li>
+              <li class="dg-msg"><span class="dg-actor">Each server</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">Response in flight</span><span class="dg-msg-text">cut if the block came after the response started. Not yet sent: what was written is dropped and <code>403</code> goes out; already sending: only the cut marker is written and the response closes</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">Next request</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Access control filter</span><span class="dg-msg-text"><code>403</code> <code>ACCOUNT_BLOCKED</code> or the block page</span></li>
+            </ol>
+          </figure>
+          <p>A server that missed the signal also checks the store every 0.5 seconds. Contexa's own refusal responses are not cut.</p>
+          <h3 id="unblock">How a block is released</h3>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The user asks for release and an administrator releases</strong>Passing the MFA leaves the block in place; only an administrator's approval releases it.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor dg-request">User</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text">from the block page, <code>POST /contexa/admin/api/aiam/zero-trust/initiate-block-mfa</code> (checks the attempt limit, waits 10 minutes for the unblock MFA)</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">User</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text">passes the unblock MFA: marked verified for 1 hour; only the signal that cuts responses is lifted</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">User</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /contexa/admin/api/aiam/zero-trust/unblock-request</code> (a reason is required): status <code>UNBLOCK_REQUESTED</code></span></li>
+              <li class="dg-msg"><span class="dg-actor dg-host">Administrator</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text">handles it in the admin console's "Blocked Users": the administrator's approval (<code>AdminOverrideService</code>) changes the decision, the block flag is removed, and an <code>UNBLOCK</code> signal sent</span></li>
+            </ol>
+          </figure>
+          <ul>
+            <li>A block record has five states: <code>BLOCKED</code> · <code>UNBLOCK_REQUESTED</code> · <code>RESOLVED</code> · <code>TIMEOUT_RESPONDED</code> · <code>MFA_FAILED</code>.</li>
+            <li>The unblock MFA cannot be started again once the attempt limit (<code>contexa.security.zerotrust.max-block-mfa-attempts</code>, default 2) is reached. Failures are counted for 24 hours.</li>
+            <li>A delegated agent's block cannot be released by MFA; it gets <code>403</code> <code>AGENT_BLOCKED</code>.</li>
+            <li>When an unresolved hold turns into a block, the same block storage, flag and block record (person) or agent stop take place.</li>
+          </ul>
 
+          <h2 id="agents">How agent requests differ</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Item</th><th>For an agent request</th><th>Ownership mode where it runs</th></tr></thead>
+            <tbody>
+              <tr><td>Decision key</td><td>a delegated agent is stored separately under <code>&lt;user&gt;::agent::&lt;agent&gt;</code>. A block of the delegator counts as its block too</td><td>both</td></tr>
+              <tr><td>No decision on record</td><td>not let through; decided on the spot (default)</td><td>both (<code>@Protectable</code>)</td></tr>
+              <tr><td>Block response</td><td><code>403</code> <code>AGENT_BLOCKED</code>, not released by MFA</td><td><code>CONTEXA_OWNED</code> (filter)</td></tr>
+              <tr><td>Agent request gate</td><td>call limits, ended delegations, confirmation by the accountable person, narrowed scope</td><td><code>CONTEXA_OWNED</code> only</td></tr>
+            </tbody>
+          </table></div>
+          <p>Details are in <a href="../agent/overview.html">Agents as Security Subjects</a> and <a href="../agent/controls.html">Stop, Confirm, Limit</a>.</p>
 
-            <div class="dual-flow">
+          <h2 id="modes">Enforcement modes and operation</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Enforcement mode</th><th>AI analysis</th><th>Decision stored and applied</th><th>Observation and audit records</th><th>Learning</th></tr></thead>
+            <tbody>
+              <tr><td><code>DISABLED</code> · <code>OBSERVE</code></td><td>no</td><td>none</td><td>none</td><td>none</td></tr>
+              <tr><td><code>SHADOW</code></td><td>yes</td><td>no. A protected method's stored decision is recorded only</td><td>written</td><td>no</td></tr>
+              <tr><td><code>ENFORCE</code> (default)</td><td>yes</td><td>stored and applied from the next request</td><td>written</td><td>only allows actually applied</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>The request-time filters do not read the enforcement mode.</strong> Even after switching to <code>SHADOW</code> or turning off <code>contexa.security.zerotrust.enabled</code>, the filters keep enforcing the block (no expiry), step-up and hold already stored (<code>CONTEXA_OWNED</code>).</li>
+            <li><strong>An event carries the mode it was published under.</strong> The decision of an event published under <code>SHADOW</code> is not stored or applied, even if the mode has meanwhile become <code>ENFORCE</code>.</li>
+            <li><strong>Decision results go to the observation and audit records.</strong> The observation table is <code>ai_security_decision_observation</code>; the decision records are shown in the admin console's "Real-time Monitor" (<code>/contexa/admin/security-monitor</code>).</li>
+          </ul>
+          <h3 id="settings">Settings you often change</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>enforcement mode (<code>DISABLED</code> · <code>OBSERVE</code> · <code>SHADOW</code> · <code>ENFORCE</code>)</td><td><code>SHADOW</code> at the start of adoption. A value saved in the admin console wins</td></tr>
+              <tr><td><code>contexa.security.zerotrust.enabled</code></td><td><code>true</code></td><td>when off, no decision is applied, no authority changed and no analysis event handled (the filters' reads of the decision remain)</td><td>to stop the whole decision flow while looking into a problem</td></tr>
+              <tr><td><code>contexa.security.zerotrust.max-block-mfa-attempts</code></td><td><code>2</code></td><td>attempt limit of the unblock MFA (filter and release API)</td><td>to change the limit. The MFA failure handling clears the waiting state at the 2nd failure whatever this value is</td></tr>
+              <tr><td><code>contexa.security.zerotrust.protectable.rapid-reentry-window-ms</code></td><td><code>5000</code></td><td>window (ms) in which the same person and session re-entering is not analyzed</td><td>when one screen calls the same protected method several times in a row</td></tr>
+              <tr><td><code>contexa.security.zerotrust.protectable.unrecorded-agent-request</code></td><td><code>DECIDE_IN_PLACE</code></td><td>decide an agent request with no decision on record on the spot</td><td><code>PROCEED</code> to let agents through first, like people</td></tr>
+              <tr><td><code>contexa.security.zerotrust.redis.update-interval-seconds</code></td><td><code>30</code></td><td>minimum interval (s) before the session tracking record of the same session is written again</td><td>to write session tracking less often</td></tr>
+            </tbody>
+          </table></div>
+          <p>All settings are in <a href="../../install/configuration.html">Configuration</a>.</p>
 
-              <!-- Flow A -->
-              <div class="dual-flow-col dual-flow-col--a">
-                <div class="dual-flow-header">
-                  <div class="dual-flow-label dual-flow-label--a">Flow A</div>
-                  <div class="dual-flow-name">Event-Driven AI Analysis</div>
-                  <div class="dual-flow-mode">Asynchronous &middot; Background</div>
-                </div>
+          <h2 id="app-code">Reading the decision in application code</h2>
+          <ul>
+            <li><strong>Request attribute</strong> <code>contexa.zeroTrustAction</code>: a request the decision was applied to keeps the decision (<code>CONTEXA_OWNED</code>).</li>
+            <li><strong>Authentication object</strong> <code>ZeroTrustAuthenticationToken</code>: <code>getAction()</code> · <code>getTrustScore()</code> · <code>getThreatScore()</code>. It becomes this object only when the session chain changed the authorities; the token chain keeps a <code>JwtAuthenticationToken</code>.</li>
+            <li><strong>Policy expressions</strong> <code>#ai</code>: used in Contexa's policy (XACML) expressions. To use them in the application's <code>@PreAuthorize</code>, the mode must be <code>CONTEXA_OWNED</code>.</li>
+            <li><strong>Decision classes</strong>: on <code>ZeroTrustAction</code>, <code>isBlocking()</code> is true for block and hold, and <code>isAccessRestricted()</code> for block, step-up and hold.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Expression</th><th>True when</th></tr></thead>
+            <tbody>
+              <tr><td><code>#ai.isAllowed()</code></td><td>the current decision is allow</td></tr>
+              <tr><td><code>#ai.isBlocked()</code></td><td>the current decision is block</td></tr>
+              <tr><td><code>#ai.needsChallenge()</code></td><td>the current decision is step-up</td></tr>
+              <tr><td><code>#ai.needsEscalation()</code></td><td>the current decision is held for review</td></tr>
+              <tr><td><code>#ai.isPendingAnalysis()</code></td><td>the current decision is pending analysis</td></tr>
+              <tr><td><code>#ai.hasAction('ALLOW')</code></td><td>the current decision is the one given</td></tr>
+              <tr><td><code>#ai.hasActionIn('ALLOW', 'PENDING_ANALYSIS')</code></td><td>the current decision is one of those given</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>The usual state is pending analysis.</strong> An allow is used only for 15 seconds in the same context, so requiring only <code>#ai.isAllowed()</code> refuses most requests. To filter out only restricting decisions, accept allow and pending analysis together, as below.
+          </div>
+          <pre><code class="language-java">// #ai is registered only under CONTEXA_OWNED (@EnableAISecurity(mode = SecurityMode.FULL) or contexa.bridge.ownership=CONTEXA_OWNED).
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--a">1</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">Resource Access</div>
-                    <div class="dual-flow-step-desc">User accesses <code>@Protectable</code> method or protected URL</div>
-                    <div class="dual-flow-step-impl">AuthorizationManagerMethodInterceptor</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--a">2</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">Event Published</div>
-                    <div class="dual-flow-step-desc">Security event with full request context (IP, session, user agent, resource, auth method)</div>
-                    <div class="dual-flow-step-impl">ZeroTrustEventPublisher</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--a">3</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">Event Received &amp; Deduplicated</div>
-                    <div class="dual-flow-step-desc">Filters duplicate events via contextBindingHash. Routes to background processing.</div>
-                    <div class="dual-flow-step-impl">ZeroTrustEventListener &rarr; SecurityPlaneAgent</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--a">4</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">Tiered AI Analysis</div>
-                    <div class="dual-flow-step-desc">Layer 1 fast analysis (HCAD + RAG + baseline + LLM). If confidence insufficient, escalate to Layer 2 deep forensics.</div>
-                    <div class="dual-flow-step-impl">ColdPathEventProcessor &rarr; L1/L2 Strategy</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--a">5</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">Decision &amp; Store</div>
-                    <div class="dual-flow-step-desc">Tiered analysis yields a <code>SecurityDecision</code> whose enforced action is persisted to the action repository. BLOCK can trigger cross-instance propagation, while ALLOW feeds baseline learning.</div>
-                    <div class="dual-flow-step-impl">SecurityDecisionEnforcementHandler</div>
-                  </div>
-                </div>
-              </div>
+@RestController
+public class ReportController {
 
-              <!-- Bridge -->
-              <div class="dual-flow-bridge">
-                <div style="font-size:11px; font-weight:700; color:#7c3aed; text-align:center; letter-spacing:0.05em;">WRITE &#10132;</div>
-                <div class="dual-flow-bridge-line"></div>
-                <div class="dual-flow-bridge-badge">Action Repository</div>
-                <div class="dual-flow-bridge-sub">ZeroTrust<br>Action<br>Repository</div>
-                <div class="dual-flow-bridge-line"></div>
-                <div style="font-size:11px; font-weight:700; color:#0891b2; text-align:center; letter-spacing:0.05em;">&#10132; READ</div>
-              </div>
-
-              <!-- Flow B -->
-              <div class="dual-flow-col dual-flow-col--b">
-                <div class="dual-flow-header">
-                  <div class="dual-flow-label dual-flow-label--b">Flow B</div>
-                  <div class="dual-flow-name">Dynamic Authority Enforcement</div>
-                  <div class="dual-flow-mode">Synchronous &middot; Every Request</div>
-                </div>
-
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--b">1</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">HTTP Request Arrives</div>
-                    <div class="dual-flow-step-desc">Any authenticated request enters the Spring Security filter chain</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--b">2</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">AI Security Context Loaded</div>
-                    <div class="dual-flow-step-desc">Replaces Spring Security's default <code>SecurityContextRepository</code>. Resolves the current <code>ZeroTrustAction</code> through <code>ZeroTrustActionRepository</code>; in distributed mode this shared state is Redis-backed.</div>
-                    <div class="dual-flow-step-impl">AISessionSecurityContextRepository</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--b">3</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">Authority Switched</div>
-                    <div class="dual-flow-step-desc">Dynamically replaces user's <code>GrantedAuthority</code> based on AI decision: BLOCK&rarr;<code>ROLE_BLOCKED</code>, CHALLENGE&rarr;<code>ROLE_MFA_REQUIRED</code>, etc.</div>
-                    <div class="dual-flow-step-impl">adjustAuthoritiesByAction()</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--b">4</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">Access Control Filter</div>
-                    <div class="dual-flow-step-desc">Routes based on action: BLOCK&rarr;403/Block-MFA, ESCALATE&rarr;423 locked, PENDING&rarr;response wrapped for in-flight interruption on the active request path</div>
-                    <div class="dual-flow-step-impl">ZeroTrustAccessControlFilter (Order: 45)</div>
-                  </div>
-                </div>
-                <div class="dual-flow-arrow">&#8595;</div>
-                <div class="dual-flow-step">
-                  <div class="dual-flow-step-icon dual-flow-step-icon--b">5</div>
-                  <div class="dual-flow-step-body">
-                    <div class="dual-flow-step-name">Challenge Filter</div>
-                    <div class="dual-flow-step-desc">If <code>ROLE_MFA_REQUIRED</code> detected, initializes adaptive MFA challenge with distributed lock</div>
-                    <div class="dual-flow-step-impl">ZeroTrustChallengeFilter (Order: 50)</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Unified conclusion -->
-            <div style="text-align:center; margin:24px 0 16px;">
-              <div style="display:inline-block; padding:14px 32px; background:linear-gradient(135deg, rgba(99,102,241,0.08), rgba(6,182,212,0.08)); border:2px solid rgba(99,102,241,0.25); border-radius:12px;">
-                <div style="font-size:18px; font-weight:800; color:#4f46e5; margin-bottom:4px;">AI Analyzes &rarr; Shared Action State Bridges &rarr; Spring Enforces</div>
-                <div style="font-size:14px; color:var(--text-secondary);">This is how Contexa realizes continuous Zero Trust across request-time enforcement and asynchronous analysis.</div>
-              </div>
-            </div>
-
-            <div class="callout-info">
-              <strong>Flow A analyzes. Flow B enforces.</strong> The shared action state bridges them &mdash;across time (async analysis completes, the next request picks it up) and, in distributed mode, across application instances via Redis-backed storage and Redisson-based signaling.
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 3: Real-World Scenario -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="scenario">Real-World Scenario: Legitimate User vs. Account Takeover</h2>
-            <p>Both users authenticate with valid credentials. Both pass MFA. Traditional security cannot distinguish them. Contexa's AI watches what happens <em>after</em> login.</p>
-
-            <div class="scenario-split">
-              <!-- Good user -->
-              <div class="scenario-column scenario-column--good">
-                <div class="scenario-header scenario-header--good">Sarah &mdash; Legitimate User</div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 1 &middot; Login</div>
-                  <div class="scenario-step-content">
-                    IP: Home office (known range)<br>
-                    Time: 10:00 AM (usual hours)<br>
-                    Device: Windows / Chrome (registered)<br>
-                    <span class="scenario-badge scenario-badge--normal">Authentication: PASS</span>
-                  </div>
-                </div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 2 &middot; Behavioral Context</div>
-                  <div class="scenario-step-content">
-                    Access pattern: Email &rarr; ERP &rarr; Reports<br>
-                    Request frequency: Normal pace<br>
-                    Navigation: Matches 6-month baseline<br>
-                    <span class="scenario-badge scenario-badge--normal">Pattern: Normal</span>
-                  </div>
-                </div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 3 &middot; AI Verdict</div>
-                  <div class="scenario-step-content">
-                    Context trust: <strong style="color:#16a34a">97%</strong><br>
-                    Action: <span class="badge" style="background:var(--zt-allow);color:#fff;font-size:11px">ALLOW</span>
-                  </div>
-                </div>
-                <div class="scenario-verdict scenario-verdict--allow">
-                  Normal access continues.<br>Baseline updated with new session data.
-                </div>
-              </div>
-
-              <!-- Bad user -->
-              <div class="scenario-column scenario-column--bad">
-                <div class="scenario-header scenario-header--bad">Attacker &mdash; Stolen Credentials</div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 1 &middot; Login</div>
-                  <div class="scenario-step-content">
-                    IP: Similar range (VPN)<br>
-                    Time: 2:00 PM (within office hours)<br>
-                    Device: Windows / Chrome (mimicked)<br>
-                    <span class="scenario-badge scenario-badge--normal">Authentication: PASS</span>
-                  </div>
-                </div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 2 &middot; Behavioral Context</div>
-                  <div class="scenario-step-content">
-                    Access pattern: Login &rarr; HR Database directly<br>
-                    Request frequency: Bulk export 5,000 records<br>
-                    Navigation: Never accessed this path before<br>
-                    <span class="scenario-badge scenario-badge--anomaly">Pattern: Anomaly Detected</span>
-                  </div>
-                </div>
-                <div class="scenario-step">
-                  <div class="scenario-step-label">Step 3 &middot; AI Verdict</div>
-                  <div class="scenario-step-content">
-                    Context trust: <strong style="color:#dc2626">12%</strong><br>
-                    Action: <span class="badge" style="background:var(--zt-block);color:#fff;font-size:11px">BLOCK</span>
-                  </div>
-                </div>
-                <div class="scenario-verdict scenario-verdict--block">
-                  Session terminated immediately.<br>All instances notified. Admin alerted via SSE.
-                </div>
-              </div>
-            </div>
-
-            <div class="scenario-conclusion">
-              <strong>No rule was written. No signature was matched.</strong><br>
-              The AI recognized that this behavior doesn't belong to this person &mdash;<br>
-              even though the credentials were perfectly valid.
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 4: The Bridge &mdash;AISecurityContextRepository -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="bridge">The Bridge &mdash; AISecurityContextRepository</h2>
-            <p>This is the integration point where stored AI decisions meet Spring Security request processing. By replacing Spring Security's default <code>HttpSessionSecurityContextRepository</code> with <code>AISessionSecurityContextRepository</code>, Contexa applies previously stored zero-trust actions to the authentication context on subsequent requests &mdash; without changing application code.</p>
-
-            <div class="callout-info">
-              <strong>Exact method chain.</strong> Spring Security calls <code>loadDeferredContext(...)</code>, the repository resolves the request context lazily, <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code> loads the current action, <code>adjustAuthoritiesByAction(...)</code> maps that action into authorities, and <code>saveContext(...)</code> persists the updated security context when needed. In standalone mode the same contract is backed by in-memory implementations; in distributed mode Redis-backed repositories and broadcasters are used.
-            </div>
-
-            <div class="bridge-highlight">
-              <h3>How It Works</h3>
-              <div class="arch-flow">
-                <div class="arch-flow-node arch-flow-node--filter">Spring Security calls <code>loadDeferredContext()</code></div>
-                <div class="arch-flow-connector"></div>
-                <div class="arch-flow-node arch-flow-node--agent">AISessionSecurityContextRepository<span class="arch-flow-detail">replaces HttpSessionSecurityContextRepository</span></div>
-                <div class="arch-flow-connector"></div>
-                <div class="arch-flow-node arch-flow-node--secondary">ZeroTrustDeferredSecurityContext<span class="arch-flow-detail">lazy-loads on first SecurityContext access</span></div>
-                <div class="arch-flow-connector"></div>
-                <div class="arch-flow-node arch-flow-node--primary">applyZeroTrustToContext()<span class="arch-flow-detail">queries the action repository &rarr; adjustAuthoritiesByAction()</span></div>
-                <div class="arch-flow-connector"></div>
-                <div class="arch-flow-node arch-flow-node--agent">ZeroTrustAuthenticationToken<span class="arch-flow-detail">trustScore + threatScore + ZeroTrustAction</span></div>
-              </div>
-
-              <h3 style="margin-top:var(--space-6)">Authority Transformation</h3>
-              <p style="font-size:var(--text-sm);color:var(--text-secondary)">When Spring Security loads the request <code>SecurityContext</code>, <code>adjustAuthoritiesByAction()</code> dynamically replaces the user's authorities based on the currently stored zero-trust action:</p>
-
-              <div class="table-scroll">
-              <table class="authority-transform-table">
-                <thead>
-                  <tr>
-                    <th>AI Decision</th>
-                    <th></th>
-                    <th>Granted Authority</th>
-                    <th></th>
-                    <th>Enforcement Result</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td><span class="badge" style="background:var(--zt-allow);color:#fff">ALLOW</span></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>Original authorities preserved</td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>Normal access, baseline learning</td>
-                  </tr>
-                  <tr>
-                    <td><span class="badge" style="background:var(--zt-block);color:#fff">BLOCK</span></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td><code>ROLE_BLOCKED</code> <strong>only</strong></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>403 Forbidden, session invalidated</td>
-                  </tr>
-                  <tr>
-                    <td><span class="badge" style="background:var(--zt-challenge);color:#fff">CHALLENGE</span></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td><code>ROLE_MFA_REQUIRED</code> <strong>only</strong></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>MFA challenge, max 2 attempts</td>
-                  </tr>
-                  <tr>
-                    <td><span class="badge" style="background:var(--zt-escalate);color:#fff">ESCALATE</span></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td><code>ROLE_REVIEW_REQUIRED</code> <strong>only</strong></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>423 Locked, auto-BLOCK after 300s</td>
-                  </tr>
-                  <tr>
-                    <td><span class="badge" style="background:var(--zt-pending);color:#fff">PENDING</span></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>Original + <code>ROLE_PENDING_ANALYSIS</code></td>
-                    <td class="auth-arrow">&rarr;</td>
-                    <td>Response wrapped, in-flight interruption if the user becomes blocked while the response is still being written</td>
-                  </tr>
-                </tbody>
-              </table>
-              </div>
-            </div>
-
-            <div class="callout-info">
-              <strong>Zero code changes required.</strong> Because authority transformation happens inside Spring Security's <code>SecurityContextRepository</code>, every existing <code>@PreAuthorize</code>, <code>hasRole()</code>, and <code>isAuthenticated()</code> expression automatically incorporates AI zero-trust state. <code>@Protectable</code> methods, URL-based policies, and SpEL expressions all benefit transparently.
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 5: ZeroTrustAction &mdash;The 5 Decisions -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="zero-trust-actions">ZeroTrustAction &mdash; The 5 Decisions</h2>
-
-            <div class="callout-danger">
-              <strong>The LLM decides the action directly.</strong> The tiered AI analysis pipeline outputs a <code>SecurityDecision</code> containing a <code>ZeroTrustAction</code> &mdash; not a risk score that gets mapped to an action. Fields like <code>riskScore</code> and <code>confidence</code> exist in <code>SecurityDecision</code> for audit logging and learning purposes only.
-            </div>
-
-            <div class="table-scroll">
-            <table class="api-table" style="min-width:720px;margin:var(--space-4) 0">
-              <thead>
-                <tr>
-                  <th style="width:140px">Action</th>
-                  <th style="width:50px">HTTP</th>
-                  <th style="width:80px">TTL</th>
-                  <th style="width:170px">Authority</th>
-                  <th>Meaning &amp; Next Step</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><span class="badge" style="background:var(--zt-allow);color:#fff">ALLOW</span></td>
-                  <td>200</td>
-                  <td>15s</td>
-                  <td>&mdash;</td>
-                  <td>Request trusted. Proceed normally. Baseline learning triggered via <code>SecurityLearningService</code>.</td>
-                </tr>
-                <tr>
-                  <td><span class="badge" style="background:var(--zt-block);color:#fff">BLOCK</span></td>
-                  <td>403</td>
-                  <td>permanent</td>
-                  <td><code>ROLE_BLOCKED</code></td>
-                  <td>Threat confirmed. Session invalidated, cross-instance propagation via Redisson RTopic. User redirected to <code>/zero-trust/blocked</code>.</td>
-                </tr>
-                <tr>
-                  <td><span class="badge" style="background:var(--zt-challenge);color:#fff">CHALLENGE</span></td>
-                  <td>401</td>
-                  <td>1800s</td>
-                  <td><code>ROLE_MFA_REQUIRED</code></td>
-                  <td>Suspicious activity. MFA challenge initiated via <code>ChallengeMfaInitializer</code>. Max 2 attempts; failure escalates to BLOCK.</td>
-                </tr>
-                <tr>
-                  <td><span class="badge" style="background:var(--zt-escalate);color:#fff">ESCALATE</span></td>
-                  <td>423</td>
-                  <td>300s</td>
-                  <td><code>ROLE_REVIEW_REQUIRED</code></td>
-                  <td>Human review required. Auto-promotes to BLOCK after 300s. SOAR integration via <code>SoarApprovalNotifier</code>.</td>
-                </tr>
-                <tr>
-                  <td><span class="badge" style="background:var(--zt-pending);color:#fff">PENDING_ANALYSIS</span></td>
-                  <td>503</td>
-                  <td>0s</td>
-                  <td><code>ROLE_PENDING_ANALYSIS</code></td>
-                  <td>AI analysis in progress. Response is wrapped with <code>BlockableResponseWrapper</code> so the stream can be interrupted if the user becomes blocked while data is still being written.</td>
-                </tr>
-              </tbody>
-            </table>
-            </div>
-
-            <p><code>ZeroTrustAction</code> also provides utility methods: <code>isBlocking()</code> returns <code>true</code> for BLOCK and ESCALATE; <code>isAccessRestricted()</code> returns <code>true</code> for BLOCK, CHALLENGE, and ESCALATE.</p>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 6: Flow A Deep Dive -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="flow-a">Flow A &mdash; Event-Driven AI Analysis Pipeline</h2>
-            <p>When a user accesses a <code>@Protectable</code> resource, the security event flows through a three-stage handler chain, each with a specific order and responsibility. The event analysis pipeline runs asynchronously in the background while request handling continues on the direct servlet path.</p>
-
-            <h3>Handler Chain</h3>
-            <div class="filter-chain">
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">50</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name"><span class="handler-order">ORDER 50</span> ProcessingExecutionHandler</div>
-                  <div class="filter-chain-desc">Selects processing strategy (AI_ANALYSIS mode). Delegates to <code>ColdPathEventProcessor</code> for tiered LLM analysis. Stores <code>ProcessingResult</code> in pipeline context.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">55</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name"><span class="handler-order">ORDER 55</span> SecurityDecisionEnforcementHandler</div>
-                  <div class="filter-chain-desc">Extracts the enforced action from the result. Persists it through <code>ZeroTrustActionRepository</code>. BLOCK: sets <code>blockedFlag</code> + broadcasts via <code>BlockingSignalBroadcaster</code>. ALLOW: schedules baseline learning, which flows into <code>SecurityLearningService.learnBaselineOnly(...)</code>.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">60</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name"><span class="handler-order">ORDER 60</span> AuditingHandler</div>
-                  <div class="filter-chain-desc">Records complete audit log via <code>CentralAuditFacade</code>. Includes decision, risk score, confidence, reasoning, processing time.</div>
-                </div>
-              </div>
-            </div>
-
-            <h3>AI Analysis &mdash; Layer 1 &amp; Layer 2</h3>
-            <p><code>ColdPathEventProcessor</code> orchestrates a tiered AI strategy. Layer 1 performs fast contextual analysis, and when confidence is insufficient Layer 2 escalates to deeper forensic analysis. Both layers use <code>SecurityDecisionStandardPromptTemplate</code> for structured prompt engineering.</p>
-
-            <div class="callout-info">
-              <strong>LLM output is <code>SecurityDecision</code></strong>, which contains the proposed <code>action</code>, the effective <code>autonomousAction</code>, and supporting fields such as <code>riskScore</code> and <code>confidence</code>. Those supporting fields are preserved for audit, calibration, and learning, while the resolved autonomous action is what the enforcement path consumes.
-            </div>
-
-            <h4>Layer 1 &mdash; Contextual Analysis</h4>
-            <div class="filter-chain">
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">1</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">HCAD Context Collection</div>
-                  <div class="filter-chain-desc">Builds <code>SessionContext</code> from session info, request patterns, device fingerprint, behavioral baseline vectors</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">2</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">RAG Search</div>
-                  <div class="filter-chain-desc">Searches unified vector store (similarity threshold 0.5, top-k 5) for similar historical security events</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">3</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">Session History Analysis</div>
-                  <div class="filter-chain-desc">Analyzes last 100 actions for anomalous patterns (unusual times, unfamiliar paths, rapid-fire requests)</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">4</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">LLM Evaluation (Tier 1)</div>
-                  <div class="filter-chain-desc">Constructs a prompt via <code>SecurityDecisionStandardPromptTemplate</code>, sends it to <code>UnifiedLLMOrchestrator</code>, and produces a <code>SecurityDecision</code> that carries the proposed and effective zero-trust action.</div>
-                </div>
-              </div>
-            </div>
-
-            <h4>Layer 2 &mdash; Expert Investigation</h4>
-            <p>Triggered when Layer 1 confidence is below the configured threshold. Uses Tier 2 LLM for full forensic analysis.</p>
-            <div class="filter-chain">
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">1</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">Extended Context</div>
-                  <div class="filter-chain-desc">Reuses Layer 1 context + deeper behavioral embeddings from complete activity profile</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">2</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">Broader RAG Search</div>
-                  <div class="filter-chain-desc">Extended search with top-k 10 for comprehensive threat context</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">3</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">Expert LLM Evaluation (Tier 2)</div>
-                  <div class="filter-chain-desc">Full forensic analysis with broader context, deeper embeddings, and the same enforcement contract used by the rest of the runtime pipeline.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order">4</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">SOAR Integration (optional)</div>
-                  <div class="filter-chain-desc"><code>ApprovalService</code> requests human approval via <code>SoarApprovalNotifier</code> for ESCALATE decisions</div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 7: Flow B Deep Dive -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="flow-b">Flow B &mdash; Dynamic Authority Enforcement</h2>
-            <p>On every HTTP request, Spring Security's filter chain enforces the current action resolved through <code>ZeroTrustActionRepository</code>. The key mechanism is <strong>authority replacement</strong> &mdash; the user's <code>GrantedAuthority</code> set is dynamically rewritten based on the current <code>ZeroTrustAction</code>.</p>
-
-            <h3>Filter Chain Order</h3>
-            <div class="filter-chain">
-              <div class="filter-chain-item">
-                <div class="filter-chain-order" style="background:rgba(6,182,212,0.1);color:#0891b2">30</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">HCADFilter</div>
-                  <div class="filter-chain-desc">Collects behavioral context: device fingerprint, session metadata, user agent, IP. Stores in request attributes for downstream use.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order" style="background:rgba(99,102,241,0.1);color:#4f46e5">40</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">AISessionSecurityContextRepository</div>
-                  <div class="filter-chain-desc">Replaces Spring Security's default. On <code>loadDeferredContext()</code>, wraps with <code>ZeroTrustDeferredSecurityContext</code>. On first access: resolves the current action through <code>ZeroTrustActionRepository</code>, calls <code>adjustAuthoritiesByAction()</code>, and creates <code>ZeroTrustAuthenticationToken</code>.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">45</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">ZeroTrustAccessControlFilter</div>
-                  <div class="filter-chain-desc">
-                    <strong>BLOCK</strong>: Redirect to <code>/zero-trust/blocked</code> or initiate Block-MFA (max 2 attempts via <code>ChallengeMfaInitializer</code>).<br>
-                    <strong>ESCALATE</strong>: Return 423 to <code>/zero-trust/analysis-pending</code>. TTL 5 min; auto-promotes to BLOCK.<br>
-                    <strong>PENDING_ANALYSIS</strong>: Wrap the response with <code>BlockableResponseWrapper</code> so an in-flight stream can be interrupted if the action changes while data is still being written.
-                  </div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order" style="background:rgba(217,119,6,0.1);color:var(--zt-challenge)">50</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">ZeroTrustChallengeFilter</div>
-                  <div class="filter-chain-desc">Detects <code>ROLE_MFA_REQUIRED</code>. Acquires distributed lock (30s). Initializes MFA state machine via <code>ChallengeMfaInitializer</code>. Redirects to MFA challenge page. Failure &rarr; auto-escalates to BLOCK.</div>
-                </div>
-              </div>
-              <div class="filter-chain-connector">|</div>
-              <div class="filter-chain-item">
-                <div class="filter-chain-order" style="background:rgba(22,163,74,0.1);color:var(--zt-allow)">&#8734;</div>
-                <div class="filter-chain-body">
-                  <div class="filter-chain-name">Standard Spring Security Filters</div>
-                  <div class="filter-chain-desc">All existing <code>@PreAuthorize</code>, <code>hasRole()</code>, URL-based authorization now operates on AI-adjusted authorities transparently.</div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 8: Enforcement Infrastructure -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="enforcement">Enforcement Infrastructure</h2>
-            <p>AI makes the decision. Spring Security's filter chain and, in distributed mode, the shared runtime infrastructure enforce it on the active request path, across instances, and even while a response is still being written.</p>
-
-            <div class="enforcement-grid">
-              <!-- BLOCK -->
-              <div class="enforcement-card" style="border-color:var(--zt-block)">
-                <h4 style="color:var(--zt-block)">BLOCK Enforcement</h4>
-                <p style="font-size:var(--text-sm);color:var(--text-secondary)">Immediate denial with cross-instance propagation.</p>
-                <div class="filter-chain" style="margin:var(--space-3) 0">
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">1</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">SecurityDecisionEnforcementHandler</div>
-                      <div class="filter-chain-desc">Persists BLOCK through <code>ZeroTrustActionRepository</code> and sets <code>blockedFlag</code>. In distributed mode the stored action is Redis-backed.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">2</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">BlockingSignalBroadcaster</div>
-                      <div class="filter-chain-desc">Publishes <code>BLOCK:{userId}</code> via Redisson RTopic. All instances receive signal in real time.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">3</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">BlockingDecisionRegistry</div>
-                      <div class="filter-chain-desc">Receives RTopic signal. Updates local <code>ConcurrentHashMap</code> for O(1) lookup.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">4</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">BlockableResponseWrapper</div>
-                      <div class="filter-chain-desc"><code>BlockableServletOutputStream</code> checks block status on every <code>write()</code>. Even in-flight responses are terminated.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(220,38,38,0.1);color:var(--zt-block)">5</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">ZeroTrustAccessControlFilter</div>
-                      <div class="filter-chain-desc">Returns 403. Clears authentication, invalidates session. <code>IBlockedUserRecorder</code> persists to DB.</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- CHALLENGE -->
-              <div class="enforcement-card" style="border-color:var(--zt-challenge)">
-                <h4 style="color:var(--zt-challenge)">CHALLENGE Enforcement</h4>
-                <p style="font-size:var(--text-sm);color:var(--text-secondary)">Requires additional authentication. Distributed lock prevents race conditions.</p>
-                <div class="filter-chain" style="margin:var(--space-3) 0">
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(217,119,6,0.1);color:var(--zt-challenge)">1</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">ZeroTrustChallengeFilter</div>
-                      <div class="filter-chain-desc">Detects <code>ROLE_MFA_REQUIRED</code>. Acquires distributed lock (30s).</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(217,119,6,0.1);color:var(--zt-challenge)">2</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">ChallengeMfaInitializer</div>
-                      <div class="filter-chain-desc">Initializes MFA state machine. Generates secure session ID. Determines auto-factor (OTT, Passkey, TOTP). Redirects to MFA page.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(217,119,6,0.1);color:var(--zt-challenge)">3</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">MFA Verification</div>
-                      <div class="filter-chain-desc"><code>BlockMfaStateStore</code> tracks attempts (max 2 in 1 hour). Success clears challenge.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(217,119,6,0.1);color:var(--zt-challenge)">4</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">Failure Escalation</div>
-                      <div class="filter-chain-desc">MFA failure or timeout &rarr; auto-promotes to <strong>BLOCK</strong>.</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- ESCALATE -->
-              <div class="enforcement-card" style="border-color:var(--zt-escalate)">
-                <h4 style="color:var(--zt-escalate)">ESCALATE Enforcement</h4>
-                <p style="font-size:var(--text-sm);color:var(--text-secondary)">Requires human review. Time-bounded with automatic promotion to BLOCK.</p>
-                <div class="filter-chain" style="margin:var(--space-3) 0">
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(124,58,237,0.1);color:var(--zt-escalate)">1</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">ZeroTrustAccessControlFilter</div>
-                      <div class="filter-chain-desc">Returns 423 Locked. Grants <code>ROLE_REVIEW_REQUIRED</code>. TTL: 300 seconds.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(124,58,237,0.1);color:var(--zt-escalate)">2</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">SOAR Workflow</div>
-                      <div class="filter-chain-desc"><code>ApprovalService.requestApproval()</code> &rarr; <code>SoarApprovalNotifier</code> sends notification to security team.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order" style="background:rgba(124,58,237,0.1);color:var(--zt-escalate)">3</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">Admin Override or Auto-Promotion</div>
-                      <div class="filter-chain-desc"><code>AdminOverrideService.approve()</code> resolves. If TTL expires (300s) &rarr; auto-promotes to <strong>BLOCK</strong>.</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Cross-Instance + Unblock -->
-              <div class="enforcement-card" style="border-color:var(--brand-primary)">
-                <h4 style="color:var(--brand-primary)">Cross-Instance Propagation &amp; Unblock</h4>
-                <p style="font-size:var(--text-sm);color:var(--text-secondary)">Blocking decisions propagate to all instances in real time. Blocked users can request unblock via MFA verification.</p>
-                <div class="filter-chain" style="margin:var(--space-3) 0">
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order">1</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">Redisson RTopic</div>
-                      <div class="filter-chain-desc">Channel: <code>contexa:security:block-signal</code>. Signals: <code>BLOCK:{userId}</code>, <code>UNBLOCK:{userId}</code>.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order">2</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">BlockedUserService</div>
-                      <div class="filter-chain-desc">Persists block to DB. Status tracking: <code>BLOCKED</code> &rarr; <code>UNBLOCK_REQUESTED</code> &rarr; <code>RESOLVED</code>.</div>
-                    </div>
-                  </div>
-                  <div class="filter-chain-connector">|</div>
-                  <div class="filter-chain-item">
-                    <div class="filter-chain-order">3</div>
-                    <div class="filter-chain-body">
-                      <div class="filter-chain-name">Unblock Flow</div>
-                      <div class="filter-chain-desc">
-                        <code>ZeroTrustUnblockController</code>: Block-MFA (max 2 attempts) &rarr; MFA verified &rarr; <code>requestUnblockWithMfa()</code>.<br>
-                        Admin approves via <code>BlockedUserService.resolveBlockById()</code> &rarr; clears Redis keys &rarr; broadcasts <code>UNBLOCK</code> signal.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 9: Monitoring, Learning & SSE -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="monitoring">Monitoring, Learning &amp; SSE</h2>
-            <p>Every AI decision is streamed to dashboards in real time and fed back into the learning loop to improve future decisions.</p>
-
-            <div class="comparison-grid">
-              <div class="comparison-card">
-                <h3>Real-Time Stream</h3>
-                <p>Server-Sent Events for live monitoring.</p>
-                <ul>
-                  <li><code>ZeroTrustSsePublisher</code> broadcasts decisions</li>
-                  <li>SSE endpoint: <code>/api/aiam/sse/zero-trust/subscribe</code></li>
-                  <li>Live action feed: ALLOW/BLOCK/CHALLENGE/ESCALATE</li>
-                  <li>Analysis completion, unblock notifications</li>
-                </ul>
-              </div>
-              <div class="comparison-card">
-                <h3>Admin Dashboard</h3>
-                <p>Visual control center for security operators.</p>
-                <ul>
-                  <li><code>/zero-trust/blocked</code> &mdash; blocked user page</li>
-                  <li><code>/zero-trust/challenge-required</code> &mdash; MFA challenge</li>
-                  <li><code>/zero-trust/analysis-pending</code> &mdash; review in progress</li>
-                  <li><code>AdminOverrideService</code> for decision overrides</li>
-                </ul>
-              </div>
-              <div class="comparison-card">
-                <h3>Learning Loop</h3>
-                <p>Every ALLOW decision improves baselines.</p>
-                <ul>
-                  <li><code>SecurityLearningService</code> &rarr; <code>BaselineLearningService</code></li>
-                  <li>EMA (Exponential Moving Average) baseline updates</li>
-                  <li><code>SecurityDecisionPostProcessor</code> vector storage</li>
-                  <li>LFU eviction for IP/path frequency maps</li>
-                </ul>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Section 10: SpEL & Configuration -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="spel-config">SpEL Integration &amp; Configuration</h2>
-
-            <h3>Zero Trust in SpEL Expressions</h3>
-            <p>Spring Security's <code>@PreAuthorize</code> and <code>@PostAuthorize</code> annotations can reference zero-trust state through custom expression methods on <code>AbstractAISecurityExpressionRoot</code>.</p>
-
-            <table class="api-table spel-table" style="width:100%;margin:var(--space-4) 0">
-              <thead><tr><th>Expression</th><th>Returns</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>#ai.isAllowed()</code></td><td>boolean</td><td>Current user's ZeroTrustAction is ALLOW</td></tr>
-                <tr><td><code>#ai.isBlocked()</code></td><td>boolean</td><td>Current user's action is BLOCK</td></tr>
-                <tr><td><code>#ai.needsChallenge()</code></td><td>boolean</td><td>Current user's action is CHALLENGE</td></tr>
-                <tr><td><code>#ai.needsEscalation()</code></td><td>boolean</td><td>Current user's action is ESCALATE</td></tr>
-                <tr><td><code>#ai.isPendingAnalysis()</code></td><td>boolean</td><td>Current user's action is PENDING_ANALYSIS</td></tr>
-                <tr><td><code>#ai.hasAction("ALLOW")</code></td><td>boolean</td><td>Checks whether the current action matches the specified ZeroTrustAction</td></tr>
-                <tr><td><code>#ai.hasActionIn("ALLOW", "CHALLENGE")</code></td><td>boolean</td><td>Checks whether the current action is one of the allowed actions</td></tr>
-              </tbody>
-            </table>
-
-            <h4>SpEL Usage Controller Example</h4>
-            <p>You can use these expressions at the method level of your REST API controllers as follows:</p>
-            <pre><code class="language-java">@RestController
-@RequestMapping("/api/v1/financial")
-public class FinancialController {
-
-    // Access is granted only if AI Zero Trust allows (ALLOW) and the user has the ADMIN role
     @GetMapping("/reports")
-    @PreAuthorize("#ai.isAllowed() and hasRole('ADMIN')")
-    public ResponseEntity<List<Report>> getFinancialReports() {
-        return ResponseEntity.ok(financeService.getReports());
-    }
-
-    // Access is allowed only if AI Zero Trust resolves to ALLOW or analysis is PENDING
-    @PostMapping("/transfer")
-    @PreAuthorize("#ai.hasActionIn('ALLOW', 'PENDING_ANALYSIS')")
-    public ResponseEntity<Void> executeTransfer(@RequestBody TransferRequest request) {
-        financeService.transfer(request);
-        return ResponseEntity.ok().build();
+    @PreAuthorize("#ai.hasActionIn('ALLOW', 'PENDING_ANALYSIS') and hasRole('ADMIN')")
+    public String reports() {
+        return "ok";
     }
 }</code></pre>
+          <p>Agent expressions (<code>isAgent()</code> and others) are in <a href="../agent/controls.html#expressions">Stop, Confirm, Limit</a>; all policy expressions are in <a href="../iam/ai-security-expressions.html">AI security expressions</a>.</p>
 
-            <h3>Configuration Reference</h3>
-            <table class="api-table" style="width:100%;margin:var(--space-4) 0">
-              <thead><tr><th>Property</th><th>Default</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.security.zerotrust.enabled</code></td><td><code>true</code></td><td>Enable/disable zero-trust pipeline</td></tr>
-                <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>SHADOW (log only) or ENFORCE (full enforcement)</td></tr>
-                <tr><td><code>contexa.security.zerotrust.sampling.rate</code></td><td><code>1.0</code></td><td>Fraction of requests to analyze (0.0-1.0)</td></tr>
-                <tr><td><code>contexa.security.zerotrust.hotpath.enabled</code></td><td><code>true</code></td><td>Enable Layer 1 hot-path analysis</td></tr>
-                <tr><td><code>contexa.security.zerotrust.redis.updateIntervalSeconds</code></td><td><code>30</code></td><td>Redis action update interval</td></tr>
-                <tr><td><code>contexa.infrastructure.mode</code></td><td><code>STANDALONE</code></td><td>STANDALONE (in-memory) or DISTRIBUTED (Redis+Kafka)</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-
-          <!-- ============================================ -->
-          <!-- Related -->
-          <!-- ============================================ -->
-          <section>
-            <h2 id="related">Related</h2>
-            <div class="related-links-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--space-3);margin:var(--space-4) 0">
-              <a href="../../../docs/reference/architecture/overview.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;transition:box-shadow 0.2s">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Platform Architecture</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Module overview and request flow</span>
-              </a>
-              <a href="../../../docs/reference/identity/dsl.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;transition:box-shadow 0.2s">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Identity DSL</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Authentication flows and security configuration</span>
-              </a>
-              <a href="../../../docs/reference/iam/protectable.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;transition:box-shadow 0.2s">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">@Protectable</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Method-level zero-trust protection annotation</span>
-              </a>
-              <a href="../../../docs/install/shadow-mode.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;transition:box-shadow 0.2s">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Shadow Mode</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Safe progressive adoption strategy</span>
-              </a>
-            </div>
-          </section>
-
-
+          <h2 id="learning-sse">Learning and live notifications</h2>
+          <ul>
+            <li><strong>Learning:</strong> only allow decisions actually applied are learned into the behavioral baseline. Decisions in shadow mode are not learned. The learning service (<code>SecurityLearningService</code>) hands them to baseline learning (<code>BaselineLearningService</code>, an exponential moving average), and frequently used IP ranges are kept up to a fixed number, pushing out the least used first. The conditions are in <a href="decision-engine.html#learning">Decision Engine, "What is learned"</a>.</li>
+            <li><strong>Live notifications (SSE):</strong> subscribing to <code>GET /contexa/admin/api/aiam/sse/zero-trust/subscribe</code> gives the signed-in user <strong>their own</strong> decision, analysis progress and error notifications (<code>ZeroTrustSsePublisher</code>). It is not a channel that sends every decision to administrators.</li>
+            <li><strong>Notice pages:</strong> <code>/contexa/zero-trust/blocked</code> · <code>/contexa/zero-trust/challenge-required</code> · <code>/contexa/zero-trust/analysis-pending</code> are the pages a user who got a decision sees.</li>
+          </ul>
           <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/architecture/overview.html" class="docs-nav-link prev">
+            <a href="overview.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Platform Architecture</span>
+              <span class="docs-nav-title">How Contexa Works</span>
             </a>
-            <a href="../../../docs/reference/identity/dsl.html" class="docs-nav-link next">
+            <a href="decision-engine.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Identity DSL</span>
+              <span class="docs-nav-title">Decision Engine: How a Decision Is Made</span>
             </a>
           </div>

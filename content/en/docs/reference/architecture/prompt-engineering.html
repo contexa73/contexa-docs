@@ -1,753 +1,225 @@
-<!-- Breadcrumb -->
-          <nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">Home</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Prompt Engineering</span>
+            <span class="breadcrumb-current">Decision Prompts and Bundles</span>
           </nav>
 
-          <!-- Page Header -->
           <div class="docs-page-header">
-            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
-              <span class="badge">contexa-common</span>
-              <span class="badge">contexa-core</span>
-              <span class="badge">autonomous</span>
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-primary">contexa-common</span>
             </div>
-            <h1>Security Decision Prompt Pipeline</h1>
-            <p class="lead">Contexa's prompt is not just a simple string concatenation. Instead, it collects authentication, authorization, and delegation evidence from the customer's system, standardizes it into a <code>CanonicalSecurityContext</code>, and includes trust scores and missing knowledge indicators so that the LLM can make robust security decisions. Getting there takes six stages: <strong>collect &rarr; process &rarr; harden &rarr; standardise &rarr; compose &rarr; check</strong>. The compose stage draws one of two prompt bundles: the v19 section prompt, which is the build default, or the v20 dictionary prompt with fact IDs and the output contract v3. This page follows the flow end to end.</p>
+            <h1>Decision Prompts and Bundles</h1>
+            <p class="lead">What the text sent to the AI model for a decision (the decision prompt) is made of. It covers the differences between the three prompt bundles in the build and how to choose one, the facts given to the model, the minimum action rules and the budget, and the form and checks of the model's answer.</p>
           </div>
 
+          <h2 id="overview">At a glance</h2>
+          <p>A decision prompt gathers the facts of a request, puts them into one <strong>canonical context</strong>, and draws a system text and a user text in the shape of the chosen <strong>prompt bundle</strong>. Before the model's answer becomes a decision, it is checked once more by the bundle's rules. The engine only states facts; the model chooses the action (allow, step-up, block, hold for review).</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>From facts to a decision</strong>Left to right. The bundle is fixed once per event, and Layer 2 of the same event uses the same bundle.</figcaption>
+            <ol class="dg-flow dg-flow-h">
+              <li class="dg-node dg-request"><span class="dg-node-title">Gather facts</span><span class="dg-node-desc">authentication, authorization and delegation stamps</span></li>
+              <li class="dg-node"><span class="dg-node-title">Canonical context</span><span class="dg-node-desc">one form, hardened</span></li>
+              <li class="dg-node"><span class="dg-node-title">Decision facts</span><span class="dg-node-desc">differences from usual, company records</span></li>
+              <li class="dg-node"><span class="dg-node-title">Draw the prompt</span><span class="dg-node-desc">bundle v19 · v20 · v21</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-title">AI model</span><span class="dg-node-desc">chooses the action</span></li>
+              <li class="dg-node"><span class="dg-node-title">Response check</span><span class="dg-node-desc">form and citations</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-title">Decision record</span><span class="dg-node-desc">proposed and final action</span></li>
+            </ol>
+          </figure>
+          <div class="callout callout-info">
+            <strong>One missing fact does not stop a decision.</strong> The v19 bundle leaves out sections without evidence; the v20 and v21 bundles name every unknown fact in the UNKNOWN block. The system text states that an unknown fact is neither the same as usual nor different.
+          </div>
 
-          <!-- Section 1: Six-stage pipeline -->
-          <section>
-            <h2 id="pipeline">Six-stage pipeline</h2>
-            <p>A prompt is never built on the spot. Six stages collect, organise and verify every fact around the request before anything reaches the LLM. Each stage lives in its own package and the output of one stage is the input of the next.</p>
+          <h2 id="bundles">The three bundles</h2>
+          <p>A <strong>prompt bundle</strong> is one versioned set of the prompt: the system text, the shape of the user text, the form of the model's answer (the output contract) and the response check are fixed together. This build runs <strong>three</strong> bundles of the prompt key <code>cortex.security-decision</code>. When nothing is chosen, v19.21 runs.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Item</th><th>v19 (build default)</th><th>v20</th><th>v21</th></tr></thead>
+            <tbody>
+              <tr><td>Version</td><td><code>2026.10.24-v19.21</code></td><td><code>2026.10.24-v20.26</code></td><td><code>2026.10.30-v21.19</code></td></tr>
+              <tr><td>Descriptor status</td><td><code>PRODUCTION</code></td><td><code>DRAFT</code> (not evaluated)</td><td><code>DRAFT</code> (not evaluated)</td></tr>
+              <tr><td>User text</td><td>16 named sections (<code>V19_SECTIONS</code>)</td><td>8 dictionary blocks, 76 entries (<code>V20_BLOCKS</code>)</td><td>dictionary blocks, 85 entries (<code>V21_BLOCKS</code>). Written only as records, measurements and comparisons, without conclusions</td></tr>
+              <tr><td>System text</td><td>decision boundaries, judgment procedure, evidence rules, label preservation</td><td>role, how to read the blocks, the four actions, the minimum action rules turned on, boundaries, judgment procedure, evidence rules</td><td>mission, how to read the evidence, comparing explanations (H1–H4), what each action means, honesty. No rules, thresholds or floors</td></tr>
+              <tr><td>Reading past decision records</td><td>similarity search</td><td>exact lookup</td><td>exact lookup</td></tr>
+              <tr><td>Output contract</td><td>v2 (<code>CORTEX_PROMPT_CONTRACT_V2</code>)</td><td>v3 (<code>CORTEX_PROMPT_CONTRACT_V3</code>)</td><td>v4 (<code>CORTEX_PROMPT_CONTRACT_V4</code>)</td></tr>
+              <tr><td>Response check</td><td>label checks</td><td>boundaries, reason sentence and reason codes compared with the facts the prompt was drawn from</td><td>form, citations and statements that contradict the lines only. The action is not checked</td></tr>
+              <tr><td>Minimum action rules</td><td>not in the system text. Under <code>ENFORCE</code>, the response check still applies them</td><td>written in the system text. Recorded only by default</td><td>neither evaluated nor recorded</td></tr>
+              <tr><td>Agent requests</td><td>the automation-client block boundary is left out</td><td>the automation category is left out</td><td>agent fact lines are added</td></tr>
+              <tr><td>Rollback target (descriptor)</td><td>none</td><td><code>2026.10.24-v19.21</code></td><td><code>2026.10.24-v20.26</code></td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="choose">Choosing a bundle</h3>
+          <pre><code class="language-yaml">contexa:
+  security:
+    tiered:
+      prompt-bundle:
+        active: 2026.10.30-v21.19   # empty means the build default (2026.10.24-v19.21)</code></pre>
+          <ul>
+            <li>The version in <code>contexa.security.tiered.prompt-bundle.active</code> is used for every request (selector <code>CONFIGURATION</code>, the default).</li>
+            <li>With <code>contexa.security.tiered.prompt-bundle.selector: registry</code>, the prompt version registry of the admin console chooses by state, scope and canary share (<a href="prompt-inspection.html#selection">How each request gets its bundle</a>).</li>
+            <li>A version this build does not run falls back to the build default bundle, with one error log per version. Manifests of earlier versions remain only as records and cannot be run.</li>
+            <li>The first prompt of an event writes the bundle onto the event, and the Layer 2 prompt of the same event uses the same bundle.</li>
+          </ul>
 
-            <div class="pipeline-six">
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">1</span>
-                <div class="pipeline-stage-name">Collect</div>
-                <div class="pipeline-stage-pkg">common/security</div>
-                <div class="pipeline-stage-desc">Three evidence stamps</div>
-              </div>
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">2</span>
-                <div class="pipeline-stage-name">Process</div>
-                <div class="pipeline-stage-pkg">autonomous/context</div>
-                <div class="pipeline-stage-desc">Session, work, role-scope profiles</div>
-              </div>
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">3</span>
-                <div class="pipeline-stage-name">Harden</div>
-                <div class="pipeline-stage-pkg">context/hardener</div>
-                <div class="pipeline-stage-desc">Injection defence, format enforcement</div>
-              </div>
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">4</span>
-                <div class="pipeline-stage-name">Standardise</div>
-                <div class="pipeline-stage-pkg">CanonicalSecurityContext</div>
-                <div class="pipeline-stage-desc">22 fields + 7 profiles in one record</div>
-              </div>
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">5</span>
-                <div class="pipeline-stage-name">Compose</div>
-                <div class="pipeline-stage-pkg">tiered/prompt</div>
-                <div class="pipeline-stage-desc">v19 sections or v20 dictionary blocks</div>
-              </div>
-              <div class="pipeline-stage">
-                <span class="pipeline-stage-num">6</span>
-                <div class="pipeline-stage-name">Check</div>
-                <div class="pipeline-stage-pkg">pipeline/processor</div>
-                <div class="pipeline-stage-desc">Response check, minimum action rules</div>
-              </div>
+          <h2 id="facts">Gathering facts: stamps and evidence quality</h2>
+          <p>The raw material of a decision is the three stamps the authentication bridge makes for each request. The bridge reads the application's sign-in, permission and delegation information in a fixed order (<a href="../common/bridge.html#order">the bridge's reading order</a>).</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The three stamps</strong>The three stamps feed the actor, session, authorization and delegation parts of the canonical context.</figcaption>
+            <div class="dg-grid">
+              <div class="dg-node dg-host"><span class="dg-node-tag">Authentication stamp</span><span class="dg-node-title"><code>AuthenticationStamp</code></span><span class="dg-node-desc">principalId · principalType · authenticationType · authenticationSource · authenticationAssurance · mfaCompleted · authenticationTime · sessionId · authorities</span></div>
+              <div class="dg-node dg-host"><span class="dg-node-tag">Authorization stamp</span><span class="dg-node-title"><code>AuthorizationStamp</code></span><span class="dg-node-desc">effect (ALLOW · DENY · UNKNOWN) · privileged · scopeTags · policyId · policyVersion · decisionSource · effectiveRoles · effectiveAuthorities</span></div>
+              <div class="dg-node dg-request"><span class="dg-node-tag">Delegation stamp</span><span class="dg-node-title"><code>DelegationStamp</code></span><span class="dg-node-desc">subjectId · agentId · delegated · objectiveId · objectiveFamily · allowedOperations · allowedResources · approvalRequired · containmentOnly · expiresAt</span></div>
             </div>
+          </figure>
+          <ul>
+            <li>The delegation stamp's <code>subjectId</code> is the delegator for an agent acting for a person, and the agent itself (<code>delegated=false</code>) for an agent acting on its own.</li>
+            <li>Headers sent by a client are not taken as they are. The header channel is off by default, and even when on, a header is accepted only from a trusted proxy and only when its subject is the signed-in subject.</li>
+          </ul>
+          <h3 id="quality">Evidence quality labels</h3>
+          <p>Every gathered value gets a label for where it came from. The labels name the source; they are not a ranking from strong to weak.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Label</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>EXPLICIT_CUSTOMER_SIGNAL</code></td><td>a value the application (host) gave. Set whenever a value exists, through any channel</td></tr>
+              <tr><td><code>STRUCTURAL_DISCOVERY_ONLY</code></td><td>a value the bridge found by looking at the structure</td></tr>
+              <tr><td><code>DERIVED_RUNTIME_FALLBACK</code></td><td>a value filled in from runtime continuity</td></tr>
+              <tr><td><code>HEURISTIC_HINT_ONLY</code></td><td>a hint only; it must not be promoted to a meaningful conclusion</td></tr>
+              <tr><td><code>BRIDGE_COMPLETENESS_ONLY</code></td><td>for reporting how much the bridge read (completeness)</td></tr>
+              <tr><td><code>UNAVAILABLE</code></td><td>no evidence</td></tr>
+              <tr><td><code>DERIVED_FROM_AMR</code></td><td>read from the token's <code>amr</code> claim, not stated by the application</td></tr>
+              <tr><td><code>CLASS_NAME_FALLBACK</code></td><td>a Java class name standing in for a fact the application did not state; not a sign-in fact</td></tr>
+              <tr><td><code>SIGNED_TOKEN_CLAIM</code></td><td>read from a claim of the access token the authorization server signed</td></tr>
+              <tr><td><code>AGENT_REGISTRY_RECORD</code></td><td>the registry record of an agent an operator registered and approved</td></tr>
+            </tbody>
+          </table></div>
 
-            <div class="callout-info">
-              <strong>Design principle.</strong> A missing fact never blocks the next stage. The v19 layout leaves out a section without evidence; the v20 layout names each fact it does not know in its UNKNOWN block, and its system text states that an unknown fact is neither a match nor a mismatch.
-            </div>
-          </section>
+          <h2 id="canonical">The canonical context and decision facts</h2>
+          <p>The stamps and the facts gathered by collectors and enrichers are put into one <strong>canonical context</strong> (<code>CanonicalSecurityContext</code>). Collectors add the session flow, work profile and role scope; enrichers add authentication strength, delegation, peer group, friction (approval history), organization and reasoning memory; inference computes the observed scope and whether the delegated scope is exceeded, and grades the completeness. There are 25 top-level fields.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Field</th><th>What it holds (examples)</th></tr></thead>
+            <tbody>
+              <tr><td>Actor <code>actor</code></td><td>userId · organizationId · tenantId · principalType · roleSet · authoritySet</td></tr>
+              <tr><td>Session <code>session</code></td><td>sessionId · clientIp · userAgent · authenticationType · mfaVerified · concurrentSessions</td></tr>
+              <tr><td>Device <code>device</code></td><td>operating system · browser · device fingerprint match</td></tr>
+              <tr><td>Intent <code>intent</code></td><td>botUserAgent · impossibleTravel · missingReferer</td></tr>
+              <tr><td>Location <code>location</code></td><td>country · city · ipBand · asn · networkZone</td></tr>
+              <tr><td>Resource <code>resource</code></td><td>resourceType · businessLabel · sensitivity · resourceClass · actionFamily</td></tr>
+              <tr><td>Authorization <code>authorization</code></td><td>effectiveRoles · effectivePermissions · scopeTags · authorizationEffect · policyId · policyVersion</td></tr>
+              <tr><td>Delegation <code>delegation</code></td><td>delegated · agentId · objectiveId · allowedOperations · allowedResources · objectiveDrift · maxItemsPerRequest · standing</td></tr>
+              <tr><td>Execution subject and envelope</td><td>the kind of subject making the request (person, service, agent), and the objective, scope and period of a delegated execution</td></tr>
+              <tr><td>Bridge and observed scope</td><td>how much the bridge read (completeness), the scope seen from recent protected-resource access</td></tr>
+              <tr><td>Six profiles</td><td>session narrative · work · role scope · peer cohort · friction · reasoning memory</td></tr>
+              <tr><td>Seven more fields</td><td>coverage report, extra attributes, trust profiles, data conflicts, collection time, request observation time, decision facts</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>Hardening:</strong> the hardener (<code>CanonicalSecurityContextHardener</code>) fills empty parts, trims strings and normalizes case, ranges and order. Prompt injection is handled not by the hardener but by the rendering rules: text anyone can write is drawn apart as UNTRUSTED TEXT.</li>
+            <li>The check that decodes a request payload and requires at least 80% printable characters is done by the event enricher, not the hardener.</li>
+          </ul>
+          <h3 id="coverage">Four levels of completeness</h3>
+          <p>The coverage evaluator (<code>ContextCoverageEvaluator</code>) grades the facts that were filled. A low grade adds a warning to the prompt not to conclude from work patterns.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Level</th><th>Facts available</th></tr></thead>
+            <tbody>
+              <tr><td><code>BUSINESS_AWARE</code></td><td>identity, session, scope, resource and observed patterns</td></tr>
+              <tr><td><code>SCOPE_AWARE</code></td><td>identity and scope. No observed profile</td></tr>
+              <tr><td><code>IDENTITY_AWARE</code></td><td>identity only. No scope or profile</td></tr>
+              <tr><td><code>ENVIRONMENT_ONLY</code></td><td>environment only, such as IP and time</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="decision-facts">Decision facts</h3>
+          <p>The decision facts resolver (<code>DecisionFactsResolver</code>) computes once how the request differs from usual behavior, whether the company rule is met at request time, the approval, assignment, ticket, on-call and trip records, repeats in the session, scope group comparisons and data conflicts. A fact the engine cannot settle is left only as a name, as "unknown". The same computation stays in the canonical context, so the prompt, the sealed evidence, the response check and the inspection all read one computation.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Dimension</th><th>Reason code</th><th>Record that can explain a difference</th></tr></thead>
+            <tbody>
+              <tr><td>time · day</td><td><code>DEVIATION_TIME</code> · <code>DEVIATION_DAY</code></td><td>a valid approval or ticket covering the work</td></tr>
+              <tr><td>network</td><td><code>DEVIATION_NETWORK</code></td><td>a registered trip that holds the request address</td></tr>
+              <tr><td>device · login method</td><td><code>DEVIATION_DEVICE</code> · <code>DEVIATION_LOGIN_METHOD</code></td><td>none</td></tr>
+              <tr><td>target · action · class · rate</td><td><code>DEVIATION_TARGET</code> · <code>DEVIATION_ACTION</code> · <code>DEVIATION_RESOURCE_CLASS</code> · <code>DEVIATION_RATE</code></td><td>a valid approval or ticket covering the work</td></tr>
+              <tr><td>size</td><td><code>DEVIATION_SIZE</code></td><td>a valid approval or ticket covering the work, or the item limit of a satisfied assigned exception</td></tr>
+            </tbody>
+          </table></div>
+          <p>A difference from a baseline that is not established, or a dimension not compared, is unknown, not "unexplained". The v21 bundle writes the same facts again only as records and comparisons, without conclusions (no policy-satisfaction line, no judgment such as "covers" or "explained").</p>
 
-
-          <!-- Section 2: Collect -->
-          <section>
-            <h2 id="stage-1-collect">Stage 1 &middot; Collect</h2>
-            <p>Once a request enters the Spring Security filter chain, an <code>AuthBridge</code> implementation pulls the principal out of headers, session attributes or request attributes. The extracted evidence is packaged into three kinds of <strong>evidence stamps</strong>. Those three stamps are the raw input for every later stage.</p>
-
-            <div class="stamp-trio">
-              <div class="stamp-card stamp-card--auth">
-                <div class="stamp-card-icon">AU</div>
-                <div class="stamp-card-title">Authentication stamp</div>
-                <div class="stamp-card-sub">AuthenticationStamp</div>
-                <ul>
-                  <li>principalType &middot; subject class</li>
-                  <li>authenticationType</li>
-                  <li>authenticationAssurance</li>
-                  <li>mfaCompleted</li>
-                  <li>authenticationSource</li>
-                  <li>sessionId &middot; authenticationTime</li>
-                </ul>
-              </div>
-              <div class="stamp-card stamp-card--authz">
-                <div class="stamp-card-icon">AZ</div>
-                <div class="stamp-card-title">Authorization stamp</div>
-                <div class="stamp-card-sub">AuthorizationStamp</div>
-                <ul>
-                  <li>effect (ALLOW &middot; DENY &middot; UNKNOWN)</li>
-                  <li>privileged action flag</li>
-                  <li>policyId &middot; policyVersion</li>
-                  <li>decisionSource</li>
-                  <li>effectiveRoles &middot; effectiveAuthorities</li>
-                </ul>
-              </div>
-              <div class="stamp-card stamp-card--deleg">
-                <div class="stamp-card-icon">DG</div>
-                <div class="stamp-card-title">Delegation stamp</div>
-                <div class="stamp-card-sub">DelegationStamp</div>
-                <ul>
-                  <li>subjectId &middot; the human delegator</li>
-                  <li>agentId &middot; the acting principal</li>
-                  <li>objectiveId &middot; objectiveFamily</li>
-                  <li>allowedOperations</li>
-                  <li>allowedResources</li>
-                  <li>containmentOnly &middot; expiresAt</li>
-                </ul>
-              </div>
-            </div>
-
-            <h3 style="margin-top:var(--space-8)">Six evidence quality tiers</h3>
-            <p>Not all evidence carries the same weight. A signal the customer sent explicitly is the strongest; a platform-observed structural signal comes next; a fallback derived from runtime continuity is the weakest. <code>BridgeSemanticBoundaryPolicy</code> tags every collected field with one of the six tiers below.</p>
-
-            <div class="quality-ladder">
-              <div class="quality-rung quality-rung--best">
-                <div class="quality-rung-rank">1</div>
-                <div>
-                  <div class="quality-rung-name">EXPLICIT_CUSTOMER_SIGNAL</div>
-                  <div class="quality-rung-desc">Signal the customer sent explicitly in headers or parameters</div>
-                </div>
-                <span class="quality-rung-score">Top</span>
-              </div>
-              <div class="quality-rung quality-rung--high">
-                <div class="quality-rung-rank">2</div>
-                <div>
-                  <div class="quality-rung-name">STRUCTURAL_DISCOVERY_ONLY</div>
-                  <div class="quality-rung-desc">Signal the platform auto-discovered from structural patterns</div>
-                </div>
-                <span class="quality-rung-score">High</span>
-              </div>
-              <div class="quality-rung quality-rung--med">
-                <div class="quality-rung-rank">3</div>
-                <div>
-                  <div class="quality-rung-name">DERIVED_RUNTIME_FALLBACK</div>
-                  <div class="quality-rung-desc">Signal inferred from runtime continuity as a fallback</div>
-                </div>
-                <span class="quality-rung-score">Medium</span>
-              </div>
-              <div class="quality-rung quality-rung--low">
-                <div class="quality-rung-rank">4</div>
-                <div>
-                  <div class="quality-rung-name">HEURISTIC_HINT_ONLY</div>
-                  <div class="quality-rung-desc">Hint only. Semantic conclusions are not allowed</div>
-                </div>
-                <span class="quality-rung-score">Low</span>
-              </div>
-              <div class="quality-rung" style="border-left: 4px solid var(--color-info, #0ea5e9); background: rgba(14, 165, 233, 0.05);">
-                <div class="quality-rung-rank">5</div>
-                <div>
-                  <div class="quality-rung-name">BRIDGE_COMPLETENESS_ONLY</div>
-                  <div class="quality-rung-desc">Special quality signal for identifying the completeness of bridge coverage reports</div>
-                </div>
-                <span class="quality-rung-score" style="color: var(--color-info, #0ea5e9)">Completeness Only</span>
-              </div>
-              <div class="quality-rung quality-rung--none">
-                <div class="quality-rung-rank">6</div>
-                <div>
-                  <div class="quality-rung-name">UNAVAILABLE</div>
-                  <div class="quality-rung-desc">No evidence for this area</div>
-                </div>
-                <span class="quality-rung-score">None</span>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- Section 3: Process -->
-          <section>
-            <h2 id="stage-2-process">Stage 2 &middot; Process</h2>
-            <p>Raw evidence alone is not enough for the LLM to decide whether a user is acting differently from usual. Stage 2 expands it through three families of components that turn primitive facts into observable patterns.</p>
-
-            <div class="process-trio">
-              <div class="process-col process-col--collect">
-                <div class="process-col-head">
-                  <span class="process-col-dot"></span>
-                  <span class="process-col-title">Collectors</span>
-                </div>
-                <ul>
-                  <li>SessionNarrativeCollector &mdash; in-session action sequence</li>
-                  <li>ProtectableWorkProfileCollector &mdash; usual work profile for resources protected by the <a href="../../iam/protectable.html">@Protectable</a> annotation</li>
-                  <li>RoleScopeCollector &mdash; current role scope snapshot</li>
-                </ul>
-              </div>
-              <div class="process-col process-col--enrich">
-                <div class="process-col-head">
-                  <span class="process-col-dot"></span>
-                  <span class="process-col-title">Enrichers</span>
-                </div>
-                <ul>
-                  <li>AuthenticationContextProvider &mdash; auth strength</li>
-                  <li>DelegationContextProvider &mdash; delegation scope</li>
-                  <li>PeerCohortContextProvider &mdash; cohort outliers</li>
-                  <li>FrictionContextProvider &mdash; MFA &amp; approval history</li>
-                  <li>OrganizationContextProvider &mdash; org hierarchy</li>
-                  <li>ReasoningMemoryContextProvider &mdash; prior cases</li>
-                </ul>
-              </div>
-              <div class="process-col process-col--infer">
-                <div class="process-col-head">
-                  <span class="process-col-dot"></span>
-                  <span class="process-col-title">Inference</span>
-                </div>
-                <ul>
-                  <li>ObjectiveDriftEvaluator &mdash; agent objective drift</li>
-                  <li>ObservedScopeInferenceService &mdash; observed scope</li>
-                  <li>ContextCoverageEvaluator &mdash; coverage level</li>
-                </ul>
-              </div>
-            </div>
-
-            <div class="callout-info">
-              <strong>Agent-specific inference.</strong> Unlike humans, agents must act only within their allowed objective. <code>ObjectiveDriftEvaluator</code> checks in real time whether the request's resource and action family fall inside the <code>allowedOperations</code> and <code>allowedResources</code> declared by the delegation stamp.
-            </div>
-          </section>
-
-
-          <!-- Section 4: Harden -->
-          <section>
-            <h2 id="stage-3-harden">Stage 3 &middot; Harden</h2>
-            <p>Prompt injection, field spoofing and signal forgery are the top threats for any LLM-based security system. <code>CanonicalSecurityContextHardener</code> puts every field through field-specific normalisation before it ever reaches the model.</p>
-
-            <div class="anatomy-split">
-              <div class="anatomy-panel">
-                <div class="anatomy-head anatomy-head--sys">Input validation</div>
-                <div class="anatomy-body">
-                  <ol>
-                    <li>Replace null fields with safe defaults</li>
-                    <li>Trim strings and cap length</li>
-                    <li>Normalise enum values</li>
-                    <li>Validate time and coordinate ranges</li>
-                    <li>Normalise language / country codes to ISO</li>
-                    <li>Decode payloads and filter to 80%+ printable chars</li>
-                  </ol>
-                </div>
-              </div>
-              <div class="anatomy-panel">
-                <div class="anatomy-head anatomy-head--usr">Profile hardening</div>
-                <div class="anatomy-body">
-                  <ol>
-                    <li>Preserve session narrative burst flags</li>
-                    <li>Drop negative values from the work profile</li>
-                    <li>Deduplicate role scope while keeping order</li>
-                    <li>Pin approval-lineage order in friction</li>
-                    <li>Clean reasoning-memory guardrails</li>
-                    <li>Normalise trust profile decision states</li>
-                  </ol>
-                </div>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- Section 5: Standardise -->
-          <section>
-            <h2 id="stage-4-standardise">Stage 4 &middot; Standardise</h2>
-            <p>After stage 3, every piece of evidence is consolidated into a single standard context model &mdash; <code>CanonicalSecurityContext</code>. The current implementation is a Lombok-backed class; the hardener normalizes fields and fills required defaults before the compose stage receives it. Twenty-two fields and seven profiles sit in well-known places, so the compose stage always knows where each field lives.</p>
-
-            <div class="canonical-layout">
-              <div class="canonical-cell">
-                <h4>Subject</h4>
-                <ul>
-                  <li>userId</li>
-                  <li>organizationId</li>
-                  <li>tenantId</li>
-                  <li>principalType</li>
-                  <li>roleSet</li>
-                  <li>authoritySet</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>Session</h4>
-                <ul>
-                  <li>sessionId</li>
-                  <li>clientIp</li>
-                  <li>userAgent</li>
-                  <li>authenticationType</li>
-                  <li>mfaVerified</li>
-                  <li>concurrentSessions</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>Delegation</h4>
-                <ul>
-                  <li>delegated</li>
-                  <li>agentId</li>
-                  <li>objectiveId</li>
-                  <li>allowedOperations</li>
-                  <li>allowedResources</li>
-                  <li>objectiveDrift</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>Authorization</h4>
-                <ul>
-                  <li>effectiveRoles</li>
-                  <li>effectivePermissions</li>
-                  <li>scopeTags</li>
-                  <li>authorizationEffect</li>
-                  <li>policyId</li>
-                  <li>policyVersion</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>Intent</h4>
-                <ul>
-                  <li>botUserAgent</li>
-                  <li>impossibleTravel</li>
-                  <li>missingReferer</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>Location &middot; IP</h4>
-                <ul>
-                  <li>country &middot; city</li>
-                  <li>IP band &middot; ASN</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>Resource</h4>
-                <ul>
-                  <li>resourceType</li>
-                  <li>businessLabel</li>
-                  <li>sensitivity</li>
-                  <li>actionFamily</li>
-                </ul>
-              </div>
-              <div class="canonical-cell">
-                <h4>Seven profiles</h4>
-                <ul>
-                  <li>SessionNarrative</li>
-                  <li>Work</li>
-                  <li>RoleScope</li>
-                  <li>PeerCohort</li>
-                  <li>Friction</li>
-                  <li>ReasoningMemory</li>
-                  <li>ObservedScope</li>
-                </ul>
-              </div>
-            </div>
-
-            <h4>CanonicalSecurityContext Java Structure</h4>
-            <p>Below is the actual structure of <code>CanonicalSecurityContext</code>, which consolidates and normalizes 22 base security fields and 7 behavioral profiles into a single standard record:</p>
-            <pre><code class="language-java">@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-public class CanonicalSecurityContext {
-    private Actor actor;                             // Actor identity (userId, tenantId, roleSet, etc.)
-    private Session session;                         // Session/Auth state (sessionId, clientIp, mfaVerified, etc.)
-    private Device device;                           // Device fingerprint (os, browser, etc.)
-    private Intent intent;                           // Behavioral intent analysis (botUserAgent, impossibleTravel, etc.)
-    private Location location;                       // Geo/Network location (country, city, ipBand, asn, etc.)
-    private Resource resource;                       // Target resource metadata (resourceId, sensitivity, actionFamily, etc.)
-    private Authorization authorization;             // Pre-existing authorization outcome (effectiveRoles, policyId, etc.)
-    private Delegation delegation;                   // Delegated authority evidence (delegated, agentId, allowedOperations, etc.)
-    private ExecutionSubject executionSubject;
-    private ExecutionEnvelope executionEnvelope;
-    private Bridge bridge;                           // Bridge discovery & coverage details
-    private ObservedScope observedScope;             // Observed behavior boundary snapshot
-    
-    // 7 behavioral/security profiles
-    private SessionNarrativeProfile sessionNarrativeProfile;  // Session action narrative sequence
-    private WorkProfile workProfile;                          // Individual work profile baseline
-    private RoleScopeProfile roleScopeProfile;                // Role scope expectation profile
-    private PeerCohortProfile peerCohortProfile;              // Peer cohort outlier profile
-    private FrictionProfile frictionProfile;                  // Friction and approval lineage profile
-    private ReasoningMemoryProfile reasoningMemoryProfile;    // RAG & reinforced reasoning memory profile
-    
-    private ContextCoverageReport coverage;          // Context coverage report
-    @Builder.Default
-    private Map&lt;String, Object&gt; attributes = new LinkedHashMap&lt;&gt;();
-    @Builder.Default
-    private List&lt;ContextTrustProfile&gt; contextTrustProfiles = new ArrayList&lt;&gt;();
-    @Builder.Default
-    private Instant collectedAt = Instant.now();
-
-    // Nested static classes examples
-    @Data public static class Actor {
-        private String userId;
-        private String organizationId;
-        private String tenantId;
-        private String principalType;
-        private List&lt;String&gt; roleSet;
-        private List&lt;String&gt; authoritySet;
-    }
-
-    @Data public static class Session {
-        private String sessionId;
-        private String clientIp;
-        private String userAgent;
-        private String authenticationType;
-        private Boolean mfaVerified;
-        private Integer concurrentSessions;
-    }
-
-    @Data public static class Delegation {
-        private Boolean delegated;
-        private String agentId;
-        private String objectiveId;
-        private List&lt;String&gt; allowedOperations;
-        private List&lt;String&gt; allowedResources;
-        private Boolean objectiveDrift;              // Delegation drift flag
-    }
-}</code></pre>
-
-            <h3 style="margin-top:var(--space-8)">Four coverage levels</h3>
-            <p><code>ContextCoverageEvaluator</code> grades how complete the record is by counting filled fields and available profiles. A low grade automatically injects a warning into the prompt telling the LLM not to draw strong conclusions from "usual work patterns".</p>
-
-            <div class="coverage-meter">
-              <div class="coverage-row">
-                <span class="coverage-label">BUSINESS_AWARE</span>
-                <div class="coverage-bar"><div class="coverage-fill coverage-fill--best"></div></div>
-                <span class="coverage-note">Identity, session, scope, resource and observed patterns all present</span>
-              </div>
-              <div class="coverage-row">
-                <span class="coverage-label">SCOPE_AWARE</span>
-                <div class="coverage-bar"><div class="coverage-fill coverage-fill--good"></div></div>
-                <span class="coverage-note">Identity and scope only; observed profiles missing</span>
-              </div>
-              <div class="coverage-row">
-                <span class="coverage-label">IDENTITY_AWARE</span>
-                <div class="coverage-bar"><div class="coverage-fill coverage-fill--ok"></div></div>
-                <span class="coverage-note">Identity only; scope and profiles missing</span>
-              </div>
-              <div class="coverage-row">
-                <span class="coverage-label">ENVIRONMENT_ONLY</span>
-                <div class="coverage-bar"><div class="coverage-fill coverage-fill--poor"></div></div>
-                <span class="coverage-note">Only environmental signals (IP, time) available</span>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- Section 6: Compose -->
-          <section>
-            <h2 id="stage-5-compose">Stage 5 &middot; Compose</h2>
-            <p>The standardised context now becomes a prompt. <code>SecurityDecisionPromptSections</code> builds the system text and the user text, and the <strong>prompt bundle</strong> chosen for the request decides how the user text is drawn. A build runs two bundles of the prompt key <code>cortex.security-decision</code>: the v19 bundle, which draws named sections and is the build default, and the v20 bundle, which draws the blocks of a prompt dictionary. Every later prompt of the same event (a Layer2 prompt or a second pass) is drawn with the bundle of its first prompt.</p>
-
-            <div class="anatomy-split">
-              <div class="anatomy-panel">
-                <div class="anatomy-head anatomy-head--sys">v19 bundle &middot; build default</div>
-                <div class="anatomy-body">
-                  <p>Runs when no selector chooses another bundle. Its descriptor is released as <code>PRODUCTION</code>.</p>
-                  <ol>
-                    <li>Layout <code>V19_SECTIONS</code></li>
-                    <li>2 system sections + 16 user sections</li>
-                    <li>Contract <code>CORTEX_PROMPT_CONTRACT_V2</code></li>
-                    <li>Response check reads the v19 labels</li>
-                  </ol>
-                </div>
-              </div>
-              <div class="anatomy-panel">
-                <div class="anatomy-head anatomy-head--usr">v20 bundle &middot; dictionary blocks</div>
-                <div class="anatomy-body">
-                  <p>Ships as a draft (<code>DRAFT</code>) and runs only when a selector chooses it.</p>
-                  <ol>
-                    <li>Layout <code>V20_BLOCKS</code> (<code>v20-dictionary-blocks</code>)</li>
-                    <li>Its own system text + up to 7 user blocks; SECOND PASS for a Layer2 second pass</li>
-                    <li>Contract <code>CORTEX_PROMPT_CONTRACT_V3</code> (output contract v3)</li>
-                    <li>Response check reads the facts the prompt was drawn from</li>
-                  </ol>
-                </div>
-              </div>
-            </div>
-
-            <div class="callout-info">
-              <strong>Choosing a bundle.</strong> <code>contexa.security.tiered.prompt-bundle.active</code> names the bundle version to run; blank runs the build default. With <code>contexa.security.tiered.prompt-bundle.selector=registry</code> the prompt release registry chooses by state, scope and canary share. A version this build cannot run falls back to the build default. See <a href="../../../docs/reference/architecture/prompt-inspection.html">Prompt Inspection &amp; Bundle Versions</a>.
-            </div>
-
-            <h3 style="margin-top:var(--space-8)">v19: 18 section plans</h3>
-            <p>The v19 bundle renders 2 system sections and 16 user sections in the order below. Each plan carries a priority class. A section whose builder emits nothing is left out; for the sections that track their absence, the omission is recorded in the omission ledger as <code>NOT_COLLECTED</code> with the semantic risk of its class.</p>
-            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-4);font-size:var(--text-xs);font-weight:600">
-              <span style="padding:2px 8px;background:#ef4444;color:white;border-radius:4px">P0 (Required)</span>
-              <span style="padding:2px 8px;background:#f59e0b;color:white;border-radius:4px">P1 (High Value)</span>
-              <span style="padding:2px 8px;background:#10b981;color:white;border-radius:4px">P2 (Supporting)</span>
-            </div>
-
-            <div class="builder-grid">
-              <div class="builder-tile builder-tile--system">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--sys">SYS</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">SYSTEM_INSTRUCTION</div>
-                <div class="builder-tile-desc">Policy &amp; format guidance</div>
-              </div>
-              <div class="builder-tile builder-tile--system">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--sys">SYS</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">DECISION_CONTRACT</div>
-                <div class="builder-tile-desc">Enforces the JSON schema</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">CURRENT_REQUEST_AND_EVENT</div>
-                <div class="builder-tile-desc">Current request &amp; payload</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">BRIDGE_AND_COVERAGE</div>
-                <div class="builder-tile-desc">Bridge resolution &amp; coverage</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">IDENTITY_AND_ROLE</div>
-                <div class="builder-tile-desc">Identity &amp; authority set</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">DEVICE_CONTEXT</div>
-                <div class="builder-tile-desc">OS &amp; browser fingerprint</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">LOCATION_CONTEXT</div>
-                <div class="builder-tile-desc">Country &middot; city &middot; IP band</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">RESOURCE_AND_ACTION</div>
-                <div class="builder-tile-desc">Resource &amp; action semantics</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">SESSION_NARRATIVE</div>
-                <div class="builder-tile-desc">Session state &amp; MFA</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">OBSERVED_AND_PERSONAL_WORK_PATTERN</div>
-                <div class="builder-tile-desc">Personal &amp; organisational norm</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">RAG_EVIDENCE_CONTEXT</div>
-                <div class="builder-tile-desc">RAG retrieved security context documents</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">SUPPORTING_LEARNING_CONTEXT</div>
-                <div class="builder-tile-desc">Reference learning &amp; supporting evidence</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">ROLE_SCOPE</div>
-                <div class="builder-tile-desc">Role scope &amp; expected families</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">FRICTION_AND_APPROVAL</div>
-                <div class="builder-tile-desc">MFA &amp; approval history</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">DELEGATED_OBJECTIVE</div>
-                <div class="builder-tile-desc">Delegation scope &amp; drift</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#10b981;color:white;border-radius:2px;font-weight:700">P2</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">THREAT_LEARNING_AND_MEMORY</div>
-                <div class="builder-tile-desc">Threat intel &amp; org learning</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#ef4444;color:white;border-radius:2px;font-weight:700">P0</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">EXPLICIT_MISSING_KNOWLEDGE</div>
-                <div class="builder-tile-desc">Missing knowledge &amp; trust limits</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:#f59e0b;color:white;border-radius:2px;font-weight:700">P1</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">INTENT_SIGNAL_CONTEXT</div>
-                <div class="builder-tile-desc">Request intent &amp; referer signals</div>
-              </div>
-            </div>
-
-            <div class="callout-info">
-              <strong>Evidence completeness.</strong> Every prompt records its evidence completeness: <code>SUFFICIENT</code>, <code>PARTIAL</code> or <code>INCOMPLETE</code>. A prompt without the actor, session or resource identity, or with a blocking omission, is <code>INCOMPLETE</code>. A v20 prompt is <code>PARTIAL</code> when its UNKNOWN block names a fact; a v19 prompt is <code>PARTIAL</code> when, among others, the roles, authorization scope, resource sensitivity or MFA state are missing (checked through <code>CanonicalContextFieldPolicy</code>). <code>PromptGovernanceDescriptor</code> records the bundle's prompt key, template key and version with the prompt.
-            </div>
-
-            <h3 style="margin-top:var(--space-8)">v19: EXPLICIT_MISSING_KNOWLEDGE</h3>
-            <p><code>EXPLICIT_MISSING_KNOWLEDGE</code> is a P0 section that keeps the LLM from mistaking evidence gaps for certainty. <code>SecurityContextQualityUserSectionBuilder</code> calls <code>PromptContextComposer.composeMissingKnowledgeSection()</code>, which renders only when the coverage report or the trust profiles name a gap. If no gap signal exists, the section stays empty: there is no missing knowledge to declare.</p>
-
-            <ul class="calib-list">
-              <li><strong>Coverage gaps</strong> &mdash; <code>missingCriticalFacts</code>, <code>remediationHints</code>, or <code>confidenceWarnings</code> create the missing-knowledge section.</li>
-              <li><strong>Trust limits</strong> &mdash; <code>ContextEvidenceLimitation</code>, <code>ContextTrustLimitation</code> and <code>ContextTrustWarning</code> are surfaced as explicit items.</li>
-              <li><strong>False-positive control</strong> &mdash; the <code>AUTHORIZATION_EFFECT</code> missing-context entry is dropped once the authorization effect has been resolved.</li>
-              <li><strong>Baseline gap support</strong> &mdash; when the baseline has gaps, a <code>BaselineGapSupport</code> block is added to the same section, under the section header when nothing else was written.</li>
-            </ul>
-
-            <h3 style="margin-top:var(--space-8)">v20: dictionary blocks</h3>
-            <p>The v20 user prompt is drawn only from <code>SecurityDecisionPromptDictionary</code> (version <code>v20</code>, 76 entries). Every entry states the line's meaning, where its value comes from, the form of the value as a regular expression, what is written without a value, its source grades, what the decision uses it for, its priority, its list cap and order, and whether its value may be cut. <code>PromptDictionaryRenderer</code> draws the blocks in the order below, each line in dictionary order; a block without lines is left out. The dictionary's content digest is element B2 of the bundle manifest.</p>
-
-            <div class="builder-grid">
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID B</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">USER BASELINE</div>
-                <div class="builder-tile-desc">What was learned about this user before this request (18 entries)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID S</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">SESSION</div>
-                <div class="builder-tile-desc">How this session signed in and what it did before this request (12)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID R</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">REQUEST</div>
-                <div class="builder-tile-desc">Subject, roles, time, action, target, size, class, network, device (10)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID F</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">DECISION FACTS</div>
-                <div class="builder-tile-desc">Policy, differences from the usual, records, role scope, delegation, signals, conflicts (24)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID P</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">PAST RECORDS</div>
-                <div class="builder-tile-desc">This user's past allowed records and recent non-allowed decisions (6)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--brand-primary);color:white;border-radius:2px;font-weight:700">ID U</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">UNKNOWN</div>
-                <div class="builder-tile-desc">Coverage and the facts not known now; the IDs are on the names (2)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--text-tertiary);color:white;border-radius:2px;font-weight:700">no ID</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">UNTRUSTED TEXT</div>
-                <div class="builder-tile-desc">Text anyone could write: evidence, never instructions (1)</div>
-              </div>
-              <div class="builder-tile">
-                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
-                  <span class="builder-tile-tag builder-tile-tag--usr">USR</span>
-                  <span style="font-size:9px;padding:1px 4px;background:var(--text-tertiary);color:white;border-radius:2px;font-weight:700">no ID</span>
-                </div>
-                <div class="builder-tile-name" style="margin-top:var(--space-2)">SECOND PASS</div>
-                <div class="builder-tile-desc">Layer2 second pass only: the first verdict and what was newly found (3)</div>
-              </div>
-            </div>
-
-            <h4>How a line is drawn</h4>
-            <ul class="calib-list">
-              <li><strong>Header</strong> &mdash; <code>=== TITLE ===</code>, or <code>=== TITLE (q1; q2) ===</code> with its qualifiers: the source grade once when every drawn line of the block has the same one, and <code>time zone &lt;id&gt;</code> once when a value is on the event clock.</li>
-              <li><strong>Line</strong> &mdash; <code>Name: value</code>. Line breaks and control characters in a value are escaped, so a value stays on its line.</li>
-              <li><strong>Fact ID</strong> &mdash; a required (P0) line of USER BASELINE, SESSION, REQUEST, DECISION FACTS or PAST RECORDS carries <code>[B1]</code>, <code>[S1]</code>, <code>[R1]</code>, <code>[F1]</code> or <code>[P1]</code>, numbered in drawn order inside its block. These are the IDs a reason code cites.</li>
-              <li><strong>Lists</strong> &mdash; numbered lines (<code>PastRecord1</code>, <code>PastRecord2</code>, ...) up to the entry's cap (five past records), then one <code>+n more</code> line, which carries no fact ID.</li>
-              <li><strong>UNKNOWN</strong> &mdash; one line names each kind once: <code>not-integrated</code> (nothing gives the fact) and <code>unavailable-now</code> (its source could not give it for this request, with the reason). Each name carries its own ID <code>[U1]</code>, <code>[U2]</code>, ... A fact that does not apply to the request is not written at all.</li>
-              <li><strong>UNTRUSTED TEXT</strong> &mdash; <code>source=...; "..."</code>: the text in quotes with its quotes and backslashes escaped; a long text keeps its start and ends with <code>&hellip; [+n chars cut]</code>. Untrusted text is the only value that may be cut. The target&rsquo;s business label (a document title, an export&rsquo;s description) is host text, so it is an UNTRUSTED TEXT line with <code>source=business label (host text)</code>; the REQUEST <code>Target</code> line names it only by where it is, <code>(business label in UNTRUSTED TEXT)</code>.</li>
-            </ul>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Source grade</th><th>Meaning</th></tr></thead>
-              <tbody>
-                <tr><td><code>host</code></td><td>Stated by the host application: business providers, bridge stamps, official request fields, resource descriptors.</td></tr>
-                <tr><td><code>learned</code></td><td>Learned by Contexa from allowed requests: baseline, work profile, past records.</td></tr>
-                <tr><td><code>computed</code></td><td>Computed by the core from the request and the records.</td></tr>
-                <tr><td><code>inferred</code></td><td>Estimated by a fallback rule because no explicit value exists.</td></tr>
-                <tr><td><code>untrusted</code></td><td>Text anyone can write.</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Missing notation</th><th>What the prompt shows without a value</th></tr></thead>
-              <tbody>
-                <tr><td><code>RENDERED_VALUE</code></td><td>The line with the entry's own missing text, for example <code>not learned</code> or <code>none</code>.</td></tr>
-                <tr><td><code>LINE_OMITTED</code></td><td>No line.</td></tr>
-                <tr><td><code>UNKNOWN_BLOCK</code></td><td>No line; the fact's name and kind go to the UNKNOWN block.</td></tr>
-                <tr><td><code>BLOCK_OMITTED</code></td><td>The whole block is left out.</td></tr>
-                <tr><td><code>ALWAYS_PRESENT</code></td><td>The request always states it; without a value the name goes to the UNKNOWN block.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>Example excerpt</h4>
-            <p>Three blocks of a v20 user prompt, with some lines left out. The values are the dictionary's own format examples.</p>
-            <pre><code class="language-text">=== USER BASELINE (learned; time zone Asia/Seoul) ===
+          <h2 id="rendering">Drawing the prompt</h2>
+          <h3 id="v19-sections">v19: 18 named sections</h3>
+          <p>The v19 bundle draws 2 system sections and 16 user sections in the order below. Each section has a priority class (P0 required · P1 high value · P2 reference). A section that produces nothing is left out; for a section that records its omission, the omission ledger keeps <code>NOT_COLLECTED</code> with its class.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Section</th><th>Class</th><th>What it holds</th></tr></thead>
+            <tbody>
+              <tr><td><code>SYSTEM_INSTRUCTION</code> (system)</td><td>P0</td><td>policy and format instructions</td></tr>
+              <tr><td><code>DECISION_CONTRACT</code> (system)</td><td>P0</td><td>enforced JSON schema</td></tr>
+              <tr><td><code>CURRENT_REQUEST_AND_EVENT</code></td><td>P0</td><td>current request and payload</td></tr>
+              <tr><td><code>BRIDGE_AND_COVERAGE</code></td><td>P0</td><td>bridge correction and completeness</td></tr>
+              <tr><td><code>IDENTITY_AND_ROLE</code></td><td>P0</td><td>identity and authority set</td></tr>
+              <tr><td><code>DEVICE_CONTEXT</code></td><td>P1</td><td>operating system and browser</td></tr>
+              <tr><td><code>LOCATION_CONTEXT</code></td><td>P1</td><td>country, city, IP band</td></tr>
+              <tr><td><code>RESOURCE_AND_ACTION</code></td><td>P0</td><td>meaning of the resource and action</td></tr>
+              <tr><td><code>SESSION_NARRATIVE</code></td><td>P1</td><td>session state and MFA</td></tr>
+              <tr><td><code>OBSERVED_AND_PERSONAL_WORK_PATTERN</code></td><td>P1</td><td>personal and organizational usual patterns</td></tr>
+              <tr><td><code>RAG_EVIDENCE_CONTEXT</code></td><td>P1</td><td>past decision records found by search</td></tr>
+              <tr><td><code>SUPPORTING_LEARNING_CONTEXT</code></td><td>P1</td><td>reference learning and supporting grounds</td></tr>
+              <tr><td><code>ROLE_SCOPE</code></td><td>P1</td><td>role scope and expected work families</td></tr>
+              <tr><td><code>FRICTION_AND_APPROVAL</code></td><td>P1</td><td>MFA and approval history</td></tr>
+              <tr><td><code>DELEGATED_OBJECTIVE</code></td><td>P1</td><td>delegated scope and objective drift</td></tr>
+              <tr><td><code>THREAT_LEARNING_AND_MEMORY</code></td><td>P2</td><td>threat information and organizational learning</td></tr>
+              <tr><td><code>EXPLICIT_MISSING_KNOWLEDGE</code></td><td>P0</td><td>missing knowledge and trust limits</td></tr>
+              <tr><td><code>INTENT_SIGNAL_CONTEXT</code></td><td>P1</td><td>request intent and reference signals</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>The <strong>missing knowledge section</strong> (<code>EXPLICIT_MISSING_KNOWLEDGE</code>) is the required section that keeps the model from mistaking an evidence gap for certainty. It writes the coverage report's missing critical facts, remediation hints and confidence warnings, the trust profiles' limits (<code>ContextEvidenceLimitation</code> · <code>ContextTrustLimitation</code> · <code>ContextTrustWarning</code> lines) and baseline gaps (<code>BaselineGapSupport</code>), and leaves out the missing authorization-effect item when that effect is already known. Without gap signals it is empty.</li>
+            <li><strong>Evidence completeness</strong> is recorded for each prompt as <code>SUFFICIENT</code> · <code>PARTIAL</code> · <code>INCOMPLETE</code>. Without the actor, session or resource identity, or with a blocking omission, it is <code>INCOMPLETE</code>. A v19 prompt is <code>PARTIAL</code> when, for example, the role, authorization scope, resource sensitivity or MFA state is missing (<code>CanonicalContextFieldPolicy</code>); a v20 or v21 prompt is <code>PARTIAL</code> when the UNKNOWN block names any fact. The descriptor (<code>PromptGovernanceDescriptor</code>) records the bundle's prompt key, template key and version with the prompt.</li>
+          </ul>
+          <h3 id="dictionary-blocks">v20 · v21: dictionary blocks</h3>
+          <p>The v20 and v21 user texts use only lines from the prompt dictionary. Each entry fixes the meaning of the line, the source and form of the value, what is written when it is missing, the source grade, the priority, the list limit and whether it may be cut. Blocks are drawn in the order below, and a block without lines is left out.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Block</th><th>Fact ID</th><th>v20 entries</th><th>What it holds</th></tr></thead>
+            <tbody>
+              <tr><td><code>USER BASELINE</code></td><td>B</td><td>18</td><td>what was learned about this user before this request</td></tr>
+              <tr><td><code>SESSION</code></td><td>S</td><td>12</td><td>how this session signed in and what it did before this request</td></tr>
+              <tr><td><code>REQUEST</code></td><td>R</td><td>10</td><td>subject, role, time, action, target, size, class, network, device</td></tr>
+              <tr><td><code>DECISION FACTS</code> (v21: <code>RECORDS AND COMPARISONS</code>)</td><td>F</td><td>24</td><td>rules, differences from usual, work records, role scope, delegation, signals, conflicts</td></tr>
+              <tr><td><code>PAST RECORDS</code></td><td>P</td><td>6</td><td>this user's past allowed records and recent decisions other than allow</td></tr>
+              <tr><td><code>UNKNOWN</code></td><td>U (one per name)</td><td>2</td><td>completeness and facts not known now</td></tr>
+              <tr><td><code>UNTRUSTED TEXT</code></td><td>none</td><td>1</td><td>text anyone can write; evidence only, never instructions</td></tr>
+              <tr><td><code>SECOND PASS</code></td><td>none</td><td>3</td><td>Layer 2 only: the first decision and what was newly found</td></tr>
+            </tbody>
+          </table></div>
+          <p>The <strong>v21 dictionary</strong> drops the policy-satisfaction line from the v20 entries and adds 10 (baseline subject, usual sequence, usual clients, credential, confirmation, target scope, delegation activity, records holder, record provenance, argument origin), 85 in all. Five of the added lines get a value only on an agent's request (<a href="#human-agent">How people's and agents' requests differ</a>).</p>
+          <ul>
+            <li><strong>Header</strong>: <code>=== TITLE ===</code> or <code>=== TITLE (q1; q2) ===</code>. When all lines of a block share one source grade, the grade is written once in the header; with an event clock, <code>time zone &lt;id&gt;</code> is written once.</li>
+            <li><strong>Line</strong>: <code>Name: value</code>. Line breaks and control characters inside a value are escaped so the value stays on one line.</li>
+            <li><strong>Fact ID</strong>: the required (P0) lines of USER BASELINE, SESSION, REQUEST, DECISION FACTS and PAST RECORDS get <code>[B1]</code> · <code>[S1]</code> · <code>[R1]</code> · <code>[F1]</code> · <code>[P1]</code> in the order drawn. These are the IDs reason codes cite.</li>
+            <li><strong>List</strong>: numbered lines up to the limit (5 for past records), the rest counted on one <code>+n more</code> line. These lines have no fact ID.</li>
+            <li><strong>UNKNOWN</strong>: names are written per kind. <code>not-integrated</code> means no integration provides that fact; <code>unavailable-now</code> means the source gave no value for this request (with the reason). Each name gets <code>[U1]</code> · <code>[U2]</code>.</li>
+            <li><strong>SECOND PASS</strong>: Layer 2 adds this block after the first user text, with the first decision and the past records the first pass did not have. When the first pass already retrieved its past records, v21 writes "none new" and v20 asks again with the first user text alone, without the block.</li>
+            <li><strong>UNTRUSTED TEXT</strong>: in the form <code>source=...; "..."</code>; this text is the only value that may be cut (<code>… [+n chars cut]</code>). A resource's business label (a document title and so on) is free text the application received, so it is drawn here too, and the REQUEST target line holds only <code>(business label in UNTRUSTED TEXT)</code> in its place.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Source grade</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>host</code></td><td>given by the application: work record providers, bridge stamps, request fields, resource descriptions</td></tr>
+              <tr><td><code>learned</code></td><td>learned from allowed requests: baselines, work profiles, past records</td></tr>
+              <tr><td><code>computed</code></td><td>computed by the engine from the request and records</td></tr>
+              <tr><td><code>inferred</code></td><td>estimated by a fallback rule because no explicit value exists</td></tr>
+              <tr><td><code>untrusted</code></td><td>text anyone can write</td></tr>
+            </tbody>
+          </table></div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Missing notation</th><th>What the prompt shows when there is no value</th></tr></thead>
+            <tbody>
+              <tr><td><code>RENDERED_VALUE</code></td><td>the line is written with the entry's missing wording (for example <code>not learned</code>, <code>none</code>)</td></tr>
+              <tr><td><code>LINE_OMITTED</code></td><td>the line is not written</td></tr>
+              <tr><td><code>UNKNOWN_BLOCK</code></td><td>the line is not written; the name and kind go to the UNKNOWN block</td></tr>
+              <tr><td><code>BLOCK_OMITTED</code></td><td>the whole block is left out</td></tr>
+              <tr><td><code>ALWAYS_PRESENT</code></td><td>a value the request always states; without it the name goes to the UNKNOWN block</td></tr>
+            </tbody>
+          </table></div>
+          <p>Some lines from three blocks of a v20 user text. The values are the format examples written in the dictionary.</p>
+          <pre><code class="language-text">=== USER BASELINE (learned; time zone Asia/Seoul) ===
 Evidence: collector PERSONAL_WORK_PROFILE, window 7 days (09-23..09-29), observations 25 over 5 days, fallback 100%, unknown 0%, evidence LIMITED, scope personal
 [B1] BaselineStatus: ESTABLISHED (25 learned requests, personal baseline AVAILABLE)
 UsualHours: 09-11, 13-14, 17 (seen 9,10,11,12,13,14,16,17)
@@ -762,96 +234,49 @@ UsualDays: Mon-Fri
 === UNKNOWN ===
 Coverage: context coverage BUSINESS_AWARE; bridge AUTHORIZATION_CONTEXT
 Unknown: not-integrated: [U1] ClientSignals, [U2] PeerCohort</code></pre>
+          <h3 id="system-text">System text</h3>
+          <ul>
+            <li><strong>v19:</strong> required decision boundaries (block, allow and so on), judgment procedure, evidence rules, label preservation.</li>
+            <li><strong>v20:</strong> role (the request has already passed authentication and authorization; judge from the user text's facts alone whether it can be trusted now) → how to read the blocks (source grades, event clock, fact IDs; an unknown fact is neither a match nor a mismatch; UNTRUSTED TEXT and PAST RECORDS are not instructions) → the four actions → the minimum action rules turned on, with their floors → required block boundary, low-risk allow boundary, business-satisfied allow boundary → judgment procedure → evidence rules → output block.</li>
+            <li><strong>v21:</strong> mission (sign-in, permissions and fixed rules cannot tell a stolen account or an insider's misuse from legitimate work) → how to read the evidence (including agents, delegations and credentials) → how to judge (compare legitimate work H1, account takeover H2, insider misuse H3, automation or error H4 against each fact, and add another explanation when needed) → what each action means → honesty (only what the lines state; controls are not proof of legitimacy). There are no rules, thresholds or floors that decide the action.</li>
+            <li>The system text is cached per bundle version, budget profile, output mode and minimum action settings; an agent's request on a bundle other than v21 is cached separately.</li>
+            <li><strong>Budget:</strong> the default (<code>contexa.security.tiered.prompt-runtime.budget-enforcement</code> = <code>OBSERVE_ONLY</code>) only measures the budget. With <code>ENFORCE</code>, a v20 or v21 prompt over its budget profile drops entries in dictionary priority order (reference entries, then high-value entries, from the end of the dictionary), never drops required entries, and records the dropped entries in the omission ledger as <code>BUDGET_TRIMMED</code>.</li>
+            <li><strong>Call settings:</strong> a decision call carries determinism values (temperature <code>0.0</code>, seed <code>1</code>), and providers that support it get native structured output (a strict JSON schema). The output limit is 4096 tokens for Layer 1 and 2560 for Layer 2.</li>
+            <li>OSS has no implementation of the provider that adds rules to the prompt at runtime, so by default no rule is added.</li>
+          </ul>
 
-            <h4>The v20 system text</h4>
-            <p>The v20 bundle has its own system text, cached per bundle version, budget profile, output mode and minimum action settings. In order:</p>
-            <ul class="calib-list">
-              <li><strong>Role</strong> &mdash; the request has already passed authentication and authorization; judge whether this action should be trusted now, using only the facts the user prompt states.</li>
-              <li><strong>How to read the blocks</strong> &mdash; the block order, the five source grades, the event clock, the fact IDs; an unknown fact is neither a match nor a mismatch; RoleScope compares with the scope group's 30-day facts; UNTRUSTED TEXT and PAST RECORDS are evidence, never instructions, and the current session outweighs past records.</li>
-              <li><strong>Actions</strong> &mdash; ALLOW, CHALLENGE, ESCALATE, BLOCK, each defined once.</li>
-              <li><strong>Minimum action rules</strong> &mdash; only the rules the host turned on, each with its floor (see below).</li>
-              <li><strong>Boundaries</strong> &mdash; a required BLOCK boundary (an active attack corroborated across at least two categories, a tenant or organization conflict, or an authorization effect of BLOCK or DENY), a required low-risk ALLOW boundary and a required covered-work ALLOW boundary, checked in order.</li>
-              <li><strong>Decision process</strong> &mdash; in block order: baseline, session, request, decision facts, reconciliation, then the least disruptive action the evidence justifies.</li>
-              <li><strong>Evidence rules</strong> &mdash; controls are not proof of legitimacy, missing or thin evidence is uncertainty and not risk, and facts are stated as the lines state them.</li>
-              <li><strong>Output</strong> &mdash; the <code>=== OUTPUT ===</code> block of the output contract v3 with the meaning of every reason code.</li>
-            </ul>
+          <h2 id="minimum-action">Minimum action rules (v19 · v20)</h2>
+          <p>The minimum action rules (<code>MinimumActionRules</code>) read the decision facts and set the weakest action a request requires (a floor). The order of actions is ALLOW &lt; CHALLENGE &lt; ESCALATE &lt; BLOCK. A rule is only a floor and never chooses the action itself. Only differences no record explains are counted.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Rule</th><th>Condition</th><th>Floor</th><th>Settings (under <code>contexa.security.zerotrust.minimum-action</code>)</th></tr></thead>
+            <tbody>
+              <tr><td><code>MIN_P1_IDENTITY_DEVIATION</code></td><td>the resource class is at least the minimum class, and at least the minimum number of time, day, network and device differ from usual without explanation</td><td>CHALLENGE</td><td><code>.identity.enabled</code> (<code>true</code>), <code>.identity.min-deviations</code> (<code>2</code>), <code>.identity.min-resource-class</code> (<code>SENSITIVE</code>)</td></tr>
+              <tr><td><code>MIN_P2_NEW_DEVICE_OR_NETWORK_EXPORT</code></td><td>the action is EXPORT, the resource class is SENSITIVE or CRITICAL, and the device or network differs from usual without explanation</td><td>CHALLENGE</td><td><code>.new-device-export.enabled</code> (<code>true</code>)</td></tr>
+              <tr><td><code>MIN_P3_POLICY_NOT_SATISFIED</code></td><td>no valid record covers what the company rule requires</td><td><code>.policy-satisfaction.action</code> (<code>ESCALATE</code>)</td><td><code>.policy-satisfaction.enabled</code> (<code>true</code>). The floor can only be CHALLENGE or ESCALATE; another value stops the start</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>Observe (default, <code>contexa.security.zerotrust.minimum-action.mode</code> = <code>OBSERVE</code>):</strong> the rules hit and whether the decision was weaker are only recorded in the event metadata (<code>minimumActionFindings</code>); the decision stays as it is.</li>
+            <li><strong>Enforce (<code>ENFORCE</code>):</strong> the response check treats an answer weaker than the floor as a violation (<code>MINIMUM_ACTION_VIOLATION</code>), asks once more, and ends as held for review if it is still weaker. This check does not look at the bundle's layout, so it also applies to v19 answers.</li>
+            <li>The <strong>v21 bundle</strong> neither evaluates nor records these rules.</li>
+            <li>The v20 system text states only the rules turned on, with their floors, and leaves the rules paragraph out when none is on.</li>
+            <li>When Layer 2 still chooses ESCALATE, it ends as the fallback action regardless of the floor (see <a href="#checks">Response check</a> below).</li>
+          </ul>
 
-            <div class="callout-info">
-              <strong>Budget.</strong> By default (<code>contexa.security.tiered.prompt-runtime.budget-enforcement=OBSERVE_ONLY</code>) the budget is only observed. With <code>ENFORCE</code>, a v20 prompt over its budget profile takes entries out by dictionary priority &mdash; supporting entries first, then high-value ones, each from the last dictionary entry backwards &mdash; and stops as soon as it fits. Required (P0) entries never leave, no fact value is cut, and each removal is recorded in the omission ledger as <code>BUDGET_TRIMMED</code>.
-            </div>
-          </section>
-
-
-          <!-- Section 6b: Decision facts -->
-          <section>
-            <h2 id="decision-facts">Decision facts</h2>
-            <p><code>DecisionFactsResolver</code> computes the DECISION FACTS of a request: how the request compares with the usual behaviour on each dimension, whether the company's policy is satisfied at the request time, the approval, assignment, ticket, on-call and trip records, repeats in the session, the scope group comparison, data conflicts and the cohort comparison. A fact the engine cannot establish gets no line and is named as unknown. The engine states facts; it does not decide. The same <code>DecisionFacts</code> are kept on the canonical context with the IDs the prompt drew for them, so the prompt, the sealed record, the response check and the prompt inspector read one computation.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Dimension</th><th>Reason code</th><th>What can explain a difference</th></tr></thead>
-              <tbody>
-                <tr><td><code>time</code>, <code>day</code></td><td><code>DEVIATION_TIME</code>, <code>DEVIATION_DAY</code></td><td>A valid approval or ticket that covers the work</td></tr>
-                <tr><td><code>network</code></td><td><code>DEVIATION_NETWORK</code></td><td>A registered trip</td></tr>
-                <tr><td><code>device</code>, <code>login method</code></td><td><code>DEVIATION_DEVICE</code>, <code>DEVIATION_LOGIN_METHOD</code></td><td>Nothing</td></tr>
-                <tr><td><code>target</code>, <code>action</code>, <code>class</code>, <code>size</code>, <code>rate</code></td><td><code>DEVIATION_TARGET</code>, <code>DEVIATION_ACTION</code>, <code>DEVIATION_RESOURCE_CLASS</code>, <code>DEVIATION_SIZE</code>, <code>DEVIATION_RATE</code></td><td>A valid approval or ticket that covers the work</td></tr>
-              </tbody>
-            </table></div>
-            <p>Only a difference that no record explains counts toward the minimum action rules. A difference against a baseline that is not established, or a dimension that was not compared, is unknown rather than unexplained.</p>
-          </section>
-
-
-          <!-- Section 6c: Minimum action rules -->
-          <section>
-            <h2 id="minimum-action-rules">Minimum action rules</h2>
-            <p><code>MinimumActionRules</code> reads the decision facts and names the least action a request asks for. Actions rank ALLOW &lt; CHALLENGE &lt; ESCALATE &lt; BLOCK. A rule is a floor and never a reason to choose a stronger action; the code chooses no action itself.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Rule</th><th>Condition</th><th>Floor</th><th>Settings (<code>contexa.security.zerotrust.minimum-action</code>)</th></tr></thead>
-              <tbody>
-                <tr><td><code>MIN_P1_IDENTITY_DEVIATION</code></td><td>ResourceClass is at or above the minimum class, and at least the minimum number of time, day, network and device differ from the usual without explanation (the device counts once)</td><td>CHALLENGE</td><td><code>.identity.enabled</code> (<code>true</code>), <code>.identity.min-deviations</code> (<code>2</code>), <code>.identity.min-resource-class</code> (<code>SENSITIVE</code>)</td></tr>
-                <tr><td><code>MIN_P2_NEW_DEVICE_OR_NETWORK_EXPORT</code></td><td>The action is EXPORT, ResourceClass is SENSITIVE or CRITICAL, and the device or the network differs without explanation</td><td>CHALLENGE</td><td><code>.new-device-export.enabled</code> (<code>true</code>)</td></tr>
-                <tr><td><code>MIN_P3_POLICY_NOT_SATISFIED</code></td><td>PolicySatisfied is no: no valid record covers what the company policy requires</td><td><code>.policy-satisfaction.action</code> (<code>ESCALATE</code>)</td><td><code>.policy-satisfaction.enabled</code> (<code>true</code>); the action must be CHALLENGE or ESCALATE, any other value stops the start-up</td></tr>
-              </tbody>
-            </table></div>
-
-            <ul class="calib-list">
-              <li><strong>In the prompt</strong> &mdash; the v20 system text states the rules that are on, each with its floor; with no rule on, the rules paragraph is left out.</li>
-              <li><strong>OBSERVE (default)</strong> &mdash; <code>.mode=OBSERVE</code> records the rules a request meets and whether the decision was weaker on the event metadata (<code>minimumActionFindings</code>); the decision is kept as it is.</li>
-              <li><strong>ENFORCE</strong> &mdash; <code>.mode=ENFORCE</code> makes the response check treat an answer weaker than a rule that applies as a violation (<code>MINIMUM_ACTION_VIOLATION</code>), which goes to the corrective retry.</li>
-              <li><strong>Layer2</strong> &mdash; an unresolved Layer2 ESCALATE is not turned into the fallback action when that action ranks below the floor of a rule that applies.</li>
-            </ul>
-          </section>
-
-
-          <!-- Section 6d: Output contract v3 -->
-          <section>
-            <h2 id="output-contract">Output contract v3</h2>
-            <p><code>SecurityDecisionOutputContract</code> is the one source of the v20 response: the provider schema, the system text's output block and the parser all read it. A provider with native structured output gets the strict JSON schema; any other provider gets the same schema as text in the system prompt.</p>
-
-            <div class="outcome-frame">
-              <h3>Response fields</h3>
-              <div class="outcome-matrix">
-                <div class="outcome-field">
-                  <div class="outcome-field-name">action</div>
-                  <div class="outcome-field-desc">ALLOW, CHALLENGE, ESCALATE or BLOCK</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">reasonCodes</div>
-                  <div class="outcome-field-desc">1 to 5 objects <code>{"code", "fact"}</code>; the fact is an ID matching <code>^[BSRFPU][0-9]{1,2}$</code></div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">reason</div>
-                  <div class="outcome-field-desc">One sentence in the model's own words; the response processor keeps at most 200 characters</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">riskScore &middot; confidence &middot; mitre</div>
-                  <div class="outcome-field-desc">0 to 1 or null, and a list of MITRE ATT&amp;CK IDs or null; kept for audit, they decide nothing</div>
-                </div>
-              </div>
-            </div>
-
-            <p>The 53 reason codes fall into 11 groups: minimum action, policy, business records, deviation, as usual, scope and permissions, delegation, session, past records, block grounds and escalation. Each code names the dictionary line it cites; <code>MATERIAL_MISSING_EVIDENCE</code> cites the <code>U</code> ID the UNKNOWN line gives a missing fact.</p>
-            <pre><code class="language-json">{
+          <h2 id="output">The form of the model's answer and its check</h2>
+          <p>The output contract is the form of the model's answer. The provider schema, the system text's output block and the parser that reads the answer all use the same contract.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Field</th><th>v2 (v19)</th><th>v3 (v20)</th><th>v4 (v21)</th></tr></thead>
+            <tbody>
+              <tr><td><code>action</code></td><td colspan="3">one of ALLOW · CHALLENGE · ESCALATE · BLOCK</td></tr>
+              <tr><td>Reason</td><td><code>reasoning</code>, one sentence (up to 180 characters), references <code>evidenceRefs</code></td><td><code>reason</code>, one sentence (up to 200 characters) + 1–5 <code>reasonCodes</code> (<code>{"code", "fact"}</code>)</td><td><code>reason</code> (up to 300 characters) + 1–5 <code>reasonCodes</code></td></tr>
+              <tr><td>Reason codes</td><td>none</td><td>53 in 11 groups</td><td>51 in 9 groups</td></tr>
+              <tr><td>Hypotheses</td><td>none</td><td>none</td><td><code>hypotheses</code>: for each of H1–H5, <code>MOST_LIKELY</code> · <code>POSSIBLE</code> · <code>UNLIKELY</code> · <code>NO_EVIDENCE</code></td></tr>
+              <tr><td><code>riskScore</code> · <code>confidence</code> · <code>mitre</code></td><td colspan="3">kept for audit only, not used for the decision</td></tr>
+            </tbody>
+          </table></div>
+          <p>In v3, <code>fact</code> is a fact ID of the form <code>^[BSRFPU][0-9]{1,2}$</code>. Each reason code has the dictionary lines it may cite, and <code>MATERIAL_MISSING_EVIDENCE</code> cites the <code>U</code> ID of the UNKNOWN block.</p>
+          <pre><code class="language-json">{
   "action": "ESCALATE",
   "reasonCodes": [
     {"code": "MIN_P3_POLICY_NOT_SATISFIED", "fact": "F4"},
@@ -862,80 +287,35 @@ Unknown: not-integrated: [U1] ClientSignals, [U2] PeerCohort</code></pre>
   "confidence": null,
   "mitre": null
 }</code></pre>
-          </section>
-
-
-          <!-- Section 7: Check -->
-          <section>
-            <h2 id="stage-6-check">Stage 6 &middot; Check</h2>
-            <p>Getting a response back from the LLM is not the end. The response check reads the answer before it becomes a decision. For a v20 prompt it checks the reason's claims (for example a claim that MFA is verified when LoginMethod says it is not), the required boundaries and every reason code against the facts the prompt was drawn from; in ENFORCE mode it also applies the minimum action rules. A v19 prompt is checked by its labels.</p>
-
-            <div class="guardrail-flow">
-              <div class="guardrail-track">
-                <div class="guardrail-node guardrail-node--allow">
-                  <span class="guardrail-action">ANSWER</span>
-                  <span class="guardrail-label">Model output</span>
-                </div>
-                <div class="guardrail-arrow">&rarr;</div>
-                <div class="guardrail-node guardrail-node--chall">
-                  <span class="guardrail-action">RETRY</span>
-                  <span class="guardrail-label">One corrective retry</span>
-                </div>
-                <div class="guardrail-arrow">&rarr;</div>
-                <div class="guardrail-node guardrail-node--escal">
-                  <span class="guardrail-action">FALLBACK</span>
-                  <span class="guardrail-label">Contract fallback</span>
-                </div>
-              </div>
-              <div class="guardrail-caption">A violation gets one retry; a violation left after it ends in the contract's fallback action.</div>
+          <h3 id="checks">Response check</h3>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The response check by bundle</strong>Both ask again at most once, and an answer cut at the output limit is asked again with twice the limit.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side"><p class="dg-side-title">v19 · v20</p><ul><li>v19 checks labels; v20 compares the reason sentence, required boundaries and reason codes with the facts the prompt was drawn from</li><li>a violation is asked once more, with what was wrong attached</li><li>a remaining violation ends as held for review: breaking the block boundary gives block, breaking the low-risk or business-satisfied boundary gives allow</li></ul></div>
+              <div class="dg-side dg-model"><p class="dg-side-title">v21</p><ul><li>checks only form, citations and statements that contradict the lines; the chosen action is not checked</li><li>an answer whose only fault is its reason codes is kept and recorded without asking again (because asking again changed the action in a case)</li><li>held for review only when, after asking again, there is still no usable form</li></ul></div>
             </div>
+          </figure>
+          <ul>
+            <li><strong>ESCALATE after Layer 2:</strong> unless <code>contexa.security.tiered.layer2.allow-escalate-final-action</code> is <code>true</code>, an ESCALATE remaining after Layer 2 becomes <code>contexa.security.tiered.layer2.escalate-fallback-action</code> (default <code>CHALLENGE</code>), and the decision records <code>LAYER2_ESCALATE_TERMINALIZED</code>. This is the same for every bundle.</li>
+            <li>What happens when no answer comes from the model (provider failure, timeout) is in <a href="decision-engine.html#overrides">Decision Engine, "When the model's answer is changed"</a>.</li>
+          </ul>
 
-            <ul class="calib-list">
-              <li><strong>Corrective retry</strong> &mdash; the same prompt is sent again with the previous answer and what was wrong with it. An answer cut at the output limit is asked again with twice the limit.</li>
-              <li><strong>Fallback</strong> &mdash; a violation left after the retry falls back to ESCALATE; a broken BLOCK boundary falls back to BLOCK, and a broken low-risk or covered-work boundary to ALLOW.</li>
-              <li><strong>Layer2 ESCALATE</strong> &mdash; unless <code>contexa.security.tiered.layer2.allow-escalate-final-action</code> is <code>true</code>, an unresolved ESCALATE becomes <code>contexa.security.tiered.layer2.escalate-fallback-action</code> (default CHALLENGE) and the decision records <code>LAYER2_ESCALATE_TERMINALIZED</code>.</li>
-            </ul>
-          </section>
-
-
-          <!-- Section 8: Final decision -->
-          <section>
-            <h2 id="final-decision">The final decision record</h2>
-            <p>What comes out the other end is the <code>SecurityDecision</code>. It is not just "ALLOW" or "BLOCK". It keeps the LLM's own proposal, the action that is finally enforced, and why the two differ.</p>
-
-            <div class="outcome-frame">
-              <h3>SecurityDecision fields</h3>
-              <div class="outcome-matrix">
-                <div class="outcome-field">
-                  <div class="outcome-field-name">action</div>
-                  <div class="outcome-field-desc">The LLM's proposal</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">autonomousAction</div>
-                  <div class="outcome-field-desc">The action enforced after the autonomy constraints</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">llmAuditRiskScore / llmAuditConfidence</div>
-                  <div class="outcome-field-desc">Raw LLM scores before autonomy constraints, kept for audit</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">reasonCodes</div>
-                  <div class="outcome-field-desc">The output contract v3 citations; empty for a v19 decision</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">autonomyConstraintApplied</div>
-                  <div class="outcome-field-desc">Whether a constraint changed the action, with its reasons and summary</div>
-                </div>
-                <div class="outcome-field">
-                  <div class="outcome-field-name">processingLayer</div>
-                  <div class="outcome-field-desc">1 = fast tier &middot; 2 = expert tier (escalation)</div>
-                </div>
-              </div>
-            </div>
-
-            <h4>SecurityDecision excerpt</h4>
-            <p>An excerpt of a Layer2 decision: the model proposed <code>ESCALATE</code> citing a missing fact, and the tiered strategy turned the unresolved ESCALATE into the configured fallback <code>CHALLENGE</code>:</p>
-            <pre><code class="language-json">{
+          <h2 id="decision-record">The final decision record</h2>
+          <p>The decision record (<code>SecurityDecision</code>) keeps the action the model proposed, the action actually enforced and why they differ.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>action</code></td><td>the action the model proposed</td></tr>
+              <tr><td><code>autonomousAction</code></td><td>the action actually enforced after the constraints</td></tr>
+              <tr><td><code>llmAuditRiskScore</code> · <code>llmAuditConfidence</code></td><td>the model's scores before the constraints (audit)</td></tr>
+              <tr><td><code>reasonCodes</code></td><td>the reason codes cited (v20 · v21). Empty for a v19 decision</td></tr>
+              <tr><td><code>hypotheses</code></td><td>the hypothesis assessments of a v21 decision</td></tr>
+              <tr><td><code>autonomyConstraintApplied</code></td><td>whether a constraint changed the action, with its reasons and summary</td></tr>
+              <tr><td><code>processingLayer</code></td><td>1 = Layer 1, 2 = Layer 2</td></tr>
+            </tbody>
+          </table></div>
+          <p>An excerpt of a Layer 2 decision. The model cited an unknown fact and proposed ESCALATE, and the remaining ESCALATE was changed to the configured fallback action CHALLENGE.</p>
+          <pre><code class="language-json">{
   "eventId": "evt_8a9f3b2c1d",
   "action": "ESCALATE",
   "autonomousAction": "CHALLENGE",
@@ -950,91 +330,51 @@ Unknown: not-integrated: [U1] ClientSignals, [U2] PeerCohort</code></pre>
   "autonomyConstraintSummary": "Layer2 returned ESCALATE, so final autonomous action was terminalized to CHALLENGE by tiered strategy policy.",
   "technicalFallbackApplied": false
 }</code></pre>
-          </section>
 
+          <h2 id="human-agent">How people's and agents' requests differ</h2>
+          <p>The prompt treats a request as an agent's when the execution subject is <code>DELEGATED_AGENT</code> (or the delegation is <code>delegated=true</code>) or <code>AUTONOMOUS_AGENT</code>, and an agent ID exists. A service client (<code>SERVICE_CLIENT</code>) is not an agent.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Bundle</th><th>A person's request</th><th>An agent's request</th></tr></thead>
+            <tbody>
+              <tr><td>v19</td><td>the system text has the automation-client (bot UA, TLS fingerprint, header order) block boundary. With delegated authority, the <code>DELEGATED_OBJECTIVE</code> section</td><td>a system text without that block boundary (cached separately). The <code>DELEGATED_OBJECTIVE</code> section</td></tr>
+              <tr><td>v20</td><td>the block boundary has the automation category. With delegated authority, the Delegation line of DECISION FACTS</td><td>a system text without the automation category; the response check also does not count the agent's client signals as an attack category. The Delegation line</td></tr>
+              <tr><td>v21</td><td colspan="2">one system text that always explains how to read agents, delegations and credentials. Lines with a value only on an agent's request: the subject line in agent form, baseline subject, usual sequence, usual clients, delegation activity, records holder. Lines a person's request also gets when the source exists: credential, confirmation, delegation, record provenance, argument origin</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>Whether the delegated scope is exceeded is computed by the engine as a <strong>fact</strong> only. Allow, extra confirmation or block is the model's choice (<a href="../agent/delegation.html#drift">Drift</a>).</li>
+            <li>Agents do not do MFA. An agent's step-up is replaced by confirmation from the accountable person under <code>CONTEXA_OWNED</code> (<a href="../agent/controls.html#confirm">Confirmation</a>).</li>
+            <li>The v21 agent lines need the bundle <code>2026.10.30-v21.19</code> (<a href="../agent/overview.html#prompt-facts">Facts the decision model receives</a>).</li>
+          </ul>
 
-          <!-- Section 9: Human vs Agent -->
-          <section>
-            <h2 id="persona-compare">How prompts differ for humans and agents</h2>
-            <p>The pipeline is the same, but the centre of gravity shifts depending on who the subject is. For a human, the key axis is "deviation from the usual pattern". For an agent, it is "staying within the allowed objective".</p>
+          <h2 id="trust">What can be trusted</h2>
+          <ul>
+            <li>The system and user texts exactly as sent to the model are kept as sealed evidence after the decision (a sample, <a href="evidence.html">Sealed evidence and official verification</a>). The canonical context is sealed with them.</li>
+            <li>Sealed prompts are compared with the facts by 10 inspector checks, apart from the decision. Inspection changes no prompt, decision or rule (<a href="prompt-inspection.html#inspection">Inspecting sealed prompts</a>).</li>
+            <li>A new bundle is released through the shadow, canary and active stages, and rolled back when something goes wrong (<a href="prompt-inspection.html">Prompt Governance and Inspection</a>).</li>
+          </ul>
 
-            <div class="persona-compare">
-              <div class="persona-col persona-col--human">
-                <div class="persona-col-title">
-                  <span class="persona-col-icon">H</span>
-                  <span class="persona-col-name">Human</span>
-                </div>
-                <table class="persona-table">
-                  <tr><th>Subject type</th><td>HUMAN</td></tr>
-                  <tr><th>Delegation stamp</th><td>Usually absent</td></tr>
-                  <tr><th>Key profiles</th><td>Work &middot; PeerCohort &middot; Friction</td></tr>
-                  <tr><th>Key v20 lines</th><td>USER BASELINE &middot; DeviationsFromBaseline</td></tr>
-                  <tr><th>Decision axis</th><td>Deviation from usual behaviour</td></tr>
-                  <tr><th>MFA signal</th><td>Verified at login time</td></tr>
-                </table>
-              </div>
-              <div class="persona-col persona-col--agent">
-                <div class="persona-col-title">
-                  <span class="persona-col-icon">A</span>
-                  <span class="persona-col-name">Agent</span>
-                </div>
-                <table class="persona-table">
-                  <tr><th>Subject type</th><td>AGENT &middot; SERVICE_ACCOUNT</td></tr>
-                  <tr><th>Delegation stamp</th><td>Required. delegated = true + agentId</td></tr>
-                  <tr><th>Key profiles</th><td>ObservedScope &middot; RoleScope</td></tr>
-                  <tr><th>Key v20 lines</th><td>Delegation (DECISION FACTS) &middot; DELEGATION_SCOPE_DRIFT</td></tr>
-                  <tr><th>Decision axis</th><td>Drift from the allowed objective</td></tr>
-                  <tr><th>MFA signal</th><td>Verified when the delegation token was issued</td></tr>
-                </table>
-              </div>
-            </div>
-          </section>
-
-          <!-- Section 10: Prompt inspection -->
-          <section>
-            <h2 id="prompt-inspection">Prompt inspection</h2>
-            <p>The prompt inspector reads sealed prompts apart from the decision path and compares each line with the sealed facts it was drawn from: seal integrity, bundle trace, dictionary contract, decision fact match, fact accuracy, unknown declaration, past record notation, source truth, same fact and reason match. It points at problems for a person to review; it never changes a prompt, a decision or a rule. Bundle versions move through registry states behind a release gate, with shadow runs, canaries and rollback.</p>
-            <div class="callout-info">
-              <strong>Read more.</strong> The checks, the registry states, the release gate and their settings are described in <a href="../../../docs/reference/architecture/prompt-inspection.html">Prompt Inspection &amp; Bundle Versions</a>.
-            </div>
-          </section>
-
-<!-- Related documents -->
-          <section>
-            <h2 id="related">Related documentation</h2>
-            <div class="related-links-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--space-3);margin:var(--space-4) 0">
-              <a href="../../../docs/reference/architecture/overview.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Platform Architecture</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Module overview and request flow</span>
-              </a>
-              <a href="../../../docs/reference/architecture/hcad-early-detection.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">HCAD Early Threat Detection</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Behavioural signal collection and early analysis</span>
-              </a>
-              <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Zero Trust Flow</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Enforcement and authority swap</span>
-              </a>
-              <a href="../../../docs/reference/iam/protectable.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">@Protectable</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Protected resource annotation</span>
-              </a>
-              <a href="../../../docs/reference/architecture/prompt-inspection.html" class="related-link-card" style="display:block;padding:var(--space-4);border:1px solid var(--border-light);border-radius:var(--radius-md);text-decoration:none;color:inherit;background:var(--bg-primary)">
-                <strong style="display:block;font-size:var(--text-sm);color:var(--text-primary)">Prompt Inspection &amp; Bundle Versions</strong>
-                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Inspector checks, registry states, release gate, rollback</span>
-              </a>
-            </div>
-          </section>
-
-
+          <h2 id="settings">Settings you often change</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.active</code></td><td>empty (build default v19.21)</td><td>the bundle version used for every request</td><td>to use the v20 or v21 bundle</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.selector</code></td><td><code>CONFIGURATION</code></td><td>choose the bundle by configuration (<code>CONFIGURATION</code>) or by the registry (<code>REGISTRY</code>)</td><td><code>registry</code> to release a new bundle through shadow and canary</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.mode</code></td><td><code>OBSERVE</code></td><td>only record the minimum action rules, or enforce them in the response check (<code>ENFORCE</code>)</td><td>to force the floors after watching the rule records long enough</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-runtime.budget-enforcement</code></td><td><code>OBSERVE_ONLY</code></td><td>drop entries of a dictionary prompt over its budget (<code>ENFORCE</code>)</td><td>when the model's input limit or cost must be kept</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.escalate-fallback-action</code></td><td><code>CHALLENGE</code></td><td>the action an ESCALATE remaining after Layer 2 becomes</td><td>to treat undecided requests more strictly (<code>BLOCK</code>)</td></tr>
+              <tr><td><code>contexa.security.tiered.argument-origin.max-excerpt-chars</code></td><td><code>300</code></td><td>the longest tool-output sentence quoted on the v21 argument origin line (0–300)</td><td>to shorten quotes. To stop quoting, <code>contexa.security.tiered.argument-origin.quote-excerpt: false</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>All settings are in <a href="../../install/configuration/ai.html">AI model configuration</a> and <a href="../../install/configuration.html">Configuration</a>.</p>
           <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="docs-nav-link prev">
+            <a href="../identity/zero-trust-filters.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Zero Trust Flow</span>
+              <span class="docs-nav-title">Request-Time Enforcement</span>
             </a>
-            <a href="../../../docs/reference/architecture/prompt-inspection.html" class="docs-nav-link next">
+            <a href="prompt-inspection.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Prompt Inspection &amp; Bundle Versions</span>
+              <span class="docs-nav-title">Prompt Governance and Inspection</span>
             </a>
           </div>

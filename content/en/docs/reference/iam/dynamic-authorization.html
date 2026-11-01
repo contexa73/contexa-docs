@@ -3,884 +3,276 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <a href="../../../docs/reference/iam/protectable.html">IAM</a>
-            <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Dynamic Authorization</span>
+            <span class="breadcrumb-current">URL Access Policies</span>
           </nav>
+
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-warning">contexa-iam</span>
+              <span class="badge badge-secondary">Authorization</span>
             </div>
-            <h1>Dynamic URL Authorization</h1>
-            <p class="lead">Database-driven URL authorization using <code>CustomDynamicAuthorizationManager</code>. Define access policies through the current Policy Center and related admin policy flows, then have them enforced without rebuilding the application.</p>
+            <h1>URL Access Policies (Dynamic URL Authorization)</h1>
+            <p class="lead">Decide whether a URL request is allowed or denied with policies stored in the database. This page covers how to connect URL policies to requests, how to create a first policy, the order in which one request is decided, how to write conditions, and how a changed policy takes effect.</p>
           </div>
 
-          <!-- What is Dynamic Authorization -->
-          <section>
-            <h2 id="overview">What is Dynamic Authorization?</h2>
-            <p>Traditional Spring Security uses static URL matchers defined in Java code. Any change to authorization rules requires a code change, rebuild, and redeployment. Contexa's <code>CustomDynamicAuthorizationManager</code> takes a fundamentally different approach: authorization policies are loaded from the database at startup and evaluated at runtime.</p>
-            <p>This architecture enables three key capabilities:</p>
-            <ul>
-              <li><strong>No-redeploy policy changes</strong> &mdash;Authorization rules can be modified, added, or removed without rebuilding or redeploying the application. After editing, a hot-reload triggers re-initialization.</li>
-              <li><strong>Admin policy management</strong> &mdash;Policies can be created and managed through Policy Center, policy detail flows, and related admin endpoints without changing Java security configuration.</li>
-              <li><strong>AI-generated policy integration</strong> &mdash;AI-generated and AI-evolved policies can be integrated into the authorization pipeline after human approval.</li>
-            </ul>
-          </section>
-
-          <!-- How It Works -->
-          <section>
-            <h2 id="how-it-works">How It Works</h2>
-            <p><code>CustomDynamicAuthorizationManager</code> implements Spring Security's <code>AuthorizationManager&lt;RequestAuthorizationContext&gt;</code> interface. It bridges the gap between database-stored policies and Spring Security's runtime evaluation engine.</p>
-
-            <h3 id="policy-flow">Policy Evaluation Flow</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Text</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
+          <h2 id="overview">What it does</h2>
+          <p>Spring Security's static matchers (<code>requestMatchers(...).hasRole(...)</code>) are fixed in code. <code>CustomDynamicAuthorizationManager</code> is a Spring <code>AuthorizationManager</code>: when the application starts it reads the URL policies from the database, builds a list of address matchers, and decides every request with that list. When you change a policy in the Policy Center admin screen, the list is rebuilt without redeploying. A policy written by AI enters the list only after a person approves it.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Two moments: loading and requests</strong>Conditions are not interpreted again for each request. Requests read the mapping list built at load time.</figcaption>
+            <div class="dg-lanes">
+              <section class="dg-lane"><h4 class="dg-lane-title">Loading<span class="dg-lane-sub">At startup and when policies change</span></h4>
+                <ol class="dg-flow">
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">Read the policies with a URL target</span><span class="dg-node-desc">Cache key <code>policies:url:all</code></span></li>
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">Keep only the policies that run</span><span class="dg-node-desc">Active + <code>APPROVED</code> or <code>NOT_REQUIRED</code></span></li>
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">Tidy the conditions into one expression and check it</span><span class="dg-node-desc">A failed check: that target always denies</span></li>
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">Build a matcher per target</span><span class="dg-node-desc">In priority order</span></li>
+                </ol>
+              </section>
+              <div class="dg-bridge">
+                <span class="dg-bridge-arrow">← Built by loading</span>
+                <div class="dg-node dg-store"><span class="dg-node-title">URL mapping list</span><span class="dg-node-desc">In instance memory</span></div>
+                <span class="dg-bridge-arrow">Read by requests →</span>
               </div>
-              <div class="diagram-container">
-                <div class="diagram-flow-vertical">
-                  <div class="diagram-group">
-                    <div class="diagram-group-title">Initialization</div>
-                    <div class="diagram-flow">
-                      <div class="diagram-box">
-                        <div class="diagram-box-name">Application Startup</div>
-                      </div>
-                      <div class="diagram-box">
-                        <div class="diagram-box-name">Policy Center / Admin Policy Flows</div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-flow">
-                    <div class="diagram-box">
-                      <div class="diagram-box-name">PolicyRetrievalPoint (PRP)</div>
-                      <div class="diagram-box-desc">Loads policies</div>
-                    </div>
-                    <div class="diagram-arrow"></div>
-                    <div class="diagram-box">
-                      <div class="diagram-box-name">Database (Policies)</div>
-                      <div class="diagram-box-desc">Rules, Conditions, Targets</div>
-                    </div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box diagram-highlight">
-                    <div class="diagram-box-name">CustomDynamicAuthorizationManager</div>
-                    <div class="diagram-box-desc">Builds RequestMatcherEntry list from policies + URL targets</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-group">
-                    <div class="diagram-group-title">Per-Request Evaluation</div>
-                    <div class="diagram-flow-vertical">
-                      <div class="diagram-box">
-                        <div class="diagram-box-name">PolicyExpressionConverter</div>
-                        <div class="diagram-box-desc">Converts each active URL policy into the SpEL string used by Spring Security</div>
-                      </div>
-                      <div class="diagram-arrow-down"></div>
-                      <div class="diagram-box">
-                        <div class="diagram-box-name">ExpressionAuthorizationManagerResolver</div>
-                        <div class="diagram-box-desc">Builds the Spring AuthorizationManager used for each cached request matcher entry</div>
-                      </div>
-                      <div class="diagram-arrow-down"></div>
-                      <div class="diagram-box">
-                        <div class="diagram-box-name">SpEL Evaluation</div>
-                        <div class="diagram-box-desc">hasAnyAuthority(), hasPermission(), isAllowed(), custom expressions</div>
-                      </div>
-                      <div class="diagram-arrow-down"></div>
-                      <div class="diagram-box">
-                        <div class="diagram-box-name">AI Policy Gate</div>
-                        <div class="diagram-box-desc">Policies with <code>PENDING</code> or <code>REJECTED</code> approval are filtered out before request-time evaluation</div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">CentralAuditFacade</div>
-                    <div class="diagram-box-desc">Records denied URL authorization results with request URI, action, outcome, and optional AI assessment context</div>
-                  </div>
-                </div>
-              </div>
+              <section class="dg-lane"><h4 class="dg-lane-title">Request<span class="dg-lane-sub">For each request</span></h4>
+                <ol class="dg-flow">
+                  <li class="dg-node dg-request"><span class="dg-node-title">Find matchers for the address and method</span></li>
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">Evaluate the condition, apply the effect</span></li>
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">Combine, or the default decision</span></li>
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">Delegator re-evaluation, audit record</span></li>
+                </ol>
+              </section>
             </div>
+          </figure>
 
-            <h3 id="step-by-step">Step-by-Step Evaluation</h3>
-            <ol>
-              <li><strong>Context refresh</strong> triggers <code>CustomDynamicAuthorizationManager.initialize()</code>, which calls <code>PolicyRetrievalPoint.findUrlPolicies()</code>.</li>
-              <li>The manager filters out inactive policies and policies whose <code>approvalStatus</code> is <code>PENDING</code> or <code>REJECTED</code>.</li>
-              <li>For each remaining URL policy, <code>PolicyExpressionConverter.toExpression(policy)</code> builds the SpEL expression string and <code>ExpressionAuthorizationManagerResolver.resolve(expression)</code> creates the Spring authorization manager.</li>
-              <li>The resulting <code>RequestMatcherEntry&lt;AuthorizationManager&lt;RequestAuthorizationContext&gt;&gt;</code> list is cached in memory.</li>
-              <li>At request time, <code>check(...)</code> iterates the cached matchers until it finds the first matching request pattern.</li>
-              <li>The matched authorization manager evaluates the current <code>Authentication</code> and request context. If no URL policy matches, the default decision is <code>AuthorizationDecision(true)</code>.</li>
-              <li>Denied URL authorization results are recorded through <code>CentralAuditFacade</code> with request URI, action, outcome, and optional AI assessment context before the decision is returned to Spring Security.</li>
+          <h2 id="enable">Enabling: connecting to requests</h2>
+          <p>URL policies apply to requests only while the manager is connected to the authorization step of the security filter chain. With <code>contexa-iam</code> present the manager bean always exists, but how it is connected depends on authentication ownership.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setup</th><th>URL policy connection</th></tr></thead>
+            <tbody>
+              <tr><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code> (<code>CONTEXA_OWNED</code>)</td><td>The Contexa chain permits only <code>/contexa/css/**</code>, <code>/contexa/js/**</code>, <code>/images/**</code> and <code>/favicon.ico</code> and connects every other request through <code>anyRequest().access(customDynamicAuthorizationManager)</code>. To change it, define your own <code>PlatformConfig</code> bean (<a href="../identity/dsl.html">Identity DSL</a>)</td></tr>
+              <tr><td>Default <code>@EnableAISecurity</code> (<code>HOST_OWNED</code>)</td><td>Contexa builds no chain. Connect it to your own chain as below</td></tr>
+              <tr><td><code>SANDBOX</code> + <code>contexa.bridge.ownership: CONTEXA_OWNED</code></td><td>Not connected. The Contexa chain guards only the admin area with <code>ADMIN</code> and permits the rest</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-java">import io.contexa.contexaiam.security.xacml.pep.CustomDynamicAuthorizationManager;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.web.SecurityFilterChain;
+
+@Configuration
+public class AppSecurityConfig {
+
+    @Bean
+    SecurityFilterChain appChain(HttpSecurity http,
+                                 CustomDynamicAuthorizationManager contexaUrlPolicies) throws Exception {
+        http.authorizeHttpRequests(auth -&gt; auth
+                        .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
+                        .anyRequest().access(contexaUrlPolicies))
+                .formLogin(Customizer.withDefaults());
+        return http.build();
+    }
+}</code></pre>
+          <div class="callout callout-info">
+            <strong>What URL policies cannot see under HOST_OWNED.</strong> The authentication bridge filter is a servlet filter registered without an order, so it runs after your security chain has finished. URL policies connected to your chain therefore do not see the delegation stamp: agent expressions answer as for a person's request, and no delegator re-evaluation happens. Put agent conditions in <a href="protectable.html"><code>@Protectable</code></a> method policies.
+          </div>
+          <h3 id="static-rules">Using static rules alongside</h3>
+          <ul>
+            <li>Spring Security reads matchers from the top and uses the first that matches. Put static <code>requestMatchers</code> before <code>anyRequest()</code>.</li>
+            <li>A request caught by a static matcher never reaches the URL policy manager. A database policy aimed at an address opened with <code>permitAll()</code> is silently ignored, so do not cover the same address with both a static rule and a policy.</li>
+            <li>Requests allowed statically do not pass through URL policies, so they do not appear in the authorization audit log either.</li>
+          </ul>
+          <h3 id="patterns">Configuration patterns</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Pattern</th><th>Inside <code>authorizeHttpRequests</code></th><th>When to use</th><th>Watch out</th></tr></thead>
+            <tbody>
+              <tr><td>Public assets + policies for the rest</td><td><code>.requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()</code><br><code>.anyRequest().access(customDynamicAuthorizationManager)</code></td><td>Most applications. The same shape as the <code>FULL</code> default chain</td><td>Static assets skip policy lookups, so they are fast</td></tr>
+              <tr><td>Screens that must stay open + policies for the rest</td><td>Add <code>.requestMatchers("/home", "/user/list/**").permitAll()</code> above</td><td>When some screens must stay open whatever the policies say</td><td>The pinned addresses cannot be changed by policy</td></tr>
+              <tr><td>Policies for everything</td><td>Only <code>.anyRequest().access(customDynamicAuthorizationManager)</code></td><td>When every access rule is governed by policy</td><td>Static assets are evaluated every time. With the default decision <code>PERMIT</code> an address without a policy is open; with <code>DENY</code> every address without a policy is blocked</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="first-policy">Creating a first URL policy</h2>
+          <ol>
+            <li>Open the admin screen Policy &gt; Policy Center (<code>/contexa/admin/policy-center</code>).</li>
+            <li>In the Resources tab, pick a URL resource and choose "Create Permission &amp; Policy", or create one in the Policy Creation tab in Quick, Manual or AI mode. If the resource is missing, check the scan packages of the <a href="resource-scanner.html">Resource Scanner</a>.</li>
+            <li>Set the name, effect (<code>ALLOW</code> or <code>DENY</code>), priority (lower numbers first), URL pattern (<code>/api/reports/**</code>), HTTP method (<code>GET</code> and so on; <code>ANY</code> for every method) and condition (<code>hasRole('MANAGER')</code>).</li>
+            <li>Saving rebuilds the mappings at once; no restart is needed. A policy written by hand has source <code>MANUAL</code> and approval status <code>NOT_REQUIRED</code>, so it runs right away.</li>
+            <li>Check it with the policy list, the simulator and the impact analysis. Writing, validation, impact and simulation all live in Policy Center (<a href="policy.html">Policy Management</a>).</li>
+          </ol>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Screen or API</th><th>Path</th></tr></thead>
+            <tbody>
+              <tr><td>Policy Center</td><td><code>GET /contexa/admin/policy-center</code></td></tr>
+              <tr><td>Quick creation</td><td><code>POST /contexa/admin/policy-center/api/quick-create</code></td></tr>
+              <tr><td>Manual creation (form)</td><td><code>POST /contexa/admin/policy-center/create-policy</code></td></tr>
+              <tr><td>Policy from a business rule (JSON)</td><td><code>POST /contexa/admin/api/policies/build-from-business-rule</code></td></tr>
+              <tr><td>Approve, reject</td><td><code>POST /contexa/admin/policies/{id}/approve</code>, <code>/reject</code></td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="policy-model">What one policy holds</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>name</code>, <code>description</code></td><td>Name (unique), description</td></tr>
+              <tr><td><code>effect</code></td><td><code>ALLOW</code> or <code>DENY</code> (<a href="xacml.html#decision">Decision rules</a>)</td></tr>
+              <tr><td><code>priority</code></td><td>Lower numbers first; equal values keep the order the store returned</td></tr>
+              <tr><td><code>targets</code></td><td><code>targetType</code> (<code>URL</code>), <code>targetIdentifier</code> (address pattern), <code>httpMethod</code> (<code>GET</code> and so on; empty, <code>ANY</code> or <code>ALL</code> for every method)</td></tr>
+              <tr><td><code>rules</code></td><td>Each rule has a <code>description</code> and a list of conditions; a condition is an <code>expression</code> (SpEL)</td></tr>
+              <tr><td><code>source</code></td><td><code>MANUAL</code>, <code>AI_GENERATED</code>, <code>AI_EVOLVED</code>, <code>IMPORTED</code></td></tr>
+              <tr><td><code>approvalStatus</code></td><td><code>PENDING</code>, <code>APPROVED</code>, <code>REJECTED</code>, <code>NOT_REQUIRED</code>. AI sources arrive as <code>PENDING</code> and run only once approved</td></tr>
+              <tr><td><code>isActive</code></td><td>Whether it is active; rejecting deactivates it</td></tr>
+              <tr><td><code>confidenceScore</code>, <code>aiModel</code></td><td>Confidence and model name of an AI-written policy (empty when written by hand)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The <strong>address pattern</strong> uses Spring <code>PathPattern</code> syntax. Write <code>**</code> only at the end of a pattern, as in <code>/api/reports/**</code>; a path variable such as <code>/api/users/{id}</code> can be read in conditions as <code>#id</code>.</p>
+          <p>From server code, use <code>PolicyService</code>. A saved policy takes effect at once, exactly like one created on screen.</p>
+          <pre><code class="language-java">import io.contexa.contexaiam.domain.dto.ConditionDto;
+import io.contexa.contexaiam.domain.dto.PolicyDto;
+import io.contexa.contexaiam.domain.dto.RuleDto;
+import io.contexa.contexaiam.domain.dto.TargetDto;
+import io.contexa.contexaiam.domain.entity.policy.Policy;
+import io.contexa.contexaiam.domain.entity.policy.PolicyCondition;
+import io.contexa.contexaiam.security.xacml.pap.service.PolicyService;
+import java.util.List;
+import org.springframework.stereotype.Service;
+
+@Service
+public class ReportPolicySetup {
+
+    private final PolicyService policyService;
+
+    public ReportPolicySetup(PolicyService policyService) {
+        this.policyService = policyService;
+    }
+
+    public void createReportPolicy() {
+        PolicyDto policy = PolicyDto.builder()
+                .name("REPORTS_FOR_MANAGERS")
+                .description("Managers read reports while the AI decision allows them")
+                .effect(Policy.Effect.ALLOW)
+                .priority(100)
+                .targets(List.of(TargetDto.builder()
+                        .targetType("URL")
+                        .targetIdentifier("/api/reports/**")
+                        .httpMethod("GET")
+                        .build()))
+                .rules(List.of(RuleDto.builder()
+                        .description("manager and AI allow")
+                        .conditions(List.of(ConditionDto.builder()
+                                .expression("hasRole('MANAGER') and #ai.isAllowed()")
+                                .authorizationPhase(PolicyCondition.AuthorizationPhase.PRE_AUTHORIZE)
+                                .build()))
+                        .build()))
+                .build();
+        policyService.createPolicy(policy);
+    }
+}</code></pre>
+          <div class="callout callout-warning">
+            <strong>Write "and" inside one condition.</strong> A URL policy joins several conditions with <code>or</code>. Putting <code>hasRole('MANAGER')</code> and <code>#ai.isAllowed()</code> in two separate conditions gives <code>(hasRole('MANAGER')) or (#ai.isAllowed())</code>, which allows the request when either one holds.
+          </div>
+
+          <h2 id="how-it-decides">The order in which one request is decided</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>URL policy decision</strong>The order once a request that no static rule caught reaches the manager.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">Request</span><span class="dg-node-desc">Caught by an earlier static rule: it never gets here</span></li>
+              <li class="dg-node"><span class="dg-node-tag">①</span><span class="dg-node-title">A later dispatch of the same request?</span><span class="dg-node-desc">An ASYNC or ERROR dispatch keeps the earlier granted decision</span></li>
+              <li class="dg-node"><span class="dg-node-tag">②</span><span class="dg-node-title">Find matching policies</span><span class="dg-node-desc">The mapping list in priority order, by address pattern and HTTP method</span></li>
+              <li class="dg-node"><span class="dg-node-tag">③</span><span class="dg-node-title">Evaluate conditions, apply effects</span><span class="dg-node-desc">With <code>FIRST_APPLICABLE</code>, stops at the first outcome that applies</span></li>
+              <li class="dg-node"><span class="dg-node-tag">④</span><span class="dg-node-title">Combine, or the default decision</span><span class="dg-node-desc">No matching policy: <code>no-matching-url-policy-decision</code> (default <code>PERMIT</code>)</span></li>
+              <li class="dg-node"><span class="dg-node-tag">⑤</span><span class="dg-node-title">Delegator re-evaluation</span><span class="dg-node-desc">An allowed delegated agent's request runs ② to ④ again as the delegator</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-tag">⑥</span><span class="dg-node-title">Audit record</span><span class="dg-node-desc">Both allow and deny. A signed-in user's denial is also kept as a session fact</span></li>
             </ol>
-          </section>
-
-          <!-- Static + Dynamic Integration -->
-          <section>
-            <h2 id="integration">Static + Dynamic Integration</h2>
-            <p>Contexa's dynamic authorization coexists with standard Spring Security static rules. Static rules are evaluated first by the filter chain; only requests that reach <code>.anyRequest()</code> are handled by the dynamic authorization manager.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Bean
-public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-    http.authorizeHttpRequests(auth -&gt; auth
-        // Static rules: evaluated first, bypasses dynamic authorization
-        .requestMatchers("/", "/home", "/css/**", "/js/**").permitAll()
-        .requestMatchers("/login", "/register").permitAll()
-        .requestMatchers("/user/list/**").hasRole("USER")
-
-        // Dynamic authorization: all remaining requests
-        // Policies loaded from database, hot-reloadable at runtime
-        .anyRequest().access(customDynamicAuthorizationManager)
-    );
-    return http.build();
-}</code></pre>
-            </div>
-
-            <h3>Evaluation Flow</h3>
-            <div class="diagram-container">
-              <div class="diagram-flow">
-                <div class="diagram-box">
-                  <div class="diagram-box-name">Incoming Request</div>
-                  <div class="diagram-box-desc">GET /admin/dashboard</div>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box">
-                  <div class="diagram-box-name">Static Matchers</div>
-                  <div class="diagram-box-desc">/css/**, /js/**, /images/**, /favicon.ico</div>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-highlight">
-                  <div class="diagram-box-name">Match Found?</div>
-                  <div class="diagram-box-desc">Yes: return permitAll() immediately | No: continue</div>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box">
-                  <div class="diagram-box-name">CustomDynamicAuthorizationManager</div>
-                  <div class="diagram-box-desc">Evaluate XACML policies from database</div>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box">
-                  <div class="diagram-box-name">AuthorizationDecision</div>
-                  <div class="diagram-box-desc">Grant or deny based on policy evaluation</div>
-                </div>
-              </div>
-            </div>
-
-            <h3>Important Behaviors</h3>
-            <ul>
-              <li><strong>Order matters</strong> &mdash;Static <code>requestMatchers</code> must be declared before <code>.anyRequest()</code>. Spring Security evaluates them top-to-bottom and uses the first match.</li>
-              <li><strong>Short-circuit evaluation</strong> &mdash;Once a static matcher matches, the dynamic manager is never invoked. This means <code>permitAll()</code> routes cannot be restricted by database policies.</li>
-              <li><strong>No overlap recommended</strong> &mdash;Avoid defining database policies for URLs that are already statically matched, as the static rule will always take precedence.</li>
-              <li><strong>Audit implications</strong> &mdash;Statically permitted requests do not pass through the XACML engine and will not appear in the authorization audit trail.</li>
+            <p class="dg-outcomes-title">Depending on the result</p>
+            <ul class="dg-outcomes">
+              <li class="dg-node dg-allow"><span class="dg-node-title">Allowed</span><span class="dg-node-desc">On to the controller</span></li>
+              <li class="dg-node dg-block"><span class="dg-node-title">Denied</span><span class="dg-node-desc">Handled by Spring Security (403 when signed in)</span></li>
             </ul>
+          </figure>
+          <ul>
+            <li><strong>A matching <code>ALLOW</code> policy whose condition is false denies too.</strong> Explicit <code>DENY</code> policies are not the only way to block. The full effect and combining rules are in <a href="xacml.html#decision">Authorization Overview &gt; Decision rules</a>.</li>
+            <li><strong>An address without a policy is allowed by default.</strong> To deny by default, set <code>contexa.policy.no-matching-url-policy-decision</code> to <code>DENY</code> or save it in the system settings screen (<a href="#settings">Settings</a>). A catch-all <code>DENY</code> policy such as <code>/**</code> is hard to use instead: saving a policy is refused as a conflict when an active policy with the opposite effect covers the same address or an address its pattern overlaps (different HTTP methods count as no overlap).</li>
+            <li><strong>A policy that failed the check at load time</strong> denies all its targets. The error log carries the policy ID and the reason.</li>
+            <li><strong>The audit record</strong> (<code>AUTHORIZATION_GRANTED</code>, <code>AUTHORIZATION_DENIED</code>) carries the source <code>IAM</code>, user, client IP, session ID, User-Agent, request address, HTTP method, decision (<code>ALLOW</code>, <code>DENY</code>) and outcome (<code>GRANTED</code>, <code>DENIED</code>).</li>
+            <li>URL policy decisions apply whatever the Zero Trust enforcement mode. The mode changes only whether the delegator re-evaluation refuses (<a href="#delegator-authority">below</a>).</li>
+          </ul>
 
-            <div class="callout callout-warning">
-              <strong>Caution:</strong> If you add a URL to <code>requestMatchers().permitAll()</code>, any database policy targeting that URL will be silently ignored. The static matcher always wins.
-            </div>
+          <h2 id="conditions">Writing conditions</h2>
+          <h3 id="conversion">How stored conditions become an expression</h3>
+          <p>A URL policy tidies its stored conditions into one expression at load time (<code>PolicyExpressionConverter</code>). Method policies skip this tidying and join their conditions with <code>and</code> as written.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Stored conditions</th><th>Resulting expression</th></tr></thead>
+            <tbody>
+              <tr><td>None</td><td><code>permitAll</code>: always allow for <code>ALLOW</code>, always deny for <code>DENY</code></td></tr>
+              <tr><td>One</td><td>As written; <code>permitAll</code>, <code>denyAll</code> and <code>isAuthenticated()</code> also stay as they are</td></tr>
+              <tr><td>Only an authority name (<code>ROLE_ADMIN</code>)</td><td><code>hasAuthority('ROLE_ADMIN')</code></td></tr>
+              <tr><td>Several, all authority names</td><td><code>hasAnyAuthority('ROLE_ADMIN','ROLE_AUDITOR')</code></td></tr>
+              <tr><td>Several, mixed</td><td><code>(condition1) or (condition2)</code></td></tr>
+              <tr><td>Upper-case authority names inside an expression</td><td>Only those names are wrapped: <code>ROLE_ADMIN or hasRole('AUDITOR')</code> → <code>hasAuthority('ROLE_ADMIN') or hasRole('AUDITOR')</code></td></tr>
+              <tr><td>A condition with <code>hasPermission(...)</code></td><td>That part is removed (object permissions cannot be judged for a URL). If nothing remains, <code>ALLOW</code> always denies (<code>denyAll</code>) and <code>DENY</code> always applies (<code>permitAll</code>)</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="examples">Condition examples</h3>
+          <pre><code class="language-text">hasRole('MANAGER') and #ai.isAllowed()
+ROLE_ADMIN or hasRole('AUDITOR')
+hasIpAddress('10.0.0.0/8') and T(java.time.LocalTime).now().getHour() &lt; 18
+httpMethod == 'GET' and !#ai.isBlocked()
+isDelegatedAgent() and delegationAllowsOperation('READ')</code></pre>
+          <ul>
+            <li>The full list of usable expressions is in <a href="xacml.html#conditions">Authorization Overview &gt; What a condition can use</a>. The meaning of the <code>#ai</code> decision expressions and the agent expressions is in <a href="ai-security-expressions.html">AI Security Expressions</a>.</li>
+            <li>Expressions can be called without <code>#ai.</code> (<code>isAllowed()</code> = <code>#ai.isAllowed()</code>). Agent expressions are usually written without the prefix.</li>
+            <li>An agent condition like the last line only means something under <code>CONTEXA_OWNED</code>, where the URL step sees the delegation stamp (<a href="#enable">Enabling</a>).</li>
+          </ul>
 
-            <h3 id="default-decision">Default Decision for Unmatched Requests</h3>
-            <p>When a request URL does not match any policy in the database, <code>CustomDynamicAuthorizationManager</code> returns a default authorization decision. By default, unmatched requests are <strong>allowed</strong> (<code>AuthorizationDecision(true)</code>), which means only explicitly defined DENY policies block access.</p>
-            <div class="callout callout-warning">
-              <strong>Security consideration:</strong> The default-allow behavior is suitable during initial setup and migration. For production environments with strict security requirements, consider creating a catch-all DENY policy with low priority to enforce a deny-by-default posture.
-            </div>
-          </section>
+          <h2 id="delegator-authority">Agents acting for a person</h2>
+          <p>A delegated agent may never do more than its delegator may. A delegated agent's request that the URL policies allow is <strong>evaluated against the policies once more as the delegator</strong>, and refused before any Contexa decision when the delegator may not make it or is unknown. The result is recorded in the decision event as <code>delegatorAuthority</code>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Result</th><th>Meaning</th><th>Request</th></tr></thead>
+            <tbody>
+              <tr><td><code>CARRIED</code></td><td>The request authenticated as the delegator (a delegator token from token exchange); its own evaluation was the delegator's</td><td>Unchanged</td></tr>
+              <tr><td><code>PERMITTED</code></td><td>The delegator may make it too</td><td>Unchanged</td></tr>
+              <tr><td><code>DENIED</code></td><td>The delegator may not make it</td><td>Denied</td></tr>
+              <tr><td><code>UNKNOWN</code></td><td>The delegator is unknown (no account, disabled, locked, or the lookup failed)</td><td>Denied</td></tr>
+              <tr><td><code>UNAVAILABLE</code></td><td>There is nowhere to read the delegator from, so nothing was checked</td><td>Unchanged</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>The delegator's authority is read from your <code>UserDetailsService</code>. A disabled or locked account delegates nothing. To read it from elsewhere (a directory, ...), declare a <code>DelegatorAuthoritySource</code> bean.</li>
+            <li>When the enforcement mode is not <code>ENFORCE</code> (SHADOW, OBSERVE, DISABLED), nothing is refused; it is only recorded.</li>
+            <li>A person's requests and an autonomous agent's requests are not re-evaluated.</li>
+            <li>URL policies are re-evaluated in the Contexa chain (<code>CONTEXA_OWNED</code>); method policies under both ownerships (<a href="../agent/overview.html#delegator-authority">Agent security</a>).</li>
+          </ul>
 
-          <!-- Configuration Patterns -->
-          <section>
-            <h2 id="patterns">Configuration Patterns</h2>
-            <p>The <code>authorizeHttpRequests</code> block inside the global customizer determines how static matchers interact with the dynamic authorization engine. Choose the pattern that matches your security posture.</p>
+          <h2 id="reload">Changing and checking it took effect</h2>
+          <ul>
+            <li><strong>Startup:</strong> the mapping list is first built when the application context is ready (<code>ContextRefreshedEvent</code>).</li>
+            <li><strong>Saving a policy:</strong> saving in Policy Center, the <code>PolicyService</code> create, update, delete, approve, reject and rollback operations, and the business rule path all clear the policy caches (URL and method) and rebuild the mapping list. There is no public REST API to call for this.</li>
+            <li><strong>Saving system settings:</strong> changing the combining algorithm or the default decisions applies them to this instance at once and rebuilds the list.</li>
+            <li><strong>Several instances:</strong> in distributed mode (<code>contexa.infrastructure.mode: distributed</code>) with Redisson present, <code>PolicyReloadBroadcaster</code> notifies the other instances on the Redis topic <code>contexa:policy:reload-signal</code>; each receiving instance re-reads the stored system settings and rebuilds its list. In standalone mode only that instance changes.</li>
+            <li><strong>Preview:</strong> the Policy Center simulator uses the same policy selection, order and address matching as enforcement.</li>
+          </ul>
 
-            <h3>Pattern 1: Public Assets + Full Dynamic</h3>
-            <p>The most common pattern. Static assets bypass authorization entirely; everything else is evaluated by the XACML policy engine.</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">http.authorizeHttpRequests(authReq -&gt; authReq
-    .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
-    .anyRequest().access(customDynamicAuthorizationManager)
-);</code></pre>
-            </div>
-
-            <h3>Pattern 2: Admin Fixed + Rest Dynamic</h3>
-            <p>A hybrid approach where certain well-known routes are statically permitted alongside asset paths, while the remaining routes go through dynamic evaluation. Useful when you want guaranteed access to specific pages regardless of policy state.</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">http.authorizeHttpRequests(authReq -&gt; authReq
-    .requestMatchers("/css/**", "/js/**").permitAll()
-    .requestMatchers("/home", "/user/list/**").permitAll()
-    .anyRequest().access(customDynamicAuthorizationManager)
-);</code></pre>
-            </div>
-
-            <h3>Pattern 3: Full Dynamic</h3>
-            <p>Pattern for routing all unmatched requests through <code>customDynamicAuthorizationManager</code>. In this setup, any route not statically permitted earlier in the chain is evaluated against the runtime policy mappings.</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">http.authorizeHttpRequests(authReq -&gt; authReq
-    .anyRequest().access(customDynamicAuthorizationManager)
-);</code></pre>
-            </div>
-
-            <h3>Pattern Comparison</h3>
-            <table>
-              <thead>
-                <tr><th>Criteria</th><th>Pattern 1: Public Assets + Dynamic</th><th>Pattern 2: Hybrid</th><th>Pattern 3: Full Dynamic</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Static asset performance</td><td>Best &mdash;no policy lookup</td><td>Good &mdash;no policy lookup for assets</td><td>Slowest &mdash;all requests evaluated</td></tr>
-                <tr><td>Policy flexibility</td><td>High for non-asset routes</td><td>Medium &mdash;some routes are hardcoded</td><td>Maximum &mdash;everything is policy-driven</td></tr>
-                <tr><td>Operational safety</td><td>Safe &mdash;assets always load</td><td>Safe &mdash;critical pages always reachable</td><td>Requires careful policy setup</td></tr>
-                <tr><td>Best for</td><td>Most applications</td><td>Admin panels with guaranteed access</td><td>Enterprise with full policy governance</td></tr>
-                <tr><td>Misconfiguration risk</td><td>Low</td><td>Low</td><td>High &mdash;missing policies block everything</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-          <!-- Core Implementation -->
-          <section>
-            <h2 id="implementation">Core Implementation</h2>
-            <p>The manager initializes on Spring context refresh and supports hot-reload for runtime policy updates.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public class CustomDynamicAuthorizationManager
-        implements AuthorizationManager&lt;RequestAuthorizationContext&gt; {
-
-    private final PolicyRetrievalPoint policyRetrievalPoint;
-    private final ExpressionAuthorizationManagerResolver managerResolver;
-    private final ContextHandler contextHandler;
-    private final ZeroTrustEventPublisher zeroTrustEventPublisher;
-    private final AuthorizationMetrics metricsCollector;
-
-    // Initializes on application context refresh
-    @EventListener
-    public void onApplicationEvent(ContextRefreshedEvent event) {
-        initialize();
-    }
-
-    @Override
-    public AuthorizationDecision check(
-            Supplier&lt;Authentication&gt; authenticationSupplier,
-            RequestAuthorizationContext context) {
-        // 1. Match request URL to cached RequestMatcherEntry
-        // 2. Resolve the SpEL expression for the matched policy
-        // 3. Evaluate the expression against the Authentication
-        // 4. Record denied results through CentralAuditFacade
-        // 5. Return AuthorizationDecision(granted/denied)
-    }
-
-    // Hot-reload: clears PRP cache and re-initializes mappings
-    public synchronized void reload() {
-        policyRetrievalPoint.clearUrlPoliciesCache();
-        policyRetrievalPoint.clearMethodPoliciesCache();
-        initialize();
-    }
-}</code></pre>
-            </div>
-          </section>
-
-          <!-- Policy Model -->
-          <section>
-            <h2 id="policy-model">Policy Model</h2>
-            <p>Each <code>Policy</code> entity stored in the database contains the full authorization definition including targets, rules, and metadata for AI-generated policies.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public class PolicyDto {
-    Long id;
-    String name;
-    String description;
-    Policy.Effect effect;
-    int priority;
-    List<TargetDto> targets;
-    List<RuleDto> rules;
-    Policy.PolicySource source;
-    Policy.ApprovalStatus approvalStatus;
-    Boolean isActive;
-    Double confidenceScore;
-    String aiModel;
-}</code></pre>
-            </div>
-
-            <h3 id="policy-fields">Policy Field Reference</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Field</th><th>Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>name</code></td>
-                  <td>String</td>
-                  <td>A human-readable identifier for the policy, displayed in Policy Center, policy details, and audit output.</td>
-                </tr>
-                <tr>
-                  <td><code>description</code></td>
-                  <td>String</td>
-                  <td>A human-readable description of what the policy protects and why it exists.</td>
-                </tr>
-                <tr>
-                  <td><code>effect</code></td>
-                  <td><code>Policy.Effect</code></td>
-                  <td>The policy effect. <code>ALLOW</code> grants access when conditions are met; <code>DENY</code> blocks access when conditions are met.</td>
-                </tr>
-                <tr>
-                  <td><code>priority</code></td>
-                  <td>int</td>
-                  <td>Determines the evaluation order when multiple policies match the same request. Higher priority policies are evaluated first and take precedence.</td>
-                </tr>
-                <tr>
-                  <td><code>targets</code></td>
-                  <td>List&lt;TargetDto&gt;</td>
-                  <td>The resource targets this policy applies to, defined as Ant-style URL patterns paired with HTTP methods.</td>
-                </tr>
-                <tr>
-                  <td><code>rules</code></td>
-                  <td>List&lt;PolicyRule&gt;</td>
-                  <td>The authorization rules for this policy. Each rule contains one or more SpEL conditions that are evaluated at request time.</td>
-                </tr>
-                <tr>
-                  <td><code>source</code></td>
-                  <td>PolicySource</td>
-                  <td>Indicates how the policy was created: <code>MANUAL</code>, <code>AI_GENERATED</code>, <code>AI_EVOLVED</code>, or <code>IMPORTED</code>.</td>
-                </tr>
-                <tr>
-                  <td><code>approvalStatus</code></td>
-                  <td>ApprovalStatus</td>
-                  <td>The approval workflow status: <code>NOT_REQUIRED</code>, <code>PENDING</code>, <code>APPROVED</code>, or <code>REJECTED</code>. AI-generated policies must be <code>APPROVED</code> before they are enforced.</td>
-                </tr>
-                <tr>
-                  <td><code>confidenceScore</code></td>
-                  <td>Double</td>
-                  <td>The AI model's confidence score for this policy, ranging from 0.0 to 1.0. Null for manually created policies.</td>
-                </tr>
-                <tr>
-                  <td><code>aiModel</code></td>
-                  <td>String</td>
-                  <td>The identifier of the AI model that generated this policy. Null for manually created policies.</td>
-                </tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="policy-target">PolicyTarget</h3>
-            <p>Each target captures a resource type, target identifier, optional HTTP method, ordering, and source type.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public class TargetDto {
-    String targetType;         // URL or METHOD
-    String targetIdentifier;   // e.g. "/api/admin/**"
-    String httpMethod;         // GET, POST, PUT, DELETE, ...
-    int targetOrder;
-    String sourceType;         // RESOURCE or MANUAL
-}</code></pre>
-            </div>
-
-            <h3 id="policy-rule">PolicyRule and Conditions</h3>
-            <p>Each rule contains one or more conditions. Conditions hold the actual SpEL expression strings that are evaluated at request time.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public class PolicyRule {
-    String name;
-    List&lt;PolicyCondition&gt; conditions;
-}
-
-public class PolicyCondition {
-    String expression;  // SpEL expression, e.g. "hasAnyAuthority('ROLE_ADMIN')"
-}</code></pre>
-            </div>
-          </section>
-
-          <!-- SpEL Expression Support -->
-          <section>
-            <h2 id="spel-expressions">SpEL Expression Support</h2>
-            <p>Contexa extends the standard Spring Security SpEL expressions with custom methods from <code>AbstractAISecurityExpressionRoot</code> for zero-trust AI action checks.</p>
-
-            <h3 id="standard-expressions">Standard Spring Security Expressions</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Expression</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>hasAnyAuthority('ROLE_ADMIN', 'ROLE_USER')</code></td>
-                  <td>Grants access if the principal has any of the listed authorities.</td>
-                </tr>
-                <tr>
-                  <td><code>hasAuthority('ROLE_ADMIN')</code></td>
-                  <td>Grants access if the principal has the specified authority.</td>
-                </tr>
-                <tr>
-                  <td><code>hasPermission('resource', 'action')</code></td>
-                  <td>Delegates evaluation to the <code>PermissionEvaluator</code> chain. This expression is automatically stripped from URL-level policies since it is only relevant for method-level evaluation.</td>
-                </tr>
-                <tr>
-                  <td><code>permitAll</code></td>
-                  <td>Always grants access regardless of authentication state or conditions.</td>
-                </tr>
-                <tr>
-                  <td><code>denyAll</code></td>
-                  <td>Always denies access regardless of authentication state or conditions.</td>
-                </tr>
-                <tr>
-                  <td><code>isAuthenticated()</code></td>
-                  <td>Grants access if the user is authenticated and not an anonymous user.</td>
-                </tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="zero-trust-expressions">Zero-Trust AI Expressions</h3>
-            <p>These expressions are provided by <code>AbstractAISecurityExpressionRoot</code> and integrate with Contexa's zero-trust AI evaluation pipeline.</p>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Expression</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>isAllowed()</code></td>
-                  <td>Returns true if the zero-trust AI action for the current request is <code>ALLOW</code>.</td>
-                </tr>
-                <tr>
-                  <td><code>#ai.isBlocked()</code></td>
-                  <td>Returns true if the zero-trust AI action for the current request is <code>BLOCK</code>.</td>
-                </tr>
-                <tr>
-                  <td><code>needsChallenge()</code></td>
-                  <td>Returns true if the AI evaluation determined that a step-up MFA challenge is required before granting access.</td>
-                </tr>
-                <tr>
-                  <td><code>#ai.needsEscalation()</code></td>
-                  <td>Returns true if the AI evaluation determined that human review or security team escalation is needed.</td>
-                </tr>
-                <tr>
-                  <td><code>#ai.isPendingAnalysis()</code></td>
-                  <td>Returns true if asynchronous AI analysis is still in progress for the current request.</td>
-                </tr>
-                <tr>
-                  <td><code>#ai.hasAction('ALLOW')</code></td>
-                  <td>Checks whether the zero-trust action matches a specific action by name.</td>
-                </tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="expression-conversion">Policy-to-Expression Conversion Rules</h3>
-            <p>The <code>getExpressionFromPolicy()</code> method in <code>CustomDynamicAuthorizationManager</code> applies the following conversion logic:</p>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Condition</th><th>Resulting Expression</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>No conditions + ALLOW effect</td>
-                  <td><code>permitAll</code></td>
-                </tr>
-                <tr>
-                  <td>No conditions + DENY effect</td>
-                  <td><code>denyAll</code></td>
-                </tr>
-                <tr>
-                  <td>Single condition</td>
-                  <td>Uses the expression directly</td>
-                </tr>
-                <tr>
-                  <td>Multiple simple authority conditions</td>
-                  <td><code>hasAnyAuthority('A', 'B', 'C')</code></td>
-                </tr>
-                <tr>
-                  <td>Multiple mixed conditions</td>
-                  <td>Joined with <code>or</code> operator</td>
-                </tr>
-                <tr>
-                  <td>DENY effect</td>
-                  <td>Wraps the expression in <code>!(expression)</code></td>
-                </tr>
-                <tr>
-                  <td><code>hasPermission()</code> in URL policy</td>
-                  <td>Stripped (only relevant for method-level evaluation)</td>
-                </tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- XACML Integration -->
-          <section>
-            <h2 id="xacml-integration">XACML Integration</h2>
-            <p>Dynamic authorization is powered by the XACML engine (eXtensible Access Control Markup Language). The five XACML components work together to manage the complete policy lifecycle. See the <a href="../../../docs/reference/iam/xacml.html">XACML Engine</a> page for full details.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Component</th><th>Full Name</th><th>Role in Dynamic Authorization</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><strong>PAP</strong></td>
-                  <td>Policy Administration Point</td>
-                  <td>Creates, reads, updates, and deletes policies through Policy Center, policy detail flows, and related admin services.</td>
-                </tr>
-                <tr>
-                  <td><strong>PDP</strong></td>
-                  <td>Policy Decision Point</td>
-                  <td>Evaluates policy conditions as SpEL expressions against the security context and returns a grant or deny decision.</td>
-                </tr>
-                <tr>
-                  <td><strong>PEP</strong></td>
-                  <td>Policy Enforcement Point</td>
-                  <td>Implemented by <code>CustomDynamicAuthorizationManager</code>. Enforces PDP decisions within the Spring Security filter chain.</td>
-                </tr>
-                <tr>
-                  <td><strong>PIP</strong></td>
-                  <td>Policy Information Point</td>
-                  <td>Provides contextual attributes such as user roles, permissions, and request metadata for use in SpEL expression evaluation.</td>
-                </tr>
-                <tr>
-                  <td><strong>PRP</strong></td>
-                  <td>Policy Retrieval Point</td>
-                  <td>Loads policies from the database at application startup and refreshes them on hot-reload events.</td>
-                </tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- Usage Example -->
-          <section>
-            <h2 id="usage-example">Usage Example</h2>
-            <p>The following example shows the complete lifecycle of creating and enforcing a dynamic authorization policy.</p>
-
-            <h3 id="step1-create-policy">Step 1: Create a Policy</h3>
-            <p>Policies can be created through Policy Center and related server-side admin flows. This OSS page does not describe a separate public PAP REST surface.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code>GET  /admin/policy-center
-POST /admin/policy-center/create-policy
-POST /admin/policy-center/api/quick-create
-POST /admin/api/policies/build-from-business-rule
-
-// Current OSS authoring paths:
-// - Policy Center form workflow
-// - Quick-create helper inside Policy Center
-// - Business-rule helper API for assisted policy generation</code></pre>
-            </div>
-
-            <h3 id="step2-database-storage">Step 2: Policy is Stored in Database</h3>
-            <p>The PAP persists the policy as JPA entities: <code>Policy</code>, <code>PolicyTarget</code>, <code>PolicyRule</code>, and <code>PolicyCondition</code>. For manually created policies, <code>source</code> is set to <code>MANUAL</code> and <code>approvalStatus</code> to <code>NOT_REQUIRED</code>.</p>
-
-            <h3 id="step3-manager-picks-up">Step 3: Manager Picks Up the Policy</h3>
-            <p>On the next hot-reload (or application restart), <code>CustomDynamicAuthorizationManager</code> loads the new policy from the PRP and builds a <code>RequestMatcherEntry</code> mapping:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Text</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code>URL Pattern: /api/admin/**
-HTTP Methods: GET, POST, PUT, DELETE
-SpEL Expression: hasAuthority('ROLE_ADMIN')
-Source: MANUAL
-Approval: NOT_REQUIRED (active immediately)</code></pre>
-            </div>
-
-            <h3 id="step4-request-secured">Step 4: Requests are Automatically Secured</h3>
-            <p>When a request arrives at <code>/api/admin/users</code>:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Text</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code>1. Request: GET /api/admin/users
-2. CustomDynamicAuthorizationManager.check() is invoked
-3. URL matches pattern /api/admin/** (Ant path matching)
-4. SpEL expression "hasAuthority('ROLE_ADMIN')" is evaluated
-5a. User has ROLE_ADMIN -&gt; AuthorizationDecision(granted=true)
-5b. User lacks ROLE_ADMIN -&gt; AuthorizationDecision(granted=false) -&gt; 403
-6. If the result is denied, CustomDynamicAuthorizationManager records an audit event with request URI, action, outcome, and available AI context</code></pre>
-            </div>
-
-            <h3 id="ai-policy-example">AI-Generated Policy Example</h3>
-            <p>When an AI model generates a policy, it enters the system with <code>PENDING</code> approval status and is <strong>not enforced</strong> until a human reviewer approves it.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">JSON</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code>{
-  "name": "AI: Restrict Sensitive Reports",
-  "description": "AI-detected sensitive data endpoint requiring elevated access",
-  "effect": "ALLOW",
-  "priority": 90,
-  "targets": [
-    {
-      "targetType": "URL",
-      "targetIdentifier": "/api/reports/sensitive/**",
-      "httpMethod": "GET",
-      "targetOrder": 0,
-      "sourceType": "RESOURCE",
-
-    }
-  ],
-  "rules": [
-    {
-      "name": "Require manager role and AI clearance",
-      "conditions": [
-        { "expression": "hasAuthority('ROLE_MANAGER')" },
-        { "expression": "isAllowed()" }
-      ]
-    }
-  ],
-  "source": "AI_GENERATED",
-  "approvalStatus": "PENDING",
-  "confidenceScore": 0.87,
-  "aiModel": "contexa-policy-gen-v2"
-}</code></pre>
-            </div>
-            <p>This policy will be <strong>skipped</strong> during authorization evaluation until an administrator approves it through the current admin policy review flow.</p>
-          </section>
-
-          <!-- Configuration -->
-          <section>
-            <h2 id="configuration">Configuration</h2>
-            <p>Dynamic authorization is enabled automatically when the <code>contexa-iam</code> module is on the classpath. Runtime policy changes are typically made through <a href="../../../docs/reference/iam/admin.html">Policy Center and related admin policy views</a>, while code-level behavior is defined by the IAM and security configuration classes.</p>
-
-            <h3 id="hot-reload">Hot-Reload</h3>
-            <p>After modifying policies through Policy Center or related admin flows, the server calls <code>authorizationManager.reload()</code> to rebuild URL and method policy caches without restarting the application:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">policyService.createPolicy(policyDto);
-customDynamicAuthorizationManager.reload();</code></pre>
-            </div>
-            <p>This calls <code>CustomDynamicAuthorizationManager.reload()</code>, which clears the PRP cache and re-initializes all <code>RequestMatcherEntry</code> mappings from the database.</p>
-
-            <h3 id="related-configuration">Related Configuration</h3>
-            <p>For IAM property configuration, see the <a href="../../../docs/install/configuration.html">Configuration</a> reference. Key properties include:</p>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>contexa.iam.admin.rest-docs-path</code></td>
-                  <td><code>/docs/index.html</code></td>
-                  <td>Base documentation path used when MVC-scanned resources generate their API documentation anchors.</td>
-                </tr>
-                <tr>
-                  <td><code>contexa.policy.combining-algorithm</code></td>
-                  <td><code>FIRST_APPLICABLE</code></td>
-                  <td>Combining algorithm used when multiple URL policies match the same request.</td>
-                </tr>
-                <tr>
-                  <td><code>security.zerotrust.mode</code></td>
-                  <td><code>ENFORCE</code></td>
-                  <td>Controls whether zero-trust decisions are enforced live or observed in shadow mode.</td>
-                </tr>
-              </tbody>
-            </table></div>
-
-            <h3>Zero Trust Properties</h3>
-            <table>
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>security.zerotrust.enabled</code></td><td><code>true</code></td><td>Enable or disable the zero-trust authorization framework globally</td></tr>
-                <tr><td><code>security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>Authorization mode: <code>SHADOW</code> (audit only) or <code>ENFORCE</code> (live enforcement)</td></tr>
-                <tr><td><code>security.zerotrust.sampling.rate</code></td><td><code>1.0</code></td><td>Sampling rate for authorization evaluation (1.0 = evaluate all requests)</td></tr>
-                <tr><td><code>security.zerotrust.hotpath.enabled</code></td><td><code>true</code></td><td>Enable hot-path optimization for frequently accessed resources</td></tr>
-                <tr><td><code>security.zerotrust.threat.initial</code></td><td><code>0.3</code></td><td>Initial threat score assigned to new sessions</td></tr>
-              </tbody>
-            </table>
-
-            <h3>Threshold Properties</h3>
-            <table>
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>security.zerotrust.thresholds.skip</code></td><td><code>0.3</code></td><td>Threat score below which authorization checks may be skipped</td></tr>
-                <tr><td><code>security.zerotrust.thresholds.optional</code></td><td><code>0.5</code></td><td>Threat score threshold for optional additional verification</td></tr>
-                <tr><td><code>security.zerotrust.thresholds.required</code></td><td><code>0.7</code></td><td>Threat score threshold requiring mandatory verification</td></tr>
-                <tr><td><code>security.zerotrust.thresholds.strict</code></td><td><code>0.9</code></td><td>Threat score threshold triggering strict security measures</td></tr>
-              </tbody>
-            </table>
-
-            <h3>Cache and Session Properties</h3>
-            <table>
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>security.zerotrust.cache.ttl-hours</code></td><td><code>24</code></td><td>TTL for cached authorization decisions (hours)</td></tr>
-                <tr><td><code>security.zerotrust.cache.session-ttl-minutes</code></td><td><code>30</code></td><td>Session-specific cache TTL (minutes)</td></tr>
-                <tr><td><code>security.zerotrust.cache.invalidated-ttl-minutes</code></td><td><code>60</code></td><td>TTL for invalidated cache entries before removal (minutes)</td></tr>
-                <tr><td><code>security.zerotrust.session.tracking-enabled</code></td><td><code>true</code></td><td>Enable AI session tracking for behavioral analysis</td></tr>
-                <tr><td><code>security.zerotrust.redis.timeout</code></td><td><code>5</code></td><td>Redis connection timeout (seconds)</td></tr>
-                <tr><td><code>security.zerotrust.redis.update-interval-seconds</code></td><td><code>30</code></td><td>Interval for pushing session metrics to Redis</td></tr>
-              </tbody>
-            </table>
-
-            <div class="callout callout-info">
-              <strong>Related:</strong> For IAM admin UI properties such as <code>contexa.iam.admin.*</code>, see the <a href="../../../docs/reference/iam/admin.html">Admin Console</a> reference page.
-            </div>
-          </section>
-
-          <!-- See Also -->
-          <section>
-            <h2 id="see-also">See Also</h2>
-            <ul>
-              <li><a href="../../../docs/reference/iam/xacml.html">Authorization Overview</a> &mdash;Full XACML architecture, AI expressions, and Quick Start</li>
-              <li><a href="../../../docs/reference/iam/policy.html">Policy Management</a> &mdash;Policy lifecycle, Policy Builder, and condition templates</li>
-              <li><a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> &mdash;Automatic resource discovery and the end-to-end workflow</li>
-              <li><a href="../../../docs/reference/iam/permission-evaluators.html">Permission Evaluators</a> &mdash;Method-level permission evaluation with <code>hasPermission()</code></li>
-              <li><a href="../../../docs/reference/iam/admin.html">Admin Console</a> &mdash;Current Policy Center, access center, and related IAM operator views</li>
-            </ul>
-          </section>
-
-          <!-- Default Policy Management -->
-          <section>
-            <h2 id="default-policy">Default Policy Management</h2>
-            <p>When an incoming request does not match any configured URL policy, <code>CustomDynamicAuthorizationManager.check(...)</code> falls back to <code>new AuthorizationDecision(true)</code>. That means unmatched requests are allowed by default in the current OSS runtime.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Default behavior: unmatched requests are allowed
-return new AuthorizationDecision(true);</code></pre>
-            </div>
-            <h3>Moving Toward Default Deny</h3>
-            <p>The OSS codebase does not expose a dedicated YAML property such as <code>default-policy</code> for unmatched URL requests. To move toward deny-by-default, create explicit catch-all DENY policies for protected URL spaces or customize the authorization manager in code.</p>
-          </section>
-
-          <!-- Admin UI: Creating URL Policies -->
-          <section>
-            <h2 id="admin-url-policies">Creating URL Policies in Policy Center</h2>
-            <p>The current OSS operator flow for URL policies is centered on Policy Center. Follow these steps to create a policy that protects a URL pattern:</p>
-            <ol>
-              <li><strong>Open Policy Center</strong> &mdash;Go to <strong>/admin/policy-center?tab=create</strong> and open the integrated create surface.</li>
-              <li><strong>Choose a create path</strong> &mdash;Use quick-create for simple role/permission grants, or use the manual form to edit the full <code>PolicyDto</code>.</li>
-              <li><strong>Set Policy Metadata</strong> &mdash;Enter a descriptive policy name, select the effect (<code>ALLOW</code> or <code>DENY</code>), and set the priority (lower numbers evaluate first).</li>
-              <li><strong>Add URL Target</strong> &mdash;In the Targets section, add a URL target by specifying:
-                <ul>
-                  <li>URL pattern (e.g., <code>/api/admin/**</code>)</li>
-                  <li>HTTP method (<code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>DELETE</code>, or <code>ANY</code>)</li>
-                </ul>
-              </li>
-              <li><strong>Add Rule with Condition</strong> &mdash;Add a rule containing a SpEL condition expression. For example:
-                <div class="code-block">
-                  <div class="code-block-header">
-                    <span class="code-block-lang">SpEL</span>
-                    <button class="code-copy-btn" type="button" aria-label="Copy code">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                      <span>Copy</span>
-                    </button>
-                  </div>
-                  <pre><code>hasAnyAuthority('ROLE_ADMIN')</code></pre>
-                </div>
-              </li>
-              <li><strong>Save and Verify</strong> &mdash;Save the policy through Policy Center or a related admin flow. The server rebuilds authorization mappings through <code>authorizationManager.reload()</code>. Verify enforcement with the list, simulator, impact analysis, and detail views.</li>
-            </ol>
-            <div class="callout callout-info">
-              <strong>Tip:</strong> For complex conditions, use Policy Center and the condition catalog to compose stored SpEL rules. <code>#ai.*</code> expressions, role checks, permission checks, time checks, and IP checks can be combined in the same rule.
-            </div>
-          </section>
-
-          <!-- Policy Hot-Reload -->
-          <section>
-            <h2 id="policy-hot-reload">Policy Hot-Reload</h2>
-            <p><code>CustomDynamicAuthorizationManager</code> supports hot-reloading of policies without application restart. This ensures authorization changes take effect immediately.</p>
-
-            <h3>Automatic Reload</h3>
-            <p>Policies are automatically reloaded when the application context fires a <code>ContextRefreshedEvent</code>. The reload process:</p>
-            <ol>
-              <li><code>PolicyRetrievalPoint</code> fetches the latest policies from the database.</li>
-              <li><code>CustomDynamicAuthorizationManager</code> rebuilds the <code>RequestMatcherEntry</code> list.</li>
-              <li>New requests are evaluated against the updated policy set.</li>
-            </ol>
-
-            <h3>Manual Reload</h3>
-            <p>Reload can be triggered from server-side admin flows that call <code>authorizationManager.reload()</code>, including Policy Center updates and system settings flows. This page does not document a standalone public reload REST endpoint.</p>
-
-            <h3>Cache Invalidation</h3>
-            <p>When policies are reloaded, <code>CustomDynamicAuthorizationManager.reload()</code> clears URL and method policy caches through <code>PolicyRetrievalPoint</code> and rebuilds request mappings. Shared infrastructure such as Redis may still participate elsewhere in the platform, but the runtime reload contract here is the authorization manager and PRP cache reset.</p>
-          </section>
-
+          <h2 id="settings">Settings</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.policy.no-matching-url-policy-decision</code></td><td><code>PERMIT</code></td><td>Decision when no URL policy matches</td><td><code>DENY</code> to run deny-by-default, blocking addresses without a policy</td></tr>
+              <tr><td><code>contexa.policy.combining-algorithm</code></td><td><code>FIRST_APPLICABLE</code></td><td>How the outcomes of several policies are merged (URL and method)</td><td><code>DENY_OVERRIDES</code> to stop relying on policy order ("deny wins")</td></tr>
+              <tr><td><code>contexa.policy.missing-method-policy-decision</code></td><td><code>PERMIT</code></td><td>Decision when no method policy matches (<a href="protectable.html">@Protectable</a>)</td><td><code>DENY</code> to block protected methods without a policy</td></tr>
+            </tbody>
+          </table></div>
+          <p>When the system settings row created by the default seed exists, its values replace the three settings above at startup (initially <code>FIRST_APPLICABLE</code>, <code>PERMIT</code>, <code>PERMIT</code>). In operation, change them in the admin screen IAM &gt; System Settings (<code>/contexa/admin/system-settings</code>). The admin screen's own settings (<code>contexa.iam.admin.*</code>) are in <a href="admin.html">Admin Console</a>, and all authorization settings in <a href="../../install/configuration/iam.html">Authorization settings</a>.</p>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/iam/xacml.html" class="docs-nav-prev">
+            <a href="xacml.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
               <span class="docs-nav-title">Authorization Overview</span>
             </a>
-            <a href="../../../docs/reference/iam/protectable.html" class="docs-nav-next">
+            <a href="protectable.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">@Protectable</span>
+              <span class="docs-nav-title">@Protectable: Protecting Methods</span>
             </a>
           </div>

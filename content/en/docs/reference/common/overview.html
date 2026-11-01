@@ -1,69 +1,155 @@
-<!-- Breadcrumb -->
 <nav class="breadcrumb">
-  <a href="../../index.html">Home</a>
-  <span class="breadcrumb-separator">/</span>
-  <a href="../../docs/reference/index.html">Reference</a>
-  <span class="breadcrumb-separator">/</span>
-  <span class="breadcrumb-current">Common</span>
-</nav>
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Common Contracts</span>
+          </nav>
 
-<div class="docs-page-header">
-  <h1>Common Contracts</h1>
-  <p class="lead">Shared annotations, security mode types, and bridge contracts that connect the Contexa OSS modules.</p>
-</div>
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-common</span>
+            </div>
+            <h1>Common Contracts: Contexa Types in Your Code</h1>
+            <p class="lead">The Contexa annotations, decision values, mode enums and extension interfaces that you write in application code, in one place. Find the type for what you want to do, when to use it, and what actually happens with the OSS modules.</p>
+          </div>
 
-<section class="docs-section">
-  <h2>Key Annotations</h2>
-  <p><code>@EnableAISecurity</code> enables the runtime control plane from a Spring Boot application, and <code>@Protectable</code> marks request handlers for Contexa protection.</p>
-  <div class="code-block"><div class="code-block-header"><span class="code-block-lang">Java</span></div><pre><code class="language-java">@EnableAISecurity
+          <h2 id="overview">At a glance</h2>
+          <p>All the types below live in the <code>contexa-common</code> module (only the enforcement mode enum is in <code>contexa-core</code>). The single starter (<code>spring-boot-starter-contexa</code>) brings them in.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What you want to do</th><th>Type you use</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td>Turn Contexa on</td><td><code>@EnableAISecurity</code></td><td><a href="#enable">Below</a>, <a href="../autoconfigure/ai-security.html">Turning Contexa On and Choosing a Security Mode</a></td></tr>
+              <tr><td>Choose the methods that are analyzed and enforced</td><td><code>@Protectable</code></td><td><a href="#protectable">Below</a>, <a href="../iam/protectable.html">@Protectable</a></td></tr>
+              <tr><td>Read a decision</td><td><code>ZeroTrustAction</code></td><td><a href="#actions">Below</a>, <a href="../identity/zero-trust-filters.html">Request-time enforcement</a></td></tr>
+              <tr><td>Choose who owns login and whether decisions are enforced</td><td><code>SecurityMode</code> (two of them), <code>SecurityOwnershipMode</code></td><td><a href="#modes">Below</a></td></tr>
+              <tr><td>Tell Contexa about your application's login</td><td><code>AuthBridge</code>, <code>ContexaAuthBridge</code></td><td><a href="bridge.html">Connecting Your Existing Login</a></td></tr>
+              <tr><td>Add your own startup check, replace the cache</td><td><code>CapabilityContributor</code>, <code>ContexaCacheService</code></td><td><a href="#extension">Below</a></td></tr>
+              <tr><td>See the automated response (SOAR) and tool approval contracts</td><td><code>@SoarTool</code>, <code>SecurityActionEvent</code></td><td><a href="../soar/index.html">SOAR extension points</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="enable">Turning Contexa on: <code>@EnableAISecurity</code></h2>
+          <p>The switch you put on the main class (package <code>io.contexa.contexacommon.annotation</code>). It imports the selector <code>AiSecurityImportSelector</code> (<code>@Import</code>), which loads the Contexa configuration. Without attributes the security mode is <code>SANDBOX</code> (your application owns login).</p>
+          <pre><code class="language-java">@EnableAISecurity
 @SpringBootApplication
-public class Application { }
+public class Application {
+    public static void main(String[] args) {
+        SpringApplication.run(Application.class, args);
+    }
+}</code></pre>
+          <ul>
+            <li><strong>It is the "on" marker.</strong> The annotation puts the setting key <code>contexa.ai.security.mode</code>, and Contexa counts itself on only while that key exists. Without the annotation every Contexa auto-configuration is left out, even with the starter on the classpath.</li>
+            <li><strong>A dedicated database is required.</strong> Startup stops when <code>contexa.datasource.url</code> is empty.</li>
+            <li>The attributes (<code>mode</code>, <code>authObjectLocation</code>, <code>authObjectAttribute</code>, <code>authObjectType</code>) and what happens when you turn it on are in <a href="../autoconfigure/ai-security.html">Turning Contexa On and Choosing a Security Mode</a>.</li>
+          </ul>
 
-@Protectable
-@GetMapping("/api/customers")
-public List&lt;Customer&gt; list() { ... }</code></pre></div>
-</section>
+          <h2 id="protectable">Choosing the methods to analyze and enforce: <code>@Protectable</code></h2>
+          <p>When a method with this annotation is called, Contexa intercepts the call (<code>AuthorizationManagerMethodInterceptor</code>), evaluates the method authorization policies (<code>ProtectableMethodAuthorizationManager</code>), and the decision engine analyzes the call. This <strong>protected method</strong> is the unit a decision is made about.</p>
+          <ul>
+            <li><strong>Where it goes:</strong> a method or a class of a Spring bean. On a class it covers every method of the class. It does not have to be a controller.</li>
+            <li><strong>Login is required:</strong> if the <code>SecurityContext</code> holds no authenticated <code>Authentication</code> at call time, or only an anonymous one, the call is refused.</li>
+            <li><strong>Analysis runs only in the <code>SHADOW</code> and <code>ENFORCE</code> enforcement modes:</strong> under <code>DISABLED</code> and <code>OBSERVE</code> only the authorization policies are evaluated; nothing is analyzed and no event is published.</li>
+          </ul>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Default (decided later) and immediate decision</strong>Both use the same decision engine. The difference is whether the call waits for the decision.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side"><p class="dg-side-title">Default: <code>@Protectable</code></p><ul><li>A stored block, step-up or hold for this user refuses the call before it runs (only recorded under <code>SHADOW</code>)</li><li>The method runs and answers at once</li><li>When it finishes, an analysis event goes out and the decision is made in the background</li><li>That decision applies from the same user's next request</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Immediate decision: <code>@Protectable(sync = true)</code></p><ul><li>Decided on the spot, before the method runs</li><li>Allow: the method runs</li><li>Anything else: refused under <code>ENFORCE</code></li><li>Under <code>SHADOW</code>: recorded, and the method runs</li></ul></div>
+            </div>
+          </figure>
+          <p>An agent request with no decision on record is decided on the spot even on a default method (<a href="../agent/overview.html">Agent security</a>). How a decision is made is described in <a href="../architecture/decision-engine.html">Decision Engine</a>.</p>
+          <h3 id="protectable-attributes">Attributes</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Attribute</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>sync</code></td><td><code>false</code></td><td><code>true</code> decides immediately, inside the request</td><td>Methods that must not run before the decision (bulk export, permission changes). The response waits for the decision.</td></tr>
+              <tr><td><code>ownerField</code></td><td><code>""</code></td><td>The field or getter name read from the target object when the policy expression <code>hasPermission(target, permission)</code> checks ownership. The value must equal the signed-in user name. Administrators skip the check. Blank means no check</td><td>When you need row-level ownership checks (<a href="../iam/protectable.html">@Protectable</a>)</td></tr>
+              <tr><td><code>category</code></td><td><code>""</code></td><td>The business category of the resource (for example <code>REPORT</code>). The role scope and the delegated scope are compared in this vocabulary</td><td>When it must be compared with a delegated scope</td></tr>
+              <tr><td><code>sensitivity</code></td><td><code>""</code></td><td>Sensitivity (<code>PUBLIC</code>, <code>INTERNAL</code>, <code>CONFIDENTIAL</code>, <code>RESTRICTED</code>, ...). A value the application sets on the request wins</td><td>To tell the decision how sensitive the resource is</td></tr>
+              <tr><td><code>actions</code></td><td><code>{}</code></td><td>The action families the method performs (<code>READ</code>, <code>EXPORT</code>, ...). With exactly one, it is the request's action family unless the application sets another on the request</td><td>To have reads and exports decided apart</td></tr>
+              <tr><td><code>importance</code></td><td><code>UNSPECIFIED</code></td><td><code>SENSITIVE</code>: a request cannot lower it, each resource is decided on its own, and the restrictions in force are checked again right before it runs. <code>NON_SENSITIVE</code>: a candidate for a few requests passing while the first decision is made (a request sensitivity can raise it). <code>UNSPECIFIED</code>: nothing declared</td><td>When the application states how important the resource is (<code>ResourceImportance</code>)</td></tr>
+              <tr><td><code>privileged</code></td><td><code>false</code></td><td>Declares a privileged method (only <code>true</code> means anything)</td><td>Administration and permission-change methods</td></tr>
+              <tr><td><code>exportSensitive</code></td><td><code>false</code></td><td>Declares a method that exports sensitive data (only <code>true</code> means anything)</td><td>Download and export methods</td></tr>
+              <tr><td><code>verificationRequired</code></td><td><code>true</code></td><td>Whether the prompt quality certification gate (<code>ProtectableResourceCertificationGate</code>) applies</td><td><strong>No effect with the OSS modules alone.</strong> The OSS has no gate implementation; it applies only when a bean implementing it exists.</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-java">import io.contexa.contexacommon.annotation.Protectable;
+import io.contexa.contexacommon.annotation.ResourceImportance;
+import org.springframework.stereotype.Service;
 
-<section class="docs-section">
-  <h2>Security Mode</h2>
-  <p><code>SecurityMode</code> currently exposes <code>FULL</code> and <code>SANDBOX</code>. The default on <code>@EnableAISecurity</code> is <code>SANDBOX</code>. Unless <code>contexa.bridge.ownership</code> is set, <code>SANDBOX</code> runs as <code>HOST_OWNED</code> and <code>FULL</code> as <code>CONTEXA_OWNED</code>; an explicitly configured value always wins. In <code>HOST_OWNED</code>, Contexa does not build an authentication <code>SecurityFilterChain</code>, so the host application must declare its own Spring Security configuration to keep its existing behavior. Without one, Spring Boot's default security applies (every request requires authentication, with a generated form login and HTTP Basic login).</p>
-</section>
+@Service
+public class ReportService {
 
-<section class="docs-section">
-  <h2>Annotation Attributes</h2>
-  <h3><code>@EnableAISecurity</code></h3>
-  <p>Package: <code>io.contexa.contexacommon.annotation</code>. Meta-annotated with <code>@Import(AiSecurityImportSelector.class)</code>.</p>
-  <div class="table-scroll"><table class="api-table">
-    <thead><tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-    <tbody>
-      <tr><td><code>mode</code></td><td><code>SecurityMode</code></td><td><code>SANDBOX</code></td><td>Runtime mode. <code>SANDBOX</code> (default ownership <code>HOST_OWNED</code>) leaves authentication to the host application's Spring Security configuration; <code>FULL</code> (default ownership <code>CONTEXA_OWNED</code>) lets Contexa own the login flows.</td></tr>
-      <tr><td><code>authObjectLocation</code></td><td><code>AuthObjectLocation</code></td><td><code>AUTO</code></td><td>Hint for locating the authenticated object in SANDBOX mode. Enum values: <code>AUTO</code>, <code>SESSION</code>, <code>REQUEST_ATTRIBUTE</code>, <code>HEADER</code>.</td></tr>
-      <tr><td><code>authObjectAttribute</code></td><td><code>String</code></td><td><code>""</code></td><td>Session or request attribute name used when the host app stores the authenticated object outside Spring Security. This object is read as authorization and delegation evidence and does not by itself become authentication evidence (authentication evidence comes from the Spring <code>Authentication</code>).</td></tr>
-      <tr><td><code>authObjectType</code></td><td><code>Class&lt;?&gt;</code></td><td><code>Object.class</code></td><td>Optional type hint for reflective extraction of the authenticated object.</td></tr>
-    </tbody>
-  </table></div>
+    @Protectable(category = "REPORT", actions = {"EXPORT"},
+                 importance = ResourceImportance.SENSITIVE, sync = true)
+    public String exportMonthlyReport(String month) {
+        return "report-" + month;
+    }
+}</code></pre>
 
-  <h3><code>@Protectable</code></h3>
-  <p>Package: <code>io.contexa.contexacommon.annotation</code>. Method-level marker consumed by <code>AuthorizationManagerMethodInterceptor</code> and <code>ProtectableMethodAuthorizationManager</code>. A Spring <code>Authentication</code> is required at invocation time; without one, or with an anonymous one, the call is rejected.</p>
-  <div class="table-scroll"><table class="api-table">
-    <thead><tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-    <tbody>
-      <tr><td><code>ownerField</code></td><td><code>String</code></td><td><code>""</code></td><td>Field name on the return type used to identify the resource owner for ownership-based authorization.</td></tr>
-      <tr><td><code>sync</code></td><td><code>boolean</code></td><td><code>false</code></td><td>When <code>true</code>, <code>SynchronousProtectableDecisionService</code> invokes <code>SecurityPlaneAgent</code> inline and produces the <code>ZeroTrustAction</code> before the method returns; when <code>false</code>, a <code>ZeroTrustSpringEvent</code> is published and evaluation is asynchronous.</td></tr>
-    </tbody>
-  </table></div>
-  <p class="docs-note" style="margin-top: var(--space-3)">
-    💡 For the complete annotation attributes specification (such as <code>resourceId</code>, <code>resourceUrl</code>, <code>criticality</code>) and practical usage examples, please refer to the <a href="../iam/protectable.html">Protectable Detailed Guide</a>.
-  </p>
-</section>
+          <h2 id="actions">Decision values: <code>ZeroTrustAction</code></h2>
+          <p>The value the decision engine makes and stores. Each value carries an HTTP status, a lifetime and a granted authority fixed in code.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Value</th><th>In plain words</th><th>HTTP status value</th><th>Lifetime</th><th>Granted authority</th></tr></thead>
+            <tbody>
+              <tr><td><code>ALLOW</code></td><td>Allow</td><td>200</td><td>15 s</td><td>None</td></tr>
+              <tr><td><code>CHALLENGE</code></td><td>Step-up authentication</td><td>401</td><td>1,800 s (30 min)</td><td><code>ROLE_MFA_REQUIRED</code></td></tr>
+              <tr><td><code>ESCALATE</code></td><td>Held for review (analysis not finished)</td><td>423</td><td>300 s (5 min)</td><td><code>ROLE_REVIEW_REQUIRED</code></td></tr>
+              <tr><td><code>BLOCK</code></td><td>Block</td><td>403</td><td>No expiry (until released)</td><td><code>ROLE_BLOCKED</code></td></tr>
+              <tr><td><code>PENDING_ANALYSIS</code></td><td>Pending analysis (no decision stored)</td><td>503</td><td>0</td><td><code>ROLE_PENDING_ANALYSIS</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>When a value is read from a string (<code>ZeroTrustAction.fromString</code>), case does not matter and the one-letter forms (<code>A</code>, <code>B</code>, <code>C</code>, <code>E</code>) are accepted. No value reads as pending analysis and an unknown string reads as held for review. How a stored decision applies to the next request is in <a href="../identity/zero-trust-filters.html">Request-time enforcement</a>; where it is stored is in <a href="../architecture/decision-engine.html#storage">Decision Engine</a>.</p>
 
-<section class="docs-section">
-  <h2>Bridge and Shared Contracts</h2>
-  <p>The common module also carries shared bridge contracts and types used by the runtime security chain. These contracts let autoconfiguration and module wiring stay decoupled from implementation modules.</p>
-  <ul>
-    <li><code>AiSecurityImportSelector</code> imports <code>io.contexa.autoconfigure.ai.AiSecurityConfiguration</code> by fully qualified class name.</li>
-    <li><code>SecurityMode</code> (<code>FULL</code>, <code>SANDBOX</code>) and <code>AuthObjectLocation</code> (<code>AUTO</code>, <code>SESSION</code>, <code>REQUEST_ATTRIBUTE</code>, <code>HEADER</code>) live in <code>io.contexa.contexacommon.security.bridge</code>.</li>
-    <li><code>ZeroTrustAction</code> (<code>io.contexa.contexacommon.enums</code>) centralizes HTTP status, TTL, and granted authority for the five runtime outcomes (<code>ALLOW</code>, <code>BLOCK</code>, <code>CHALLENGE</code>, <code>ESCALATE</code>, <code>PENDING_ANALYSIS</code>).</li>
-    <li>Shared contracts are consumed by autoconfigure, identity, iam, and core runtime services.</li>
-  </ul>
-</section>
+          <h2 id="modes">Three modes with similar names</h2>
+          <p>There are two enums named <code>SecurityMode</code>, in different packages. Check the package when you import one.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>In plain words</th><th>Type (package)</th><th>Values</th><th>Where you set it</th></tr></thead>
+            <tbody>
+              <tr><td>Security mode</td><td><code>SecurityMode</code><br>(<code>io.contexa.contexacommon.security.bridge</code>)</td><td><code>SANDBOX</code> (default), <code>FULL</code></td><td><code>@EnableAISecurity(mode = ...)</code></td></tr>
+              <tr><td>Authentication ownership</td><td><code>SecurityOwnershipMode</code><br>(<code>io.contexa.contexacommon.security.bridge</code>)</td><td><code>HOST_OWNED</code>, <code>CONTEXA_OWNED</code></td><td><code>contexa.bridge.ownership</code> (when not set: <code>SANDBOX</code> → <code>HOST_OWNED</code>, <code>FULL</code> → <code>CONTEXA_OWNED</code>)</td></tr>
+              <tr><td>Enforcement mode</td><td><code>SecurityZeroTrustProperties.SecurityMode</code><br>(<code>io.contexa.contexacore.properties</code>)</td><td><code>DISABLED</code>, <code>OBSERVE</code>, <code>SHADOW</code>, <code>ENFORCE</code> (default)</td><td><code>contexa.security.zerotrust.mode</code> or the admin console's system settings</td></tr>
+            </tbody>
+          </table></div>
+          <p>Under <code>HOST_OWNED</code> Contexa builds no authentication chain, so your application must declare its own Spring Security configuration to keep its existing behavior. Without one, Spring Boot's default security applies (every request needs authentication). What each mode changes and how to choose is in <a href="../autoconfigure/ai-security.html#modes">Turning Contexa On and Choosing a Security Mode</a>. The authentication object location hint <code>AuthObjectLocation</code> (<code>AUTO</code>, <code>SESSION</code>, <code>REQUEST_ATTRIBUTE</code>, <code>HEADER</code>) is in the same <code>io.contexa.contexacommon.security.bridge</code> package.</p>
+
+          <h2 id="extension">Extension interfaces</h2>
+          <p>When the application declares a bean of one of these interfaces, Contexa's default steps aside or the bean is added to the defaults.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Interface</th><th>When you implement it</th><th>With your bean</th></tr></thead>
+            <tbody>
+              <tr><td><code>AuthBridge</code></td><td>To take the signed-in user from a request in your own way</td><td>It replaces the default composite bridge (session, request attributes, headers) (<a href="bridge.html#extension">bridge extension points</a>).</td></tr>
+              <tr><td><code>ContexaAuthBridge</code> (static method <code>handoff</code>)</td><td>To tell Contexa about a user directly from your login code</td><td>You call it rather than implement it. <code>IllegalStateException</code> if Contexa is not on (<a href="bridge.html#handoff">Direct handoff</a>).</td></tr>
+              <tr><td><code>CapabilityContributor</code></td><td>To add your own check to the startup capability diagnostics</td><td>The results of every contributor are gathered with the default checker (<a href="../autoconfigure/overview.html#diagnostics">Startup diagnostics</a>).</td></tr>
+              <tr><td><code>ContexaCacheService</code></td><td>To replace Contexa's internal cache</td><td>The default (in memory in standalone mode, Redis in distributed mode) steps aside.</td></tr>
+            </tbody>
+          </table></div>
+          <p>How to replace the beans the auto-configuration makes, such as the decision store, event publishing and data beans, is in <a href="../autoconfigure/overview.html#replace">Auto-configuration: replacing beans</a>.</p>
+
+          <h2 id="modules">Module boundaries</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>OSS modules</strong>A layer uses the layers below it. The common contracts (<code>contexa-common</code>) are the bottom layer, which uses no other module.</figcaption>
+            <div class="dg-layers">
+              <div class="dg-layer dg-host"><span class="dg-layer-name">spring-boot-starter-contexa<small>dependency bundle</small></span><div class="dg-chips"><span class="dg-chip">the five modules below</span><span class="dg-chip">Spring Security, OAuth2 resource server, client, authorization server</span></div></div>
+              <div class="dg-layer"><span class="dg-layer-name">contexa-autoconfigure<small>auto-configuration</small></span><div class="dg-chips"><span class="dg-chip">is Contexa on</span><span class="dg-chip">conditional beans</span><span class="dg-chip">startup diagnostics</span></div></div>
+              <div class="dg-layer"><span class="dg-layer-name">contexa-identity · contexa-iam<small>authentication, authorization</small></span><div class="dg-chips"><span class="dg-chip">authentication DSL, MFA</span><span class="dg-chip">request-time filters</span><span class="dg-chip">authorization policies</span><span class="dg-chip"><code>@Protectable</code> interception</span><span class="dg-chip">admin console</span></div></div>
+              <div class="dg-layer"><span class="dg-layer-name">contexa-core<small>decision engine, AI</small></span><div class="dg-chips"><span class="dg-chip">asynchronous decisions</span><span class="dg-chip">LLM, RAG</span><span class="dg-chip">sealed evidence</span></div></div>
+              <div class="dg-layer dg-store"><span class="dg-layer-name">contexa-common<small>common contracts</small></span><div class="dg-chips"><span class="dg-chip">annotations</span><span class="dg-chip">decision values</span><span class="dg-chip">authentication bridge</span><span class="dg-chip">cache</span><span class="dg-chip">capability contracts</span><span class="dg-chip">SOAR and MCP contracts</span></div></div>
+            </div>
+          </figure>
+          <ul>
+            <li>The default configuration that <code>@EnableAISecurity</code> imports (<code>io.contexa.autoconfigure.ai.AiSecurityConfiguration</code>) is named by a class-name string, so <code>contexa-common</code> does not know the implementation modules at compile time.</li>
+            <li><code>contexa-common</code> also holds the SOAR contracts (<code>@SoarTool</code>, <code>SecurityActionEvent</code>, tool policy interfaces) and the MCP tool-call contracts. <strong>The OSS has no implementation that runs these contracts.</strong> For SOAR see <a href="../soar/index.html">SOAR extension points</a>; for MCP see <a href="../agent/overview.html#mcp">Agent security</a>.</li>
+          </ul>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="../agent/controls.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Stop, Confirm, Limit</span>
+            </a>
+            <a href="bridge.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Connecting Your Existing Login (Authentication Bridge)</span>
+            </a>
+          </div>

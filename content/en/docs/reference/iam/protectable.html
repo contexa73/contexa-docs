@@ -5,619 +5,239 @@
             <span class="breadcrumb-separator">/</span>
             <span class="breadcrumb-current">@Protectable</span>
           </nav>
+
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-warning">contexa-iam</span>
+              <span class="badge badge-secondary">Authorization</span>
             </div>
-            <h1>@Protectable Annotation</h1>
-            <p class="lead">AI-driven method-level authorization that intercepts method invocations, evaluates SpEL-based security rules, and enforces rapid reentry protection with optional synchronous AI decision support.</p>
+            <h1>@Protectable: Protecting Methods</h1>
+            <p class="lead">Put <code>@Protectable</code> on a method and Contexa evaluates the method's policies and applies the stored Zero Trust decision right before the call, then sends an analysis event for the next decision when the call ends. This page covers where to put it, connecting policies, the order in which one call is handled, choosing <code>sync</code>, the owner check, and the nine attributes.</p>
           </div>
 
-          <!-- Overview -->
-          <section>
-            <h2 id="overview">Overview</h2>
-            <p>The <code>@Protectable</code> annotation marks methods for AI-based authorization enforcement. Defined in <code>contexa-common</code> and processed by <code>contexa-iam</code>, it integrates with the XACML PEP layer to intercept method calls, evaluate security policies through SpEL expressions, and optionally invoke synchronous AI analysis for high-risk operations.</p>
-            <p>The processing pipeline consists of three key components working in sequence:</p>
-            <ol>
-              <li><strong>ProtectableRapidReentryGuard</strong> &mdash;Prevents duplicate requests within a configurable time window</li>
-              <li><strong>ProtectableMethodAuthorizationManager</strong> &mdash;Evaluates SpEL-based security expressions against the current authentication context</li>
-              <li><strong>AuthorizationManagerMethodInterceptor</strong> &mdash;Orchestrates the full authorization flow as a Spring Security <code>AuthorizationAdvisor</code></li>
-            </ol>
+          <h2 id="overview">At a glance</h2>
+          <pre><code class="language-java">import io.contexa.contexacommon.annotation.Protectable;
+import org.springframework.stereotype.Service;
 
-            <div class="callout callout-info">
-              <strong>Authentication required:</strong> <code>@Protectable</code> methods require a Spring <code>Authentication</code> at invocation time. If the <code>SecurityContext</code> holds no authentication, or an anonymous one, the call is rejected and the response is determined by Spring Security exception handling. In <code>HOST_OWNED</code> (the default for <code>SANDBOX</code> mode), an application that authenticates users with its own legacy mechanism must place the authenticated user into the Spring <code>SecurityContext</code> (for example with a filter in its own chain), or use <code>CONTEXA_OWNED</code> so that Contexa owns authentication.
-            </div>
+@Service
+public class ReportService {
 
-            <h3>When to Use @Protectable</h3>
-            <table>
-              <thead>
-                <tr><th>Approach</th><th>Scope</th><th>Policy Source</th><th>AI Integration</th><th>Best For</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>@Protectable</code></td>
-                  <td>Method-level</td>
-                  <td>Database (dynamic)</td>
-                  <td>Full (<code>sync</code>, <code>#ai.*</code> expressions)</td>
-                  <td>Business-critical operations, ownership-aware permission checks, AI-monitored endpoints</td>
-                </tr>
-                <tr>
-                  <td><code>@PreAuthorize</code></td>
-                  <td>Method-level</td>
-                  <td>Annotations (static)</td>
-                  <td>None</td>
-                  <td>Simple role/permission checks that rarely change</td>
-                </tr>
-                <tr>
-                  <td><a href="../../../docs/reference/iam/dynamic-authorization.html">Dynamic URL Auth</a></td>
-                  <td>URL-level</td>
-                  <td>Database (dynamic)</td>
-                  <td>Full (<code>#ai.*</code> expressions)</td>
-                  <td>URL-pattern-based access control, API endpoint protection</td>
-                </tr>
-              </tbody>
-            </table>
-          </section>
+    // Applies the stored decision; analysed after it runs, effective from the next call
+    @Protectable(category = "REPORT", actions = "READ")
+    public Report findReport(Long reportId) {
+        ...
+    }
 
-          <!-- Quick Start -->
-          <section>
-            <h2 id="quickstart">Quick Start</h2>
-
-            <h3>Basic Usage</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Service
-public class UserService {
-
-    @Protectable
-    public User getUser(Long userId) {
-        // Protected by method-level policies from the database.
-        // Policies are created through the IAM admin surfaces, primarily Policy Center and related policy authoring flows.
-        return userRepository.findById(userId).orElseThrow();
+    // An export that cannot be undone: gets its decision within this call before it runs
+    @Protectable(category = "REPORT", actions = "EXPORT", sensitivity = "CONFIDENTIAL",
+            exportSensitive = true, sync = true)
+    public ReportFile exportReport(Long reportId) {
+        ...
     }
 }</code></pre>
-            </div>
+          <p>The annotation lives in <code>contexa-common</code>; the method interceptor in <code>contexa-iam</code> handles it. How it differs from the other ways to protect things:</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Way</th><th>What it guards</th><th>Where the rule lives</th><th>AI decision</th></tr></thead>
+            <tbody>
+              <tr><td><code>@Protectable</code></td><td>Method calls</td><td>METHOD policies in the database + the stored Zero Trust decision</td><td>Always applied (by enforcement mode); decided within the call with <code>sync</code></td></tr>
+              <tr><td><code>@PreAuthorize</code></td><td>Method calls</td><td>Code (static)</td><td><code>#ai</code> usable in the expression only under <code>CONTEXA_OWNED</code> (<a href="ai-security-expressions.html#where">Where they can be used</a>)</td></tr>
+              <tr><td><a href="dynamic-authorization.html">URL policies</a></td><td>URL requests</td><td>URL policies in the database</td><td><code>#ai</code> in conditions</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3>With Owner Verification</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Service
-public class OrderService {
+          <h2 id="prerequisites">Before you use it</h2>
+          <ul>
+            <li><strong>Contexa must be on</strong> (<code>@EnableAISecurity</code>). It works under both authentication ownerships. Under <code>HOST_OWNED</code> (the default, your application owns sign-in), your application must put the sign-in result into the Spring <code>SecurityContext</code>.</li>
+            <li><strong>Only signed-in calls pass.</strong> Without authentication, or with an anonymous one, the call is refused with <code>AuthenticationCredentialsNotFoundException</code>.</li>
+            <li><strong>Only calls through the Spring proxy are intercepted.</strong> Calls from another bean are covered; a call through <code>this</code> inside the same class is not (Spring AOP behaviour).</li>
+            <li><strong>Under HOST_OWNED, stored decisions are enforced only here.</strong> The request-time filters live only in the Contexa chain (<code>CONTEXA_OWNED</code>), so in the default mode the place that actually stops BLOCK, CHALLENGE and ESCALATE is the <code>@Protectable</code> method (<a href="../agent/controls.html#ownership">What works under each ownership</a>).</li>
+          </ul>
+          <p>What happens depends on the Zero Trust enforcement mode (<code>contexa.security.zerotrust.mode</code>). Policies are evaluated in every mode.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Enforcement mode</th><th>Method policies</th><th>Stored decision applied</th><th>Analysis</th></tr></thead>
+            <tbody>
+              <tr><td><code>DISABLED</code>, <code>OBSERVE</code> (or <code>enabled: false</code>)</td><td>Evaluated</td><td>No</td><td>No. No re-entry check and no analysis event either</td></tr>
+              <tr><td><code>SHADOW</code></td><td>Evaluated</td><td>Recorded only</td><td>Yes (<code>sync</code> within the call). Decisions are not stored</td></tr>
+              <tr><td><code>ENFORCE</code> (default)</td><td>Evaluated</td><td>Yes</td><td>Yes</td></tr>
+            </tbody>
+          </table></div>
+          <p>The delegator re-evaluation refuses only under <code>ENFORCE</code>; in the other modes it only records.</p>
 
-    @Protectable(ownerField = "userId")
-    public Order updateOrder(Order order) {
-        // Enables owner-aware permission checks when the method policy uses
-        // hasPermission(...) against the protected Order resource.
-        return orderRepository.save(order);
-    }
-}</code></pre>
-            </div>
+          <h2 id="apply">Where to put it</h2>
+          <ul>
+            <li>Put it on a <strong>method or a class</strong> (<code>io.contexa.contexacommon.annotation.Protectable</code>, retained at runtime). It is looked up on the called method, then on that method in the actual class, then on the actual class, then on the class that declares the method. On a class, every method call of that bean is covered.</li>
+            <li><code>ownerField</code>, however, is read <strong>only from an annotation on the method</strong>, and the <a href="resource-scanner.html">Resource Scanner</a> registers only annotated methods as resources.</li>
+            <li>The <strong>policy target identifier</strong> is <code>package.Class.method(simple parameter types)</code>, for example <code>com.example.report.ReportService.exportReport(Long)</code>. Use this string as the target of a METHOD policy.</li>
+            <li>The <code>resourceId</code> of a refusal is <code>SimpleClassName.method</code> (for example <code>ReportService.exportReport</code>).</li>
+            <li>The interceptor sits at the very front of Spring method security (<code>AuthorizationInterceptorsOrder.FIRST</code> + 1), so it runs before <code>@PreAuthorize</code>.</li>
+          </ul>
 
-            <h3>With Synchronous AI Analysis</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Service
-public class PaymentService {
+          <h2 id="policy">Connecting policies</h2>
+          <p>When no executable policy targets the method, the policy step follows the default decision <code>contexa.policy.missing-method-policy-decision</code> (default <code>PERMIT</code>), and the next step (checking the decision) still runs. To block protected methods without a policy, set it to <code>DENY</code> (<a href="xacml.html#no-policy">When no policy matches</a>).</p>
+          <h3 id="policy-center">Connecting in Policy Center</h3>
+          <ol>
+            <li><strong>Find the resource:</strong> the Resource Scanner registers <code>@Protectable</code> on public methods of beans (controllers excluded) under the scan packages as METHOD resources. The default scan package is <code>io.contexa.contexaiam.</code>, so add your application's package in the admin screen IAM &gt; System Settings to see your methods. The scan does not run by itself at startup; it runs when you press "Load Resources" in the Policy Center (<a href="resource-scanner.html">Resource Scanner</a>).</li>
+            <li><strong>Create the permission:</strong> in the Resources tab of Policy Center (<code>/contexa/admin/policy-center</code>), give the resource a name and description and choose "Create Permission &amp; Policy". The permission name is set automatically to <code>METHOD_{CLASS}_{METHOD}</code> (upper case, for example <code>METHOD_REPORTSERVICE_EXPORTREPORT</code>), and its action type is <code>EXECUTE</code>.</li>
+            <li><strong>Create the policy:</strong> create a METHOD-target policy in the Policy Creation tab in Quick mode (roles, permissions, effect, target), Manual mode (target and conditions written yourself) or AI mode. It takes effect once saved.</li>
+          </ol>
+          <h3 id="policy-conditions">Writing conditions yourself</h3>
+          <pre><code class="language-text">hasRole('ADMIN') and #ai.isAllowed()
+hasRole('ANALYST') and !#ai.isBlocked() and T(java.time.LocalTime).now().getHour() &lt; 18
+isDelegatedAgent() and delegationAllowsOperation('EXPORT') and #ai.isAllowed()</code></pre>
+          <ul>
+            <li>A method policy's conditions are evaluated as <strong>SpEL exactly as written</strong>. The shorthand of a bare authority name (<code>ROLE_ADMIN</code>) works only in URL policies.</li>
+            <li>Several conditions of one policy are joined with <code>and</code>. Policies are ordered by target order, then priority, then policy ID, and merged with the same combining algorithm as URL policies (<a href="xacml.html#decision">Decision rules</a>).</li>
+            <li>Variables available in conditions: method parameter names (<code>#reportId</code>), <code>#ai</code>, and <code>#ownerField</code> when <code>ownerField</code> is set. Contexa puts the method's policy plan into the <code>#methodPolicyPlan</code> variable and evaluates it.</li>
+            <li>Agent expressions (third line) see the delegation stamp under both ownerships (<a href="ai-security-expressions.html#agent-expressions">Agent expressions</a>).</li>
+          </ul>
 
-    @Protectable(sync = true)
-    public PaymentResult processPayment(PaymentRequest request) {
-        // The request blocks until the AI Zero Trust analysis completes.
-        // If the AI returns BLOCK, CHALLENGE, or ESCALATE,
-        // ZeroTrustAccessDeniedException is thrown before execution.
-        return paymentGateway.process(request);
-    }
-}</code></pre>
-            </div>
-            <div class="callout callout-warning">
-              <strong>Performance note:</strong> <code>sync = true</code> blocks the request until the synchronous Zero Trust decision path finishes. Use it only for operations that truly need pre-execution enforcement.
-            </div>
-          </section>
-
-          <!-- Annotation Definition -->
-          <section>
-            <h2 id="annotation">Annotation Definition</h2>
-            <p>The annotation is declared in <code>io.contexa.contexacommon.annotation</code> and targets methods at runtime.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Target({ElementType.METHOD, ElementType.TYPE})
-@Retention(RetentionPolicy.RUNTIME)
-public @interface Protectable {
-    String ownerField() default "";
-    String resourceId() default "";
-    String resourceUrl() default "";
-    String httpMethod() default "";
-    String criticality() default "standard";
-    boolean verificationRequired() default true;
-    boolean sync() default false;
-}</code></pre>
-            </div>
-
-            <h3>Attributes</h3>
-            <table>
-              <thead>
-                <tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>ownerField</code></td>
-                  <td><code>String</code></td>
-                  <td><code>""</code></td>
-                  <td>Field or getter name used by ownership-aware <code>hasPermission(...)</code> evaluation. The value is resolved from the authorization target object (or a resolved entity for ID-based checks). When empty, ownership-aware permission checks are not applied.</td>
-                </tr>
-                <tr>
-                  <td><code>resourceId</code></td>
-                  <td><code>String</code></td>
-                  <td><code>""</code></td>
-                  <td>Static resource identifier attached to the authorization event and policy evaluation context.</td>
-                </tr>
-                <tr>
-                  <td><code>resourceUrl</code></td>
-                  <td><code>String</code></td>
-                  <td><code>""</code></td>
-                  <td>Logical URL associated with the protected operation. Used when matching policies that reference URL patterns.</td>
-                </tr>
-                <tr>
-                  <td><code>httpMethod</code></td>
-                  <td><code>String</code></td>
-                  <td><code>""</code></td>
-                  <td>Logical HTTP method tag attached to the authorization event.</td>
-                </tr>
-                <tr>
-                  <td><code>criticality</code></td>
-                  <td><code>String</code></td>
-                  <td><code>"standard"</code></td>
-                  <td>Operation criticality classifier (for example, <code>standard</code>, <code>high</code>). Emitted with the authorization event for policy authoring and analytics.</td>
-                </tr>
-                <tr>
-                  <td><code>verificationRequired</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Controls whether downstream consumers of the authorization event (including AI analysis pipelines) should treat the call as requiring verification.</td>
-                </tr>
-                <tr>
-                  <td><code>sync</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>false</code></td>
-                  <td>When true, the Zero Trust evaluation completes synchronously before the method returns &mdash;the user's request blocks until LLM analysis finishes, so choose this option carefully. When false (default), evaluation runs asynchronously and the method proceeds immediately.</td>
-                </tr>
-              </tbody>
-            </table>
-            <p>Because the target includes <code>ElementType.TYPE</code>, <code>@Protectable</code> can also be placed on a class to apply the annotation's defaults to every method in that class.</p>
-          </section>
-
-          <!-- AuthorizationManagerMethodInterceptor -->
-          <section>
-            <h2 id="interceptor">AuthorizationManagerMethodInterceptor</h2>
-            <p>The core AOP interceptor that implements <code>MethodInterceptor</code> and <code>AuthorizationAdvisor</code>. It is registered at <code>AuthorizationInterceptorsOrder.FIRST + 1</code> priority, ensuring it runs before standard Spring Security method interceptors.</p>
-
-            <h3>Authorization Flow</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Text</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <div class="diagram-container">
-                <div class="diagram-flow-vertical">
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">Method Invocation</div>
-                    <div class="diagram-box-desc">Incoming call to @Protectable method</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">[1] RapidReentryGuard.check()</div>
-                    <div class="diagram-box-desc">Denied &mdash;RapidProtectableReentryDeniedException (no event published)</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">[2] ProtectableMethodAuthorizationManager.protectable()</div>
-                    <div class="diagram-box-desc">SpEL expression evaluated from #protectableRule variable. Denied &mdash;AuthorizationDeniedException</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box diagram-highlight">
-                    <div class="diagram-box-name">[3] @Protectable(sync=true)?</div>
-                    <div class="diagram-box-desc">Yes &mdash;SynchronousProtectableDecisionService.analyze()<br>ALLOW &mdash;proceed | BLOCK / CHALLENGE / ESCALATE &mdash;ZeroTrustAccessDeniedException</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">[4] mi.proceed()</div>
-                    <div class="diagram-box-desc">Method executes and returns result</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">[5] Publish Event + Record Metrics</div>
-                    <div class="diagram-box-desc">Authorization event via ZeroTrustEventPublisher, duration via AuthorizationMetrics</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <h3>Constructor</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public AuthorizationManagerMethodInterceptor(
-        Pointcut pointcut,
-        ProtectableMethodAuthorizationManager authorizationManager,
-        ProtectableRapidReentryGuard rapidReentryGuard)</code></pre>
-            </div>
-
-            <h3>Optional Dependencies (setter injection)</h3>
-            <table>
-              <thead>
-                <tr><th>Setter</th><th>Type</th><th>Purpose</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>setZeroTrustEventPublisher</code></td>
-                  <td><code>ZeroTrustEventPublisher</code></td>
-                  <td>Publishes authorization events for audit logging and AI-driven threat analysis. When absent, event publishing is silently skipped.</td>
-                </tr>
-                <tr>
-                  <td><code>setMetricsCollector</code></td>
-                  <td><code>AuthorizationMetrics</code></td>
-                  <td>Records invocation duration in nanoseconds and authorization decision counts for monitoring and alerting. When absent, metrics collection is silently skipped.</td>
-                </tr>
-                <tr>
-                  <td><code>setSynchronousProtectableDecisionService</code></td>
-                  <td><code>SynchronousProtectableDecisionService</code></td>
-                  <td>Required for <code>sync=true</code>. If absent, sync requests throw <code>ZeroTrustAccessDeniedException</code>.</td>
-                </tr>
-              </tbody>
-            </table>
-
-            <h3>Annotation Resolution</h3>
-            <p>The interceptor resolves <code>@Protectable</code> annotations using a multi-level lookup strategy:</p>
-            <ol>
-              <li>Direct method annotation via <code>AnnotationUtils.findAnnotation(method)</code></li>
-              <li>Most specific method on the target class (handles proxy scenarios via <code>AopProxyUtils</code>)</li>
-              <li>Class-level annotation on the target class</li>
-              <li>Class-level annotation on the declaring class</li>
+          <h2 id="flow">The order in which one call is handled</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>A @Protectable call</strong>Checks run from the top down; once one refuses, the method does not run.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-host"><span class="dg-node-title">Method call</span></li>
+              <li class="dg-node"><span class="dg-node-tag">①</span><span class="dg-node-title">Sign-in check</span><span class="dg-node-desc">Refused when missing or anonymous</span></li>
+              <li class="dg-node"><span class="dg-node-tag">②</span><span class="dg-node-title">Re-entry check within the same request</span><span class="dg-node-desc">Under SHADOW and ENFORCE. When caught, it is analysed only once</span></li>
+              <li class="dg-node"><span class="dg-node-tag">③</span><span class="dg-node-title">Method policy evaluation</span><span class="dg-node-desc">Always. Denied: <code>AuthorizationDeniedException</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">④</span><span class="dg-node-title">Once more as the delegator</span><span class="dg-node-desc">For a delegated agent's call</span></li>
+              <li class="dg-node"><span class="dg-node-tag">⑤</span><span class="dg-node-title">Prompt quality certification gate</span><span class="dg-node-desc">Only with <code>verificationRequired</code> and a gate bean</span></li>
+              <li class="dg-node"><span class="dg-node-tag">⑥</span><span class="dg-node-title">Decision check</span><span class="dg-node-desc"><code>sync = false</code>: refused on a stored restriction; an agent call with no decision is decided in place. <code>sync = true</code>: decided in place</span></li>
+              <li class="dg-node dg-allow"><span class="dg-node-title">Runs</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-tag">⑦</span><span class="dg-node-title">Analysis event published</span><span class="dg-node-desc">Asynchronous methods. Carries the outcome (completed or failed) for the next decision</span></li>
             </ol>
-          </section>
+          </figure>
+          <ul>
+            <li><strong>③ Policy evaluation:</strong> evaluates the policy plan (<code>#methodPolicyPlan</code>, each policy's condition and effect) and combines it. With no policy at all it is the default decision. Stored conditions are evaluated in the sandbox (<a href="xacml.html#safety">Safeguards</a>). A policy denial is not analysed, but under SHADOW and ENFORCE it is recorded in the session and in the user's authorization scope as "refused", which later decisions see.</li>
+            <li><strong>④ Delegator re-evaluation:</strong> a delegated agent's call is evaluated against the same policies again as the delegator and refused when the delegator could not make it or is unknown (<a href="../agent/overview.html#delegator-authority">Evaluated again as the delegator</a>).</li>
+            <li><strong>⑤ Certification gate:</strong> OSS has no gate implementation. With a <code>ProtectableResourceCertificationGate</code> bean, a call to an uncertified resource is refused under <code>ENFORCE</code> as held for review (423) (<a href="#extension">Extension points</a>).</li>
+            <li><strong>⑥ Asynchronous methods:</strong> a stored BLOCK, CHALLENGE or ESCALATE refuses the call before it runs. A person's call runs even without a decision and is analysed afterwards, but an <strong>agent call</strong> with no decision on record is decided in place (<code>protectable.unrecorded-agent-request: DECIDE_IN_PLACE</code>, <a href="../agent/controls.html#unrecorded">Requests without a decision and ALLOW reuse</a>).</li>
+            <li><strong>An exception thrown while running</strong> is recorded as a failed run, not a denial (outcome <code>METHOD_FAILED</code> in the event).</li>
+          </ul>
 
-          <!-- ProtectableMethodAuthorizationManager -->
-          <section>
-            <h2 id="authorization-manager">ProtectableMethodAuthorizationManager</h2>
-            <p>Evaluates SpEL-based security expressions against the current method invocation context. It relies on Spring Security's <code>MethodSecurityExpressionHandler</code> to create an evaluation context, then looks up the <code>#protectableRule</code> variable.</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public class ProtectableMethodAuthorizationManager {
-
-    private final MethodSecurityExpressionHandler expressionHandler;
-
-    public void protectable(
-            Supplier&lt;Authentication&gt; authentication,
-            MethodInvocation mi) {
-        // Creates evaluation context with authentication and method invocation
-        // Looks up #protectableRule variable (set by policy engine)
-        // Evaluates expression; throws AuthorizationDeniedException on failure
-    }
+          <h2 id="sync">Choosing sync</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th></th><th><code>sync = false</code> (default)</th><th><code>sync = true</code></th></tr></thead>
+            <tbody>
+              <tr><td>When it is decided</td><td>Analysed after it runs; the decision applies from the next call</td><td>Analysed within this call, which follows the result</td></tr>
+              <tr><td>What stops it before it runs</td><td>A stored BLOCK, CHALLENGE or ESCALATE; the in-place decision of an agent call with no decision</td><td>A stored restriction if any, otherwise an analysis result other than ALLOW</td></tr>
+              <tr><td>Latency</td><td>Almost none (an agent call with no decision waits for its analysis)</td><td>The analysis time on every call. Analysed again even with a stored ALLOW</td></tr>
+              <tr><td>Where it fits</td><td>Most reads and routine work</td><td>Things that cannot be undone: payments, bulk exports, permission changes, deletions</td></tr>
+            </tbody>
+          </table></div>
+          <p><code>sync = true</code> stops a call before any side effect. The annotation's documentation recommends it only for resources that can answer within 3 seconds. With <code>sync = false</code> a first call may run without a decision, and the risk is stopped from the next call on.</p>
+          <h3 id="responses">Refusal responses</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Decision</th><th>HTTP</th><th><code>code</code></th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td>BLOCK</td><td><code>403</code></td><td><code>ZERO_TRUST_BLOCK</code></td><td>Blocked</td></tr>
+              <tr><td>CHALLENGE</td><td><code>401</code></td><td><code>ZERO_TRUST_CHALLENGE</code></td><td>Step-up authentication needed; carries <code>mfaUrl</code> when a step-up flow can be started</td></tr>
+              <tr><td>ESCALATE</td><td><code>423</code></td><td><code>ZERO_TRUST_ESCALATE</code></td><td>Held for review</td></tr>
+              <tr><td>Analysis required (PENDING_ANALYSIS)</td><td><code>503</code></td><td><code>ZERO_TRUST_PENDING_ANALYSIS</code></td><td>A decision was needed but not obtained (no synchronous decision service, a re-entry within the same request, and so on)</td></tr>
+              <tr><td>Analysis busy</td><td><code>429</code></td><td><code>ZERO_TRUST_ANALYSIS_BUSY</code></td><td><a href="../agent/controls.html#flight">Decision merging</a> is on and has no room. <code>Retry-After</code> header</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-json">{
+  "status": 403,
+  "code": "ZERO_TRUST_BLOCK",
+  "message": "Access blocked by AI security analysis",
+  "action": "BLOCK",
+  "resourceId": "ReportService.exportReport",
+  "riskScore": null,
+  "analysisTimeout": false,
+  "timestamp": "2026-11-02T06:15:00Z"
 }</code></pre>
-            </div>
-            <p>The <code>#protectableRule</code> variable is an SpEL <code>Expression</code> injected into the evaluation context by the XACML policy engine. If the variable is missing or not of type <code>Expression</code>, access is denied.</p>
-          </section>
+          <ul>
+            <li>The method throws <code>ZeroTrustAccessDeniedException</code>; for a call made from an MVC controller, <code>ZeroTrustExceptionHandler</code> (<code>@ControllerAdvice</code>) turns it into the JSON above. A call made outside a controller (a filter, ...) must be handled by your application. <code>riskScore</code> is empty.</li>
+            <li>Under <code>CONTEXA_OWNED</code> an agent call's CHALLENGE is answered with a request for confirmation by the accountable person (<a href="../agent/controls.html#confirm">Confirmation by the accountable person</a>).</li>
+          </ul>
 
-          <!-- Rapid Reentry Guard -->
-          <section>
-            <h2 id="rapid-reentry">ProtectableRapidReentryGuard</h2>
-            <p>Prevents the same authenticated user from rapidly re-entering the same protected method within the configured guard window. The default window is 5 seconds, but the guard can be constructed with a different <code>Duration</code>. This protects high-risk operations from accidental duplicate submissions and burst retries.</p>
+          <h2 id="owner-field">Owner check (ownerField)</h2>
+          <p><code>ownerField</code> works <strong>only when the policy condition calls <code>hasPermission(...)</code></strong>. Before the method runs, while the policy is being evaluated, it reads that field from the target of <code>hasPermission</code> (or from the entity loaded by its ID) and compares it with the signed-in user's name (<code>Authentication.getName()</code>). It does not look at the return value.</p>
+          <pre><code class="language-java">@Protectable(ownerField = "username")
+public void updateProfile(UserProfile profile) {
+    ...
+}
+// The condition of this method's METHOD policy
+// hasPermission(#profile, 'USER_UPDATE')</code></pre>
+          <ol>
+            <li><code>hasPermission</code> itself must be true first (<a href="permission-evaluators.html">Permission Evaluators</a>). When it is false, the owner check is never reached.</li>
+            <li>Two arguments (<code>hasPermission(#profile, 'USER_UPDATE')</code>) check the field of that object; three arguments (<code>hasPermission(#id, 'USER', 'UPDATE')</code>) check the field of the entity read through <code>findById</code> from the repository bean of that domain's evaluator.</li>
+            <li>The field is looked up through the class hierarchy, then through the getter (<code>getUsername()</code>). The value is compared as a string.</li>
+            <li>Holding the <code>ROLE_ADMIN</code> authority skips the owner check.</li>
+            <li>A missing field, value or entity denies. Nested dot paths (<code>owner.id</code>) are not supported. When the target is <code>null</code>, no owner check is made.</li>
+            <li>A condition can read the field name as <code>#ownerField</code>.</li>
+          </ol>
+          <div class="callout callout-info">
+            <strong>Under HOST_OWNED, check the permission evaluators first.</strong> The authorities the built-in domain evaluators look at (<code>PermissionAuthority</code>) are put in by Contexa's user store when Contexa owns sign-in. Your application's sign-in usually carries none, so <code>hasPermission</code> is false and the owner check never passes (<a href="permission-evaluators.html#what-it-checks">What hasPermission checks</a>).
+          </div>
 
-            <h3>Guard Logic</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public void check(Authentication authentication, MethodInvocation methodInvocation) {
-    // 1. Skip if not authenticated
-    // 2. Resolve current HttpServletRequest from RequestContextHolder
-    // 3. Generate context binding hash via SessionFingerprintUtil
-    // 4. Build resource key: "ClassName.methodName[optional-arg0-hash]|HTTP_METHOD /uri"
-    // 5. Attempt tryAcquire(userId, contextBindingHash, resourceKey, configured window)
-    // 6. If not acquired, throw RapidProtectableReentryDeniedException
-}</code></pre>
-            </div>
+          <h2 id="attributes">The nine attributes</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Attribute</th><th>Default</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>ownerField</code></td><td><code>""</code></td><td>Field or getter name used by the owner check (<a href="#owner-field">above</a>)</td></tr>
+              <tr><td><code>verificationRequired</code></td><td><code>true</code></td><td>Whether to apply the prompt quality certification gate. OSS has no gate implementation, so it has an effect only with a <code>ProtectableResourceCertificationGate</code> bean</td></tr>
+              <tr><td><code>sync</code></td><td><code>false</code></td><td>Whether to get the decision within this call (<a href="#sync">Choosing sync</a>)</td></tr>
+              <tr><td><code>category</code></td><td><code>""</code></td><td>The resource's business category (for example <code>REPORT</code>). Role scope and delegated scope are compared in this vocabulary. Sensitivity words alone are not a category</td></tr>
+              <tr><td><code>sensitivity</code></td><td><code>""</code></td><td>Sensitivity (<code>PUBLIC</code>, <code>INTERNAL</code>, <code>CONFIDENTIAL</code>, <code>RESTRICTED</code>, ...). A value your application states on the request wins</td></tr>
+              <tr><td><code>actions</code></td><td><code>{}</code></td><td>What the method does (<code>READ</code>, <code>EXPORT</code>, ...). With exactly one, it is the request's operation unless your application states another on the request</td></tr>
+              <tr><td><code>importance</code></td><td><code>UNSPECIFIED</code></td><td>The resource importance your application states. <code>SENSITIVE</code>: a request cannot lower it, each resource is decided on its own, an ALLOW is not reused for other resources, and restrictions are checked again right before it runs. <code>NON_SENSITIVE</code>: a candidate for a few requests passing before the first decision (a sensitivity stated on the request can raise it). <code>UNSPECIFIED</code>: judged by the sensitivity words</td></tr>
+              <tr><td><code>privileged</code></td><td><code>false</code></td><td>States that the method is privileged. Only <code>true</code> means something; <code>false</code> leaves it unstated</td></tr>
+              <tr><td><code>exportSensitive</code></td><td><code>false</code></td><td>States that the method exports sensitive data. Only <code>true</code> means something</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>These nine are the only attributes. The resourceId, resourceUrl, httpMethod and criticality attributes of older documents do not exist in the code.</li>
+            <li>When the application starts, every <code>@Protectable</code> method of every bean is put in the resource context registry (resource ID <code>fully.qualified.Class#method</code>). <code>category</code>, <code>sensitivity</code>, <code>actions</code>, <code>privileged</code>, <code>exportSensitive</code> and <code>importance</code> become resource facts the decision engine uses. A <code>ResourceContextDescriptor</code> bean with the same resource ID replaces them.</li>
+          </ul>
 
-            <p>The resource key combines the method signature with the HTTP request details, ensuring that different URLs invoking the same method are tracked independently. The context binding hash incorporates session fingerprint data (User-Agent, IP, etc.) to prevent cross-session interference.</p>
+          <h2 id="reentry">Re-entry within the same request</h2>
+          <p>When the same protected method is entered again while one HTTP request is being handled (for example, one request calls the method twice), it is analysed only once. This is not a guard against the same user calling repeatedly within a few seconds: the key includes a request ID the server creates anew for each request, so different requests never block one another.</p>
+          <ul>
+            <li><strong>Key:</strong> tenant, request ID, HTTP method, address, <code>fully.qualified.Class.method</code> and enforcement mode, plus the user and the context fingerprint (session, client IP, User-Agent).</li>
+            <li><strong>When caught:</strong> an asynchronous method runs without analysis (no event, only a suppression record); a <code>sync</code> method is refused under <code>ENFORCE</code> with 503 (PENDING_ANALYSIS). In other modes it runs.</li>
+            <li><strong>Window:</strong> <code>contexa.security.zerotrust.protectable.rapid-reentry-window-ms</code> (default 5000). Zero or less turns it off. Without a sign-in, a request or a context fingerprint nothing is checked.</li>
+            <li><strong>Store:</strong> memory in standalone mode (keys that vanish when the window ends), Redis in distributed mode (<code>SET NX</code>, key <code>security:protectable:rapid-reentry:</code> + MD5). A Redis error lets the call through. Replace it with a <code>ProtectableRapidReentryRepository</code> bean.</li>
+          </ul>
 
-            <h3>Repository Interface</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public interface ProtectableRapidReentryRepository {
-    boolean tryAcquire(String userId, String contextBindingHash,
-                       String resourceKey, Duration window);
-}</code></pre>
-            </div>
+          <h2 id="events">Analysis events and metrics</h2>
+          <ul>
+            <li>An asynchronous method publishes an authorization event when it finishes (normally or with an exception). The event carries the outcome (<code>METHOD_COMPLETED</code>, <code>METHOD_FAILED</code>), and the asynchronous decision analyses it and applies the result from the next call on (<a href="../architecture/decision-engine.html">Decision engine</a>).</li>
+            <li><strong>No event when:</strong> the mode does not analyse (DISABLED, OBSERVE); a re-entry within the same request; a policy denial (recorded as a denial instead); a Zero Trust refusal; a call already decided through <code>sync</code>; requests let through early by decision merging, except the first. Without an event publisher bean nothing is published either.</li>
+            <li><strong>Metrics:</strong> auto-configuration does not give the interceptor a metrics collector (<code>AuthorizationMetrics</code>). If you set one, it counts the time spent publishing the event and the number of decisions.</li>
+          </ul>
 
-            <h3>Implementations</h3>
-            <table>
-              <thead>
-                <tr><th>Implementation</th><th>Mode</th><th>Storage</th><th>Key Format</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>InMemoryProtectableRapidReentryRepository</code></td>
-                  <td>Standalone</td>
-                  <td><code>ConcurrentHashMap&lt;String, Instant&gt;</code></td>
-                  <td><code>userId:contextHash:resourceKey</code></td>
-                </tr>
-                <tr>
-                  <td><code>RedisProtectableRapidReentryRepository</code></td>
-                  <td>Distributed</td>
-                  <td>Redis <code>SET NX EX</code></td>
-                  <td><code>security:protectable:rapid-reentry:{md5}</code></td>
-                </tr>
-              </tbody>
-            </table>
-            <p>The in-memory implementation uses lock-free CAS operations with <code>ConcurrentHashMap.putIfAbsent</code> for thread safety. The Redis implementation uses <code>setIfAbsent</code> with TTL for distributed lock semantics, falling back to allow on Redis errors to prevent service disruption.</p>
-          </section>
+          <h2 id="settings">Settings</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>Enforcement mode (<code>DISABLED</code>, <code>OBSERVE</code>, <code>SHADOW</code>, <code>ENFORCE</code>)</td><td><code>SHADOW</code> to record only while adopting (<a href="../../install/shadow-mode.html">Enforcement modes</a>)</td></tr>
+              <tr><td><code>contexa.policy.missing-method-policy-decision</code></td><td><code>PERMIT</code></td><td>Decision when no method policy matches</td><td><code>DENY</code> to block protected methods without a policy. A system settings row wins when present</td></tr>
+              <tr><td><code>contexa.security.zerotrust.protectable.unrecorded-agent-request</code></td><td><code>DECIDE_IN_PLACE</code></td><td>Decide an agent call with no decision in place, even at an asynchronous method</td><td><code>PROCEED</code> to let agents through like people</td></tr>
+              <tr><td><code>contexa.security.zerotrust.protectable.rapid-reentry-window-ms</code></td><td><code>5000</code></td><td>Window for re-entry within the same request (milliseconds)</td><td>Raise it for very long requests; <code>0</code> turns it off</td></tr>
+              <tr><td><code>contexa.infrastructure.mode</code></td><td><code>standalone</code></td><td>Keep the decision and re-entry stores in memory, or in Redis (<code>distributed</code>)</td><td><code>distributed</code> with several instances</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- Connecting Policies to @Protectable Methods -->
-          <section>
-            <h2 id="connecting-policies">Connecting Policies to @Protectable Methods</h2>
-            <p><code>@Protectable</code> methods are enforced by policies stored in the database. The <a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> discovers all <code>@Protectable</code> methods and synchronizes them as <code>METHOD</code> resources. In the current OSS UI, those resources are managed primarily through <a href="../../../docs/reference/iam/admin.html">Policy Center</a>. The underlying resource-management endpoints under <code>/admin/workbench/resources/*</code> are still used behind that integrated screen.</p>
-
-            <h3>Method Identifier Format</h3>
-            <p>Each <code>@Protectable</code> method is identified by its fully qualified signature:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Text</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code>com.example.service.OrderService.updateOrder(Order)</code></pre>
-            </div>
-
-            <h3>Creating a Policy for a Method</h3>
-            <p>Two approaches to create policies for <code>@Protectable</code> methods:</p>
-            <ol>
-              <li><strong>Policy Center (recommended)</strong> &mdash;Open the Policy Center create surface, locate the scanned <code>METHOD</code> resource in the integrated resources area, define a permission, and continue into the same creation flow. This is the primary OSS screen that combines resource review, permission linkage, quick policy creation, AI-assisted setup, and policy listing.</li>
-              <li><strong>Policy service / direct creation</strong> &mdash;Create a policy with a <code>METHOD</code> target matching the method identifier and a valid SpEL condition (for example <code>hasAuthority('ROLE_ADMIN') and #ai.isAllowed()</code>). This is the underlying model used by Policy Center.</li>
-            </ol>
-
-            <h3>Behavior Matrix</h3>
-            <table>
-              <thead>
-                <tr><th><code>ownerField</code></th><th><code>sync</code></th><th>Behavior</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>""</code> (default)</td><td><code>false</code></td><td>SpEL policy evaluation only, async AI analysis</td></tr>
-                <tr><td><code>""</code></td><td><code>true</code></td><td>SpEL policy + synchronous AI blocking</td></tr>
-                <tr><td><code>"userId"</code></td><td><code>false</code></td><td>SpEL policy + ownership-aware <code>hasPermission(...)</code> checks, async AI</td></tr>
-                <tr><td><code>"userId"</code></td><td><code>true</code></td><td>SpEL policy + ownership-aware <code>hasPermission(...)</code> checks + synchronous AI blocking</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-          <!-- Usage Examples -->
-          <section>
-            <h2 id="usage">Additional Usage Examples</h2>
-            <h3>Basic Protection</h3>
-            <p>Protects a method with default settings: asynchronous evaluation, no owner-based filtering.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Protectable
-@PostMapping("/api/users/{id}/disable")
-public void disableUser(@PathVariable Long id) {
-    userService.disable(id);
-}</code></pre>
-            </div>
-
-            <h3>Owner-Scoped with Synchronous AI Analysis</h3>
-            <p>Combines ownership-aware permission checks with synchronous Zero Trust analysis before the operation proceeds.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Protectable(ownerField = "userId", sync = true)
-@PutMapping("/api/accounts/{id}")
-public Account updateAccount(@PathVariable Long id,
-                             @RequestBody AccountDto dto) {
-    return accountService.update(id, dto);
-}</code></pre>
-            </div>
-
-            <h3>ZeroTrustAction Outcomes (sync mode)</h3>
-            <table>
-              <thead>
-                <tr><th>Action</th><th>Behavior</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>ALLOW</code></td><td>Method proceeds normally and the result is returned to the caller</td></tr>
-                <tr><td><code>BLOCK</code></td><td>Throws <code>ZeroTrustAccessDeniedException.blocked(resourceId)</code> before the method executes</td></tr>
-                <tr><td><code>CHALLENGE</code></td><td>Throws <code>ZeroTrustAccessDeniedException</code> requesting step-up authentication from the caller</td></tr>
-                <tr><td><code>ESCALATE</code></td><td>Throws <code>ZeroTrustAccessDeniedException.pendingReview(resourceId)</code> before the method executes</td></tr>
-                <tr><td><code>PENDING_ANALYSIS</code></td><td>Throws <code>ZeroTrustAccessDeniedException</code> if the synchronous AI analysis service is unavailable or timed out</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-          <!-- Event Publishing -->
-          <section>
-            <h2 id="events">Event Publishing and Metrics</h2>
-            <p>Authorization events are published via <code>ZeroTrustEventPublisher.publishMethodAuthorization()</code> after each invocation. Events are suppressed in the following cases:</p>
-            <ul>
-              <li><code>RapidProtectableReentryDeniedException</code> &mdash;reentry denials are not published</li>
-              <li><code>ZeroTrustAccessDeniedException</code> &mdash;synchronous AI decisions handle their own event lifecycle</li>
-              <li>Synchronous protectable methods that return <code>ALLOW</code> &mdash;handled by the synchronous pipeline</li>
-            </ul>
-            <p>When <code>AuthorizationMetrics</code> is available, the interceptor records:</p>
-            <ul>
-              <li><code>recordProtectable(duration)</code> &mdash;invocation duration in nanoseconds</li>
-              <li><code>recordAuthzDecision()</code> &mdash;authorization decision count</li>
-            </ul>
-          </section>
-
-          <!-- ownerField Deep Dive -->
-          <section>
-            <h2 id="owner-field-deep-dive">ownerField Deep Dive</h2>
-            <p>The <code>ownerField</code> attribute does not trigger an automatic post-return ownership scan. In the current OSS implementation it is injected into the method-security evaluation context and is used when the active method policy calls ownership-aware <code>hasPermission(...)</code> checks.</p>
-
-            <h3>How ownerField Is Applied</h3>
-            <p>When <code>ownerField</code> is configured, the method-expression handler passes it into <code>CustomMethodSecurityExpressionRoot</code>. Ownership is then enforced during policy expression evaluation, not after the method returns. The flow is:</p>
-            <ol>
-              <li><code>CustomMethodSecurityExpressionHandler</code> resolves the <code>@Protectable</code> method and extracts <code>ownerField</code>.</li>
-              <li>The handler injects <code>#protectableRule</code> and <code>#ownerField</code> into the evaluation context.</li>
-              <li>If the policy expression calls <code>hasPermission(target, permission)</code> or <code>hasPermission(targetId, targetType, permission)</code>, the root first delegates to the configured permission evaluator.</li>
-              <li>If the permission evaluator grants access and <code>ownerField</code> is configured, the root resolves a direct field or matching getter from the authorization target object and compares it with <code>Authentication.getName()</code>.</li>
-            </ol>
-
-            <h3>Comparison with Authenticated User</h3>
-            <p>The resolved owner value is compared with <code>Authentication.getName()</code>. Users with <code>ROLE_ADMIN</code> bypass the ownership check. For non-admin users, a missing owner value or a mismatch fails closed and <code>hasPermission(...)</code> returns <code>false</code>.</p>
-
-            <h3>When ownerField Does Not Exist</h3>
-            <div class="callout callout-warning">
-              <strong>Important:</strong> The implementation first searches for a direct field and then for a matching getter such as <code>getCreatedBy()</code>. If neither exists, the ownership-aware permission check fails closed and access is denied for non-admin users.
-            </div>
-
-            <h3>Nested Field Access</h3>
-            <p>The current OSS implementation does not walk nested dot-notation paths such as <code>creator.id</code>. Use a direct field or getter on the authorization target object instead.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Protectable(ownerField = "createdBy")
-public Document getDocument(Long documentId) {
-    // Ownership-aware checks resolve a direct field or getter such as getCreatedBy().
-    return documentRepository.findById(documentId).orElseThrow();
-}</code></pre>
-            </div>
-            <p>If your domain model stores ownership in a nested object, expose a direct getter or dedicated field that returns the comparable owner identifier.</p>
-          </section>
-
-          <!-- sync Mode Guidelines -->
-          <section>
-            <h2 id="sync-mode-guidelines">sync Mode Guidelines</h2>
-            <h3>When to Use Synchronous Mode</h3>
-            <p>The <code>sync</code> attribute controls whether the AI Zero Trust assessment completes before or after the method returns. Choosing the right mode depends on the sensitivity of the operation and the acceptable latency.</p>
-
-            <table>
-              <thead>
-                <tr><th>Mode</th><th>Behavior</th><th>Latency Impact</th><th>Security Guarantee</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>sync = true</code></td>
-                  <td>Blocks until the AI assessment completes. If the AI returns BLOCK, CHALLENGE, or ESCALATE, the method never executes.</td>
-                  <td>Higher latency (depends on LLM response time, typically 200ms&mdash;s)</td>
-                  <td>Strong &mdash;the operation is prevented before any side effects occur</td>
-                </tr>
-                <tr>
-                  <td><code>sync = false</code> (default)</td>
-                  <td>Uses cached or asynchronous AI assessment. The method proceeds immediately; AI analysis happens in the background.</td>
-                  <td>Minimal latency impact</td>
-                  <td>Eventual consistency &mdash;threats are detected after the fact and handled through event-driven remediation</td>
-                </tr>
-              </tbody>
-            </table>
-
-            <h3>Recommended Use Cases</h3>
-            <p>Use <code>sync = true</code> for operations where preventing unauthorized actions is more critical than response time:</p>
-            <ul>
-              <li><strong>Financial transactions</strong> &mdash;Payment processing, fund transfers, refund operations</li>
-              <li><strong>Data deletion</strong> &mdash;Permanent deletion of records, account closure, data purge operations</li>
-              <li><strong>Privilege escalation</strong> &mdash;Role assignment, permission grants, admin-level operations</li>
-              <li><strong>Data export</strong> &mdash;Bulk data downloads, report generation with sensitive data</li>
-            </ul>
-            <p>Use <code>sync = false</code> (default) for read-heavy operations, listing endpoints, and actions where eventual consistency is acceptable and low latency is prioritized.</p>
-          </section>
-
-          <!-- Managing @Protectable Methods in Admin -->
-          <section>
-            <h2 id="admin-protectable">Managing @Protectable Methods via Admin</h2>
-            <p><code>@Protectable</code> methods are automatically discovered by the <a href="../../../docs/reference/iam/resource-scanner.html">Resource Scanner</a> and synchronized as <code>METHOD</code> resources. In the current OSS UI, the primary administration surface is <strong>Policy Center</strong>. Its integrated resources area works with the same managed-resource data that the legacy <code>/admin/workbench/resources/*</code> endpoints expose.</p>
-
-            <h3>Step 1: Review METHOD Resources in Policy Center</h3>
-            <p>Navigate to <strong>Admin &gt; ID &amp; Access Management &gt; Policy Center</strong> and open the <strong>Resources</strong> tab. Filter by resource type <code>METHOD</code> to review discovered <code>@Protectable</code> methods. Each entry shows the fully qualified method signature (for example <code>com.example.service.OrderService.updateOrder(Order)</code>).</p>
-
-            <h3>Step 2: Define a Permission for the METHOD Resource</h3>
-            <p>From the integrated resources area, use <strong>Create Permission &amp; Policy</strong> to define a permission for the selected method resource. Policy Center persists the permission-to-resource link by calling the managed-resource endpoints behind the integrated UI.</p>
-
-            <h3>Step 3: Create or Refine the Policy in Policy Center</h3>
-            <p>After the permission is linked, continue in Policy Center to create the actual policy. The current OSS flow supports quick creation, manual creation, AI-assisted setup, list review, simulation, and matrix analysis from the same integrated screen.</p>
-
-            <h3>Step 4: Match the Policy to METHOD Targets</h3>
-            <p>Method policies must use a <code>METHOD</code> target that matches the discovered method identifier. The underlying policy model remains the same whether the policy is created from quick mode, the AI-assisted create flow, or the manual create tab.</p>
-
-            <h3>Current OSS UI Notes</h3>
-            <ul>
-              <li><strong>Policy Center</strong> is the primary current UI and combines resource review, permission definition, policy creation, policy list, simulation, and matrix analysis.</li>
-              <li>The backend still exposes <code>/admin/workbench/resources/*</code> endpoints, and Policy Center uses them for resource-definition actions.</li>
-              <li>Standalone <code>Resource Workbench</code> and <code>Policy Builder</code> controller routes still exist in source, but the current OSS template set centers the user workflow on Policy Center.</li>
-            </ul>
-          </section>
-
+          <h2 id="extension">Extension points</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Bean</th><th>When you need it</th><th>Default behaviour</th></tr></thead>
+            <tbody>
+              <tr><td><code>ProtectableResourceCertificationGate</code></td><td>To actually enforce <code>verificationRequired</code></td><td>None (the gate is skipped)</td></tr>
+              <tr><td><code>ResourceContextDescriptor</code></td><td>To state resource facts (business name, allowed roles, ...) in more detail than the annotation</td><td>The annotation's values</td></tr>
+              <tr><td><code>ProtectableRapidReentryRepository</code></td><td>To keep re-entry windows in another store</td><td>Memory or Redis</td></tr>
+              <tr><td><code>DelegatorAuthoritySource</code></td><td>To read delegators' authority from a directory or elsewhere</td><td>Your <code>UserDetailsService</code></td></tr>
+              <tr><td><code>AuthorizationManagerMethodInterceptor</code></td><td>To replace the interceptor itself</td><td>Auto-configured (bean name <code>protectableAuthorizationAdvisor</code>). Built by hand: constructor <code>(Pointcut, ProtectableMethodAuthorizationManager, ProtectableRapidReentryGuard)</code> with collaborators set through setters; missing collaborators are skipped (no event publisher: no events; no synchronous decision service: <code>sync</code> methods answer 503)</td></tr>
+            </tbody>
+          </table></div>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/iam/dynamic-authorization.html" class="docs-nav-prev">
+            <a href="dynamic-authorization.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Dynamic Authorization</span>
+              <span class="docs-nav-title">URL Access Policies (Dynamic URL Authorization)</span>
             </a>
-            <a href="../../../docs/reference/iam/ai-security-expressions.html" class="docs-nav-next">
+            <a href="ai-security-expressions.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">AI Security Expressions</span>
+              <span class="docs-nav-title">AI Security Expressions: Decision and Agent Conditions</span>
             </a>
           </div>

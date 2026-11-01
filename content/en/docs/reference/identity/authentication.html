@@ -3,350 +3,256 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Authentication</span>
+            <span class="breadcrumb-current">Login Methods</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-info">contexa-identity</span>
             </div>
-            <h1>Authentication</h1>
-            <p class="lead">DSL options and code examples for each authentication method. Detailed reference for authentication methods configured via <code>.form()</code>, <code>.rest()</code>, <code>.ott()</code>, <code>.passkey()</code> in the <a href="dsl.html">Identity DSL</a>.</p>
+            <h1>Login Methods</h1>
+            <p class="lead">How to turn on, re-address and check the four single login methods Contexa offers when it owns login: form, REST, one-time code and passkey. It also covers who handles login success and failure, and where the login is kept.</p>
           </div>
 
-          <!-- Overview -->
-          <section class="docs-section">
-            <h2 id="overview">Overview</h2>
-            <p>Contexa Identity provides four authentication methods. Each method creates an independent <code>SecurityFilterChain</code>, and priority is controlled via <code>order()</code>.</p>
+          <div class="callout callout-info">
+            <strong>This is a feature for when Contexa owns login (<code>CONTEXA_OWNED</code>).</strong> With the default <code>HOST_OWNED</code>, your application's Spring Security handles login and the flows on this page are not built. To keep your application's existing login, see <a href="../common/bridge.html">Connecting Your Existing Login</a>. How to write flows and the shared options are in <a href="dsl.html">Identity DSL</a>.
+          </div>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Authentication Method</th><th>DSL Method</th><th>Default Order</th><th>Purpose</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Form Login</td><td><code>.form()</code></td><td>100</td><td>Traditional web form login (server-rendered)</td></tr>
-                <tr><td>REST API</td><td><code>.rest()</code></td><td>200</td><td>JSON-based API authentication (SPA, mobile)</td></tr>
-                <tr><td>One-Time Token</td><td><code>.ott()</code></td><td>300</td><td>Magic Link / email authentication</td></tr>
-                <tr><td>WebAuthn / Passkey</td><td><code>.passkey()</code></td><td>400</td><td>Biometric authentication / hardware keys</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="choose">Which method when</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Method</th><th>Where it fits</th><th>Default order</th><th>Default login processing path</th></tr></thead>
+            <tbody>
+              <tr><td>Form <code>.form()</code></td><td>Server-rendered login page</td><td>100</td><td><code>POST /login</code></td></tr>
+              <tr><td>REST <code>.rest()</code></td><td>SPAs, mobile apps, API clients (JSON)</td><td>200</td><td><code>POST /api/login</code></td></tr>
+              <tr><td>One-time code <code>.ott()</code></td><td>Logging in with a code received by email</td><td>300</td><td>Issue <code>POST /ott/generate</code>, login <code>POST /login/ott</code></td></tr>
+              <tr><td>Passkey <code>.passkey()</code></td><td>Passwordless login (WebAuthn)</td><td>400</td><td><code>POST /login/webauthn</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>Each method becomes its own chain, and the chain with the lower order compares the request first. Shared options such as <code>order</code>, <code>rawHttp</code> and <code>disableCsrf</code> are in <a href="dsl.html#flow-options">Flow options</a>.</p>
+          <h3 id="single-vs-mfa">Single login versus a factor inside MFA</h3>
+          <p>Using the same method as a second factor inside an MFA flow changes the addresses, the implementation and how progress is managed. For MFA see <a href="mfa.html">Adaptive MFA</a>. Taking the passkey as an example:</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Item</th><th>Single passkey</th><th>Passkey inside MFA</th></tr></thead>
+            <tbody>
+              <tr><td>DSL</td><td><code>.passkey(...)</code></td><td><code>.mfa(mfa -&gt; mfa.passkey(...))</code></td></tr>
+              <tr><td>Login processing path</td><td><code>/login/webauthn</code></td><td><code>/login/mfa-webauthn</code></td></tr>
+              <tr><td>Implementation</td><td><code>PasskeyAuthenticationAdapter</code>, Spring's built-in filter</td><td><code>MfaPasskeyAuthenticationAdapter</code>, Spring filter + Contexa handlers</td></tr>
+              <tr><td>Progress</td><td>Login repository (<code>SecurityContextRepository</code>)</td><td>MFA state machine and MFA session</td></tr>
+            </tbody>
+          </table></div>
 
-            <p>All authentication methods support access to the full Spring Security API via <a href="dsl.html#rawhttp">rawHttp()</a>, and support <a href="dsl.html#common-options">common options</a> (order, CSRF, CORS, headers, logout, etc.).</p>
+          <h2 id="form">Form login</h2>
+          <pre><code class="language-java">registry
+        .form(form -&gt; form.defaultSuccessUrl("/home"))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <p>Without <code>loginPage</code>, Spring's default login page appears at <code>GET /login</code> and posts to <code>POST /login</code>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Option</th><th>Default</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>loginPage(String)</code></td><td>none (Spring's default page <code>/login</code>)</td><td>To use a login page the application makes. The processing path does not change</td></tr>
+              <tr><td><code>loginProcessingUrl(String)</code></td><td><code>/login</code></td><td>When the page posts elsewhere, or the chain scope does not include <code>/login</code></td></tr>
+              <tr><td><code>usernameParameter(String)</code> · <code>passwordParameter(String)</code></td><td><code>username</code> · <code>password</code></td><td>When the page's input names differ</td></tr>
+              <tr><td><code>defaultSuccessUrl(String)</code>, <code>defaultSuccessUrl(String, boolean)</code></td><td>none</td><td>Where to go after login. With <code>true</code>, always there instead of the originally requested address</td></tr>
+              <tr><td><code>failureUrl(String)</code></td><td>none (Spring's default <code>/login?error</code>)</td><td>Where to go after a failure</td></tr>
+              <tr><td><code>permitAll()</code></td><td>off</td><td>When the login page and processing path must be open without authentication</td></tr>
+              <tr><td><code>rawFormLogin(...)</code></td><td>none</td><td>To work on Spring's <code>FormLoginConfigurer</code> directly. Called several times, only the last one remains</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>Changing only the login page leaves the processing path at <code>/login</code>.</strong> In Spring Security <code>loginPage</code> also sets the processing path, but a Contexa form flow sets the processing path first from <code>contexa.auth.urls.single.form-login-processing</code> (default <code>/login</code>). If you narrowed the chain scope, change <code>loginProcessingUrl</code> as well.
+          </div>
+          <pre><code class="language-java">registry
+        .form(form -&gt; form
+                .loginPage("/admin/login")
+                .loginProcessingUrl("/admin/login")
+                .permitAll()
+                .rawHttp(http -&gt; http.securityMatcher("/admin/**"))
+                .rawFormLogin(login -&gt; login.usernameParameter("email")))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <p>Here the application makes the <code>/admin/login</code> page. To write the response yourself, give <code>successHandler(...)</code> and <code>failureHandler(...)</code> (<a href="#handlers">Success and failure handling</a>).</p>
+          <h3 id="form-verify">Checking it</h3>
+          <ul>
+            <li>Opening a protected address goes to the login page.</li>
+            <li>A successful login goes to <code>defaultSuccessUrl</code> (or the originally requested address), a failure to <code>/login?error</code>.</li>
+          </ul>
 
-            <div class="callout callout-info">
-              For how to use these authentication methods with <strong>MFA (Multi-Factor Authentication)</strong>, see the <a href="mfa.html">Adaptive MFA</a> documentation. URLs, adapters, and state management behave differently in single authentication vs. MFA flows.
-            </div>
-          </section>
+          <h2 id="rest">REST login</h2>
+          <p>Logs in with a JSON body. It is mostly used with the token state, but the session state works too.</p>
+          <pre><code class="language-java">registry
+        .rest(rest -&gt; rest.defaultSuccessUrl("/app"))
+        .oauth2(Customizer.withDefaults())
+        .build();</code></pre>
+          <pre><code class="language-http">POST /api/login
+Content-Type: application/json
 
-          <!-- Form Login -->
-          <section class="docs-section">
-            <h2 id="form-login">Form Login</h2>
-            <p>Traditional web form-based login. Configures Spring Security's <code>formLogin()</code> via the DSL. Default order is <strong>100</strong>.</p>
+{"username": "alice", "password": "s3cret"}</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>State</th><th>Success response (200, JSON)</th></tr></thead>
+            <tbody>
+              <tr><td><code>.oauth2()</code>, <code>HEADER</code> transport (default)</td><td><code>accessToken</code>, <code>tokenType</code> (<code>Bearer</code>), <code>expiresIn</code>, <code>refreshToken</code>, <code>refreshExpiresIn</code>, <code>tokenTransportMethod</code>, <code>authenticated</code>, <code>redirectUrl</code>, <code>message</code>, <code>username</code></td></tr>
+              <tr><td><code>.session()</code></td><td><code>authenticated</code>, <code>redirectUrl</code>, <code>message</code>, <code>username</code>, <code>stateType</code> (<code>SESSION</code>) + session cookie</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>The login processing path takes <code>POST</code> only. <code>GET /api/login</code> at the same path shows a default login page.</li>
+            <li>A failure returns 401 JSON, and the failure response leaves no sooner than <code>contexa.auth.mfa.minimum-delay-ms</code> (default 500 ms), to slow down password guessing.</li>
+            <li><code>.oauth2()</code> already configures the stateless policy (<code>STATELESS</code>), so you do not set it again with <code>rawHttp</code>. With <code>.oauth2()</code>, <code>contexa.auth.oauth2.client-secret</code> is required (<a href="state-management.html#oauth2-required">What the token state needs</a>).</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Option</th><th>Default</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>loginProcessingUrl(String)</code></td><td><code>/api/login</code></td><td>When your API path rules differ</td></tr>
+              <tr><td><code>defaultSuccessUrl(...)</code> · <code>failureUrl(String)</code></td><td>none</td><td>The response's <code>redirectUrl</code> and where to go after a failure</td></tr>
+              <tr><td><code>securityContextRepository(...)</code></td><td>none</td><td>A REST flow changes the login repository only when this option is set</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="rest-verify">Checking it</h3>
+          <pre><code class="language-http">GET /api/orders
+Authorization: Bearer &lt;accessToken&gt;</code></pre>
+          <p>With the received <code>accessToken</code> the protected API answers; without it you get 401.</p>
 
-            <h3 id="form-options">All Options</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>loginPage(String)</code></td><td>String</td><td>Unset in single-auth mode; MFA builder preloads the primary login page</td><td>Login page URL</td></tr>
-                <tr><td><code>usernameParameter(String)</code></td><td>String</td><td><code>"username"</code></td><td>Username parameter name</td></tr>
-                <tr><td><code>passwordParameter(String)</code></td><td>String</td><td><code>"password"</code></td><td>Password parameter name</td></tr>
-                <tr><td><code>loginProcessingUrl(String)</code></td><td>String</td><td><code>AuthUrlProvider.getSingleFormLoginProcessing()</code></td><td>Login processing URL</td></tr>
-                <tr><td><code>defaultSuccessUrl(String)</code></td><td>String</td><td>—</td><td>Redirect URL after successful login</td></tr>
-                <tr><td><code>defaultSuccessUrl(String, boolean)</code></td><td>String, boolean</td><td>—</td><td>Success URL + alwaysUse flag</td></tr>
-                <tr><td><code>failureUrl(String)</code></td><td>String</td><td>—</td><td>Redirect URL on login failure</td></tr>
-                <tr><td><code>permitAll()</code></td><td>—</td><td><code>false</code></td><td>Enable unauthenticated access to the configured login page</td></tr>
-                <tr><td><code>successHandler(PlatformAuthenticationSuccessHandler)</code></td><td>Handler</td><td>Auto-selected</td><td>Custom success handler</td></tr>
-                <tr><td><code>failureHandler(PlatformAuthenticationFailureHandler)</code></td><td>Handler</td><td>Auto-selected</td><td>Custom failure handler</td></tr>
-                <tr><td><code>securityContextRepository(SecurityContextRepository)</code></td><td>Repository</td><td>Auto-selected by state type</td><td>Security context repository</td></tr>
-                <tr><td><code>rawFormLogin(SafeHttpFormLoginCustomizer)</code></td><td>Customizer</td><td>—</td><td>Direct customization within <code>formLogin()</code></td></tr>
-                <tr><td><code>rawHttp(SafeHttpCustomizer&lt;HttpSecurity&gt;)</code></td><td>Customizer</td><td>—</td><td>Full Spring Security API access (cumulative)</td></tr>
-                <tr><td><code>order(int)</code></td><td>int</td><td>100</td><td>Filter chain priority</td></tr>
-                <tr><td><code>asep(Customizer&lt;FormAsepAttributes&gt;)</code></td><td>Customizer</td><td>—</td><td>ASEP annotation attribute configuration</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="ott">One-time code (OTT)</h2>
+          <p>Takes a user name, sends a one-time code by email, and logs in with that code.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>One-time code login</strong>The code is kept in the Contexa database and sent by email. There is no text message (SMS) sending implementation.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor dg-request">Browser</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /ott/generate</code>, <code>username</code> (required) · <code>email</code> (optional)</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-host">Mail</span><span class="dg-msg-text">Sends the code to the user's email address</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">Browser</span><span class="dg-msg-text">Moves to the code-sent address (<code>contexa.auth.urls.factors.ott.code-sent</code>)</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">Browser</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /login/ott</code>, <code>username</code> · <code>token</code> → logged in</span></li>
+            </ol>
+          </figure>
+          <pre><code class="language-java">registry
+        .ott(Customizer.withDefaults())
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <ul>
+            <li><strong>Sending service:</strong> the default <code>OneTimeTokenService</code> bean is <code>EmailOneTimeTokenService</code>. It keeps the code in the <code>one_time_tokens</code> table of the Contexa database and sends it with Spring mail (<code>spring.mail.*</code>).</li>
+            <li><strong>Recipient:</strong> the email address in the user table (<code>users</code>). Without one, the user name is used as the address. A request <code>email</code> that differs from the registered address is refused.</li>
+            <li><strong>When mail cannot be sent:</strong> with <code>contexa.auth.ott.fail-on-email-error</code> (default <code>true</code>) issuing fails. With <code>false</code> the code is still created and a warning is logged.</li>
+            <li><strong>Validity:</strong> a code is valid for 5 minutes after it is created (Spring's default). <code>contexa.auth.mfa.otp-token-validity-seconds</code> (default 300) is used only for the number of minutes in the email text.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Option</th><th>Default</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>tokenGeneratingUrl(String)</code></td><td><code>/ott/generate</code></td><td>To change the code issuing path</td></tr>
+              <tr><td><code>defaultSubmitPageUrl(String)</code></td><td><code>/login/ott/verify</code></td><td>To change the code entry page path</td></tr>
+              <tr><td><code>showDefaultSubmitPage(boolean)</code></td><td><code>true</code></td><td><code>false</code> when the application makes the code entry page</td></tr>
+              <tr><td><code>loginProcessingUrl(String)</code></td><td><code>/login/ott</code></td><td>To change the code check path</td></tr>
+              <tr><td><code>tokenGenerationSuccessHandler(...)</code></td><td><code>oneTimeTokenCreationSuccessHandler</code> bean</td><td>To change the response after a code is created. The default handler moves to <code>contexa.auth.urls.factors.ott.code-sent</code> (default <code>/mfa/ott/code-sent</code>)</td></tr>
+              <tr><td><code>tokenService(...)</code></td><td><code>OneTimeTokenService</code> bean</td><td>See the warning below</td></tr>
+            </tbody>
+          </table></div>
+          <p>The request parameter names are fixed: <code>username</code> and <code>token</code>.</p>
+          <div class="callout callout-warning">
+            <strong>To change the sending service, register a bean, not the option.</strong> The DSL's <code>tokenService(...)</code> is used only to issue codes; codes are checked with the <code>OneTimeTokenService</code> bean. Giving another service through the option makes the check fail. A registered bean is used for both issuing and checking.
+          </div>
+          <pre><code class="language-java">@Bean
+public OneTimeTokenService oneTimeTokenService() {
+    // For example, in-memory storage for tests. This service sends no email, so the application delivers the code.
+    return new InMemoryOneTimeTokenService();
+}</code></pre>
 
-            <h3 id="form-basic">Basic Configuration</h3>
-<pre><code class="language-java">registry
-    .form(form -&gt; form
-        .loginPage("/login")
-        .defaultSuccessUrl("/home")
-        .failureUrl("/login?error")
-        .permitAll()
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
+          <h2 id="passkey">Passkey</h2>
+          <p>Logs in without a password using a WebAuthn passkey. The browser checks the service name (<code>rpId</code>) and the origin it connected to, so both must match the production address.</p>
+          <pre><code class="language-java">registry
+        .passkey(Customizer.withDefaults())
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
+          <pre><code class="language-yaml">contexa:
+  auth:
+    urls:
+      factors:
+        passkey:
+          rp-id: example.com
+          rp-name: Example
+          allowed-origins: https://app.example.com</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Option</th><th>Default</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>rpId(String)</code></td><td><code>localhost</code></td><td>To the production domain. The setting <code>contexa.auth.urls.factors.passkey.rp-id</code> is where the default comes from</td></tr>
+              <tr><td><code>rpName(String)</code></td><td><code>contexa-identity</code></td><td>The service name users see</td></tr>
+              <tr><td><code>allowedOrigins(...)</code></td><td><code>http://localhost:</code> + <code>server.port</code> (8080 when unset)</td><td>The origins browsers connect from. The setting <code>allowed-origins</code> (comma-separated) wins when present</td></tr>
+              <tr><td><code>assertionOptionsEndpoint(String)</code> · <code>loginProcessingUrl(String)</code></td><td><code>/webauthn/authenticate/options</code> · <code>/login/webauthn</code></td><td>No effect on a single passkey flow, which uses Spring's default paths</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>Passkey flows do not use the <code>successHandler</code> and <code>failureHandler</code> options (<a href="#handlers">Success and failure handling</a>).</li>
+            <li>With an empty <code>rpId</code> a validator logs an error at startup but does not stop it.</li>
+            <li>With the Contexa database (a <code>contexaJdbcTemplate</code> bean), Spring's JDBC repositories that keep passkey data (<code>JdbcUserCredentialRepository</code>, <code>JdbcPublicKeyCredentialUserEntityRepository</code>) are registered automatically.</li>
+          </ul>
+          <h3 id="passkey-register">Registering a passkey</h3>
+          <p>A logged-in user registers a passkey. The registration page <code>GET /webauthn/register</code> is replaced by Contexa's page.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Three registration steps</strong>Success returns 200 with a JSON body.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor dg-request">Browser</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /webauthn/register/options</code> → registration options</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">Browser</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-host">Authenticator</span><span class="dg-msg-text">Creates a key with <code>navigator.credentials.create()</code></span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">Browser</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /webauthn/register</code> → 200, stored</span></li>
+            </ol>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Address</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>POST /webauthn/register/options</code></td><td>Creates registration options</td></tr>
+              <tr><td><code>POST /webauthn/register</code></td><td>Registers a passkey (200)</td></tr>
+              <tr><td><code>POST /webauthn/authenticate/options</code></td><td>Creates login options</td></tr>
+              <tr><td><code>POST /login/webauthn</code></td><td>Passkey login</td></tr>
+              <tr><td><code>DELETE /webauthn/register/{id}</code></td><td>Deletes a registered passkey (204)</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3 id="form-custom">Custom Handlers</h3>
-<pre><code class="language-java">registry
-    .form(form -&gt; form
-        .loginPage("/login")
-        .usernameParameter("email")
-        .passwordParameter("passwd")
-        .successHandler(customSuccessHandler)
-        .failureHandler(customFailureHandler)
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
+          <h2 id="handlers">Success and failure handling</h2>
+          <p>Without <code>successHandler</code> and <code>failureHandler</code>, Contexa picks handlers for the flow type and state. Here <strong>single</strong> means a non-MFA flow, <strong>MFA primary</strong> the first login of MFA, and <strong>MFA second factor</strong> the one-time code or passkey after it.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Flow</th><th>State</th><th>Success</th><th>Failure</th></tr></thead>
+            <tbody>
+              <tr><td>Single form, one-time code</td><td>Session</td><td>Spring's default (moves to <code>defaultSuccessUrl</code>)</td><td>Spring's default (moves to <code>failureUrl</code>)</td></tr>
+              <tr><td>Single REST</td><td>Session</td><td><code>SessionSingleAuthSuccessHandler</code></td><td><code>SessionSingleAuthFailureHandler</code></td></tr>
+              <tr><td>Single passkey</td><td>Session</td><td>Spring's default JSON response (with the login facts recorded)</td><td>Spring's default</td></tr>
+              <tr><td>Single, every method</td><td>Token</td><td><code>OAuth2SingleAuthSuccessHandler</code> (issues tokens)</td><td><code>OAuth2SingleAuthFailureHandler</code></td></tr>
+              <tr><td>MFA primary</td><td>Both</td><td><code>PrimaryAuthenticationSuccessHandler</code></td><td><code>UnifiedAuthenticationFailureHandler</code></td></tr>
+              <tr><td>MFA second factor</td><td>Both</td><td><code>MfaFactorProcessingSuccessHandler</code></td><td><code>UnifiedAuthenticationFailureHandler</code></td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>Contexa's handlers answer with JSON when the request's <code>Accept</code> or <code>Content-Type</code> carries JSON or its path contains <code>/api/</code>, and with a redirect otherwise.</li>
+            <li>In a <strong>form or REST flow</strong>, a given <code>successHandler</code> is attached directly in place of the automatic one. Even in the token state Contexa then issues no token, so that handler owns the response.</li>
+            <li>In a <strong>one-time code flow</strong> the automatic handler, when there is one, comes first. In the token state the given handler is called first after the tokens are issued, and Contexa writes the response only if that handler did not.</li>
+            <li>For MFA results see <a href="mfa.html#results">MFA result handling</a>.</li>
+          </ul>
 
-            <h3 id="form-advanced">Advanced Configuration (rawHttp + rawFormLogin)</h3>
-<pre><code class="language-java">registry
-    .form(form -&gt; form
-        .order(20)
-        .loginPage("/admin/login")
-        .rawFormLogin(formLogin -&gt; formLogin
-            .usernameParameter("admin_user")
-            .passwordParameter("admin_pass"))
-        .rawHttp(http -&gt; http
-            .securityMatcher("/admin/**")
-            .sessionManagement(session -&gt; session
-                .maximumSessions(1)
-                .maxSessionsPreventsLogin(true)))
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
+          <h2 id="context-storage">Where the login is kept</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>State</th><th>Repository</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td>Session</td><td><code>AISessionSecurityContextRepository</code> (always present with <code>@EnableAISecurity</code>). Otherwise the repository given in the option, otherwise <code>HttpSessionSecurityContextRepository</code></td><td>Kept in the HTTP session. Contexa's repository applies the decision when the login is read</td></tr>
+              <tr><td>Token</td><td><code>RequestAttributeSecurityContextRepository</code>. A form flow uses the repository given in the option when there is one</td><td>Kept only within the request. The next request authenticates again with the token</td></tr>
+            </tbody>
+          </table></div>
+          <p>The MFA primary login is the same: in the session state it is kept in the session, in the token state only within the request, and during MFA the primary login proof is restored from the MFA session.</p>
 
-            <div class="callout callout-info">
-              <strong>rawFormLogin() vs rawHttp()</strong><br>
-              <code>rawFormLogin()</code> only customizes the internals of <code>HttpSecurity.formLogin()</code>. <code>rawHttp()</code> provides access to the full Spring Security API (<code>sessionManagement</code>, <code>securityMatcher</code>, custom filter registration, etc.). Both methods support cumulative invocations.
-            </div>
-          </section>
-
-          <!-- REST API Authentication -->
-          <section class="docs-section">
-            <h2 id="rest-api">REST API Authentication</h2>
-            <p>JSON-based REST API authentication. Authenticates via JSON payloads from frontend clients such as SPAs and mobile apps. Default order is <strong>200</strong>.</p>
-
-            <h3 id="rest-options">All Options</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>loginProcessingUrl(String)</code></td><td>String</td><td><code>AuthUrlProvider.getSingleRestLoginProcessing()</code></td><td>REST login processing URL</td></tr>
-                <tr><td><code>defaultSuccessUrl(String)</code></td><td>String</td><td>—</td><td>Redirect URL after success</td></tr>
-                <tr><td><code>defaultSuccessUrl(String, boolean)</code></td><td>String, boolean</td><td>—</td><td>Success URL + alwaysUse flag</td></tr>
-                <tr><td><code>failureUrl(String)</code></td><td>String</td><td>—</td><td>Redirect URL on failure</td></tr>
-                <tr><td><code>successHandler(PlatformAuthenticationSuccessHandler)</code></td><td>Handler</td><td>Auto-selected</td><td>Custom success handler</td></tr>
-                <tr><td><code>failureHandler(PlatformAuthenticationFailureHandler)</code></td><td>Handler</td><td>Auto-selected</td><td>Custom failure handler</td></tr>
-                <tr><td><code>securityContextRepository(SecurityContextRepository)</code></td><td>Repository</td><td>Auto-selected by state type</td><td>Security context repository</td></tr>
-                <tr><td><code>rawHttp(SafeHttpCustomizer&lt;HttpSecurity&gt;)</code></td><td>Customizer</td><td>—</td><td>Full Spring Security API access (cumulative)</td></tr>
-                <tr><td><code>order(int)</code></td><td>int</td><td>200</td><td>Filter chain priority</td></tr>
-                <tr><td><code>asep(Customizer&lt;RestAsepAttributes&gt;)</code></td><td>Customizer</td><td>—</td><td>ASEP annotation attribute configuration</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="rest-basic">Basic Configuration</h3>
-<pre><code class="language-java">registry
-    .rest(rest -&gt; rest
-        .loginProcessingUrl("/api/auth/login")
-    )
-    .oauth2(Customizer.withDefaults())
-    .build();</code></pre>
-
-            <h3 id="rest-stateless">Stateless API Configuration (rawHttp)</h3>
-<pre><code class="language-java">registry
-    .rest(rest -&gt; rest
-        .order(50)
-        .loginProcessingUrl("/api/auth")
-        .rawHttp(http -&gt; http
-            .securityMatcher("/api/**")
-            .sessionManagement(session -&gt;
-                session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)))
-    )
-    .oauth2(Customizer.withDefaults())
-    .build();</code></pre>
-
-            <div class="callout callout-info">
-              <strong>REST + OAuth2 Combination</strong><br>
-              REST API authentication is typically combined with <code>.oauth2()</code> for stateless JWT-based operation. It can also be combined with <code>.session()</code>, but OAuth2 is recommended for API servers.
-            </div>
-          </section>
-
-          <!-- One-Time Token -->
-          <section class="docs-section">
-            <h2 id="ott">One-Time Token (Magic Link)</h2>
-            <p>Authentication via a one-time token sent by email or SMS. Passwordless authentication using the Magic Link approach. Default order is <strong>300</strong>.</p>
-
-            <h3 id="ott-options">All Options</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>tokenGeneratingUrl(String)</code></td><td>String</td><td>—</td><td>Token generation request URL</td></tr>
-                <tr><td><code>defaultSubmitPageUrl(String)</code></td><td>String</td><td>—</td><td>Token input page URL</td></tr>
-                <tr><td><code>parameter names</code></td><td>String</td><td><code>"username"</code> / <code>"token"</code></td><td>The current public OTT DSL keeps the default parameter names. Custom parameter names require lower-level option customization rather than dedicated DSL setters.</td></tr>
-                <tr><td><code>showDefaultSubmitPage(boolean)</code></td><td>boolean</td><td><code>true</code></td><td>Whether to display the default token submit page</td></tr>
-                <tr><td><code>tokenService(OneTimeTokenService)</code></td><td>Service</td><td>Bean from the application context</td><td>Token generation/verification service implementation (required)</td></tr>
-                <tr><td><code>tokenGenerationSuccessHandler(OneTimeTokenGenerationSuccessHandler)</code></td><td>Handler</td><td>—</td><td>Token generation success handler (e.g., email delivery)</td></tr>
-                <tr><td><code>loginProcessingUrl(String)</code></td><td>String</td><td><code>AuthUrlProvider.getSingleOttLoginProcessing()</code></td><td>Token verification processing URL</td></tr>
-                <tr><td><code>successHandler(PlatformAuthenticationSuccessHandler)</code></td><td>Handler</td><td>Auto-selected</td><td>Authentication success handler</td></tr>
-                <tr><td><code>failureHandler(PlatformAuthenticationFailureHandler)</code></td><td>Handler</td><td>Auto-selected</td><td>Authentication failure handler</td></tr>
-                <tr><td><code>rawHttp(SafeHttpCustomizer&lt;HttpSecurity&gt;)</code></td><td>Customizer</td><td>—</td><td>Full Spring Security API access (cumulative)</td></tr>
-                <tr><td><code>order(int)</code></td><td>int</td><td>300</td><td>Filter chain priority</td></tr>
-                <tr><td><code>asep(Customizer&lt;OttAsepAttributes&gt;)</code></td><td>Customizer</td><td>—</td><td>ASEP annotation attribute configuration</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="ott-basic">Basic Configuration</h3>
-<pre><code class="language-java">registry
-    .ott(ott -&gt; ott
-        .tokenService(customTokenService)
-        .tokenGenerationSuccessHandler(emailSendingHandler)
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
-
-            <h3 id="ott-custom">Custom Pages + Email Delivery Handler</h3>
-<pre><code class="language-java">registry
-    .ott(ott -&gt; ott
-        .tokenGeneratingUrl("/auth/magic-link/request")
-        .defaultSubmitPageUrl("/auth/magic-link/verify")
-        // The public OTT DSL keeps the default token parameter name: "token"
-        .showDefaultSubmitPage(false)
-        .tokenService(jpaOneTimeTokenService)
-        .tokenGenerationSuccessHandler((request, response, token) -&gt; {
-            String email = request.getParameter("username");
-            emailService.sendMagicLink(email, token.getTokenValue());
-            response.sendRedirect("/auth/magic-link/sent");
-        })
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
-          </section>
-
-          <!-- WebAuthn / Passkey -->
-          <section class="docs-section">
-            <h2 id="passkey">WebAuthn / Passkey</h2>
-            <p>FIDO2 WebAuthn-based biometric and hardware security key authentication. The most secure form of passwordless authentication. Default order is <strong>400</strong>.</p>
-
-            <h3 id="passkey-options">All Options</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>rpName(String)</code></td><td>String</td><td><code>"contexa-identity"</code></td><td>Relying Party name (displayed to users)</td></tr>
-                <tr><td><code>rpId(String)</code></td><td>String</td><td><code>"localhost"</code></td><td>Relying Party ID (domain)</td></tr>
-                <tr><td><code>allowedOrigins(Set&lt;String&gt;)</code></td><td>Set&lt;String&gt;</td><td><code>["http://localhost:${server.port}"]</code> fallback when no explicit origins are configured</td><td>Allowed origins list</td></tr>
-                <tr><td><code>allowedOrigins(String...)</code></td><td>String...</td><td>—</td><td>Allowed origins (varargs)</td></tr>
-                <tr><td><code>assertionOptionsEndpoint(String)</code></td><td>String</td><td><code>AuthUrlProvider.getSinglePasskeyAssertionOptions()</code></td><td>Assertion options endpoint</td></tr>
-                <tr><td><code>loginProcessingUrl(String)</code></td><td>String</td><td><code>AuthUrlProvider.getSinglePasskeyLoginProcessing()</code></td><td>Authentication processing URL</td></tr>
-                <tr><td><code>successHandler(PlatformAuthenticationSuccessHandler)</code></td><td>Handler</td><td>Auto-selected</td><td>Authentication success handler</td></tr>
-                <tr><td><code>failureHandler(PlatformAuthenticationFailureHandler)</code></td><td>Handler</td><td>Auto-selected</td><td>Authentication failure handler</td></tr>
-                <tr><td><code>rawHttp(SafeHttpCustomizer&lt;HttpSecurity&gt;)</code></td><td>Customizer</td><td>—</td><td>Full Spring Security API access (cumulative)</td></tr>
-                <tr><td><code>order(int)</code></td><td>int</td><td>400</td><td>Filter chain priority</td></tr>
-                <tr><td><code>asep(Customizer&lt;PasskeyAsepAttributes&gt;)</code></td><td>Customizer</td><td>—</td><td>ASEP annotation attribute configuration</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="passkey-basic">Basic Configuration</h3>
-<pre><code class="language-java">registry
-    .passkey(passkey -&gt; passkey
-        .rpName("My Application")
-        .rpId("example.com")
-        .allowedOrigins("https://example.com")
-    )
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
-
-            <h3 id="passkey-registration">Passkey Registration Flow</h3>
-            <p>Passkey registration proceeds in three steps. The server stores credentials through Spring Security's <code>UserCredentialRepository</code>.</p>
-
-<pre class="arch-diagram"><code>
-  Client                         Server
-    |                               |
-    |  1. POST /webauthn/register   |
-    |        /options               |
-    |  ---------------------------&gt; |
-    |                               | PublicKeyCredentialCreationOptions
-    |  &lt;--------------------------- | (rpId, rpName, userId, challenge)
-    |                               |
-    |  2. navigator.credentials     |
-    |        .create(options)       |
-    |  [Browser WebAuthn API]       |
-    |                               |
-    |  3. POST /webauthn/register   |
-    |  ---------------------------&gt; |
-    |  (AuthenticatorAttestation    | Verify + Store in
-    |   Response)                   | UserCredentialRepository
-    |                               |
-    |  &lt;--- 201 Created ----------- |
-</code></pre>
-
-            <h3 id="passkey-management-api">Passkey Management REST API</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>URL</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>POST</code></td><td><code>/webauthn/register/options</code></td><td>Generate registration options (PublicKeyCredentialCreationOptions)</td></tr>
-                <tr><td><code>POST</code></td><td><code>/webauthn/register</code></td><td>Register credential (AuthenticatorAttestationResponse verification)</td></tr>
-                <tr><td><code>POST</code></td><td><code>/webauthn/authenticate/options</code></td><td>Generate authentication challenge (assertionOptionsEndpoint)</td></tr>
-                <tr><td><code>DELETE</code></td><td><code>/webauthn/register/{id}</code></td><td>Delete credential</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3 id="passkey-single-vs-mfa">Single Authentication vs MFA Second Factor</h3>
-            <p>Passkey uses completely different URLs, adapters, and state management for single authentication versus MFA second-factor authentication.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Aspect</th><th>Single Authentication</th><th>MFA Second Factor</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Authentication URL</td><td><code>/login/webauthn</code></td><td><code>/login/mfa-webauthn</code></td></tr>
-                <tr><td>Adapter</td><td><code>PasskeyAuthenticationAdapter</code></td><td><code>MfaPasskeyAuthenticationAdapter</code></td></tr>
-                <tr><td>Filter</td><td>Spring Security built-in</td><td>Spring Security WebAuthn filters + <code>MfaPasskeyAuthenticationAdapter</code></td></tr>
-                <tr><td>State Management</td><td>SecurityContextRepository</td><td>MFA State Machine</td></tr>
-                <tr><td>DSL Configuration</td><td><code>.passkey()</code></td><td><code>.mfa(m -&gt; m.passkey())</code></td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- Handler Resolution -->
-          <section class="docs-section">
-            <h2 id="handler-resolution">Automatic Handler Resolution</h2>
-            <p>When no custom handler is specified for an authentication method, the appropriate handler is automatically selected based on the authentication flow and state type.</p>
-
-            <h3>Success / Failure Handler Selection Rules</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Flow</th><th>State Type</th><th>Success Handler</th><th>Failure Handler</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Single Auth</td><td>Session</td><td>Spring Security default</td><td>Spring Security default</td></tr>
-                <tr><td>Single Auth</td><td>OAuth2</td><td><code>OAuth2SingleAuthSuccessHandler</code></td><td><code>OAuth2SingleAuthFailureHandler</code></td></tr>
-                <tr><td>MFA Primary</td><td>Any</td><td><code>PrimaryAuthenticationSuccessHandler</code></td><td><code>UnifiedAuthenticationFailureHandler</code></td></tr>
-                <tr><td>MFA Subsequent</td><td>Any</td><td><code>MfaFactorProcessingSuccessHandler</code></td><td><code>UnifiedAuthenticationFailureHandler</code></td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>SecurityContextRepository Selection Rules</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Flow</th><th>Phase</th><th>Repository</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Single Auth</td><td>Session</td><td><code>HttpSessionSecurityContextRepository</code></td></tr>
-                <tr><td>Single Auth</td><td>OAuth2</td><td><code>NullSecurityContextRepository</code></td></tr>
-                <tr><td>MFA</td><td>Primary (not final)</td><td><code>NullSecurityContextRepository</code></td></tr>
-                <tr><td>MFA</td><td>Final step</td><td>Auto-selected by state type</td></tr>
-                <tr><td>MFA</td><td>Intermediate step</td><td><code>NullSecurityContextRepository</code></td></tr>
-              </tbody>
-            </table></div>
-
-            <p>For custom handler implementation, refer to the Extension Points section in the <a href="mfa.html">Adaptive MFA</a> documentation.</p>
-          </section>
-
+          <h2 id="settings">Settings you often change</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning · when to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.urls.single.form-login-processing</code></td><td><code>/login</code></td><td>Single form login processing path</td></tr>
+              <tr><td><code>contexa.auth.urls.single.rest-login-processing</code></td><td><code>/api/login</code></td><td>Single REST login processing path</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.rp-id</code></td><td><code>localhost</code></td><td>Passkey service name. Change it to the production domain</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.allowed-origins</code></td><td>none</td><td>Origins that may use passkeys (comma-separated). Without it, <code>http://localhost:</code> + the server port</td></tr>
+              <tr><td><code>contexa.auth.ott.fail-on-email-error</code></td><td><code>true</code></td><td>Whether issuing a code fails when the email cannot be sent</td></tr>
+            </tbody>
+          </table></div>
+          <p>All login settings (including <code>contexa.auth.urls.*</code>) are in <a href="../../install/configuration/identity.html">Settings when Contexa owns login</a>.</p>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/identity/dsl.html" class="docs-nav-link prev">
+            <a href="dsl.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
               <span class="docs-nav-title">Identity DSL</span>
             </a>
-            <a href="../../../docs/reference/identity/mfa.html" class="docs-nav-link next">
+            <a href="mfa.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
               <span class="docs-nav-title">Adaptive MFA</span>
             </a>

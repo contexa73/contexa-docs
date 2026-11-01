@@ -1,233 +1,163 @@
-﻿<nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">Home</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">AI Engine Overview</span>
+            <span class="breadcrumb-current">AI Engine overview</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
             </div>
-            <h1>AI Engine Overview</h1>
-            <p class="lead">Contexa AI Engine overview — architecture, AI diagnosis process, standard and streaming analysis, customization points, and platform integration with Identity and IAM.</p>
+            <h1>AI Engine: Calling an LLM from Your Own Features</h1>
+            <p class="lead">With Contexa's general-purpose AI engine, a feature of your application can call an AI model (LLM) and get back a typed result object, or stream text to the screen as it is written. This page shows at a glance what you build, which path you call, what must be in place, and where to tune it.</p>
           </div>
 
-          <!-- AI Diagnosis Process -->
-          <section class="docs-section">
-            <h2 id="diagnosis-flow">AI Diagnosis Process</h2>
-            <p>The AI Engine supports two execution modes. Choose based on your use case:</p>
+          <div class="callout callout-info">
+            <strong>This is not the security decision engine.</strong> This group (AI Engine) is the general-purpose AI pipeline that your application calls directly. The security decision that allows, steps up or blocks a request (Layer 1 and Layer 2 analysis) is made separately by the <a href="../architecture/decision-engine.html">decision engine</a>; your application does not call it through the APIs on this page.
+          </div>
 
-            <div class="diagram-container">
-              <div class="diagram-grid diagram-grid-2">
-                <div class="diagram-box diagram-highlight">
-                  <strong>Standard Analysis</strong><br><br>
-                  Returns <code>Mono&lt;AIResponse&gt;</code><br>
-                  Full 6-step pipeline execution<br>
-                  Structured JSON response<br><br>
-                  <em>Best for: dashboards, reports, batch processing</em>
-                </div>
-                <div class="diagram-box diagram-accent">
-                  <strong>Streaming Analysis</strong><br><br>
-                  Returns <code>Flux&lt;ServerSentEvent&gt;</code><br>
-                  4-step pipeline (pre-process + streaming LLM)<br>
-                  Real-time text stream via SSE<br><br>
-                  <em>Best for: chat interfaces, live analysis, interactive UIs</em>
-                </div>
-              </div>
+          <h2 id="what-you-can-do">What you can do with this engine</h2>
+          <p>You ask an AI model with your own prompt and your own data, and receive the answer in one of two ways. It works just as well for features that have nothing to do with security (product recommendations, document summaries, classification and so on).</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Two ways to receive the result</strong>Both use the same context and template structure; only the method the controller calls differs.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side"><p class="dg-side-title">Standard: one result object</p><ul><li>Returns your response type (an <code>AIResponse</code> subclass) as <code>Mono&lt;R&gt;</code></li><li>Runs all six pipeline steps</li><li>For dashboards, reports and batch jobs where code handles the result</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Streaming: live text on the screen</p><ul><li>Returns SSE (Server-Sent Events) as <code>Flux&lt;ServerSentEvent&lt;String&gt;&gt;</code></li><li>Runs the first four steps, sends the model's text sentence by sentence, and a JSON result at the end</li><li>For chat and analysis screens that show the answer as it is written</li></ul></div>
             </div>
+          </figure>
+          <p>Contexa uses this engine too. Policy generation, resource name suggestions and condition template generation in the IAM admin console run on it (<a href="#contexa-usage">Where Contexa uses this engine</a>).</p>
 
-            <h3>Standard Analysis</h3>
-            <p>Executes the full 6-step pipeline and returns a structured JSON response. Use this when you need complete, parsed analysis results.</p>
+          <h2 id="requirements">What must be in place</h2>
+          <p>The AI engine has no switch of its own; it is created when the Contexa platform is turned on. Only when all of the following are present are the engine's beans (<code>AICoreOperations</code>, <code>PipelineOrchestrator</code>, <code>StandardStreamingService</code>) created.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Needed</th><th>Why</th><th>Without it</th></tr></thead>
+            <tbody>
+              <tr><td><code>@EnableAISecurity</code></td><td>The marker that turns the Contexa platform on. It also turns on Contexa's security features (security mode <code>SANDBOX</code> by default). Requires <code>spring-boot-starter-security</code>.</td><td>All Contexa auto-configuration is left out and none of the engine's beans exist.</td></tr>
+              <tr><td><code>contexa.datasource.url</code></td><td>The address of Contexa's own database.</td><td>The application does not start.</td></tr>
+              <tr><td>A Spring AI chat model (<code>ChatModel</code> bean)</td><td><code>UnifiedLLMOrchestrator</code>, which makes the LLM calls, is built on it. How to connect one is in <a href="../../install/configuration/ai.html">AI model configuration</a>.</td><td>No pipeline executor is created, so the engine cannot be called.</td></tr>
+              <tr><td>Three area switches (all on by default)</td><td><code>contexa.std.enabled</code> (pipeline parts), <code>contexa.rag.enabled</code> (vector store services, RAG parts and <code>AICoreOperations</code>), <code>contexa.streaming.enabled</code> (<code>StandardStreamingService</code>)</td><td>The beans of a switched-off area are missing. With <code>contexa.rag.enabled=false</code> in particular, <code>AICoreOperations</code> is gone as well.</td></tr>
+              <tr><td>(Optional) a vector store (<code>VectorStore</code>)</td><td>Used for RAG retrieval (finding related documents and putting them into the prompt).</td><td>The default retriever returns an empty result; everything else still works.</td></tr>
+            </tbody>
+          </table></div>
+          <p>Installing Contexa and turning it on for the first time is covered in <a href="../../install/installation-guide.html">Installation guide</a>.</p>
 
-<pre><code class="language-java">@RestController
-@RequestMapping("/api/my-analysis")
-@RequiredArgsConstructor
-public class MyAnalysisController {
+          <h2 id="paths">Three ways to call it</h2>
+          <p>There are three ways to call the engine. Whichever you choose, the same pipeline calls the AI model at the end.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The path of a request on the Strategy path</strong>The direct pipeline path skips steps 2–3; the direct Lab path skips step 2 and the Strategy.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-host"><span class="dg-node-tag">Your app</span><span class="dg-node-title">Controller</span><span class="dg-node-desc">Builds an <code>AIRequest</code> holding the context, the template type and the diagnosis type, and hands it over</span></li>
+              <li class="dg-node dg-contexa"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">AI entry point (<code>AICoreOperations</code>)</span><span class="dg-node-desc">Locks so the same request does not run twice at once, writes one audit start line, then finds the Strategy by diagnosis type</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">Your app</span><span class="dg-node-title">Strategy → Lab</span><span class="dg-node-desc">The Strategy checks the input and hands it to the Lab; the Lab adds data and calls the pipeline</span></li>
+              <li class="dg-node dg-contexa"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">Pipeline (<code>PipelineOrchestrator</code>)</span><span class="dg-node-desc">Retrieval → preprocessing → prompt → model call → response parsing → postprocessing. Streaming runs the first four steps</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">AI model</span><span class="dg-node-title">Spring AI chat model</span><span class="dg-node-desc">The result object or the live text travels back up</span></li>
+            </ol>
+            <div class="dg-legend"><span class="dg-host">What you build</span><span class="dg-contexa">What Contexa provides</span><span class="dg-model">AI model</span></div>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Path</th><th>What you call</th><th>What you build</th><th>When to use it</th></tr></thead>
+            <tbody>
+              <tr><td>Strategy path (recommended)</td><td><code>AICoreOperations</code>, directly or passed to <code>StandardStreamingService</code></td><td>Context, response type, template, Lab, Strategy</td><td>When you need input checks, protection against the same request running twice, and routing by diagnosis type</td></tr>
+              <tr><td>Direct pipeline</td><td><code>PipelineOrchestrator</code>, directly or passed to <code>StandardStreamingService</code></td><td>Context, response type, template</td><td>A simple call that one prompt can answer. No lock, no audit line</td></tr>
+              <tr><td>Direct Lab</td><td>The Lab bean's <code>processAsync()</code> and <code>processStream()</code></td><td>Context, response type, template, Lab</td><td>When you use a Lab without a Strategy. Skips routing, the lock and the audit line. The stream is a flow of raw chunks, not packaged as SSE</td></tr>
+            </tbody>
+          </table></div>
 
-    private final AICoreOperations&lt;MyContext&gt; aiProcessor;
-    private final StandardStreamingService streamingService;
+          <h2 id="building-blocks">What you build</h2>
+          <p>Each part is a Spring bean or a plain class, and Contexa finds it by name. A complete example from start to finish is in <a href="strategy.html">Build a Custom AI Feature</a>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Part</th><th>What it does</th><th>When you need it</th></tr></thead>
+            <tbody>
+              <tr><td>Context (a <code>DomainContext</code> subclass)</td><td>The input data for the model. You implement only <code>getDomainType()</code>.</td><td>Always (<a href="strategy.html#step-1">step 1</a>)</td></tr>
+              <tr><td>Response type (an <code>AIResponse</code> subclass)</td><td>The result class that holds the model's answer.</td><td>Always (<a href="strategy.html#step-1">step 1</a>)</td></tr>
+              <tr><td>Prompt template (a <code>PromptTemplate</code> bean)</td><td>Builds the system prompt and the user prompt. Selected by the name of the template type (<code>TemplateType</code>).</td><td>Always. Two if you use both standard and streaming (<a href="strategy.html#step-2">step 2</a>)</td></tr>
+              <tr><td>Lab (an <code>AbstractAILab</code> bean)</td><td>The unit of work that gathers domain data and calls the pipeline.</td><td>Strategy and direct Lab paths (<a href="strategy.html#step-3">step 3</a>)</td></tr>
+              <tr><td>Strategy (an <code>AbstractAIStrategy</code> bean)</td><td>Selected by the name of the diagnosis type (<code>DiagnosisType</code>); checks the input and hands it to the Lab.</td><td>Strategy path (<a href="strategy.html#step-4">step 4</a>)</td></tr>
+              <tr><td>Retriever (a <code>ContextRetriever</code> subclass)</td><td>Finds related documents in a way that fits your domain. It is called only after you register it in the registry yourself.</td><td>Optional (<a href="strategy.html#step-5">step 5</a>)</td></tr>
+              <tr><td>Response processor (a <code>DomainResponseProcessor</code> bean)</td><td>Converts the parsed result when it is not your response type.</td><td>Optional (<a href="pipeline.html#response-processor">Shaping the result</a>)</td></tr>
+            </tbody>
+          </table></div>
 
-    @PostMapping("/analyze")
-    public Mono&lt;ResponseEntity&lt;MyAnalysisResponse&gt;&gt; analyze(
-            @RequestBody MyAnalysisItem request) {
+          <h2 id="modes">Choosing how to receive the result</h2>
+          <p>In the controller, one method of <code>StandardStreamingService</code> picks the way. <code>request</code> is an <code>AIRequest</code>; <code>aiProcessor</code> is the injected <code>AICoreOperations</code>.</p>
+          <pre><code class="language-java">// Standard: receive one result object
+Mono&lt;ProductRecommendationResponse&gt; result =
+        streamingService.process(request, aiProcessor, ProductRecommendationResponse.class);
 
-        MyAnalysisRequest aiRequest = createRequest(request);
+// Streaming: receive SSE events to send to the screen
+Flux&lt;ServerSentEvent&lt;String&gt;&gt; events = streamingService.stream(request, aiProcessor);</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th></th><th>Standard</th><th>Streaming</th></tr></thead>
+            <tbody>
+              <tr><td>What you receive</td><td>One response type object (Spring turns it into JSON)</td><td>Several sentence events → result-generation notice → final JSON → <code>[DONE]</code></td></tr>
+              <tr><td>Pipeline steps</td><td>Six</td><td>The first four (up to the model call)</td></tr>
+              <tr><td>Choosing model and temperature</td><td>Possible with request parameters</td><td>Not possible (default chat model)</td></tr>
+              <tr><td>Time limit</td><td>60 seconds per model call; a temporary failure is sent again with backoff up to 4 times</td><td>Ends when the next event does not arrive within 5 minutes (fixed in code)</td></tr>
+              <tr><td>On failure</td><td>By default, an empty response object with <code>errorMessage</code> filled in</td><td>An event that starts with <code>ERROR:</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>What streaming events really look like, and client code, are in <a href="streaming.html">Streaming</a>.</p>
 
-        return streamingService.process(
-                aiRequest, aiProcessor, MyAnalysisResponse.class
-        ).map(ResponseEntity::ok);
-    }
-}</code></pre>
+          <h2 id="tuning">Where to tune it: settings and request parameters</h2>
+          <p>Most of the AI engine's behavior is decided per request, not in <code>application.yml</code>. The pipeline steps read the values you put in with <code>AIRequest.withParameter(name, value)</code>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What you want to change</th><th>Where</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td>Which model, temperature and maximum tokens to call with</td><td>Request parameters <code>preferredModel</code>, <code>temperature</code>, <code>topP</code>, <code>seed</code>, <code>maxTokens</code> (standard only). Without them, the default chat model</td><td><a href="strategy.html#model-options">Model and generation options</a></td></tr>
+              <tr><td>Whether to receive failures as errors</td><td>Request parameter <code>pipelineFailurePolicy</code></td><td><a href="pipeline.html#failures">Failures and checks</a></td></tr>
+              <tr><td>Number of retrieved documents and minimum similarity</td><td><code>contexa.rag.defaults.top-k</code> (10), <code>contexa.rag.defaults.similarity-threshold</code> (0.7)</td><td><a href="pipeline.html#configuration">Pipeline settings</a></td></tr>
+              <tr><td>Time limit of one model call</td><td><code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code> (60000)</td><td><a href="pipeline.html#configuration">Pipeline settings</a></td></tr>
+              <tr><td>Model connection (provider OpenAI, Anthropic or Ollama, key, model name)</td><td><code>spring.ai.*</code> and Contexa's model connection settings</td><td><a href="../../install/configuration/ai.html">AI model configuration</a>, <a href="model-provider.html">Model providers</a></td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>Layer 1 and Layer 2 model settings do not apply here.</strong> <code>contexa.security.tiered.llm.layer1.model</code> and <code>contexa.security.tiered.llm.layer2.model</code> are used by the decision engine. A general request has no analysis layer, so it uses the default chat model (<a href="model-provider.html#request-order">how the model is decided</a>).</li>
+            <li><strong>There is no setting for a time limit on the whole pipeline.</strong> <code>timeoutSeconds</code> on <code>PipelineConfiguration</code> only holds a value; no code reads it.</li>
+            <li><strong>The streaming time limit is 5 minutes, fixed in code</strong>, so no setting changes it.</li>
+          </ul>
 
-            <h3>Streaming Analysis</h3>
-            <p>Runs context retrieval, preprocessing, and prompt generation, then streams the LLM response in real-time via Server-Sent Events. Use this for chat-like interfaces or when users need immediate feedback.</p>
+          <h2 id="verify">Checking that it works</h2>
+          <ul>
+            <li><strong>Step logs:</strong> a standard run logs each step, for example <code>[PIPELINE] STEP 4 completed: LLM_EXECUTION (1830ms) - Request: …</code> (streaming logs <code>[STREAMING-PIPELINE]</code>).</li>
+            <li><strong>The model actually used:</strong> it is in the metadata <code>selectedModelId</code> of the standard result object. If the requested model was not found and the default model was used, <code>modelSelectionFallbackUsed</code> is <code>true</code>.</li>
+            <li><strong>Failure:</strong> by default, instead of an error you get a response object whose <code>errorMessage</code> starts with <code>Pipeline execution failed: …</code>. Check <code>getErrorMessage()</code> before using the result.</li>
+            <li><strong>Lock conflict:</strong> on the Strategy path, if exactly the same request (same response type, template, diagnosis type, user, session, organization and parameters) is already running, the new one is refused with <code>AIOperationException</code> (<code>Strategic operation conflict</code>).</li>
+            <li><strong>Audit log:</strong> the Strategy path writes one <code>AUDIT_START</code> line to the logger <code>IAM_AUDIT</code> when it starts. Completion and failure are not written separately.</li>
+          </ul>
 
-<pre><code class="language-java">@PostMapping(value = "/analyze/stream",
-             produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-public Flux&lt;ServerSentEvent&lt;String&gt;&gt; analyzeStream(
-        @RequestBody MyAnalysisItem request) {
+          <h2 id="rag">The default retriever filters by authorization</h2>
+          <p>If you do not register a retriever of your own, the default retriever (<code>AuthorizedContextRetriever</code>) is used. Of the documents found in the vector store, it keeps only those that fit the requesting user, organization, tenant and retrieval purpose, removes documents that look like prompt injection, and tags each line with <code>[auth=…]</code> before putting it into the prompt. When you register your own retriever, requests with that context type do not go through this filtering. The detailed rules are in <a href="rag.html">RAG and vector store</a>.</p>
 
-    MyAnalysisRequest aiRequest = createRequest(request);
+          <h2 id="contexa-usage">Where Contexa uses this engine</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Feature</th><th>Diagnosis type</th><th>Where</th></tr></thead>
+            <tbody>
+              <tr><td>Writing an XACML policy from natural language (standard and streaming)</td><td><code>"PolicyGeneration"</code></td><td>Admin API <code>POST /contexa/admin/api/ai/policies/generate</code> and <code>/generate/stream</code> (<a href="../iam/admin.html">Admin console</a>)</td></tr>
+              <tr><td>Resource name suggestions</td><td><code>"ResourceNaming"</code></td><td>When the resource registry names scanned resources (<a href="../iam/resource-scanner.html">Resource scanner</a>)</td></tr>
+              <tr><td>Generating condition templates</td><td><code>"ConditionTemplate"</code></td><td>The automatic condition template service</td></tr>
+            </tbody>
+          </table></div>
+          <p>Authentication (the Identity module: login, sessions, tokens, MFA) and authorization (the IAM module: XACML policies, resource protection) are separate modules from this engine. IAM only calls this engine for the features above.</p>
+          <p>The security decision also uses the same pipeline parts internally, but a decision request ignores request parameters such as model and temperature and follows the decision engine's own rules (Layer 1 and Layer 2 models, analysis time limits). <a href="../architecture/decision-engine.html">Decision engine</a></p>
 
-    return streamingService.stream(aiRequest, aiProcessor);
-}</code></pre>
-
-            <div class="callout callout-info">
-              <strong>Choosing Between Modes</strong><br>
-              Use <strong>Standard Analysis</strong> when you need structured JSON responses that can be programmatically processed (dashboards, reports, automated workflows). Use <strong>Streaming Analysis</strong> when users need to see results as they are generated (chat UIs, live monitoring, interactive analysis).
-            </div>
-          </section>
-
-          <!-- Customization Points -->
-          <section class="docs-section">
-            <h2 id="customization-points">Customization Points</h2>
-            <p>To build a custom AI feature, you implement these extension points. Each one plugs into the AI Engine at a specific layer:</p>
-
-            <div class="diagram-container">
-              <div class="diagram-grid diagram-grid-3">
-                <div class="diagram-box diagram-highlight">
-                  <strong>AIRequest / AIResponse</strong><br><br>
-                  Define your request and response types. Extend <code>AIResponse</code> with domain-specific fields.<br>
-                  <a href="strategy.html#step-1">&rarr; Step 1</a>
-                </div>
-                <div class="diagram-box diagram-highlight">
-                  <strong>Strategy</strong><br><br>
-                  Route requests by <code>DiagnosisType</code>. Validate input and select the Lab to execute.<br>
-                  <a href="strategy.html#step-4">&rarr; Step 4</a>
-                </div>
-                <div class="diagram-box diagram-highlight">
-                  <strong>Lab</strong><br><br>
-                  Collect domain data, enrich the request, and delegate to the Pipeline.<br>
-                  <a href="strategy.html#step-3">&rarr; Step 3</a>
-                </div>
-                <div class="diagram-box diagram-accent">
-                  <strong>PromptTemplate</strong><br><br>
-                  Generate system and user prompts for the LLM from your domain data.<br>
-                  <a href="strategy.html#step-2">&rarr; Step 2</a>
-                </div>
-                <div class="diagram-box diagram-accent">
-                  <strong>ContextRetriever</strong><br><br>
-                  Customize RAG vector search to retrieve relevant context for your domain.<br>
-                  <a href="strategy.html#step-5">&rarr; Step 5</a>
-                </div>
-                <div class="diagram-box diagram-muted">
-                  <strong>Configuration</strong><br><br>
-                  Tune LLM models, tiers, RAG parameters, and streaming settings via <code>application.yml</code>.<br>
-                  <a href="strategy.html#step-6">&rarr; Step 6</a>
-                </div>
-              </div>
-            </div>
-
-            <div class="callout callout-success">
-              <strong>Getting Started</strong><br>
-              See <a href="strategy.html">Building Custom AI</a> for a step-by-step guide to implementing each extension point with working code examples.
-            </div>
-          </section>
-
-          <!-- Platform Integration -->
-          <section class="docs-section">
-            <h2 id="platform-integration">Platform Integration</h2>
-            <p>The AI Engine integrates with Contexa's Identity and IAM modules to deliver AI Native Security. Each module contributes a distinct capability:</p>
-
-            <div class="diagram-container">
-              <div class="diagram-flow">
-                <div class="diagram-box diagram-highlight">
-                  <strong>Identity</strong><br><br>
-                  Authentication<br>
-                  Session / Token<br>
-                  MFA
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-accent">
-                  <strong>IAM</strong><br><br>
-                  Authorization<br>
-                  Policy / XACML<br>
-                  Resource Protection
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-success">
-                  <strong>AI Engine</strong><br><br>
-                  AI Diagnosis<br>
-                  Risk Analysis<br>
-                  Policy Generation
-                </div>
-              </div>
-            </div>
-
-            <p>When integrated together, the platform enables:</p>
-            <ul>
-              <li><strong>Zero Trust security analysis</strong> — AI-powered risk analysis can feed runtime security decisions when the core engine is integrated with Identity and IAM.</li>
-              <li><strong>Policy generation workflows</strong> — the IAM module provides AI-assisted policy generation templates and retrieval paths for structured XACML authoring.</li>
-              <li><strong>Resource naming recommendations</strong> — the IAM module includes AI-assisted resource naming templates to help normalize business-facing resource labels.</li>
-              <li><strong>Shared prompt and retrieval infrastructure</strong> — the same pipeline, model selection, advisor, and RAG primitives can be reused across security and non-security AI features.</li>
-            </ul>
-
-            <div class="callout callout-info">
-              <strong>Standalone Usage</strong><br>
-              The AI Engine can also be used independently for any AI analysis task in your Spring application. The Identity and IAM integration is optional and adds security-specific AI capabilities.
-            </div>
-          </section>
-
-          <!-- Configuration Overview -->
-          <section class="docs-section">
-            <h2 id="configuration">Configuration Overview</h2>
-            <p>AI Engine behavior is controlled through <code>application.yml</code> properties. Key configuration areas:</p>
-
-            <div class="diagram-container">
-              <div class="diagram-grid diagram-grid-2">
-                <div class="diagram-box">
-                  <strong>LLM &amp; Models</strong><br><br>
-                  Tiered model hierarchy (Layer 1 / Layer 2)<br>
-                  Model provider selection (OpenAI, Anthropic, Ollama)<br>
-                  Temperature, max tokens per task type
-                </div>
-                <div class="diagram-box">
-                  <strong>Pipeline &amp; RAG</strong><br><br>
-                  Vector search parameters (topK, similarity threshold)<br>
-                  Lab-specific RAG configuration<br>
-                  Pipeline timeout and streaming settings
-                </div>
-              </div>
-            </div>
-
-            <div class="callout callout-info">
-              <strong>Configuration Reference</strong><br>
-              For complete property reference with examples, see <a href="../../../docs/install/configuration/ai.html">Configuration &gt; AI</a> — covers LLM tiers, strategy settings, RAG parameters, streaming, and vector store configuration.
-            </div>
-          </section>
-
-          <!-- Related -->
-          <section class="docs-section">
-            <h2 id="related">Related</h2>
-            <div class="related-links-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1rem;">
-              <a href="strategy.html" class="related-link-card">
-                <h3>Building Custom AI</h3>
-                <p>Step-by-step guide to implementing Strategy, Lab, and PromptTemplate.</p>
-              </a>
-              <a href="pipeline.html" class="related-link-card">
-                <h3>Pipeline &amp; RAG</h3>
-                <p>6-step pipeline architecture and RAG context retrieval.</p>
-              </a>
-              <a href="streaming.html" class="related-link-card">
-                <h3>Streaming</h3>
-                <p>Real-time SSE streaming and client integration.</p>
-              </a>
-              <a href="llm-orchestrator.html" class="related-link-card">
-                <h3>LLM &amp; Models</h3>
-                <p>Tiered model hierarchy, providers, and advisor system.</p>
-              </a>
-            </div>
-          </section>
-
+          <h2 id="related">Where to read next</h2>
+          <ul>
+            <li><a href="strategy.html">Build a Custom AI Feature</a>: one complete example, from the context to the controller.</li>
+            <li><a href="pipeline.html">Pipeline and RAG</a>: choosing steps, adding retrieval, shaping the result, handling failures.</li>
+            <li><a href="streaming.html">Streaming</a>: the events that really arrive, and client code.</li>
+            <li><a href="llm-orchestrator.html">LLM orchestrator</a>, <a href="model-provider.html">Model providers</a>, <a href="advisor.html">Advisors</a>, <a href="rag.html">RAG</a>: inside the model call.</li>
+            <li><a href="../../install/configuration/ai.html">AI model configuration</a></li>
+          </ul>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/iam/end-to-end-workflow.html" class="docs-nav-link prev">
+            <a href="../iam/end-to-end-workflow.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">IAM End-to-End Workflow</span>
+              <span class="docs-nav-title">End-to-End Dynamic Authorization</span>
             </a>
             <a href="strategy.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Building Custom AI</span>
+              <span class="docs-nav-title">Build a Custom AI Feature</span>
             </a>
           </div>

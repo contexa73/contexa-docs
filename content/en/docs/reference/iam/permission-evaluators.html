@@ -5,447 +5,117 @@
             <span class="breadcrumb-separator">/</span>
             <span class="breadcrumb-current">Permission Evaluators</span>
           </nav>
+
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-warning">contexa-iam</span>
+              <span class="badge badge-secondary">Authorization</span>
             </div>
-            <h1>Permission Evaluators</h1>
-            <p class="lead">Composite permission evaluation system implementing Spring Security's <code>PermissionEvaluator</code> with domain-specific evaluators for fine-grained method-level access control.</p>
+            <h1>Permission Evaluators: hasPermission</h1>
+            <p class="lead">What <code>hasPermission(...)</code> in a method policy condition looks at to answer true or false. Covers creating permissions and attaching them to roles, the five built-in domains, the synonyms of action names, and building an evaluator for a new domain.</p>
           </div>
 
-          <!-- Choosing the Right Approach -->
-          <section>
-            <h3>Choosing the Right Approach</h3>
-            <table>
-              <thead>
-                <tr><th>Approach</th><th>Scope</th><th>Use Case</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>hasPermission()</code></td>
-                  <td>Object-level</td>
-                  <td>Fine-grained CRUD permissions on specific domain objects</td>
-                </tr>
-                <tr>
-                  <td><code>hasRole()</code></td>
-                  <td>Global</td>
-                  <td>Broad access control based on user roles</td>
-                </tr>
-                <tr>
-                  <td><code>@Protectable</code></td>
-                  <td>Method-level</td>
-                  <td>Dynamic policy-driven authorization with AI integration</td>
-                </tr>
-              </tbody>
-            </table>
-          </section>
+          <h2 id="what-it-checks">What hasPermission actually checks</h2>
+          <p><code>hasPermission(...)</code> is Spring Security's object permission expression. Contexa's <code>CompositePermissionEvaluator</code> (a Spring <code>PermissionEvaluator</code>) picks one domain evaluator and hands it over. The built-in evaluators do not look at the target object or ID; they only check <strong>whether one of the signed-in user's permission names contains both the domain word and an action word</strong>.</p>
+          <ol>
+            <li>Only the user's <code>PermissionAuthority</code> entries, which come from Contexa permission records, count. Other authorities such as roles (<code>ROLE_...</code>) are ignored.</li>
+            <li>That permission's target type must be <code>METHOD</code>.</li>
+            <li>It is true when the permission name (upper case) contains the domain word (for example <code>USER</code>) and one of the action's synonyms (<a href="#synonyms">below</a>) <strong>as substrings</strong>.</li>
+            <li>The target object or ID takes no part in the decision. The only per-object check is the owner check of <code>@Protectable(ownerField)</code> (<a href="#ownership">With the owner check</a>).</li>
+          </ol>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Permission the user holds</th><th>Expression</th><th>Result</th></tr></thead>
+            <tbody>
+              <tr><td><code>METHOD_USERSERVICE_GETUSER</code> (target type METHOD)</td><td><code>hasPermission(#id, 'USER', 'READ')</code></td><td>True: it contains USER and GET (a READ synonym)</td></tr>
+              <tr><td><code>METHOD_REPORTSERVICE_EXPORTREPORT</code> (METHOD)</td><td>Same</td><td>False: no USER</td></tr>
+              <tr><td><code>USER_READ</code> (target type URL)</td><td>Same</td><td>False: the target type is not METHOD</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>Under HOST_OWNED it is usually false.</strong> <code>PermissionAuthority</code> entries are put into the sign-in by Contexa's user store when Contexa owns sign-in (<code>CONTEXA_OWNED</code>). Under the default <code>HOST_OWNED</code>, where your application owns sign-in, your sign-in carries none, so the built-in evaluators answer false. To decide by your application's own authorities, change the decision rule in a <a href="#custom">custom evaluator</a>.
+          </div>
 
-          <!-- Quick Start -->
-          <section>
-            <h2 id="quickstart">Quick Start</h2>
-            <p>Use <code>hasPermission()</code> in <code>@PreAuthorize</code> annotations or SpEL policy conditions to check fine-grained permissions.</p>
+          <h2 id="prepare">Preparation: create permissions and attach them to roles</h2>
+          <ol>
+            <li>Create permissions in the admin screen IAM &gt; Permission Management (<code>/contexa/admin/permissions</code>). The fields are name, description, target type (<code>URL</code>, <code>METHOD</code>) and action type (<code>READ</code>, <code>WRITE</code>, <code>EXECUTE</code>, <code>DELETE</code>, <code>ALL</code>).</li>
+            <li>The evaluators look at the <strong>name</strong>, not the action type field. Put the domain and action words in the name (by convention <code>DOMAIN_ACTION</code>, for example <code>USER_READ</code>) and set the target type to <code>METHOD</code>.</li>
+            <li>Permissions created from resources in Policy Center get automatic names: <code>METHOD_{CLASS}_{METHOD}</code> for METHOD resources and <code>URL_{address}</code> for URL resources (characters other than letters and digits become <code>_</code>), all upper case. Automatic names can match through the substring rule too: <code>METHOD_ORDERSERVICE_UPDATEORDER</code> matches ORDER and UPDATE.</li>
+            <li>Attach permissions to a role in IAM &gt; Role Management (<code>/contexa/admin/roles</code>) and give the role to users or groups. At sign-in the role's permissions are carried as <code>PermissionAuthority</code>, whose value is the permission name in upper case.</li>
+          </ol>
 
-            <h3>In Annotations</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@PreAuthorize("hasPermission(#id, 'USER', 'READ')")
-public User getUser(Long id) { ... }
+          <h2 id="where">Where it is used</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Where</th><th>Works?</th></tr></thead>
+            <tbody>
+              <tr><td>Conditions of <code>@Protectable</code> method policies</td><td>Yes (under both authentication ownerships)</td></tr>
+              <tr><td><code>@PreAuthorize</code> and other Spring method security</td><td>Only under <code>CONTEXA_OWNED</code> (Contexa registers the handler that uses this evaluator)</td></tr>
+              <tr><td>Conditions of URL policies</td><td>No. It is removed at load time. An <code>ALLOW</code> policy that had only <code>hasPermission</code> always denies; a <code>DENY</code> policy always applies</td></tr>
+            </tbody>
+          </table></div>
+          <p>A check over the whole role is <code>hasRole(...)</code>, and protecting each method with database policies is <a href="protectable.html"><code>@Protectable</code></a>; <code>hasPermission</code> is for checking permission names inside such a policy's condition. A <code>#name</code> in a condition is a method parameter name. <code>#targetId</code> has a value only when a parameter has that name. Method policies join conditions with <code>and</code>, so it can sit alongside other conditions.</p>
 
-@PreAuthorize("hasPermission(#id, 'ROLE', 'UPDATE')")
-public void updateRole(Long id, RoleDto dto) { ... }</code></pre>
+          <h2 id="domains">Built-in domains and examples</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Domain</th><th>Target type with three arguments</th><th>Permission prefix with two arguments</th><th>Repository bean (for the owner check)</th></tr></thead>
+            <tbody>
+              <tr><td>USER</td><td><code>'USER'</code></td><td><code>USER_</code></td><td><code>userRepository</code></td></tr>
+              <tr><td>ROLE</td><td><code>'ROLE'</code></td><td><code>ROLE_</code></td><td><code>roleRepository</code></td></tr>
+              <tr><td>ROLE_HIERARCHY</td><td><code>'ROLE_HIERARCHY'</code></td><td><code>ROLE_HIERARCHY_</code></td><td><code>roleHierarchyRepository</code></td></tr>
+              <tr><td>GROUP</td><td><code>'GROUP'</code></td><td><code>GROUP_</code></td><td><code>groupRepository</code></td></tr>
+              <tr><td>PERMISSION</td><td><code>'PERMISSION'</code></td><td><code>PERMISSION_</code></td><td><code>permissionRepository</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>Target types ignore case. The five built-in evaluators differ only in domain and repository bean name; their decision rule is the same.</p>
+          <pre><code class="language-text">hasPermission(#id, 'USER', 'READ')
+hasPermission(#id, 'ROLE', 'EDIT')
+hasPermission(#groupId, 'GROUP', 'DELETE')
+hasPermission(null, 'USER_READ')
+hasPermission(#userId, 'USER', 'UPDATE') and T(java.time.LocalTime).now().getHour() &lt; 18</code></pre>
+          <ul>
+            <li>Domains such as ORDER, DOCUMENT, REPORT or PAYMENT have no evaluator. To use them, <a href="#custom">build one</a>; without it a three-argument expression ends in an exception.</li>
+            <li>Write time conditions with <code>T(java.time.LocalTime)</code> and the like. There is no <code>#time</code> variable.</li>
+          </ul>
+
+          <h2 id="synonyms">Action names and synonyms</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Action</th><th>Words treated as the same</th></tr></thead>
+            <tbody>
+              <tr><td>Read</td><td><code>GET</code>, <code>FIND</code>, <code>READ</code>, <code>FETCH</code>, <code>VIEW</code>, <code>RETRIEVE</code>, <code>LIST</code>, <code>SEARCH</code></td></tr>
+              <tr><td>Create</td><td><code>CREATE</code>, <code>SAVE</code>, <code>ADD</code>, <code>INSERT</code>, <code>REGISTER</code>, <code>POST</code></td></tr>
+              <tr><td>Update</td><td><code>UPDATE</code>, <code>EDIT</code>, <code>MODIFY</code>, <code>CHANGE</code>, <code>PATCH</code>, <code>PUT</code></td></tr>
+              <tr><td>Delete</td><td><code>DELETE</code>, <code>REMOVE</code>, <code>DESTROY</code>, <code>DROP</code>, <code>ERASE</code>, <code>PURGE</code>, <code>CLEAR</code>, <code>TRUNCATE</code></td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>When the action in the expression belongs to a group, any word of that group in the permission name is enough. An action outside the groups (for example <code>EXPORT</code>) is looked for as that word alone.</li>
+            <li>With two arguments, the action is what remains after removing the domain prefix from the permission string. <code>hasPermission(#user, 'USER_FETCH')</code> is FETCH, in the read group, so it is true when a METHOD permission's name contains USER and GET, READ or another read word.</li>
+          </ul>
+
+          <h2 id="routing">How the evaluator is chosen</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The way of choosing depends on the number of arguments</strong>Only the chosen evaluator decides; it never falls through to the next one.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side"><p class="dg-side-title">Two arguments: <code>hasPermission(target, 'USER_READ')</code></p><ul><li>Picks the evaluator whose <code>DOMAIN_</code> starts the permission string</li><li>No matching evaluator: false</li><li>A <code>null</code> permission: true when there is a target</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Three arguments: <code>hasPermission(ID, 'USER', 'READ')</code></p><ul><li>Picks the evaluator whose domain equals the target type (case ignored)</li><li>No matching evaluator: an exception (<code>IllegalArgumentException</code>), and the call fails</li><li>A <code>null</code> action: true</li></ul></div>
             </div>
+          </figure>
+          <ul>
+            <li>The evaluators are collected at startup and checked <strong>longest domain name first</strong>. So <code>ROLE_HIERARCHY_READ</code> goes to the <code>ROLE_HIERARCHY</code> evaluator, not the <code>ROLE</code> one. USER and ROLE have the same length, but their prefixes never overlap, so their order does not matter.</li>
+            <li>Without sign-in it is always false.</li>
+            <li><code>DomainPermissionEvaluator</code> is the evaluator interface; the decision rule above lives in the base class <code>AbstractDomainPermissionEvaluator</code>.</li>
+          </ul>
 
-            <h3>In Policy Conditions</h3>
-            <p>When authoring method-oriented conditions in Policy Center or other policy-editing flows, use <code>hasPermission()</code> in stored SpEL condition expressions:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">SpEL</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code>hasPermission(#targetId, 'GROUP', 'DELETE')
-hasPermission(#targetId, 'USER', 'READ') and #ai.isAllowed()</code></pre>
-            </div>
-          </section>
+          <h2 id="ownership">With the owner check</h2>
+          <p>In a method policy, when <code>hasPermission</code> is true and the method carries <code>@Protectable(ownerField = "...")</code>, the target's owner is checked next. With two arguments the field is read from the object passed; with three, from the entity the chosen evaluator reads through <code>findById</code> on its repository bean. It is compared with the signed-in user's name. The rules are in <a href="protectable.html#owner-field">@Protectable &gt; Owner check</a>.</p>
 
-          <!-- CRUD Synonym Mapping -->
-          <section>
-            <h2 id="crud-synonyms">CRUD Synonym Mapping</h2>
-            <p>Permission evaluators use synonym groups so that equivalent actions are treated as the same permission. The synonym sets come directly from <code>AbstractDomainPermissionEvaluator.resolveCrudSynonyms(...)</code>, including the extended read aliases <code>LIST</code>/<code>SEARCH</code> and delete aliases <code>CLEAR</code>/<code>TRUNCATE</code>.</p>
-            <table>
-              <thead>
-                <tr><th>Permission Group</th><th>Synonyms</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>READ</td><td><code>GET</code>, <code>FIND</code>, <code>READ</code>, <code>FETCH</code>, <code>VIEW</code>, <code>RETRIEVE</code>, <code>LIST</code>, <code>SEARCH</code></td></tr>
-                <tr><td>CREATE</td><td><code>CREATE</code>, <code>SAVE</code>, <code>ADD</code>, <code>INSERT</code>, <code>REGISTER</code>, <code>POST</code></td></tr>
-                <tr><td>UPDATE</td><td><code>UPDATE</code>, <code>EDIT</code>, <code>MODIFY</code>, <code>CHANGE</code>, <code>PATCH</code>, <code>PUT</code></td></tr>
-                <tr><td>DELETE</td><td><code>DELETE</code>, <code>REMOVE</code>, <code>DESTROY</code>, <code>DROP</code>, <code>ERASE</code>, <code>PURGE</code>, <code>CLEAR</code>, <code>TRUNCATE</code></td></tr>
-              </tbody>
-            </table>
-            <p>This means <code>hasPermission(#id, 'USER', 'FETCH')</code> is equivalent to <code>hasPermission(#id, 'USER', 'READ')</code>.</p>
-          </section>
+          <h2 id="custom">Custom domain evaluators</h2>
+          <p>To use a new domain (for example DOCUMENT), register a bean that <strong>extends</strong> <code>AbstractDomainPermissionEvaluator</code>. Implementing only the <code>DomainPermissionEvaluator</code> interface fails at startup with <code>ClassCastException</code>, because the collector casts every evaluator to the base class.</p>
+          <pre><code class="language-java">import io.contexa.contexaiam.security.xacml.pdp.evaluation.method.AbstractDomainPermissionEvaluator;
+import org.springframework.context.ApplicationContext;
+import org.springframework.stereotype.Component;
 
-          <!-- Architecture -->
-          <section>
-            <h2 id="architecture">Architecture</h2>
-            <p>The permission evaluation system follows a composite pattern. <code>CompositePermissionEvaluator</code> is the entry point. The object-form overload routes by permission-string prefix through <code>supportsPermission()</code>, and the three-argument overload routes by <code>targetType</code> through <code>supportsTargetType()</code>.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Text</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <div class="diagram-container">
-                <div class="diagram-flow-vertical">
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">hasPermission(auth, target, 'USER_READ')</div>
-                    <div class="diagram-box-desc">SpEL expression triggers permission evaluation</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box diagram-highlight">
-                    <div class="diagram-box-name">CompositePermissionEvaluator</div>
-                    <div class="diagram-box-desc">Routes to domain evaluators sorted by domain length (longest first)</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">UserPermissionEvaluator</div>
-                    <div class="diagram-box-desc">domain: "USER"</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">RolePermissionEvaluator</div>
-                    <div class="diagram-box-desc">domain: "ROLE"</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">RoleHierarchyPermissionEvaluator</div>
-                    <div class="diagram-box-desc">domain: "ROLE_HIERARCHY"</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">GroupPermissionEvaluator</div>
-                    <div class="diagram-box-desc">domain: "GROUP"</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">Custom DomainPermissionEvaluator beans</div>
-                    <div class="diagram-box-desc">Optional user-defined evaluators registered as Spring beans</div>
-                  </div>
-                  <div class="diagram-arrow-down"></div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">PermissionTargetPermissionEvaluator</div>
-                    <div class="diagram-box-desc">domain: "PERMISSION"</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- CompositePermissionEvaluator -->
-          <section>
-            <h2 id="composite">CompositePermissionEvaluator</h2>
-            <p>Implements Spring Security's <code>PermissionEvaluator</code> interface and routes permission checks to domain-specific evaluators.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public class CompositePermissionEvaluator implements PermissionEvaluator {
-
-    // Sorted by domain length (descending) for longest-prefix matching
-    // e.g., ROLE_HIERARCHY matches before ROLE
-    private final List&lt;DomainPermissionEvaluator&gt; evaluators;
-
-    // Permission-string routing (e.g., "USER_READ" -&gt; UserPermissionEvaluator)
-    @Override
-    public boolean hasPermission(Authentication authentication,
-                                 Object targetDomainObject,
-                                 Object permission) { ... }
-
-    // Target-type routing (e.g., targetType="ROLE" -&gt; RolePermissionEvaluator)
-    @Override
-    public boolean hasPermission(Authentication authentication,
-                                 Serializable targetId,
-                                 String targetType,
-                                 Object permissionAction) { ... }
-
-    // Entity resolution for UI display
-    public Object resolveEntity(Serializable targetId, String targetType) { ... }
-}</code></pre>
-            </div>
-
-            <h3>Routing Logic</h3>
-            <table>
-              <thead>
-                <tr><th>Method Signature</th><th>Routing Strategy</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>hasPermission(auth, target, permission)</code></td>
-                  <td>Routes to the first evaluator whose <code>supportsPermission()</code> method returns <code>true</code> for the given permission string. The permission is matched against evaluators by domain prefix (e.g., <code>USER_READ</code> routes to the User evaluator).</td>
-                </tr>
-                <tr>
-                  <td><code>hasPermission(auth, targetId, targetType, action)</code></td>
-                  <td>Routes to the first evaluator whose <code>supportsTargetType()</code> method returns <code>true</code> for the given target type. Target type matching is case-insensitive.</td>
-                </tr>
-              </tbody>
-            </table>
-          </section>
-
-          <!-- DomainPermissionEvaluator Interface -->
-          <section>
-            <h2 id="interface">DomainPermissionEvaluator Interface</h2>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public interface DomainPermissionEvaluator {
-    boolean supportsTargetType(String targetType);
-    boolean supportsPermission(String permission);
-    boolean hasPermission(Authentication auth, Object target, Object permission);
-    boolean hasPermission(Authentication auth, Serializable targetId,
-                          String targetType, Object permission);
-    Object resolveEntity(Serializable targetId);
-}</code></pre>
-            </div>
-          </section>
-
-          <!-- AbstractDomainPermissionEvaluator -->
-          <section>
-            <h2 id="abstract-base">AbstractDomainPermissionEvaluator</h2>
-            <p>Base class providing common functionality for all domain evaluators. Implements CRUD synonym resolution and <code>PermissionAuthority</code>-based permission matching.</p>
-
-            <h3>Permission Matching</h3>
-            <p>Permission strings are matched against the user's <code>PermissionAuthority</code> grants. The matching process:</p>
-            <ol>
-              <li>Strip the domain prefix (e.g., <code>USER_READ</code> &mdash;<code>READ</code>)</li>
-              <li>Resolve CRUD synonyms for the action verb</li>
-              <li>Match against authorities with target type <code>METHOD</code> that contain both the action synonym and the domain name</li>
-            </ol>
-
-            <h3>CRUD Synonym Groups</h3>
-            <table>
-              <thead>
-                <tr><th>Group</th><th>Synonyms</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Read</td><td><code>GET</code>, <code>FIND</code>, <code>READ</code>, <code>FETCH</code>, <code>VIEW</code>, <code>RETRIEVE</code>, <code>LIST</code>, <code>SEARCH</code></td></tr>
-                <tr><td>Create</td><td><code>CREATE</code>, <code>SAVE</code>, <code>ADD</code>, <code>INSERT</code>, <code>REGISTER</code>, <code>POST</code></td></tr>
-                <tr><td>Update</td><td><code>UPDATE</code>, <code>EDIT</code>, <code>MODIFY</code>, <code>CHANGE</code>, <code>PATCH</code>, <code>PUT</code></td></tr>
-                <tr><td>Delete</td><td><code>DELETE</code>, <code>REMOVE</code>, <code>DESTROY</code>, <code>DROP</code>, <code>ERASE</code>, <code>PURGE</code>, <code>CLEAR</code>, <code>TRUNCATE</code></td></tr>
-              </tbody>
-            </table>
-            <p>For example, <code>hasPermission(auth, null, 'USER_FETCH')</code> will match if the user has any authority containing <code>USER</code> and any of <code>GET</code>, <code>FIND</code>, <code>READ</code>, <code>FETCH</code>, <code>VIEW</code>, <code>RETRIEVE</code>, <code>LIST</code>, or <code>SEARCH</code>.</p>
-
-            <h3>Entity Resolution</h3>
-            <p>Each evaluator resolves entities via a named repository bean from the <code>ApplicationContext</code>. The <code>resolveEntity()</code> method calls <code>findById()</code> on the resolved repository using reflection.</p>
-          </section>
-
-          <!-- Individual Evaluators -->
-          <section>
-            <h2 id="evaluators">Domain Evaluators</h2>
-            <table>
-              <thead>
-                <tr><th>Evaluator</th><th>Domain</th><th>Repository Bean</th><th>Permission Prefix</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>UserPermissionEvaluator</code></td>
-                  <td><code>USER</code></td>
-                  <td><code>userRepository</code></td>
-                  <td><code>USER_*</code></td>
-                </tr>
-                <tr>
-                  <td><code>RolePermissionEvaluator</code></td>
-                  <td><code>ROLE</code></td>
-                  <td><code>roleRepository</code></td>
-                  <td><code>ROLE_*</code></td>
-                </tr>
-                <tr>
-                  <td><code>RoleHierarchyPermissionEvaluator</code></td>
-                  <td><code>ROLE_HIERARCHY</code></td>
-                  <td><code>roleHierarchyRepository</code></td>
-                  <td><code>ROLE_HIERARCHY_*</code></td>
-                </tr>
-                <tr>
-                  <td><code>GroupPermissionEvaluator</code></td>
-                  <td><code>GROUP</code></td>
-                  <td><code>groupRepository</code></td>
-                  <td><code>GROUP_*</code></td>
-                </tr>
-                <tr>
-                  <td><code>PermissionTargetPermissionEvaluator</code></td>
-                  <td><code>PERMISSION</code></td>
-                  <td><code>permissionRepository</code></td>
-                  <td><code>PERMISSION_*</code></td>
-                </tr>
-              </tbody>
-            </table>
-            <p>All evaluators extend <code>AbstractDomainPermissionEvaluator</code> and only define their <code>domain()</code>, <code>repositoryBeanName()</code>, and <code>getApplicationContext()</code> methods. The permission check logic is inherited from the abstract base.</p>
-          </section>
-
-          <!-- Evaluation Order -->
-          <section>
-            <h2 id="evaluation-order">Evaluation Order</h2>
-            <p>Evaluators are sorted by domain string length in descending order. This ensures that more specific domains are matched first:</p>
-            <ol>
-              <li><code>ROLE_HIERARCHY</code> (14 chars) &mdash;checked first</li>
-              <li><code>PERMISSION</code> (10 chars)</li>
-              <li><code>GROUP</code> (5 chars)</li>
-              <li><code>USER</code> (4 chars)</li>
-              <li><code>ROLE</code> (4 chars)</li>
-            </ol>
-            <p>This ordering prevents <code>ROLE_HIERARCHY_READ</code> from being incorrectly matched by the <code>ROLE</code> evaluator.</p>
-          </section>
-
-          <!-- Usage with SpEL -->
-          <section>
-            <h2 id="usage">Usage in SpEL Expressions</h2>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Permission-string based (routed by prefix)
-@PreAuthorize("hasPermission(null, 'USER_READ')")
-public List&lt;UserDto&gt; getUsers() { ... }
-
-// Target-type based (routed by targetType parameter)
-@PreAuthorize("hasPermission(#id, 'ROLE', 'EDIT')")
-public void updateRole(@PathVariable Long id, @RequestBody RoleDto dto) { ... }
-
-// Group-scoped permission
-@PreAuthorize("hasPermission(#groupId, 'GROUP', 'DELETE')")
-public void deleteGroup(@PathVariable Long groupId) { ... }</code></pre>
-            </div>
-          </section>
-
-          <!-- Managing Permissions in Admin -->
-          <section>
-            <h2 id="admin-permissions">Managing Permissions in the Permission Management UI</h2>
-            <p>The current OSS permission maintenance screen is <code>/admin/permissions</code>. It provides the standalone CRUD UI for permission records, while Policy Center links back to the same permission catalog during policy authoring.</p>
-
-            <h3>Navigating to Permission Management</h3>
-            <p>Go to <strong>/admin/permissions</strong> from the IAM menu. This screen lists stored permission records with their target types and action types; role assignment is handled separately in the role management screens.</p>
-
-            <h3>Creating a New Permission</h3>
-            <p>Click "Create Permission" and fill in the following fields:</p>
-            <table>
-              <thead>
-                <tr><th>Field</th><th>Description</th><th>Example</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><strong>Name</strong></td>
-                  <td>A unique identifier for the permission, typically in <code>DOMAIN_ACTION</code> format</td>
-                  <td><code>USER_READ</code></td>
-                </tr>
-                <tr>
-                  <td><strong>Description</strong></td>
-                  <td>Human-readable explanation of what this permission grants</td>
-                  <td>"Allows reading user records"</td>
-                </tr>
-                <tr>
-                  <td><strong>Target Type</strong></td>
-                  <td>The resource scope: <code>URL</code> for endpoint-level or <code>METHOD</code> for method-level permissions</td>
-                  <td><code>METHOD</code></td>
-                </tr>
-                <tr>
-                  <td><strong>Action Type</strong></td>
-                  <td>The current standalone form exposes <code>READ</code>, <code>WRITE</code>, <code>EXECUTE</code>, <code>DELETE</code>, and <code>ALL</code> as action metadata.</td>
-                  <td><code>READ</code></td>
-                </tr>
-              </tbody>
-            </table>
-
-            <p>The standalone permission form and Policy Center use related but not identical action vocabularies. <code>/admin/permissions</code> stores <code>actionType</code> metadata on the permission record, while Policy Center quick-create and business-policy flows separately use CRUD selections such as <code>READ</code>, <code>WRITE</code>, <code>UPDATE</code>, and <code>DELETE</code>.</p>
-
-            <h3>Associating Permissions with Roles</h3>
-            <p>After creating a permission, navigate to the role management section to associate it. Open the target role, go to the "Permissions" tab, and add the newly created permission. When a user with that role invokes <code>hasPermission()</code>, the <code>CompositePermissionEvaluator</code> checks whether the user's <code>PermissionAuthority</code> grants include the matching domain and action.</p>
-
-            <h3>How Permissions Connect to DomainPermissionEvaluator Routing</h3>
-            <p>Permissions associated with the authenticated principal are represented as <code>PermissionAuthority</code> grants. When <code>hasPermission()</code> is called, <code>CompositePermissionEvaluator</code> routes the call to the appropriate <code>DomainPermissionEvaluator</code> based on the domain prefix or target type. The evaluator then checks whether the user's authorities include a matching permission with the correct action synonym group.</p>
-          </section>
-
-          <!-- Using hasPermission() in Policy Center and stored expressions -->
-          <section>
-            <h2 id="policy-builder-permission">Using hasPermission() in Policy Center and stored expressions</h2>
-            <p>When authoring stored expressions, <code>hasPermission()</code> can be combined with role checks, time checks, and <code>#ai.*</code> conditions. In the current OSS UI, Policy Center is the primary screen for that flow.</p>
-
-            <div class="callout callout-warning">
-              <strong>Important:</strong> The current URL-policy runtime path passes stored expressions through <code>PolicyExpressionConverter</code>, which strips <code>hasPermission()</code>. Keep <code>hasPermission()</code> for method-security expressions and method-oriented authoring flows, not for URL-policy enforcement.
-            </div>
-
-            <h3>Examples of Policy Conditions</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">SpEL</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code>// Permission check only
-hasPermission(#targetId, 'USER', 'READ')
-
-// Combined with AI security expression
-hasPermission(#targetId, 'GROUP', 'DELETE') and #ai.isAllowed()
-
-// Combined with role check
-hasPermission(#targetId, 'ROLE', 'UPDATE') or hasRole('ADMIN')
-
-// Combined with time-based condition
-hasPermission(#targetId, 'PERMISSION', 'READ') and #time.isBusinessHours()</code></pre>
-            </div>
-            <p>These expressions are entered in the condition field of the policy authoring flow. The OSS UI supports condition entry and condition catalogs, but the documentation should not assume dedicated parameter auto-completion beyond what the current screen actually exposes.</p>
-          </section>
-
-          <!-- Custom DomainPermissionEvaluator -->
-          <section>
-            <h2 id="custom-evaluator">Creating Custom Domain Evaluators</h2>
-            <p>You can extend the permission evaluation system by implementing the <code>DomainPermissionEvaluator</code> interface for your own domain types. Custom evaluators are automatically detected by <code>CompositePermissionEvaluator</code> when registered as Spring beans.</p>
-
-            <h3>Implementation Steps</h3>
-            <ol>
-              <li>Implement the <code>DomainPermissionEvaluator</code> interface</li>
-              <li>Define <code>domain()</code> to return your domain name (e.g., <code>"DOCUMENT"</code>)</li>
-              <li>Define <code>repositoryBeanName()</code> to return the Spring bean name of the repository that handles your domain entities</li>
-              <li>Register the class as a Spring <code>@Component</code> &mdash;<code>CompositePermissionEvaluator</code> auto-detects all <code>DomainPermissionEvaluator</code> beans in the application context</li>
-            </ol>
-
-            <h3>Example Implementation</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Component
-public class DocumentPermissionEvaluator
-        extends AbstractDomainPermissionEvaluator {
+@Component
+public class DocumentPermissionEvaluator extends AbstractDomainPermissionEvaluator {
 
     private final ApplicationContext applicationContext;
 
@@ -454,12 +124,12 @@ public class DocumentPermissionEvaluator
     }
 
     @Override
-    public String domain() {
+    protected String domain() {
         return "DOCUMENT";
     }
 
     @Override
-    public String repositoryBeanName() {
+    protected String repositoryBeanName() {
         return "documentRepository";
     }
 
@@ -468,19 +138,20 @@ public class DocumentPermissionEvaluator
         return applicationContext;
     }
 }</code></pre>
-            </div>
-            <p>With this bean registered, <code>hasPermission(#id, 'DOCUMENT', 'READ')</code> will automatically route to <code>DocumentPermissionEvaluator</code>. The base class <code>AbstractDomainPermissionEvaluator</code> handles CRUD synonym resolution, <code>PermissionAuthority</code> matching, and entity resolution via the named repository bean.</p>
-
-            <h3>Auto-Detection and Ordering</h3>
-            <p><code>CompositePermissionEvaluator</code> collects all <code>DomainPermissionEvaluator</code> beans at startup and sorts them by domain string length (longest first). This ensures that a custom evaluator with domain <code>"DOCUMENT_ARCHIVE"</code> is matched before one with domain <code>"DOCUMENT"</code>. No additional configuration is required beyond registering the bean.</p>
-          </section>
-
+          <ul>
+            <li>Write <code>domain()</code> in upper case. The permission string is upper-cased before comparison, but the domain name is not.</li>
+            <li><code>repositoryBeanName()</code> is the repository bean used to read the entity through <code>findById</code> for the three-argument owner check (a Spring Data repository works). Without the bean the owner check denies.</li>
+            <li>Once it is a bean, auto-configuration collects every evaluator and sorts them by length; nothing else is needed. If you declare your own <code>CompositePermissionEvaluator</code> bean, the auto-configured one backs off.</li>
+            <li>To change the decision rule, override <code>checkPermission(Authentication, Object)</code> (protected), for example to decide by your application's own authorities under <code>HOST_OWNED</code>.</li>
+            <li>You can now write <code>hasPermission(#docId, 'DOCUMENT', 'READ')</code> and <code>hasPermission(#document, 'DOCUMENT_UPDATE')</code>.</li>
+          </ul>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/iam/ai-security-expressions.html" class="docs-nav-prev">
+            <a href="ai-security-expressions.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">AI Security Expressions</span>
+              <span class="docs-nav-title">AI Security Expressions: Decision and Agent Conditions</span>
             </a>
-            <a href="../../../docs/reference/iam/policy.html" class="docs-nav-next">
+            <a href="policy.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
               <span class="docs-nav-title">Policy Management</span>
             </a>

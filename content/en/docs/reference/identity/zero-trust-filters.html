@@ -1,127 +1,197 @@
-<!-- Breadcrumb -->
 <nav class="breadcrumb">
-  <a href="../../../index.html">Home</a>
-  <span class="breadcrumb-separator">/</span>
-  <a href="../../../docs/reference/index.html">Reference</a>
-  <span class="breadcrumb-separator">/</span>
-  <a href="../../../docs/reference/identity/dsl.html">Identity</a>
-  <span class="breadcrumb-separator">/</span>
-  <span class="breadcrumb-current">Zero Trust Filters</span>
-</nav>
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Request-Time Enforcement</span>
+          </nav>
 
-<div class="docs-page-header">
-  <div class="docs-module-badge">
-    <span class="badge badge-info">contexa-identity</span>
-  </div>
-  <h1>Zero Trust Filters</h1>
-  <p class="lead">Request-time servlet filters that enforce access control and challenge continuation after authentication. These filters work with <code>AISessionSecurityContextRepository</code>, MFA context state, and <code>ZeroTrustActionRepository</code> to apply runtime zero trust outcomes inside the identity layer.</p>
-</div>
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-info">contexa-identity</span>
+            </div>
+            <h1>Request-Time Enforcement</h1>
+            <p class="lead">How a stored decision (allow, step-up authentication, block, held for review, pending analysis) applies to the user's next request. On this one page you see, for each decision, the response the user gets, how authorities change, how it is released, where the filters run in the security chain, and how agent requests differ.</p>
+          </div>
 
-<section class="docs-section">
-  <h2 id="overview">Overview</h2>
-  <p>The identity layer uses two dedicated servlet filters. <code>ZeroTrustAccessControlFilter</code> handles <code>BLOCK</code>, <code>ESCALATE</code>, and <code>PENDING_ANALYSIS</code>. <code>ZeroTrustChallengeFilter</code> handles the <code>CHALLENGE</code> path and initializes or resumes MFA challenge sessions.</p>
+          <div class="callout callout-warning">
+            <strong>These filters work only when Contexa owns login (<code>CONTEXA_OWNED</code>).</strong> Their servlet auto-registration is turned off, and they go only into the security chains Contexa builds. With the default <code>HOST_OWNED</code>, Contexa builds no chain, so there is no URL-level enforcement; stored BLOCK, CHALLENGE and ESCALATE are refused only in front of <code>@Protectable</code> methods (<a href="../iam/protectable.html">Protected methods</a>). How to keep your application's existing login is in <a href="../common/bridge.html">Connecting Your Existing Login</a>.
+          </div>
 
-<pre class="arch-diagram"><code>
-  Runtime Decision Path
-  =====================
+          <h2 id="overview">At a glance</h2>
+          <p>Decisions are made asynchronously after the response has left and written to the decision store (<a href="../architecture/decision-engine.html">Decision Engine</a>); they apply on that user's <strong>next request</strong>. The filters let requests without a login pass untouched.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Applying the stored decision when a request arrives</strong>Authorities are adjusted to the decision, and the filters answer according to it.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">Request from a logged-in user</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-tag">Decision store</span><span class="dg-node-title">Read this user's decision</span><span class="dg-node-desc">Memory (standalone) or Redis (distributed)</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">Adjust authorities to the decision</span><span class="dg-node-desc">Sessions when the login is read, tokens right after token validation</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa filters</span><span class="dg-node-title">Challenge filter · access control filter</span><span class="dg-node-desc">Read the store again directly and answer according to the decision</span></li>
+            </ol>
+            <p class="dg-outcomes-title">Depending on the decision</p>
+            <ul class="dg-outcomes">
+              <li class="dg-node dg-allow"><span class="dg-node-title">ALLOW</span><span class="dg-node-desc">Goes on as is</span></li>
+              <li class="dg-node dg-challenge"><span class="dg-node-title">CHALLENGE</span><span class="dg-node-desc">Identity check with MFA</span></li>
+              <li class="dg-node dg-block"><span class="dg-node-title">BLOCK</span><span class="dg-node-desc">Blocked, released by an administrator</span></li>
+              <li class="dg-node dg-escalate"><span class="dg-node-title">ESCALATE</span><span class="dg-node-desc">423, retry in 30 seconds</span></li>
+              <li class="dg-node dg-pending"><span class="dg-node-title">PENDING_ANALYSIS</span><span class="dg-node-desc">Passes, the response is watched</span></li>
+            </ul>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Decision</th><th>Stored for</th><th>Where it applies</th></tr></thead>
+            <tbody>
+              <tr><td>ALLOW</td><td>15 seconds</td><td>Only in the session, IP and browser it was decided for (context hash). Elsewhere it reads as PENDING_ANALYSIS</td></tr>
+              <tr><td>CHALLENGE</td><td>1800 seconds</td><td>Every session of that user</td></tr>
+              <tr><td>ESCALATE</td><td>300 seconds</td><td>Every session of that user</td></tr>
+              <tr><td>BLOCK</td><td>Until released</td><td>Every session of that user</td></tr>
+              <tr><td>PENDING_ANALYSIS</td><td>No limit</td><td>Read when no decision is stored or its time has run out</td></tr>
+            </tbody>
+          </table></div>
+          <p>The context hash is made from the session ID, the client IP and the <code>User-Agent</code>. A less strict decision cannot override a restriction already in force (BLOCK, CHALLENGE, ESCALATE).</p>
 
-  [AISessionSecurityContextRepository]
-              |
-              v
-  [Authenticated Request]
-              |
-              +--> [ZeroTrustAccessControlFilter]
-              |         |- BLOCK
-              |         |- ESCALATE
-              |         `- PENDING_ANALYSIS
-              |
-              `--> [ZeroTrustChallengeFilter]
-                        `- CHALLENGE
-</code></pre>
-</section>
+          <h2 id="responses">Response, authorities and release per decision</h2>
+          <p>Browser requests move to a notice page; API and AJAX requests (<code>Accept: application/json</code>, <code>X-Requested-With: XMLHttpRequest</code>, or a path starting with <code>/api/</code>) receive a JSON error. Every JSON error body has <code>timestamp</code>, <code>status</code>, <code>error</code>, <code>message</code> and <code>path</code>, plus the fields in the table below.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Decision</th><th>Browser</th><th>API · AJAX</th><th>Authorities</th><th>How it is released</th></tr></thead>
+            <tbody>
+              <tr><td>ALLOW</td><td>Goes on</td><td>Goes on</td><td>Original authorities</td><td>—</td></tr>
+              <tr><td>CHALLENGE</td><td>Moves to <code>/contexa/zero-trust/challenge-required?mfaUrl=…</code></td><td>401 <code>MFA_CHALLENGE_REQUIRED</code>: <code>mfaUrl</code>, <code>challengeNoticeUrl</code>, <code>sessionId</code>, <code>currentState</code>, <code>currentFactor</code></td><td>Only <code>ROLE_MFA_REQUIRED</code></td><td>When the MFA this challenge started succeeds, the decision changes to ALLOW. Or 1800 seconds pass. A login MFA does not release the challenge</td></tr>
+              <tr><td>BLOCK</td><td>Moves to <code>/contexa/zero-trust/blocked</code></td><td>403 <code>ACCOUNT_BLOCKED</code>: <code>adminReviewRequired</code> (<code>true</code>), <code>redirectUrl</code></td><td>Only <code>ROLE_BLOCKED</code></td><td>An administrator's approval (<a href="#unblock">Releasing a block</a>)</td></tr>
+              <tr><td>ESCALATE</td><td>Moves to <code>/contexa/zero-trust/analysis-pending?returnUrl=…</code></td><td>423 <code>SECURITY_REVIEW_IN_PROGRESS</code> + <code>Retry-After: 30</code>: <code>retryAfterSeconds</code>, <code>redirectUrl</code></td><td>Only <code>ROLE_REVIEW_REQUIRED</code></td><td>An administrator's approval. MFA does not release it. If it stays unresolved it becomes BLOCK (<a href="#escalate">When held for review becomes a block</a>)</td></tr>
+              <tr><td>PENDING_ANALYSIS</td><td>Passes</td><td>Passes</td><td>Original authorities + <code>ROLE_PENDING_ANALYSIS</code></td><td>From the next request after an analysis result is stored, that decision</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="challenge-more">Other CHALLENGE responses</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Situation</th><th>Response</th></tr></thead>
+            <tbody>
+              <tr><td>An MFA this challenge started already exists</td><td>Continues on that MFA page</td></tr>
+              <tr><td>MFA starts for the same user overlap</td><td>503 <code>MFA_BUSY_RETRY</code> + <code>Retry-After: 3</code></td></tr>
+              <tr><td>The application has no MFA flow at all</td><td>401 <code>ZERO_TRUST_CHALLENGE</code></td></tr>
+              <tr><td>Starting MFA failed</td><td>500 <code>MFA_INIT_FAILED</code></td></tr>
+              <tr><td>Agent request</td><td>Confirmation by the accountable person instead of a person's MFA (<a href="#agents">Agent requests</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <p>MFA is started only once per user, under a lock (<code>mfa:challenge:init:&lt;user&gt;</code>); the lock wait, lease time and retry seconds are settings (<a href="#settings">Settings</a>).</p>
+          <h3 id="pending">PENDING_ANALYSIS: watching the response</h3>
+          <p>With no decision yet the request passes, but its response is wrapped and watched. If a BLOCK signal arrives for this user while the response is going out, the response is cut. If nothing has been sent yet, what was written is discarded and 403 is sent with the marker <code>__CONTEXA_RESPONSE_BLOCKED__:BLOCK</code>; if sending has started, the marker is written and the response ends. The JavaScript SDK moves to the blocked page when it sees this marker (<a href="mfa.html#step-up">Extra verification after login</a>).</p>
+          <h3 id="authorities">How authorities change</h3>
+          <ul>
+            <li><strong>Session flows:</strong> Contexa's session login repository (<code>AISessionSecurityContextRepository</code>) applies the decision the first time the request reads the login. When the authorities change, the login object is replaced with a <code>ZeroTrustAuthenticationToken</code> holding the decision (trust score, threat score, decision). An invalidated session is ended and the request goes on as not logged in.</li>
+            <li><strong>Token flows:</strong> <code>AIOAuth2ZeroTrustFilter</code>, right after token validation (<code>BearerTokenAuthenticationFilter</code>), applies the decision to JWT requests and puts in a new <code>JwtAuthenticationToken</code> with the adjusted authorities. An invalidated token gets 401.</li>
+            <li>The decision used to adjust authorities is cached for 5 seconds. The two filters read the store directly without a cache, so blocking the response on a new BLOCK is not delayed.</li>
+            <li>A decision never adds authorities. ALLOW keeps the original ones; CHALLENGE, BLOCK and ESCALATE leave only the decision's marker authority. So the restriction also applies to authority checks such as URL policies and <code>@PreAuthorize</code>.</li>
+          </ul>
 
-<section class="docs-section">
-  <h2 id="access-control-filter">ZeroTrustAccessControlFilter</h2>
-  <p><code>io.contexa.contexaidentity.security.zerotrust.ZeroTrustAccessControlFilter</code> reads the current action with <code>ZeroTrustActionRepository.getCurrentAction(userId, contextBindingHash)</code>. It only intercepts requests when the current runtime decision is <code>BLOCK</code>, <code>ESCALATE</code>, or <code>PENDING_ANALYSIS</code>.</p>
+          <h2 id="position">Where the filters run</h2>
+          <p>The three filters (MFA-in-progress access control, access control, challenge) have their servlet auto-registration turned off with <code>FilterRegistrationBean</code>, and Contexa's configurers put them into the chain of each flow. Their positions are not fixed numbers but positions relative to Spring filters. The configurer order values 44, 45 and 50 are the turns in which the configurers are applied, not filter positions.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Chain</th><th>Filter</th><th>Position</th></tr></thead>
+            <tbody>
+              <tr><td>Every chain</td><td>MFA-in-progress access control (<code>MfaPendingAccessControlFilter</code>)</td><td>Right after <code>LogoutFilter</code></td></tr>
+              <tr><td>Session chain</td><td>Authentication bridge + decision applied (session login repository)</td><td>Right after <code>SecurityContextHolderFilter</code></td></tr>
+              <tr><td>Token chain</td><td>Authentication bridge → <code>AIOAuth2ZeroTrustFilter</code></td><td>Right after <code>BearerTokenAuthenticationFilter</code></td></tr>
+              <tr><td>Session, MFA flow</td><td>Challenge (<code>ZeroTrustChallengeFilter</code>)</td><td>Right after the MFA page generating filter (<code>DefaultMfaPageGeneratingFilter</code>)</td></tr>
+              <tr><td>Session, non-MFA flow</td><td>Challenge</td><td>Right before <code>AuthorizationFilter</code> (after access control)</td></tr>
+              <tr><td>Token chain</td><td>Challenge</td><td>Right before <code>BasicAuthenticationFilter</code></td></tr>
+              <tr><td>Every chain</td><td>Access control (<code>ZeroTrustAccessControlFilter</code>)</td><td>Right before <code>AuthorizationFilter</code></td></tr>
+            </tbody>
+          </table></div>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Order in a session MFA flow chain</strong>Only the relevant filters are shown. In a non-MFA session flow the challenge comes after access control.</figcaption>
+            <ol class="dg-flow dg-flow-h">
+              <li class="dg-node"><span class="dg-node-title"><code>SecurityContextHolderFilter</code></span><span class="dg-node-desc">Reads the login → decision applied</span></li>
+              <li class="dg-node"><span class="dg-node-title">Authentication bridge</span></li>
+              <li class="dg-node"><span class="dg-node-title"><code>LogoutFilter</code></span></li>
+              <li class="dg-node"><span class="dg-node-title">MFA-in-progress access control</span></li>
+              <li class="dg-node"><span class="dg-node-title">MFA page generation</span></li>
+              <li class="dg-node dg-challenge"><span class="dg-node-title">Challenge</span></li>
+              <li class="dg-node dg-block"><span class="dg-node-title">Access control</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-title"><code>AuthorizationFilter</code></span><span class="dg-node-desc">URL policies</span></li>
+            </ol>
+          </figure>
+          <div class="callout callout-info">
+            <strong>The two filters do not look at the enforcement mode settings.</strong> New decisions are stored and applied only while <code>contexa.security.zerotrust.enabled</code> is on and <code>contexa.security.zerotrust.mode</code> is <code>ENFORCE</code>. But the access control and challenge filters read neither setting, so after switching to <code>SHADOW</code> or turning it off, BLOCK, CHALLENGE and ESCALATE already stored are still enforced. With <code>enabled: false</code> only the authority adjustment when the login is read and the session tracking stop.
+          </div>
 
-  <div class="table-scroll"><table class="api-table">
-    <thead>
-      <tr><th>Decision</th><th>Behavior</th></tr>
-    </thead>
-    <tbody>
-      <tr><td><code>BLOCK</code></td><td>Blocks the request immediately, or starts block-resolution MFA through <code>ChallengeMfaInitializer</code> when block-MFA is pending.</td></tr>
-      <tr><td><code>ESCALATE</code></td><td>Returns an escalation response and sets retry metadata using the configured response writer.</td></tr>
-      <tr><td><code>PENDING_ANALYSIS</code></td><td>Returns a pending-analysis response until a definitive runtime action is available.</td></tr>
-    </tbody>
-  </table></div>
+          <h2 id="mfa-pending">MFA-in-progress access control</h2>
+          <p>A session that finished only the primary login and not MFA passes only the requests needed to go on with or leave MFA: login and logout, the pages and factor addresses of every MFA flow, the MFA configuration API, Contexa's static files, the Zero Trust notice pages and the error path. Any other request moves to the MFA page in progress (or the login page when the MFA session is gone) for a browser, and gets 401 <code>MFA_REQUIRED</code> for an API. Passkey registration requests are refused too, so a passkey cannot be registered with the primary login alone to skip the second factor (the API gets 401 <code>PASSKEY_REGISTRATION_REQUIRES_MFA</code>).</p>
 
-  <p>The filter deliberately skips logout, zero-trust API endpoints, and <code>/.well-known/</code> paths via <code>shouldNotFilter(...)</code>. It also avoids re-blocking MFA pages and dynamic MFA URLs discovered from <code>MfaFlowUrlRegistry</code> / <code>AuthUrlProvider</code>.</p>
-</section>
+          <h2 id="unblock">Releasing a block</h2>
+          <p>A BLOCK is released only by an administrator's approval. From the blocked page the user can verify themselves (MFA) and ask for the release.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Asking for a release</strong>MFA success alone does not lift the BLOCK.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor dg-request">User</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text">From the blocked page, <code>POST /contexa/admin/api/aiam/zero-trust/initiate-block-mfa</code> (attempt limit checked, 10-minute pending mark)</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">User</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text">Next request → 401 <code>BLOCK_MFA_REQUIRED</code> or the MFA page</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">User</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text">MFA succeeds → verified mark (1 hour); only the response-cut signal is lifted. Back to the blocked page</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">User</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /contexa/admin/api/aiam/zero-trust/unblock-request</code> (reason required)</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-host">Administrator</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text">Approves → decision replaced, block mark removed, release signal</span></li>
+            </ol>
+          </figure>
+          <ul>
+            <li><strong>Attempt limit:</strong> the release MFA start API and the access control filter look at <code>contexa.security.zerotrust.max-block-mfa-attempts</code> (default 2). The handler that counts failed release MFAs, however, uses a constant 2 instead of this setting. One failed MFA session counts once; at two the pending mark is removed and only block responses follow. Each failure returns 403 <code>BLOCK_MFA_FAILED</code> with the blocked page address, and the failure count is kept for 24 hours.</li>
+            <li><strong>The session stays.</strong> When blocking, the filter only writes the response; it does not invalidate the session or log the user out.</li>
+            <li><strong>An agent's BLOCK</strong> is 403 <code>AGENT_BLOCKED</code> and is not released by MFA. For releasing it see <a href="../agent/controls.html#stop">Stopping and releasing</a>.</li>
+          </ul>
 
-<section class="docs-section">
-  <h2 id="challenge-filter">ZeroTrustChallengeFilter</h2>
-  <p><code>io.contexa.contexaidentity.security.zerotrust.ZeroTrustChallengeFilter</code> handles the <code>CHALLENGE</code> action. It resumes an existing MFA challenge session when possible, or calls <code>ChallengeMfaInitializer.initializeChallengeFlow(...)</code> to create a new challenge session.</p>
+          <h2 id="escalate">When held for review becomes a block</h2>
+          <p>The first time ESCALATE stops a request, a retry mark (5 minutes) is set once. On the <strong>next request</strong> after both the decision's lifetime (300 seconds) and the retry mark have passed, the access control filter stores BLOCK, leaves the block mark and answers with a block. For a person it records the block; for an agent it stops that agent. MFA success does not release ESCALATE.</p>
 
-  <p>For browser requests, the filter redirects to <code>/zero-trust/challenge-required?mfaUrl=...</code>. For API or AJAX requests, it returns a JSON error body containing <code>mfaUrl</code>, <code>challengeNoticeUrl</code>, <code>sessionId</code>, and the current MFA state.</p>
+          <h2 id="excluded">Addresses the filters skip</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Filter</th><th>Addresses skipped (starting with)</th></tr></thead>
+            <tbody>
+              <tr><td>Access control</td><td><code>/logout</code>, <code>/contexa/zero-trust</code>, <code>/contexa/api/aiam/zero-trust</code>, <code>/contexa/api/aiam/sse/zero-trust</code>, <code>/contexa/admin/api/aiam/zero-trust</code>, <code>/contexa/admin/api/aiam/sse/zero-trust</code>, <code>/.well-known/</code>. For a user waiting on the release MFA, MFA addresses also pass</td></tr>
+              <tr><td>Challenge</td><td><code>/logout</code>, the addresses registered by every MFA flow, <code>/mfa/challenge/</code>, <code>/api/mfa/</code>, <code>/contexa/admin/api/mfa/</code>, <code>/webauthn/</code>, <code>/login/webauthn</code>, <code>/contexa/zero-trust</code>, <code>/contexa/api/agent-confirmations</code>, <code>/.well-known/</code></td></tr>
+            </tbody>
+          </table></div>
 
-  <div class="table-scroll"><table class="api-table">
-    <thead>
-      <tr><th>Skipped by <code>shouldNotFilter(...)</code></th><th>Reason</th></tr>
-    </thead>
-    <tbody>
-      <tr><td><code>/mfa/**</code>, dynamic MFA page URLs</td><td>Prevents re-triggering the challenge filter while the user is already inside an MFA flow.</td></tr>
-      <tr><td><code>/api/mfa/**</code>, <code>/admin/api/mfa/**</code></td><td>Preserves MFA control-plane APIs.</td></tr>
-      <tr><td><code>/webauthn/**</code>, <code>/login/webauthn</code></td><td>Allows WebAuthn registration and challenge processing to complete.</td></tr>
-      <tr><td><code>/zero-trust/**</code>, <code>/.well-known/**</code></td><td>Avoids looping on challenge-notice and well-known endpoints.</td></tr>
-    </tbody>
-  </table></div>
-</section>
+          <h2 id="agents">Agent requests</h2>
+          <p>A request is an agent request when the authentication bridge put a delegation stamp naming an agent on it. An agent cannot answer a person's MFA, so the challenge filter sends it to the <strong>agent request gate</strong> instead. The gate checks, in order, the call limit → an ended delegation → the accountable person's confirmation for CHALLENGE → a narrowed scope. Responses and handling are in <a href="../agent/controls.html">Stop, Confirm, Limit</a>.</p>
+          <ul>
+            <li>Without the gate (no agent confirmation service bean), CHALLENGE is answered with 403 <code>AGENT_CONFIRMATION_REQUIRED</code>.</li>
+            <li>The decision of an agent working for a person is read under the key <code>&lt;user&gt;::agent::&lt;agent&gt;</code>, and the agent also receives the delegating person's BLOCK.</li>
+            <li>An agent's BLOCK is 403 <code>AGENT_BLOCKED</code>.</li>
+            <li>The gate lives only in this chain, so it does not run with <code>HOST_OWNED</code>. Also, with <code>HOST_OWNED</code> the authentication bridge is registered as a servlet filter with no order and runs after the application's security chain, so the URL authorization step of the application's chain has no delegation stamp yet.</li>
+          </ul>
 
-<section class="docs-section">
-  <h2 id="repositories-and-context">Repositories and Runtime Context</h2>
-  <p>Both filters depend on the runtime decision repository and MFA context services rather than acting as isolated servlet filters.</p>
+          <h2 id="components">Components involved</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Component</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>ZeroTrustActionRepository</code></td><td>The decision store. Reads decisions with <code>getCurrentAction(user, context hash)</code>. Memory or Redis (<code>contexa.infrastructure.mode</code>)</td></tr>
+              <tr><td><code>AISessionSecurityContextRepository</code></td><td>Applies the decision and handles invalidated sessions when a session login is read, tracks sessions when it is saved</td></tr>
+              <tr><td><code>AIOAuth2ZeroTrustFilter</code></td><td>Applies the decision to JWT requests</td></tr>
+              <tr><td><code>ZeroTrustChallengeFilter</code> · <code>ChallengeMfaInitializer</code></td><td>Starts or continues MFA for CHALLENGE</td></tr>
+              <tr><td><code>ZeroTrustAccessControlFilter</code></td><td>Stops BLOCK and ESCALATE, watches PENDING_ANALYSIS responses, raises ESCALATE to BLOCK</td></tr>
+              <tr><td><code>MfaPendingAccessControlFilter</code></td><td>Restricts sessions that have not finished MFA</td></tr>
+              <tr><td><code>MfaSessionRepository</code></td><td>Keeps MFA sessions</td></tr>
+              <tr><td><code>MfaFlowUrlRegistry</code> · <code>AuthUrlProvider</code></td><td>MFA addresses (computing the skipped addresses and the MFA page addresses)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The filter and configurer beans are <code>@ConditionalOnMissingBean</code>, so a bean of the same type replaces them. The auto-configuration that creates these filters is turned off as a whole with <code>contexa.identity.security-core.enabled: false</code>.</p>
 
-  <div class="table-scroll"><table class="api-table">
-    <thead>
-      <tr><th>Component</th><th>Role</th></tr>
-    </thead>
-    <tbody>
-      <tr><td><code>ZeroTrustActionRepository</code></td><td>Stores and retrieves the current runtime action for a user plus context-binding hash.</td></tr>
-      <tr><td><code>AISessionSecurityContextRepository</code></td><td>Loads the authenticated security context that feeds the post-auth zero trust decision path.</td></tr>
-      <tr><td><code>MfaSessionRepository</code></td><td>Persists or resumes MFA challenge sessions.</td></tr>
-      <tr><td><code>MfaFlowUrlRegistry</code> / <code>AuthUrlProvider</code></td><td>Resolve default and prefixed MFA URLs for browser redirect and API response payloads.</td></tr>
-      <tr><td><code>ChallengeMfaInitializer</code></td><td>Bootstraps challenge MFA when runtime policy requires additional verification.</td></tr>
-    </tbody>
-  </table></div>
-</section>
-
-<section class="docs-section">
-  <h2 id="request-time-sequence">Request-Time Sequence</h2>
-<pre class="arch-diagram"><code>
-  Request-Time Zero Trust Sequence
-  ================================
-
-  [Authenticated Request]
-          |
-          v
-  [ZeroTrustActionRepository.getCurrentAction(...)]
-          |
-          +--> BLOCK / ESCALATE / PENDING_ANALYSIS --> [ZeroTrustAccessControlFilter]
-          |
-          `--> CHALLENGE --> [ZeroTrustChallengeFilter]
-                                   |
-                                   +--> existing MFA session -> redirect / JSON response
-                                   `--> initializeChallengeFlow(...) -> redirect / JSON response
-</code></pre>
-</section>
-
-<div class="docs-nav-footer">
-  <a href="../../../docs/reference/identity/state-management.html" class="docs-nav-link prev">
-    <span class="docs-nav-label">Previous</span>
-    <span class="docs-nav-title">State Management</span>
-  </a>
-  <a href="../../../docs/reference/iam/xacml.html" class="docs-nav-link next">
-    <span class="docs-nav-label">Next</span>
-    <span class="docs-nav-title">Authorization Overview</span>
-  </a>
-</div>
+          <h2 id="settings">Settings</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning · when to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.max-block-mfa-attempts</code></td><td><code>2</code></td><td>Attempt limit of the block release MFA (start API, access control filter). The handler counting failures uses a constant 2</td></tr>
+              <tr><td><code>contexa.security.zerotrust.challenge.lock-wait-time</code></td><td><code>0</code></td><td>How long to wait for the challenge MFA start lock (0 answers 503 at once)</td></tr>
+              <tr><td><code>contexa.security.zerotrust.challenge.lock-lease-time</code></td><td><code>30s</code></td><td>Lease time of that lock</td></tr>
+              <tr><td><code>contexa.security.zerotrust.challenge.busy-retry-after-seconds</code></td><td><code>3</code></td><td><code>Retry-After</code> of the 503 when the lock is not obtained</td></tr>
+              <tr><td><code>contexa.identity.security-core.enabled</code></td><td><code>true</code></td><td>Off turns off these filters' auto-configuration</td></tr>
+            </tbody>
+          </table></div>
+          <p>Enforcement mode and decision settings are in <a href="../../install/configuration/security.html">Security settings</a>.</p>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="../architecture/company-records.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Company Records: Telling Decisions What the Company Knows</span>
+            </a>
+            <a href="../architecture/prompt-engineering.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Decision Prompts and Bundles</span>
+            </a>
+          </div>

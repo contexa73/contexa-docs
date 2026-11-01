@@ -1,550 +1,243 @@
-<!-- Breadcrumb -->
-          <nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">Home</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Architecture</span>
+            <span class="breadcrumb-current">How Contexa Works</span>
           </nav>
 
-          <!-- Page Header -->
           <div class="docs-page-header">
-            <h1>Platform Architecture</h1>
-            <p class="lead">Understand how Contexa's modules work together to provide AI-driven zero trust security for Spring Boot applications &mdash;from HTTP request entry through AI threat analysis to final access decisions.</p>
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-primary">contexa-identity</span>
+              <span class="badge badge-primary">contexa-iam</span>
+            </div>
+            <h1>How Contexa Works</h1>
+            <p class="lead">What Contexa asks about each request, and when it makes and applies the answer (the decision), on one page. It also covers how to turn Contexa on, the three choices to make first, what actually runs under each ownership mode, and how the modules fit together.</p>
           </div>
 
+          <h2 id="what-it-does">What Contexa does</h2>
+          <p>A request that passed sign-in and the permission check can still come from someone who stole the account, or from an insider using their own permission for another purpose. For each request it protects, Contexa asks an AI model <strong>"is the owner of this account doing their own work right now?"</strong>, stores the answer as a <strong>decision</strong>, and applies it to that user's requests.</p>
+          <p>A decision is not made while the request waits. It is made in the background after the request has been handled and the response has left, and it applies <strong>from the same user's next request</strong>. Only a method that needs a decision inside the request (<code>@Protectable(sync=true)</code>) and an agent request with no decision on record are decided on the spot.</p>
+          <p>Requests from AI agents are told apart from people's requests and decided separately (<a href="../agent/overview.html">Agents as security subjects</a>).</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The five decisions</strong>A user (or agent) is always in one of these five states.</figcaption>
+            <ul class="dg-outcomes">
+              <li class="dg-node dg-allow"><span class="dg-node-title">Allow</span><span class="dg-node-desc">ALLOW · go on</span></li>
+              <li class="dg-node dg-challenge"><span class="dg-node-title">Step-up authentication</span><span class="dg-node-desc">CHALLENGE · confirm the account owner again with MFA</span></li>
+              <li class="dg-node dg-block"><span class="dg-node-title">Block</span><span class="dg-node-desc">BLOCK · stopped until an administrator releases it</span></li>
+              <li class="dg-node dg-escalate"><span class="dg-node-title">Held for review</span><span class="dg-node-desc">ESCALATE · analysis not settled, wait a moment</span></li>
+              <li class="dg-node dg-pending"><span class="dg-node-title">Pending analysis</span><span class="dg-node-desc">PENDING_ANALYSIS · no stored decision, let through and analyzed</span></li>
+            </ul>
+          </figure>
 
-          <!-- Section 1: Platform Overview -->
-          <section>
-            <h2 id="overview">Platform Overview</h2>
-            <p>Contexa is an <strong>AI Native Zero Trust</strong> security platform for Spring Boot. Rather than relying solely on perimeter-based security, Contexa provides <strong>continuous verification after authentication</strong> through AI-driven security decisions. Contexa applies continuous verification after authentication through request-time enforcement and asynchronous analysis that use session context, behavioral patterns, and threat signals.</p>
-            <p>The platform is composed of four core modules, each handling a distinct security concern, plus auto-configuration and starter support for seamless Spring Boot integration.</p>
-
-            <div class="callout-info">
-              <strong>Code-backed bootstrap chain.</strong> The OSS entry point is <code>@EnableAISecurity</code> in <code>contexa-common</code>. That annotation imports <code>AiSecurityImportSelector</code>, which loads <code>AiSecurityConfiguration</code>. From there, <code>IdentitySecurityCoreAutoConfiguration</code> and the module-specific auto-configurations wire the request-time runtime control path, the asynchronous analysis path, and the IAM integration points. Without an explicit <code>mode</code>, the annotation uses <code>SANDBOX</code>, and unless <code>contexa.bridge.ownership</code> is set the ownership is <code>HOST_OWNED</code>: Contexa does not build an authentication <code>SecurityFilterChain</code>, and the host application's Spring Security configuration owns authentication and authorization. <code>FULL</code> runs as <code>CONTEXA_OWNED</code>, and Contexa builds the authentication chain.
-            </div>
-
-            <h4>Application Entry Point &amp; Auto-Configuration Example</h4>
-            <p>To enable the Contexa AI security engine, place the <code>@EnableAISecurity</code> annotation on your main Spring Boot application class:</p>
-            <pre><code class="language-java">package io.contexa.example;
-
-import io.contexa.contexacommon.annotation.EnableAISecurity;
-import io.contexa.contexacommon.security.bridge.SecurityMode;
+          <h2 id="turn-on">Turning it on</h2>
+          <p>With only the starter dependency (<code>spring-boot-starter-contexa</code>), Contexa stays off and the application runs as before. It is turned on by putting <code>@EnableAISecurity</code> on the main class. The annotation loads <code>AiSecurityConfiguration</code> through <code>AiSecurityImportSelector</code>, and the auto-configurations of each module follow. Even with the annotation, <code>contexa.enabled=false</code> loads nothing.</p>
+          <pre><code class="language-java">import io.contexa.contexacommon.annotation.EnableAISecurity;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-@EnableAISecurity(mode = SecurityMode.SANDBOX) // Enables default SANDBOX mode for legacy integration
-public class ContexaDemoApplication {
+@EnableAISecurity   // no mode means SANDBOX: the application keeps sign-in (HOST_OWNED)
+public class MyApplication {
     public static void main(String[] args) {
-        SpringApplication.run(ContexaDemoApplication.class, args);
+        SpringApplication.run(MyApplication.class, args);
     }
 }</code></pre>
+          <p>A dedicated Contexa database must also be set. If it is empty, the application does not start.</p>
+          <pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa   # a Contexa database, not the application's
+    username: contexa
+    password: ${CONTEXA_DB_PASSWORD}</code></pre>
+          <ul>
+            <li><strong>The same address as the application database stops the start.</strong> Only for a trial (POC), setting both <code>contexa.datasource.isolation.allow-shared-application-datasource</code> and <code>contexa.datasource.isolation.shared-application-datasource-risk-accepted</code> to <code>true</code> allows sharing, and a production profile (<code>prod</code> · <code>production</code>) still refuses it.</li>
+            <li><strong>Decisions need an AI chat model and a vector store.</strong> Without Spring AI <code>ChatModel</code> and <code>VectorStore</code> beans (PgVector, with an embedding model for it), Layer 1 and Layer 2 are not created and protected requests stay pending analysis.</li>
+            <li><strong>A decision applies only after it is recorded in the Contexa database.</strong> Each decision is first written as an observation (table <code>ai_security_decision_observation</code>); when that write fails, the decision is not applied.</li>
+            <li>At start, Contexa checks that the beans it needs exist (<code>contexa.capability.mode</code>: <code>AUTO</code> · <code>OFF</code> · <code>WARN</code> · <code>FAIL_FAST</code> · <code>STRICT</code>). When something is missing, the default <code>AUTO</code> only logs it for an ordinary application and stops the start for a Contexa-only application (<code>FULL</code> mode and the like) (<code>FAIL_FAST</code>).</li>
+          </ul>
+          <p>The steps from the dependency to the first decision are in <a href="../../install/index.html">Getting started</a>.</p>
 
-            <div class="module-grid">
-              <!-- contexa-core -->
-              <div class="module-card">
-                <div class="module-card-header">
-                  <div class="module-card-icon module-card-icon--core">AI</div>
-                  <h3>contexa-core <span>AI Engine</span></h3>
-                </div>
-                <p>The AI-powered security brain of the platform. Communicates with LLMs to make autonomous security decisions.</p>
-                <ul>
-                  <li>LLM communication and orchestration</li>
-                  <li>Risk analysis and threat evaluation</li>
-                  <li>HCAD anomaly detection</li>
-                  <li>SecurityPlaneAgent with tiered analysis</li>
-                  <li>Autonomous event pipeline with handler chain</li>
-                  <li>RAG-based context retrieval</li>
-                  <li>Behavioral embeddings</li>
-                </ul>
-              </div>
+          <h3 id="three-choices">The three choices to make first</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>What it decides</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.bridge.ownership</code><br>(<code>@EnableAISecurity(mode)</code> sets its default)</td><td><code>HOST_OWNED</code></td><td><strong>Authentication ownership</strong>: whether the application keeps sign-in (<code>HOST_OWNED</code>) or Contexa owns it (<code>CONTEXA_OWNED</code>). No <code>mode</code> or <code>SANDBOX</code> means <code>HOST_OWNED</code>; <code>FULL</code> means <code>CONTEXA_OWNED</code>.</td><td><code>CONTEXA_OWNED</code> to use Contexa's sign-in, MFA and request-time filters. <code>FULL</code> treats the application as Contexa-only and, unless the application declares its own DataSource, makes its default DataSource the Contexa database. Differences: <a href="#ownership">What runs under each ownership mode</a></td></tr>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td><strong>Enforcement mode</strong>: <code>DISABLED</code> · <code>OBSERVE</code> (no AI analysis), <code>SHADOW</code> (analyze and record only, nothing stored or applied), <code>ENFORCE</code> (store and apply)</td><td>Start with <code>SHADOW</code> to watch the decisions, then switch to <code>ENFORCE</code>. A value saved in the admin console's "System Settings" wins over YAML (no restart). <a href="../../install/shadow-mode.html">Start safely with enforcement modes</a></td></tr>
+              <tr><td><code>contexa.infrastructure.mode</code></td><td><code>standalone</code></td><td><strong>Infrastructure mode</strong>: keep the decision store, event delivery and learned state in memory (<code>standalone</code>) or in Redis · Kafka (<code>distributed</code>)</td><td><code>distributed</code> when there are several servers or the learned state must survive a restart. <a href="#infrastructure">Infrastructure modes</a></td></tr>
+            </tbody>
+          </table></div>
 
-              <!-- contexa-identity -->
-              <div class="module-card">
-                <div class="module-card-header">
-                  <div class="module-card-icon module-card-icon--identity">ID</div>
-                  <h3>contexa-identity <span>Authentication</span></h3>
-                </div>
-                <p>Manages all authentication flows with a custom DSL built on top of Spring Security.</p>
-                <ul>
-                  <li>Form login and REST API authentication</li>
-                  <li>Adaptive MFA, passkey/WebAuthn, OTT</li>
-                  <li>OAuth2 integration</li>
-                  <li>Zero-trust challenge filters</li>
-                  <li>Custom security DSL configuration</li>
-                </ul>
+          <h2 id="two-lanes">The two lanes a request goes through</h2>
+          <p>Contexa works in two lanes. The <strong>request-time</strong> lane reads and applies the decision already stored while the user waits; the <strong>asynchronous decision</strong> lane makes a new decision and stores it after the response has left. The two lanes meet only at the decision store.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Request time and asynchronous decision</strong>The request-time lane never calls the AI model; the asynchronous lane never holds the request.</figcaption>
+            <div class="dg-lanes">
+              <section class="dg-lane"><h4 class="dg-lane-title">Request time<span class="dg-lane-sub">while the user waits</span></h4>
+                <ol class="dg-flow">
+                  <li class="dg-node dg-request"><span class="dg-node-title">Request arrives</span><span class="dg-node-desc">from a signed-in user or agent</span></li>
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">Apply the stored decision</span><span class="dg-node-desc">stops here on block, step-up or hold</span></li>
+                  <li class="dg-node dg-host"><span class="dg-node-title">Application logic and protected method run</span><span class="dg-node-desc"><code>@Protectable</code> method</span></li>
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">Publish an analysis event</span><span class="dg-node-desc">after the method has finished</span></li>
+                </ol>
+              </section>
+              <div class="dg-bridge">
+                <span class="dg-bridge-arrow">← read decision</span>
+                <div class="dg-node dg-store"><span class="dg-node-title">Decision store</span><span class="dg-node-desc">per user, each decision with its lifetime</span></div>
+                <span class="dg-bridge-arrow">write decision →</span>
               </div>
-
-              <!-- contexa-iam -->
-              <div class="module-card">
-                <div class="module-card-header">
-                  <div class="module-card-icon module-card-icon--iam">AC</div>
-                  <h3>contexa-iam <span>Authorization</span></h3>
-                </div>
-                <p>Dynamic policy-based access control using XACML with AI-driven method-level security.</p>
-                <ul>
-                  <li>XACML engine (PAP/PDP/PEP/PIP/PRP)</li>
-                  <li><code>@Protectable</code> annotation for AI-driven method security</li>
-                  <li>Admin console for policy management</li>
-                  <li>SpEL-based dynamic URL authorization</li>
-                  <li>Resource scanning and discovery</li>
-                </ul>
-              </div>
-
-              <!-- contexa-common -->
-              <div class="module-card">
-                <div class="module-card-header">
-                  <div class="module-card-icon module-card-icon--common">CM</div>
-                  <h3>contexa-common <span>Shared</span></h3>
-                </div>
-                <p>Common entities, services, and domain models shared across all modules.</p>
-                <ul>
-                  <li>Shared entity models</li>
-                  <li>Cache service abstraction</li>
-                  <li>Central audit facade</li>
-                  <li>Common annotations</li>
-                  <li>Domain value objects</li>
-                </ul>
-              </div>
+              <section class="dg-lane"><h4 class="dg-lane-title">Asynchronous decision<span class="dg-lane-sub">after the response has left</span></h4>
+                <ol class="dg-flow">
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">Receive and filter the event</span><span class="dg-node-desc">no analysis if a decision is already in force</span></li>
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">One line per user and session</span><span class="dg-node-desc">one at a time</span></li>
+                  <li class="dg-node dg-model"><span class="dg-node-title">The AI model decides</span><span class="dg-node-desc">Layer 1, and Layer 2 when needed</span></li>
+                  <li class="dg-node dg-contexa"><span class="dg-node-title">Enforce and record</span><span class="dg-node-desc">store, seal the evidence, write the audit record</span></li>
+                </ol>
+              </section>
             </div>
+            <div class="dg-legend"><span class="dg-request">Request</span><span class="dg-host">Host application</span><span class="dg-contexa">Contexa</span><span class="dg-store">Store</span><span class="dg-model">AI model</span></div>
+          </figure>
+          <ul>
+            <li><strong>Analysis events come from protected methods.</strong> With the default settings, analysis events are published by <code>@Protectable</code> method calls and by MFA sign-in success. An ordinary URL request that is not a protected method is not analyzed, and a request an authorization policy denied is kept only as a session fact, without analysis.</li>
+            <li><strong>The request-time step never calls the AI model.</strong> It only reads the store. That is why a new decision usually applies from the next request.</li>
+            <li><strong>Before a decision is stored, the user is pending analysis.</strong> The request goes on, and the response in flight is wrapped so that a block signal can cut it (<code>CONTEXA_OWNED</code>).</li>
+          </ul>
+          <p>Following one request from start to end is in <a href="zero-trust-flow.html">The Life of a Request</a>.</p>
 
-            <p>Additionally, <strong>contexa-autoconfigure</strong> wires the OSS modules together for Spring Boot, and <strong>spring-boot-starter-contexa</strong> is the starter dependency that brings the core modules into an application.</p>
-          </section>
+          <h2 id="ownership">What runs under each ownership mode</h2>
+          <p>The default (only <code>@EnableAISecurity</code>) is <code>HOST_OWNED</code>. Contexa then builds no security filter chain, so request-time enforcement happens <strong>only in <code>@Protectable</code> methods</strong>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Feature</th><th><code>CONTEXA_OWNED</code></th><th><code>HOST_OWNED</code> (default)</th></tr></thead>
+            <tbody>
+              <tr><td>Security filter chain (sign-in, MFA pages, filters)</td><td>built by Contexa</td><td>Not built. The application's <code>SecurityFilterChain</code> keeps sign-in and permissions. If the application declares no chain, Spring Boot's default security requires authentication on every request, and Contexa reports it with an ERROR log at start</td></tr>
+              <tr><td>Request-time filters (step-up, block and hold responses)</td><td>run inside the Contexa chain</td><td><strong>None.</strong> The filter beans exist, but their servlet registration is turned off, so they are on no chain</td></tr>
+              <tr><td>Authorities changed to match the decision (<code>ROLE_BLOCKED</code> and so on)</td><td>in the session and JWT chains</td><td>none</td></tr>
+              <tr><td>Stored decisions enforced in <code>@Protectable</code> methods</td><td>runs</td><td>runs (the only enforcement point in this mode)</td></tr>
+              <tr><td><code>#ai</code> expressions in the application's <code>@PreAuthorize</code></td><td>registered (method security turned on with Contexa's expression handler)</td><td>not registered</td></tr>
+              <tr><td>Protection of the admin console <code>/contexa/admin/**</code></td><td>protected by the Contexa chain and method security</td><td><strong>Not protected by Contexa.</strong> The application chain must protect <code>/contexa/admin/**</code>, and the application must turn on method security (<code>@EnableMethodSecurity</code>) for the admin controllers' permission checks to apply</td></tr>
+              <tr><td>Agent request gate (call limits, ended delegations, confirmation, narrowed scope)</td><td>runs</td><td>none (<a href="../agent/controls.html#ownership">details</a>)</td></tr>
+              <tr><td>Authentication bridge</td><td>reads the sign-in facts inside the chain and fills the security context</td><td>reads the application's sign-in facts and only makes stamps (does not fill or save the security context)</td></tr>
+            </tbody>
+          </table></div>
+          <p>How to choose the ownership mode and add Contexa to an existing Spring Security application: <a href="../../install/spring-boot.html">Adding Contexa to a Spring Security application</a>.</p>
 
+          <h2 id="decisions">The five decisions and their lifetimes</h2>
+          <p>Decisions are stored per user, and each decision has a fixed lifetime. A decision does not stay "until a new analysis replaces it".</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Decision</th><th>Lifetime</th><th>Where it applies</th><th>How it ends</th></tr></thead>
+            <tbody>
+              <tr><td>Allow (ALLOW)</td><td>15 s</td><td>only in the same session, IP and browser it was made for</td><td>back to pending analysis when the time passes</td></tr>
+              <tr><td>Step-up authentication (CHALLENGE)</td><td>1,800 s (30 min)</td><td>every session of the user</td><td>allowed after passing the MFA this decision started, or the time runs out</td></tr>
+              <tr><td>Held for review (ESCALATE)</td><td>300 s (5 min)</td><td>every session of the user</td><td>an administrator's approval. If unresolved when the time ends, the next request turns it into a block (<code>CONTEXA_OWNED</code>)</td></tr>
+              <tr><td>Block (BLOCK)</td><td>no limit</td><td>every session of the user</td><td>an administrator's approval (the user asks for release after the unblock MFA)</td></tr>
+              <tr><td>Pending analysis (PENDING_ANALYSIS)</td><td>—</td><td>no stored decision</td><td>changes when an analysis stores a decision</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>The stricter decision wins.</strong> In the order block &gt; held for review &gt; step-up, a weaker new decision is not stored while a stricter one is in force.</li>
+            <li>The responses users get for each decision (HTTP status, the page they are sent to) are in <a href="zero-trust-flow.html#responses">The Life of a Request</a> and <a href="../identity/zero-trust-filters.html">Request-time enforcement</a>.</li>
+          </ul>
 
-          <!-- Section 2: Request Processing Flow -->
-          <section>
-            <h2 id="request-flow">AI Native Zero Trust Flow</h2>
-            <p>Contexa processes every HTTP request through two distinct pipelines: a <strong>synchronous filter chain</strong> that runs on every request, and an <strong>asynchronous AI pipeline</strong> that analyzes events in the background. The enforced action is persisted through <code>ZeroTrustActionRepository</code> and applied on the <em>next</em> request; in distributed mode that shared state is backed by Redis and Redisson. This non-blocking design keeps analysis off the direct request path.</p>
-
-            <div class="callout-info">
-              <strong>Primary code anchors.</strong> Request-time enforcement flows through <code>AISessionSecurityContextRepository.loadDeferredContext(...)</code>, <code>AbstractZeroTrustSecurityService.applyZeroTrustToContext(...)</code>, <code>ZeroTrustAccessControlFilter.doFilterInternal(...)</code>, and <code>ZeroTrustChallengeFilter.doFilterInternal(...)</code>. Asynchronous analysis flows through <code>ZeroTrustEventPublisher.publishMethodAuthorization(...)</code>, <code>ZeroTrustEventListener.handleZeroTrustEvent(...)</code>, <code>SecurityEventProcessor.process(...)</code>, and <code>SecurityDecisionEnforcementHandler.handle(...)</code>.
-            </div>
-
-            <h3>Synchronous Filter Chain</h3>
-            <p>The Spring Security filter chain processes every HTTP request in order. Filters inspect, gate, or enrich the request but never call the LLM directly.</p>
-            <p>The chain below describes <code>CONTEXA_OWNED</code> (the default for <code>FULL</code> mode), where Contexa builds the authentication chain. In <code>HOST_OWNED</code> (the default for <code>SANDBOX</code> mode), Contexa does not build an authentication <code>SecurityFilterChain</code>, so the host's Spring Security chain handles the request. Contexa's bridge filter runs after it and reads evidence from authenticated requests, and <code>@Protectable</code> analysis happens at the annotated methods.</p>
-
-            <div class="arch-flow">
-              <div class="arch-flow-node arch-flow-node--primary">
-                HTTP Request
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--filter">
-                HCADFilter
-                <span class="arch-flow-detail">Host &amp; Context Anomaly Detection &mdash; extracts session, device, and behavioral signals and sets request attributes. Never blocks.</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--filter">
-                ZeroTrustAccessControlFilter
-                <span class="arch-flow-detail">Reads the current action from <code>ZeroTrustActionRepository</code> for this user &mdash; in distributed mode the shared state is Redis-backed, and the filter enforces decisions made by the asynchronous pipeline on a <em>previous</em> request.</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-branch">
-                <span class="arch-flow-branch-item" style="background:var(--zt-allow)">ALLOW &mdash;continue</span>
-                <span class="arch-flow-branch-item" style="background:var(--zt-block)">BLOCK &mdash;403</span>
-                <span class="arch-flow-branch-item" style="background:var(--zt-escalate)">ESCALATE &mdash;423</span>
-                <span class="arch-flow-branch-item" style="background:var(--zt-pending)">PENDING &mdash;wrap response</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--filter">
-                ZeroTrustChallengeFilter
-                <span class="arch-flow-detail">If CHALLENGE authority detected &mdash;initiate MFA challenge</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--filter">
-                CustomDynamicAuthorizationManager
-                <span class="arch-flow-detail">URL-level authorization &mdash;evaluates policies from DB as SpEL expressions</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-row">
-                <div class="arch-flow-node arch-flow-node--secondary">
-                  AuthorizationManagerMethodInterceptor
-                  <span class="arch-flow-detail">AOP interceptor &mdash;intercepts <code>@Protectable</code> method calls <em>before</em> execution. Evaluates access decision.</span>
-                </div>
-                <div class="arch-flow-side-branch">
-                  <span class="arch-flow-side-item" style="background:var(--zt-allow)">GRANTED</span>
-                  <span class="arch-flow-side-item" style="background:var(--zt-block)">DENIED</span>
-                </div>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--filter" style="border-color:var(--brand-primary)">
-                ZeroTrustEventPublisher
-                <span class="arch-flow-detail">Called via <code>publishMethodAuthorization()</code> &mdash;publishes via Spring <code>ApplicationEventPublisher</code></span>
-                <span class="arch-flow-badge">ZeroTrustSpringEvent</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--filter" style="border-color:var(--brand-secondary)">
-                @Protectable Method Execution
-                <span class="arch-flow-detail">The actual annotated method executes only if authorization was granted by the interceptor above.</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--allow">
-                Application Logic
-              </div>
-            </div>
-
-            <h3>Asynchronous AI Pipeline</h3>
-            <p><code>ZeroTrustEventListener</code> receives the <code>ZeroTrustSpringEvent</code> synchronously via <code>@EventListener</code>, acting as the bridge into the asynchronous processing pipeline. The AI evaluates threats in the background and persists the enforced action through <code>ZeroTrustActionRepository</code>; in distributed mode Redis-backed storage and Redisson propagation make that state visible to the user's <em>next</em> request.</p>
-
-            <div class="arch-flow">
-              <div class="arch-flow-node arch-flow-node--filter" style="border:2px dashed var(--brand-primary);background:var(--bg-secondary)">
-                ZeroTrustEventListener <span style="opacity:0.7">(@EventListener)</span>
-                <span class="arch-flow-badge">ZeroTrustSpringEvent</span>
-                <span class="arch-flow-detail">Receives event synchronously &mdash;bridges sync and async. Routes to SecurityEventPublisher (Kafka or in-memory).</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--agent">
-                SecurityPlaneAgent
-                <span class="arch-flow-detail">Orchestrates batch processing via SecurityEventProcessor</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--agent">
-                ColdPathEventProcessor
-                <span class="arch-flow-detail">AI analysis entry point &mdash;orchestrates Layer1/Layer2 tiered analysis with context collection</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--primary" style="padding:var(--space-4) var(--space-5)">
-                <div style="display:flex;gap:var(--space-4);justify-content:center;flex-wrap:wrap">
-                  <div style="text-align:center">
-                    <div style="font-weight:700">Layer1ContextualStrategy</div>
-                    <div style="font-size:var(--text-xs);opacity:0.85;margin-top:2px">Session context + RAG + behavior analysis</div>
-                  </div>
-                  <div style="font-size:var(--text-lg);opacity:0.5;align-self:center">/</div>
-                  <div style="text-align:center">
-                    <div style="font-weight:700">Layer2ExpertStrategy</div>
-                    <div style="font-size:var(--text-xs);opacity:0.85;margin-top:2px">Extended forensics + SOAR integration</div>
-                  </div>
-                </div>
-                <span class="arch-flow-badge">SecurityPromptTemplate</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--agent">
-                UnifiedLLMOrchestrator
-                <span class="arch-flow-detail">Spring AI ChatClient &mdash;model selection, advisor chain, retry logic</span>
-                <span class="arch-flow-badge">ExecutionContext</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-branch">
-                <span class="arch-flow-branch-item" style="background:var(--zt-allow)">ALLOW</span>
-                <span class="arch-flow-branch-item" style="background:var(--zt-block)">BLOCK</span>
-                <span class="arch-flow-branch-item" style="background:var(--zt-challenge)">CHALLENGE</span>
-                <span class="arch-flow-branch-item" style="background:var(--zt-escalate)">ESCALATE</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <div class="arch-flow-node arch-flow-node--decision">
-                SecurityDecisionEnforcementHandler <span style="opacity:0.7">(order=55)</span>
-                <span class="arch-flow-detail">Persists the enforced action through <code>ZeroTrustActionRepository</code>. On BLOCK: sets blocked state and can broadcast via Redisson RTopic in distributed mode.</span>
-              </div>
-              <div style="margin-top:var(--space-3);padding:var(--space-2) var(--space-4);background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:var(--radius-md);text-align:center;font-size:var(--text-xs);color:var(--text-secondary);font-weight:500">
-                Stored in <code style="font-size:var(--text-xs)">ZeroTrustActionRepository</code> (Redis or in-memory) &mdash;<strong>enforced on next request</strong>
-              </div>
-            </div>
-
-
-            <h3>Zero Trust Enforcement (Next Request)</h3>
-            <p>Everything above &mdash;synchronous event publication, asynchronous AI analysis, LLM decisions &mdash;<strong>converges here</strong>. Every subsequent request from this user is now governed by the AI's verdict. The decision is not a suggestion; it is fused into Spring Security's <code>Authentication</code> itself.</p>
-
-            <div class="arch-flow">
-              <!-- 1. Every request -->
-              <div class="arch-flow-node arch-flow-node--secondary">
-                Every User Request
-                <span class="arch-flow-detail">Every HTTP request passes through this pipeline &mdash;not just the next one. The AI decision persists until a new analysis overrides it.</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <!-- 2. SecurityContext loading -->
-              <div class="arch-flow-node arch-flow-node--filter" style="padding:var(--space-4) var(--space-5)">
-                <div style="display:flex;gap:var(--space-4);justify-content:center;flex-wrap:wrap">
-                  <div style="text-align:center">
-                    <div style="font-weight:700">AISessionSecurityContextRepository</div>
-                    <div style="font-size:var(--text-xs);color:var(--text-secondary);margin-top:2px">Session-based login</div>
-                  </div>
-                  <div style="font-size:var(--text-lg);opacity:0.4;align-self:center">/</div>
-                  <div style="text-align:center">
-                    <div style="font-weight:700">AIOAuth2ZeroTrustFilter</div>
-                    <div style="font-size:var(--text-xs);color:var(--text-secondary);margin-top:2px">JWT / OAuth2</div>
-                  </div>
-                </div>
-                <span class="arch-flow-badge" style="background:var(--brand-primary);margin-top:var(--space-2)">Spring SecurityContext Loading</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <!-- 3. ZeroTrustSecurityService -->
-              <div class="arch-flow-node arch-flow-node--agent">
-                ZeroTrustSecurityService
-                <span class="arch-flow-detail">Reads the current action from <code>ZeroTrustActionRepository</code> &mdash; in distributed mode this state is Redis-backed &mdash; and replaces <code>Authentication</code> with <code>ZeroTrustAuthenticationToken</code></span>
-                <span class="arch-flow-badge" style="margin-top:16px">AI Decision &mdash;Spring Security Authority</span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <!-- 4. Action already assigned -->
-              <div style="padding:var(--space-3) var(--space-5);background:linear-gradient(135deg,rgba(99,102,241,0.08),rgba(168,85,247,0.08));border:1px dashed var(--brand-primary);border-radius:var(--radius-lg);text-align:center;max-width:420px;width:100%">
-                <div style="font-size:var(--text-xs);font-weight:600;color:var(--brand-primary);margin-bottom:var(--space-2)">Action already assigned to this user</div>
-                <div style="display:flex;gap:var(--space-2);justify-content:center;flex-wrap:wrap">
-                  <span class="arch-flow-branch-item" style="background:var(--zt-allow)">ALLOW</span>
-                  <span class="arch-flow-branch-item" style="background:var(--zt-block)">BLOCK</span>
-                  <span class="arch-flow-branch-item" style="background:var(--zt-challenge)">CHALLENGE</span>
-                  <span class="arch-flow-branch-item" style="background:var(--zt-escalate)">ESCALATE</span>
-                </div>
-                <div style="font-size:11px;color:var(--text-tertiary);margin-top:var(--space-2)">This action governs <strong>every request</strong> until a new AI analysis overrides it</div>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <!-- 5. ZeroTrustAccessControlFilter -->
-              <div class="arch-flow-node arch-flow-node--decision">
-                ZeroTrustAccessControlFilter
-                <span class="arch-flow-detail">
-                  <strong>BLOCK</strong> &mdash;403 Forbidden, session invalidated, cross-instance broadcast<br>
-                  <strong>ESCALATE</strong> &mdash;423 Locked, Retry-After: 30s, auto-promotes to BLOCK on TTL expiry<br>
-                  <strong>PENDING</strong> &mdash;wraps response with <code>BlockableResponseWrapper</code> for mid-stream termination
-                </span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <!-- 6. ZeroTrustChallengeFilter -->
-              <div class="arch-flow-node arch-flow-node--decision">
-                ZeroTrustChallengeFilter
-                <span class="arch-flow-detail">
-                  <strong>CHALLENGE</strong> &mdash;initiates MFA via <code>ChallengeMfaInitializer</code><br>
-                  Max 2 attempts in 1hr window &mdash;failure auto-promotes to BLOCK
-                </span>
-              </div>
-              <div class="arch-flow-connector"></div>
-
-              <!-- 7. Result -->
-              <div style="padding:var(--space-3) var(--space-5);background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:var(--radius-md);text-align:center;max-width:420px;width:100%;font-size:var(--text-xs);color:var(--text-secondary);font-weight:500">
-                <strong style="color:var(--zt-allow)">ALLOW</strong> &mdash;request reaches application code &nbsp;|&nbsp; all others &mdash;blocked before reaching controller
-              </div>
-            </div>
-
-            <p style="font-size:var(--text-sm);color:var(--text-secondary);margin-top:var(--space-4)">For detailed enforcement mechanics including <code>BlockableResponseWrapper</code>, <code>BlockingSignalBroadcaster</code>, and cross-instance propagation, see <a href="zero-trust-flow.html#enforcement">Zero Trust Flow &mdash;Enforcement Infrastructure</a>.</p>
-          </section>
-
-
-          <!-- Section 3: Module Dependencies -->
-          <section>
-            <h2 id="module-dependencies">Module Dependencies</h2>
-            <p>The modules form a layered dependency graph. Higher-level modules depend on the core AI engine and shared infrastructure, while the starter aggregates everything.</p>
-
-            <div class="dep-diagram"><!--
--->spring-boot-starter-contexa
-  |
-  +-- contexa-autoconfigure
-  |     |
-  |     +-- contexa-identity
-  |     |     +-- contexa-core
-  |     |     +-- contexa-common
-  |     |
-  |     +-- contexa-iam
-  |     |     +-- contexa-core
-  |     |     +-- contexa-common
-  |     |
-  |     +-- contexa-core
-  |           +-- contexa-common
-  |
-  +-- contexa-identity
-  +-- contexa-iam
-  +-- contexa-core
-  +-- contexa-common</div>
-
-            <table style="width:100%;border-collapse:collapse;margin:var(--space-4) 0;font-size:var(--text-sm)">
-              <thead>
-                <tr style="border-bottom:2px solid var(--border-medium)">
-                  <th style="text-align:left;padding:var(--space-2) var(--space-3);font-weight:600">Module</th>
-                  <th style="text-align:left;padding:var(--space-2) var(--space-3);font-weight:600">Depends On</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr style="border-bottom:1px solid var(--border-light)">
-                  <td style="padding:var(--space-2) var(--space-3)"><code>contexa-identity</code></td>
-                  <td style="padding:var(--space-2) var(--space-3)"><code>contexa-core</code>, <code>contexa-common</code></td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border-light)">
-                  <td style="padding:var(--space-2) var(--space-3)"><code>contexa-iam</code></td>
-                  <td style="padding:var(--space-2) var(--space-3)"><code>contexa-core</code>, <code>contexa-common</code></td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border-light)">
-                  <td style="padding:var(--space-2) var(--space-3)"><code>contexa-core</code></td>
-                  <td style="padding:var(--space-2) var(--space-3)"><code>contexa-common</code></td>
-                </tr>
-                <tr style="border-bottom:1px solid var(--border-light)">
-                  <td style="padding:var(--space-2) var(--space-3)"><code>contexa-autoconfigure</code></td>
-                  <td style="padding:var(--space-2) var(--space-3)">All modules</td>
-                </tr>
-                <tr>
-                  <td style="padding:var(--space-2) var(--space-3)"><code>spring-boot-starter-contexa</code></td>
-                  <td style="padding:var(--space-2) var(--space-3)">All modules</td>
-                </tr>
-              </tbody>
-            </table>
-          </section>
-
-
-          <!-- Section 4: Infrastructure Modes -->
-          <section>
-            <h2 id="infrastructure-modes">Infrastructure Modes</h2>
-            <p>Contexa supports two infrastructure modes, allowing you to start with a zero-dependency setup for development and scale to a distributed architecture for production.</p>
-
-            <div class="callout-info">
-              <strong>Code anchor.</strong> Infrastructure mode is bound through <code>ContexaProperties.InfrastructureMode</code> under <code>contexa.infrastructure.mode</code>. Distributed-specific beans are activated by conditional auto-configuration, while standalone mode remains the default path with in-memory implementations.
-            </div>
-
-            <div class="mode-cards">
-              <div class="mode-card">
-                <h3 style="color:var(--color-info)">STANDALONE</h3>
-                <p>In-memory implementations for all services. Zero external dependencies &mdash;ideal for development, testing, and rapid prototyping.</p>
-                <div style="display:flex;flex-direction:column;gap:var(--space-1)">
-                  <code>contexa.infrastructure.mode=STANDALONE</code>
-                </div>
-                <ul style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--text-secondary);padding-left:var(--space-5)">
-                  <li>In-memory ZeroTrustAction storage</li>
-                  <li>In-memory cache service</li>
-                  <li>In-memory event bus</li>
-                  <li>No Redis or Kafka required</li>
-                </ul>
-              </div>
-              <div class="mode-card">
-                <h3 style="color:var(--zt-allow)">DISTRIBUTED</h3>
-                <p>Redis + Kafka backed services for production deployments. Supports horizontal scaling and multi-instance coordination.</p>
-                <div style="display:flex;flex-direction:column;gap:var(--space-1)">
-                  <code>contexa.infrastructure.mode=DISTRIBUTED</code>
-                </div>
-                <ul style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--text-secondary);padding-left:var(--space-5)">
-                  <li>Redis-backed ZeroTrustAction storage</li>
-                  <li>Redis cache with TTL management</li>
-                  <li>Kafka event streaming</li>
-                  <li>Cluster-aware session management</li>
-                </ul>
-              </div>
-            </div>
-          </section>
-
-
-          <!-- Section 5: Shadow Mode -->
-          <section>
-            <h2 id="shadow-mode">Shadow Mode</h2>
-            <p>Contexa supports a <strong>Shadow Mode</strong> for safe, progressive adoption. Controlled by a single property, <code>contexa.security.zerotrust.mode</code>, it determines whether AI decisions are enforced or only logged.</p>
-
-            <div class="callout-info">
-              <strong>Code anchor.</strong> Shadow and enforce behavior is controlled by <code>SecurityZeroTrustProperties.SecurityMode</code>. In SHADOW mode the analysis path still runs, but enforcement handlers do not persist or apply runtime actions; in ENFORCE mode the same analysis output is written to the action repository and consumed by the runtime filters.
-            </div>
-
-            <div class="mode-cards">
-              <div class="mode-card">
-                <h3 style="color:var(--zt-challenge)">SHADOW</h3>
-                <p>The full AI pipeline still runs &mdash; HCAD analysis, tiered LLM evaluation, and risk scoring &mdash; but the runtime remains in observation mode. The analysis path continues to record decisions and evidence, while request-time blocking and escalation are not activated as live user enforcement in this mode.</p>
-                <div style="display:flex;flex-direction:column;gap:var(--space-1)">
-                  <code>contexa.security.zerotrust.mode: SHADOW</code>
-                </div>
-              </div>
-              <div class="mode-card">
-                <h3 style="color:var(--zt-allow)">ENFORCE</h3>
-                <p>Default mode. The enforced action is persisted through <code>ZeroTrustActionRepository</code> and applied by <code>ZeroTrustAccessControlFilter</code> and companion zero-trust filters on subsequent requests. BLOCK, CHALLENGE, and ESCALATE are active in the live request path.</p>
-                <div style="display:flex;flex-direction:column;gap:var(--space-1)">
-                  <code>contexa.security.zerotrust.mode: ENFORCE</code>
-                </div>
-              </div>
-            </div>
-
-            <p style="font-size:var(--text-sm);color:var(--text-secondary)">See <a href="../../../docs/install/shadow-mode.html">Shadow Mode Migration Guide</a> for a detailed walkthrough of the recommended adoption timeline and rollback strategy.</p>
-          </section>
-
-
-          <!-- Section 6: AI Integration Points -->
-          <section>
-            <h2 id="ai-integration">AI Integration Points</h2>
-            <p>AI and LLM capabilities are deeply integrated throughout the platform. The following are the primary points where AI-driven decisions are made.</p>
-
-            <div class="callout-info">
-              <strong>Code anchors for this section.</strong> The items below are backed by runtime components such as <code>SecurityPlaneAgent</code>, <code>Layer1ContextualStrategy</code>, <code>Layer2ExpertStrategy</code>, <code>UnifiedLLMOrchestrator</code>, <code>AIAdaptiveMfaPolicyProvider</code>, <code>ApprovalService.requestApproval(...)</code>, <code>AuditingHandler</code>, and <code>CentralAuditFacade</code>.
-            </div>
-
-            <ol class="ai-list">
-              <li>
-                <div class="ai-list-num">1</div>
-                <div class="ai-list-content">
-                  <strong>Zero-Trust Threat Evaluation</strong>
-                  <span>SecurityPlaneAgent uses a tiered LLM strategy &mdash;Layer 1 for fast contextual analysis, Layer 2 for deep expert investigation &mdash;to evaluate suspicious requests and produce a <code>SecurityDecision</code> whose proposed action and effective autonomous action feed the zero-trust enforcement path.</span>
-                </div>
-              </li>
-              <li>
-                <div class="ai-list-num">2</div>
-                <div class="ai-list-content">
-                  <strong>@Protectable Method Authorization</strong>
-                  <span>Methods annotated with <code>@Protectable</code> trigger AI-driven authorization decisions at the method level, going beyond static role checks to evaluate request context dynamically.</span>
-                </div>
-              </li>
-              <li>
-                <div class="ai-list-num">3</div>
-                <div class="ai-list-content">
-                  <strong>HCAD Baseline Learning &amp; Anomaly Scoring</strong>
-                  <span>The Host &amp; Context Anomaly Detection system learns normal behavioral baselines and scores each request for deviation, feeding anomaly data into the threat evaluation pipeline.</span>
-                </div>
-              </li>
-              <li>
-                <div class="ai-list-num">4</div>
-                <div class="ai-list-content">
-                  <strong>Adaptive MFA Policy Decisions</strong>
-                  <span>AIAdaptiveMfaPolicyProvider uses AI analysis to determine when additional authentication factors should be required, adapting challenge strength based on risk context.</span>
-                </div>
-              </li>
-              <li>
-                <div class="ai-list-num">5</div>
-                <div class="ai-list-content">
-                  <strong>AI-Assisted XACML Policy Context</strong>
-                  <span>The platform combines XACML evaluation with AI-derived runtime context and method-level security signals, helping operators refine policy intent without presenting automatic policy generation as the primary enforcement model.</span>
-                </div>
-              </li>
-              <li>
-                <div class="ai-list-num">6</div>
-                <div class="ai-list-content">
-                  <strong>Behavior Analytics</strong>
-                  <span>Behavioral embeddings capture user interaction patterns as vectors, enabling the AI engine to detect subtle anomalies that rule-based systems would miss.</span>
-                </div>
-              </li>
-              <li>
-                <div class="ai-list-num">7</div>
-                <div class="ai-list-content">
-                  <strong>SOAR Orchestration</strong>
-                  <span>Layer 2 Expert Investigation integrates with SOAR workflows via SoarApprovalNotifier. High-risk decisions can require human approval before enforcement, bridging automated analysis with operational oversight.</span>
-                </div>
-              </li>
-              <li>
-                <div class="ai-list-num">8</div>
-                <div class="ai-list-content">
-                  <strong>Central Audit Logging</strong>
-                  <span>Every AI decision is recorded by AuditingHandler through CentralAuditFacade &mdash;regardless of whether enforcement is active (ENFORCE mode) or observation-only (SHADOW mode). Provides a complete audit trail for compliance and forensics.</span>
-                </div>
-              </li>
+          <h2 id="making-decisions">How a decision is made</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The order of one decision</strong>The numbers are the order of execution. The details are on the Decision Engine page.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node dg-model"><span class="dg-node-title">Layer 1</span><span class="dg-node-desc">gathers the session flow, differences from the behavioral baseline, company records and past decision records; the AI model decides</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node dg-model"><span class="dg-node-title">Layer 2</span><span class="dg-node-desc">decides the same request again, only when Layer 1 answered "these facts cannot decide it (ESCALATE)"</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Five steps after the decision</span><span class="dg-node-desc">make the decision (50) → enforce (55) → seal evidence (56) → audit (60) → SaaS forwarding (65, only when turned on)</span></div></li>
             </ol>
-          </section>
+          </figure>
+          <ul>
+            <li><strong>The AI model chooses the action (allow, step-up, block, hold).</strong> The engine only gathers and sends facts. When no answer comes back from the model (provider failure, timeout), the decision ends as step-up and is not passed to Layer 2.</li>
+            <li><strong>Shadow mode stores nothing.</strong> Only the observation and audit records are written.</li>
+            <li>What is learned and when the model's answer is changed: <a href="decision-engine.html">Decision Engine</a>.</li>
+          </ul>
 
+          <h2 id="trust">Records to check a decision</h2>
+          <p>So that why a decision was made can be checked later, Contexa keeps three things. None of them changes a decision.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>What stays after a decision</strong>The audit record is kept for every decision; sealed evidence for a sample of the decisions an AI model made.</figcaption>
+            <div class="dg-grid">
+              <div class="dg-node dg-store"><span class="dg-node-tag">Audit record</span><span class="dg-node-title">The record of the decision</span><span class="dg-node-desc">The proposed and final actions are written to <code>audit_log</code>, chained to the previous record's hash and signed. The admin console's "Real-time Monitor" (<code>/contexa/admin/security-monitor</code>) shows the check result of each record</span></div>
+              <div class="dg-node dg-model"><span class="dg-node-tag">Sealed evidence</span><span class="dg-node-title">The prompt exactly as sent to the model</span><span class="dg-node-desc">The prompt, its inputs and the decision are bound by a hash and kept (<a href="evidence.html">Sealed evidence and official verification</a>)</span></div>
+              <div class="dg-node"><span class="dg-node-tag">Prompt bundles and inspection</span><span class="dg-node-title">Which prompt asked</span><span class="dg-node-desc">The build runs three bundles: v19.21 (default), v20.26 and v21.19. Sealed prompts are compared with the facts apart from the decision (<a href="prompt-engineering.html">Decision Prompts and Bundles</a>, <a href="prompt-inspection.html">Prompt Governance and Inspection</a>)</span></div>
+            </div>
+          </figure>
 
+          <h2 id="modules">Modules</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Modules and dependencies</strong>The application adds only the starter. The starter brings all five modules.</figcaption>
+            <div class="dg-layers">
+              <div class="dg-layer dg-host"><span class="dg-layer-name">spring-boot-starter-contexa<small>dependency bundle</small></span><div class="dg-chips"><span class="dg-chip">brings the five modules as api</span></div></div>
+              <div class="dg-layer"><span class="dg-layer-name">contexa-autoconfigure<small>auto-configuration</small></span><div class="dg-chips"><span class="dg-chip">creates the beans whose conditions hold</span><span class="dg-chip">the other four modules are compileOnly</span></div></div>
+              <div class="dg-layer"><span class="dg-layer-name">contexa-identity · contexa-iam<small>authentication · authorization</small></span><div class="dg-chips"><span class="dg-chip">identity DSL · MFA · OAuth2</span><span class="dg-chip">request-time filters</span><span class="dg-chip">XACML policies</span><span class="dg-chip">@Protectable</span><span class="dg-chip">admin console</span></div></div>
+              <div class="dg-layer"><span class="dg-layer-name">contexa-core<small>decision engine</small></span><div class="dg-chips"><span class="dg-chip">asynchronous decision · learning</span><span class="dg-chip">prompt bundles</span><span class="dg-chip">evidence · inspection</span><span class="dg-chip">audit</span></div></div>
+              <div class="dg-layer dg-store"><span class="dg-layer-name">contexa-common<small>shared</small></span><div class="dg-chips"><span class="dg-chip">decision types</span><span class="dg-chip">annotations</span><span class="dg-chip">authentication bridge</span><span class="dg-chip">cache</span></div></div>
+            </div>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Module</th><th>What it does</th><th>Depends on</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa-common</code></td><td>Decision types, shared annotations such as <code>@EnableAISecurity</code> and <code>@Protectable</code>, the authentication bridge, the cache abstraction</td><td>nothing</td></tr>
+              <tr><td><code>contexa-core</code></td><td>AI model calls (<code>UnifiedLLMOrchestrator</code>), the asynchronous decision (<code>SecurityPlaneAgent</code> and its processing steps), past decision record search, the decision prompt (<code>SecurityDecisionStandardPromptTemplate</code>), sealed evidence and inspection, audit (<code>CentralAuditFacade</code>)</td><td><code>contexa-common</code> (api)</td></tr>
+              <tr><td><code>contexa-identity</code></td><td>Form and REST sign-in, MFA (passkey, OTT, recovery code), the adaptive MFA policy (<code>AIAdaptiveMfaPolicyProvider</code>), OAuth2, request-time filters, the identity DSL</td><td><code>contexa-core</code>, <code>contexa-common</code></td></tr>
+              <tr><td><code>contexa-iam</code></td><td>XACML policies (PAP · PDP · PEP · PIP · PRP), <code>@Protectable</code> method enforcement, URL authorization from database policies, the resource scanner that finds the application's endpoints and methods as resources, the admin console</td><td><code>contexa-core</code>, <code>contexa-common</code></td></tr>
+              <tr><td><code>contexa-autoconfigure</code></td><td>Spring Boot auto-configuration. It keeps the other four modules <code>compileOnly</code> and does not bring them itself</td><td>four modules (<code>compileOnly</code>)</td></tr>
+              <tr><td><code>spring-boot-starter-contexa</code></td><td>The one dependency the application adds</td><td>five modules (<code>api</code>)</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="infrastructure">Infrastructure modes</h2>
+          <p>The infrastructure mode decides where Contexa keeps its state. Both modes need the dedicated Contexa database (PostgreSQL).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>State</th><th>Standalone (<code>standalone</code>, default)</th><th>Distributed (<code>distributed</code>)</th></tr></thead>
+            <tbody>
+              <tr><td>Decision store</td><td>memory (with a cap on the number of users)</td><td>Redis (when a <code>RedisTemplate</code> bean exists)</td></tr>
+              <tr><td>Analysis event delivery</td><td>memory inside one server</td><td>Kafka (when a <code>KafkaTemplate</code> bean exists)</td></tr>
+              <tr><td>Block signal (cutting a response in flight)</td><td>inside one server</td><td>to every server over the Redisson channel <code>contexa:security:block-signal</code> (when a <code>RedissonClient</code> bean exists)</td></tr>
+              <tr><td>Learned state (behavioral baselines and so on)</td><td>memory. Lost on restart, reported with a WARN log at start</td><td>kept in Redis</td></tr>
+            </tbody>
+          </table></div>
+          <p>Write <code>standalone</code> or <code>distributed</code> in <code>contexa.infrastructure.mode</code>. Connection settings are in <a href="../../install/configuration/infrastructure.html">First start and deployment</a>.</p>
+
+          <h2 id="optional">Optional features and extension points</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Feature</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td>Contexa SaaS forwarding</td><td>off (<code>contexa.saas.enabled</code>)</td><td>Sends decisions other than allow and pending analysis to Contexa SaaS. <a href="../core/saas.html">Connecting Contexa SaaS</a></td></tr>
+              <tr><td>AuthZEN decision API</td><td>off (<code>contexa.security.zerotrust.authzen.enabled</code>)</td><td>An enforcement point outside Contexa (a gateway, an MCP server) asks for decisions. <a href="../agent/overview.html#mcp">Protecting tool calls and MCP servers</a></td></tr>
+              <tr><td>SOAR playbooks and approval</td><td>no OSS implementation</td><td>OSS has only the interfaces; there is no playbook execution or approval implementation. It is an extension point where the application plugs in its own. <a href="../soar/index.html">SOAR</a></td></tr>
+              <tr><td>MCP tool permits and approval</td><td>needs the enterprise module</td><td>OSS has only the data formats</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="console">What to do in the admin console</h2>
+          <p>What operators do in the admin console (<code>/contexa/admin</code>, administrator role). Under <code>HOST_OWNED</code>, the application must protect this path (<a href="#ownership">table above</a>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Menu</th><th>Path</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td>System Settings</td><td><code>/contexa/admin/system-settings</code></td><td>Change the enforcement mode (a saved value wins over YAML)</td></tr>
+              <tr><td>Real-time Monitor</td><td><code>/contexa/admin/security-monitor</code></td><td>See the decision records and the integrity check of each record</td></tr>
+              <tr><td>Blocked Users</td><td><code>/contexa/admin/blacklist</code></td><td>See blocked users and their release requests, and handle them (release)</td></tr>
+              <tr><td>Prompt Versions · Inspection Overview · Sealed Prompts · Official Inspection</td><td><code>/contexa/admin/prompt-quality/...</code>, <code>/contexa/admin/prompt-inspection</code></td><td>Release and roll back prompt bundles, see inspection results and sealed evidence</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="next">Where to read next</h2>
+          <ul>
+            <li><a href="../../install/index.html">Getting started</a>: from the dependency to the first decision</li>
+            <li><a href="zero-trust-flow.html">The Life of a Request</a>: from a request's arrival to its decision and the next request</li>
+            <li><a href="decision-engine.html">Decision Engine</a>: Layer 1 and Layer 2, the processing steps, learning</li>
+            <li><a href="../agent/overview.html">Agents as security subjects</a>: how AI agent requests are handled</li>
+          </ul>
           <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="/get-started.html" class="docs-nav-link prev">
+            <a href="../../install/configuration/index-all.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Get Started</span>
+              <span class="docs-nav-title">Settings Index</span>
             </a>
-            <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="docs-nav-link next">
+            <a href="zero-trust-flow.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Zero Trust Engine</span>
+              <span class="docs-nav-title">The Life of a Request</span>
             </a>
           </div>

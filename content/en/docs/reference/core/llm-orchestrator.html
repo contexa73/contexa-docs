@@ -1,493 +1,308 @@
-﻿<nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">Home</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">LLM &amp; Models</span>
+            <span class="breadcrumb-current">Calling an LLM</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
             </div>
-            <h1>LLM &amp; Models</h1>
-            <p class="lead">The <code>UnifiedLLMOrchestrator</code> is the central LLM client for the Contexa platform. It provides a single entry point for synchronous calls, streaming, structured entity extraction, and tool-calling &mdash; with tiered model selection, advisor integration, and automatic retry logic.</p>
+            <h1>Calling an LLM</h1>
+            <p class="lead">Every call Contexa makes to an AI model (LLM) goes through one place, the orchestrator. This page explains how to call a model from application code, which model a request goes to, how time limits, retries and provider-specific options are applied, and how to check the result of a call.</p>
           </div>
 
-          <!-- Overview -->
-          <section class="docs-section">
-            <h2 id="overview">Overview</h2>
-            <p>The orchestrator implements both <code>LLMOperations</code> (context-based API) and <code>ToolCapableLLMClient</code> (prompt-based API), providing flexible access to LLM models across the platform.</p>
-          </section>
+          <h2 id="overview">At a glance</h2>
+          <p>The orchestrator (<code>UnifiedLLMOrchestrator</code>) is Contexa's single door to LLMs. The pipeline's LLM step (<code>LLM_EXECUTION</code>), the security decision engine and application code all call models through this object. One call is handled in the order below.</p>
 
-          <!-- When to Use Directly -->
-          <section class="docs-section">
-            <h2 id="when-to-use">When to Use Directly</h2>
-            <p>In most cases, you <strong>do not need to call the orchestrator directly</strong>. The Pipeline's LLM_EXECUTION step calls it automatically. Direct use is appropriate when:</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Scenario</th><th>Recommended Approach</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>Full AI feature with structured input/output</td>
-                  <td>Use the <a href="../../../docs/reference/core/strategy.html">Strategy/Lab/Pipeline</a> architecture. The pipeline calls the orchestrator for you.</td>
-                </tr>
-                <tr>
-                  <td>Simple chat or text generation</td>
-                  <td>Use the orchestrator directly with <code>ExecutionContext</code>.</td>
-                </tr>
-                <tr>
-                  <td>Tool-calling / agentic workflows</td>
-                  <td>Use the orchestrator's <code>callTools()</code> or <code>callToolCallbacks()</code> methods directly.</td>
-                </tr>
-                <tr>
-                  <td>Custom model selection or temperature</td>
-                  <td>Use <code>ExecutionContext.builder()</code> with explicit tier, model, or temperature settings.</td>
-                </tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- Tiered Model Architecture -->
-          <section class="docs-section">
-            <h2 id="tiered-model">Tiered Model Architecture</h2>
-            <p>The orchestrator uses tier-aware model selection. In the current OSS runtime, <code>TieredLLMProperties</code> exposes two configured layers (<code>layer1</code> and <code>layer2</code>). Higher semantic tiers from <code>AnalysisLevel</code> or <code>SecurityTaskType</code> are normalized to the configured layer-2 runtime unless an explicit model is requested.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Tier</th><th>Characteristics</th><th>Typical Use</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><strong>Tier 1</strong></td>
-                  <td>Fast, low temperature (e.g., 0.3)</td>
-                  <td>Configured runtime layer 1 for quick detection, threat filtering, and latency-sensitive decisions</td>
-                </tr>
-                <tr>
-                  <td><strong>Tier 2</strong></td>
-                  <td>Balanced, moderate temperature (e.g., 0.7)</td>
-                  <td>Configured runtime layer 2 for contextual analysis, behavior analysis, and correlation</td>
-                </tr>
-                <tr>
-                  <td><strong>Tier 3</strong></td>
-                  <td>Semantic "deep" tier used by enums such as <code>DEEP</code> and <code>EXPERT_INVESTIGATION</code></td>
-                  <td>Normalized to the configured layer-2 runtime unless an explicit model override is supplied</td>
-                </tr>
-              </tbody>
-            </table></div>
-
-            <h3>How Tier Selection Works</h3>
-            <p>The effective model is resolved in this order:</p>
-            <ol>
-              <li><code>preferredModel</code> or execution metadata such as <code>requestedModelId</code>, <code>preferredModel</code>, <code>runtimeModelId</code>, or <code>modelId</code> &mdash; explicit model IDs bypass tier mapping entirely</li>
-              <li><code>analysisLevel</code> &mdash; QUICK&rarr;1, NORMAL&rarr;2, DEEP&rarr;3 (normalized to configured layer 2 at runtime)</li>
-              <li><code>securityTaskType</code> &mdash; security tasks map to default semantic tiers when <code>analysisLevel</code> is absent</li>
-              <li><code>tier</code> &mdash; explicit numeric tier when no higher-priority selector is present; values above 1 are normalized to layer 2</li>
-              <li>The primary <code>ChatModel</code> bean as the final fallback if no configured model can be resolved</li>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The path of one call</strong>Shown for <code>execute()</code>. How <code>stream()</code> differs is in "Time limits, retries and failures" below.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-tag">App · pipeline</span><span class="dg-node-title">Describe the call</span><span class="dg-node-desc">The prompt, model hints and options go into an <code>ExecutionContext</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">①</span><span class="dg-node-title">Choose the model</span><span class="dg-node-desc">Requested model → layer model → backup model → primary chat model</span></li>
+              <li class="dg-node"><span class="dg-node-tag">②</span><span class="dg-node-title">Attach advisors</span><span class="dg-node-desc">The enabled global advisors and the advisors of this call only</span></li>
+              <li class="dg-node"><span class="dg-node-tag">③</span><span class="dg-node-title">Fit the provider options</span><span class="dg-node-desc">Options are reshaped into what OpenAI, Anthropic or Ollama accepts</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">④</span><span class="dg-node-title">Call the provider</span><span class="dg-node-desc">Within the time limit (60 s by default). With throttling on, the call waits for its turn</span></li>
+              <li class="dg-node"><span class="dg-node-tag">⑤</span><span class="dg-node-title">Send again on failure</span><span class="dg-node-desc">Once without a refused field; up to 4 times for a transient error</span></li>
+              <li class="dg-node"><span class="dg-node-tag">⑥</span><span class="dg-node-title">Answer and record</span><span class="dg-node-desc">The answer is returned; the chosen model, time taken and token counts go into the metadata</span></li>
             </ol>
+          </figure>
 
-            <h3>AnalysisLevel Enum</h3>
-            <table class="enum-table">
-              <thead>
-                <tr><th>Value</th><th>Default Tier</th><th>Default Timeout</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>QUICK</code></td><td>1</td><td>50ms</td></tr>
-                <tr><td><code>NORMAL</code></td><td>2</td><td>300ms</td></tr>
-                <tr><td><code>DEEP</code></td><td>3</td><td>5000ms</td></tr>
-              </tbody>
-            </table>
-          </section>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What you want to do</th><th>What to use</th></tr></thead>
+            <tbody>
+              <tr><td>Build an AI feature with a fixed input and output shape</td><td>Strategy, Lab and pipeline (<a href="strategy.html">Building an AI feature</a>). The pipeline's LLM step calls the orchestrator for you.</td></tr>
+              <tr><td>Generate one text, chat</td><td><code>ExecutionContext</code> and <code>execute()</code></td></tr>
+              <tr><td>Get the answer as a Java object</td><td><code>executeEntity()</code></td></tr>
+              <tr><td>Get the answer piece by piece</td><td><code>stream()</code> (<a href="streaming.html">Streaming</a>)</td></tr>
+              <tr><td>Let the model call the application's tools</td><td><code>callTools()</code> · <code>callToolCallbacks()</code> (<a href="#tools">Tool calling</a>)</td></tr>
+              <tr><td>Call with a chosen model or temperature</td><td><code>preferredModel</code>, <code>temperature</code> and so on in <code>ExecutionContext.builder()</code></td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- ExecutionContext -->
-          <section class="docs-section">
-            <h2 id="execution-context">ExecutionContext</h2>
-            <p>The primary way to configure an LLM request. Built with <code>@Builder</code> pattern:</p>
+          <h2 id="prepare">Before you start</h2>
+          <ul>
+            <li><strong>At least one chat model is needed.</strong> Add a Spring AI provider starter (for example <code>spring-ai-starter-model-openai</code>) and set <code>spring.ai.&lt;provider&gt;.*</code> (API key, address); Spring AI then creates a chat model (<code>ChatModel</code>) bean. Contexa's own Ollama connection (<code>contexa.llm.chat.ollama.base-url</code>) also counts as a chat model. How to connect is in <a href="model-provider.html">Connecting and Choosing Models</a>.</li>
+            <li>Without a chat model the orchestrator bean is not created. When model selection finds no model at all, the call ends with the error <code>No LLM model configured. …</code>.</li>
+            <li><strong>Injection:</strong> take <code>LLMOperations</code> (the <code>execute()</code>, <code>stream()</code> and <code>executeEntity()</code> on this page), or <code>LLMClient</code> · <code>ToolCapableLLMClient</code>, whose methods take only a prompt. The beans named <code>llmClient</code> and <code>toolCapableLLMClient</code> are the same orchestrator.</li>
+            <li>The orchestrator is created only when the advisor registry (<code>AdvisorRegistry</code>) bean exists. Do not turn off <code>contexa.advisor.enabled</code> (default <code>true</code>); to leave advisors out, use the other ways in <a href="advisor.html#enable">Turning advisors on and off</a>.</li>
+            <li>With <code>contexa.llm.enabled=false</code> the whole LLM auto-configuration (orchestrator, model selection, primary chat model) is off.</li>
+          </ul>
 
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">ExecutionContext context = ExecutionContext.builder()
-    .prompt(new Prompt("Analyze this for threats"))
-    .analysisLevel(ExecutionContext.AnalysisLevel.NORMAL)
-    .userId("user-123")
-    .requestId(UUID.randomUUID().toString())
-    .build();
+          <h2 id="first-call">Your first call</h2>
+          <p>Describe the call in an <code>ExecutionContext</code>. Only the prompt is required; add the rest when you need it.</p>
+          <pre><code class="language-java">@Service
+public class SummaryService {
 
-// Execute
-Mono&lt;String&gt; result = orchestrator.execute(context);
+    private final LLMOperations llm;
 
-// Or stream
-Flux&lt;String&gt; chunks = orchestrator.stream(context);</code></pre>
-            </div>
-
-            <h3>Key Properties</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>prompt</code></td><td><code>Prompt</code></td><td>The Spring AI prompt to send to the LLM.</td></tr>
-                <tr><td><code>requestId</code></td><td><code>String</code></td><td>Unique request ID for tracing.</td></tr>
-                <tr><td><code>userId</code></td><td><code>String</code></td><td>Authenticated user ID for security context.</td></tr>
-                <tr><td><code>sessionId</code></td><td><code>String</code></td><td>Session identifier carried with the request.</td></tr>
-                <tr><td><code>preferredModel</code></td><td><code>String</code></td><td>Explicit model name. Bypasses all tier-based selection.</td></tr>
-                <tr><td><code>securityTaskType</code></td><td><code>SecurityTaskType</code></td><td>Security task classification. Used when <code>analysisLevel</code> is absent to resolve the default tier.</td></tr>
-                <tr><td><code>tier</code></td><td><code>Integer</code></td><td>Explicit semantic tier. The current runtime accepts 1 or 2 as configured layers and normalizes higher values to layer 2.</td></tr>
-                <tr><td><code>analysisLevel</code></td><td><code>AnalysisLevel</code></td><td>Analysis depth: QUICK, NORMAL, or DEEP. Determines the default tier.</td></tr>
-                <tr><td><code>timeoutMs</code></td><td><code>Integer</code></td><td>Explicit timeout override in milliseconds. When null, the tier/analysisLevel default is used.</td></tr>
-                <tr><td><code>temperature</code></td><td><code>Double</code></td><td>Sampling temperature override.</td></tr>
-                <tr><td><code>topP</code></td><td><code>Double</code></td><td>Top-p (nucleus sampling) override.</td></tr>
-                <tr><td><code>seed</code></td><td><code>Integer</code></td><td>Deterministic sampling seed. Useful for reproducible analysis results.</td></tr>
-                <tr><td><code>maxTokens</code></td><td><code>Integer</code></td><td>Maximum output tokens override.</td></tr>
-                <tr><td><code>chatOptions</code></td><td><code>ChatOptions</code></td><td>Spring AI ChatOptions to pass directly to the model. Overrides individual temperature/maxTokens settings.</td></tr>
-                <tr><td><code>streamingMode</code></td><td><code>Boolean</code></td><td>Whether to use streaming execution.</td></tr>
-                <tr><td><code>toolCallbacks</code></td><td><code>List&lt;ToolCallback&gt;</code></td><td>Tool callbacks for tool-calling execution.</td></tr>
-                <tr><td><code>toolProviders</code></td><td><code>List&lt;Object&gt;</code></td><td>Tool provider objects for tool-calling execution.</td></tr>
-                <tr><td><code>toolExecutionEnabled</code></td><td><code>Boolean</code></td><td>Master flag for tool execution. Set automatically by <code>addToolCallback(...)</code>.</td></tr>
-                <tr><td><code>advisors</code></td><td><code>List&lt;Advisor&gt;</code></td><td>Request-scoped advisors applied in addition to the global AdvisorRegistry.</td></tr>
-                <tr><td><code>advisorEnabled</code></td><td><code>Boolean</code></td><td>Whether global/request advisors are applied for this call. Defaults to <code>true</code> in the factory methods.</td></tr>
-                <tr><td><code>metadata</code></td><td><code>Map&lt;String, Object&gt;</code></td><td>Arbitrary metadata map. Consumers (such as <code>UnifiedLLMOrchestrator</code>) may read custom keys like <code>requestedModelId</code>, <code>runtimeModelId</code>, or <code>selectedModelId</code>; see the <code>UnifiedLLMOrchestrator</code> source for the keys that it actually reads.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h4>AnalysisLevel Default Model Names</h4>
-            <p>Each <code>AnalysisLevel</code> value also exposes a default model name via <code>getDefaultModelName()</code>. These defaults are used by the orchestrator when tier resolution falls back without a configured layer model:</p>
-            <table class="enum-table">
-              <thead>
-                <tr><th>Value</th><th>Default Model Name</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>QUICK</code></td><td><code>tinyllama:latest</code></td></tr>
-                <tr><td><code>NORMAL</code></td><td><code>llama3.1:8b</code></td></tr>
-                <tr><td><code>DEEP</code></td><td><code>llama3.1:8b</code></td></tr>
-              </tbody>
-            </table>
-
-            <h3>Factory &amp; Helper Methods</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Return</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>ExecutionContext.from(Prompt)</code></td><td><code>ExecutionContext</code></td><td>Create a minimal context from a Spring AI Prompt.</td></tr>
-                <tr><td><code>ExecutionContext.forTier(int, Prompt)</code></td><td><code>ExecutionContext</code></td><td>Create a context locked to a specific tier.</td></tr>
-                <tr><td><code>addMetadata(String, Object)</code></td><td><code>ExecutionContext</code></td><td>Fluent setter to add a single metadata entry.</td></tr>
-                <tr><td><code>addAdvisor(Advisor)</code></td><td><code>ExecutionContext</code></td><td>Fluent setter to add a request-scoped advisor.</td></tr>
-                <tr><td><code>addToolCallback(ToolCallback)</code></td><td><code>ExecutionContext</code></td><td>Fluent setter to add a tool callback.</td></tr>
-                <tr><td><code>getEffectiveTier()</code></td><td><code>int</code></td><td>Resolve the actual tier from explicit tier, analysisLevel, or securityTaskType.</td></tr>
-              </tbody>
-            </table></div>
-
-            <details>
-              <summary><strong>SecurityTaskType Enum (full list)</strong></summary>
-              <p class="docs-note">Tasks that default to tier 3 still flow through the configured layer-2 model unless <code>preferredModel</code> or metadata explicitly selects another model.</p>
-              <table class="enum-table">
-                <thead>
-                  <tr><th>Value</th><th>Default Tier</th><th>Description</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td><code>THREAT_FILTERING</code></td><td>1</td><td>Fast threat filtering for real-time requests.</td></tr>
-                  <tr><td><code>QUICK_DETECTION</code></td><td>1</td><td>Quick anomaly detection with minimal latency.</td></tr>
-                  <tr><td><code>CONTEXTUAL_ANALYSIS</code></td><td>2</td><td>Context-aware security analysis.</td></tr>
-                  <tr><td><code>BEHAVIOR_ANALYSIS</code></td><td>2</td><td>User behavior pattern analysis.</td></tr>
-                  <tr><td><code>CORRELATION</code></td><td>2</td><td>Cross-event correlation analysis.</td></tr>
-                  <tr><td><code>EXPERT_INVESTIGATION</code></td><td>3</td><td>Deep expert-level investigation.</td></tr>
-                  <tr><td><code>SOAR_AUTOMATION</code></td><td>3</td><td>SOAR orchestration and automated incident response (Enterprise).</td></tr>
-                  <tr><td><code>INCIDENT_RESPONSE</code></td><td>3</td><td>Automated incident response planning.</td></tr>
-                  <tr><td><code>FORENSIC_ANALYSIS</code></td><td>3</td><td>Forensic analysis of security events.</td></tr>
-                  <tr><td><code>APPROVAL_WORKFLOW</code></td><td>3</td><td>Human-in-the-loop approval workflows.</td></tr>
-                </tbody>
-              </table>
-            </details>
-          </section>
-
-          <!-- Tool Calling -->
-          <section class="docs-section">
-            <h2 id="tool-calling">Tool Calling</h2>
-            <p>The orchestrator supports Spring AI tool calling for agentic workflows. Two approaches:</p>
-
-            <h3>Tool Providers (Annotated Methods)</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Tool provider objects - Spring AI discovers @Tool methods
-Prompt prompt = new Prompt("Block suspicious IP 192.168.1.100");
-
-Mono&lt;String&gt; result = orchestrator.callTools(
-    prompt, List.of(ipBlockTool, auditTool));</code></pre>
-            </div>
-
-            <h3>ToolCallback Array (Explicit)</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Explicit ToolCallback array
-ToolCallback[] callbacks = new ToolCallback[] {
-    myToolCallback1, myToolCallback2
-};
-
-Mono&lt;String&gt; result = orchestrator.callToolCallbacks(
-    prompt, callbacks);</code></pre>
-            </div>
-
-            <p>Both approaches also support streaming: <code>streamTools()</code> and <code>streamToolCallbacks()</code>.</p>
-          </section>
-
-          <!-- Advisor System -->
-          <section class="docs-section">
-            <h2 id="advisor-system">Advisor System</h2>
-            <p>The orchestrator pulls enabled advisors from the <code>AdvisorRegistry</code> and combines them with any request-scoped advisors attached to the <code>ExecutionContext</code>. Those advisors are applied when the orchestrator builds a chat call for the selected model.</p>
-
-            <h3>Implementing a Custom Advisor</h3>
-            <p>Extend <code>BaseAdvisor</code> to create advisors that intercept LLM requests and responses:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Component
-public class RequestLoggingAdvisor extends BaseAdvisor {
-
-    public RequestLoggingAdvisor() {
-        super("myapp", "request-logging", 100);
-        // domain, name, order (lower = runs first)
+    public SummaryService(LLMOperations llm) {
+        this.llm = llm;
     }
 
-    @Override
-    public ChatClientRequest beforeCall(
-            ChatClientRequest request) {
-        // Inspect or modify the request before LLM call
-        // e.g., log the prompt, add metadata
-        return request;
-    }
-
-    @Override
-    public ChatClientResponse afterCall(
-            ChatClientResponse response,
-            ChatClientRequest request) {
-        // Inspect or modify the response after LLM call
-        // e.g., validate response, log metrics
-        return response;
+    public Mono&lt;String&gt; summarize(String text, String userId) {
+        ExecutionContext context = ExecutionContext.builder()
+                .prompt(new Prompt("Summarize the following text in three lines.\n\n" + text))
+                .requestId(UUID.randomUUID().toString())
+                .userId(userId)          // the user ID advisors receive
+                .temperature(0.2)
+                .build();
+        return llm.execute(context);     // the answer text
     }
 }</code></pre>
-            </div>
+          <p>To get the answer as a Java object, give <code>executeEntity()</code> the type.</p>
+          <pre><code class="language-java">record Summary(String title, List&lt;String&gt; points) {}
 
-            <p>Advisors are auto-registered as Spring beans. The <code>AdvisorRegistry</code> manages enabled/disabled state and provides sorted advisor snapshots to the orchestrator.</p>
-          </section>
+Mono&lt;Summary&gt; summary = llm.executeEntity(context, Summary.class);</code></pre>
+          <ul>
+            <li><strong>Shortcuts:</strong> <code>ExecutionContext.from(prompt)</code> (prompt only) and <code>ExecutionContext.forTier(2, prompt)</code> (a layer). Both are created with advisors on.</li>
+            <li><strong>Adding later:</strong> <code>addMetadata(key, value)</code>, <code>addAdvisor(advisor)</code>, <code>addToolCallback(callback)</code> (which also turns tool execution on).</li>
+            <li>An empty answer fails with <code>LLM response is null or empty</code>. For a model that returns thinking blocks before the answer, such as Claude, the thinking is skipped and only the answer is read.</li>
+          </ul>
 
-          <!-- Configuration -->
-          <section class="docs-section">
-            <h2 id="configuration">Configuration</h2>
+          <h3 id="context-fields">What goes into an ExecutionContext</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Field</th><th>Meaning, when to use it</th></tr></thead>
+            <tbody>
+              <tr><td><code>prompt</code></td><td>The Spring AI <code>Prompt</code> sent to the model. Required.</td></tr>
+              <tr><td><code>requestId</code></td><td>The request ID written to logs and error messages</td></tr>
+              <tr><td><code>userId</code> · <code>sessionId</code></td><td>On the <code>execute()</code> path they reach the advisors as <code>event.userId</code> · <code>event.sessionId</code> (<a href="advisor.html#security-context">security context advisor</a>).</td></tr>
+              <tr><td><code>preferredModel</code></td><td>A request to use this model. If it cannot be made, selection falls back to the layer model and then the primary chat model.</td></tr>
+              <tr><td><code>analysisLevel</code> · <code>securityTaskType</code> · <code>tier</code></td><td>Hints that choose the layer (1 or 2) (<a href="#routing">below</a>)</td></tr>
+              <tr><td><code>temperature</code> · <code>topP</code> · <code>maxTokens</code></td><td>Sampling and output length. Values the provider or model does not take are left out (<a href="#provider-options">provider options</a>).</td></tr>
+              <tr><td><code>seed</code></td><td>When you want the same answer for the same input. Contexa puts it into the options only for Ollama and OpenAI's gpt-5 and o series (default list). When it is not carried, it may be recorded in the metadata <code>determinismNotApplied</code>.</td></tr>
+              <tr><td><code>chatOptions</code></td><td>Spring AI <code>ChatOptions</code> passed as they are. When set, they are used instead of the separate values above; only values the provider refuses are adjusted.</td></tr>
+              <tr><td><code>timeoutMs</code></td><td>A time limit (ms) used only by <code>stream()</code>. It does not apply to <code>execute()</code>.</td></tr>
+              <tr><td><code>toolCallbacks</code> · <code>toolProviders</code> · <code>toolExecutionEnabled</code></td><td>Tool calling (<a href="#tools">below</a>)</td></tr>
+              <tr><td><code>advisors</code> · <code>advisorEnabled</code></td><td>Advisors for this call only, and whether the global advisors are used (<a href="#advisors">below</a>)</td></tr>
+              <tr><td><code>metadata</code></td><td>Extra instructions and the recorded results. Keys read: model requests <code>requestedModelId</code> · <code>preferredModel</code> · <code>modelId</code>, retry off <code>disableRetries</code>, call time limit <code>callTimeoutMs</code>, Ollama thinking off <code>disableOllamaThinking</code>. Result keys are in <a href="#check">Checking a call</a>.</td></tr>
+              <tr><td><code>streamingMode</code></td><td>Nothing reads it. Whether a call streams depends on calling <code>stream()</code>.</td></tr>
+            </tbody>
+          </table></div>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Description</th><th>Default</th></tr>
-              </thead>
+          <h2 id="routing">Which model a request goes to</h2>
+          <p>The model is chosen for each call in the order below; once a step decides, the later ones are not looked at. The recorded values and the detailed rules are in <a href="model-provider.html#request-order">Connecting and Choosing Models</a>.</p>
+          <ol>
+            <li><strong>Requested model:</strong> <code>preferredModel</code>, otherwise the metadata <code>requestedModelId</code> → <code>preferredModel</code> → <code>modelId</code>. If that model cannot be made, selection moves to the next step.</li>
+            <li><strong>Layer model:</strong> the layer comes from <code>analysisLevel</code> (QUICK → 1, NORMAL → 2, DEEP → 3) → <code>securityTaskType</code> (table below) → <code>tier</code>. 1 or less is layer 1, 2 or more is layer 2, and the layer's model (<code>contexa.security.tiered.llm.layer1.model</code> · <code>layer2.model</code>) is used. With no layer model set, this step is skipped.</li>
+            <li><strong>Backup model:</strong> the layer's <code>backup.model</code>, when the layer model cannot be made</li>
+            <li><strong>Primary chat model:</strong> always used when nothing above decided (<code>primaryChatModel</code>)</li>
+          </ol>
+          <p><code>ExecutionContext.getEffectiveTier()</code> returns the layer number decided in the same order (<code>analysisLevel</code> → <code>securityTaskType</code> → <code>tier</code>); 3 stays 3, and it is <code>null</code> when none is set.</p>
+          <p>The security decision engine's Layer 1 and Layer 2 use the same layer models. For the models used in decisions, see <a href="../architecture/decision-engine.html#layer-models">Decision Engine: a different model for each layer</a>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Task type (<code>securityTaskType</code>)</th><th>Layer</th></tr></thead>
+            <tbody>
+              <tr><td><code>THREAT_FILTERING</code> · <code>QUICK_DETECTION</code></td><td>1</td></tr>
+              <tr><td><code>CONTEXTUAL_ANALYSIS</code> · <code>BEHAVIOR_ANALYSIS</code> · <code>CORRELATION</code></td><td>2</td></tr>
+              <tr><td><code>EXPERT_INVESTIGATION</code> · <code>INCIDENT_RESPONSE</code> · <code>FORENSIC_ANALYSIS</code> · <code>SOAR_AUTOMATION</code> · <code>APPROVAL_WORKFLOW</code></td><td>3 (goes to the layer 2 model)</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-info">
+            <strong>Values in the code that nothing uses.</strong> The default time limits of <code>AnalysisLevel</code> (<code>AnalysisLevel.getDefaultTimeoutMs()</code>, 50 · 300 · 5000 ms), its default model names (<code>AnalysisLevel.getDefaultModelName()</code>) and the per-layer temperature (<code>TieredLLMProperties.getTemperatureForTier()</code>, 0.3 · 0.7) are applied to no call. If you need a temperature, put it into the <code>ExecutionContext</code>.
+          </div>
+
+          <h2 id="tools">Tool calling</h2>
+          <p>The model can call the application's tools (methods) while it answers. Both Spring AI styles are accepted. The examples assume <code>ToolCapableLLMClient</code> was injected as <code>toolClient</code>.</p>
+          <pre><code class="language-java">public class IpTools {
+
+    @Tool(description = "Block an IP address")
+    public String blockIp(String ip) {
+        // the application's blocking logic
+        return "blocked " + ip;
+    }
+}
+
+Prompt prompt = new Prompt("Block suspicious IP 192.168.1.100");
+
+// Style 1: objects with @Tool methods
+Mono&lt;String&gt; answer = toolClient.callTools(prompt, List.of(new IpTools()));</code></pre>
+          <pre><code class="language-java">// Style 2: an array of ToolCallback
+ToolCallback[] callbacks = ToolCallbacks.from(new IpTools());
+Mono&lt;String&gt; answer = toolClient.callToolCallbacks(prompt, callbacks);</code></pre>
+          <ul>
+            <li>Both methods take the same path as <code>execute()</code> (model selection, time limit, retries). To also get the tool calls, use <code>callToolsResponse()</code> · <code>callToolCallbacksResponse()</code> (they return the <code>ChatResponse</code>).</li>
+            <li>With an <code>ExecutionContext</code>, use <code>addToolCallback(...)</code> (which turns tool execution on) or <code>toolProviders</code> with <code>toolExecutionEnabled(true)</code>. When both are present, <code>toolCallbacks</code> are used.</li>
+            <li><strong>Streaming:</strong> <code>streamTools()</code> lets the model call tools while it answers. <code>streamToolCallbacks()</code> works differently: the model does not choose the tools. Contexa first runs each tool once (its input is the first JSON after the tool's name in the prompt, otherwise the whole prompt), adds the results under <code>Tool Results:</code> to the prompt and streams that. A failed tool adds a line <code>[tool name] Error: …</code>.</li>
+          </ul>
+
+          <h2 id="advisors">Working with advisors</h2>
+          <p>Advisors look at the request and the response before and after the model call. They are explained in <a href="advisor.html">Advisors</a>; this section covers only how the orchestrator attaches them.</p>
+          <ul>
+            <li><strong>Global advisors:</strong> the enabled ones in the registry (<code>AdvisorRegistry</code>), in order. A change to the registry applies from the next call.</li>
+            <li><code>ThinkingGenerationAdvisor</code> is always attached. It skips the thinking blocks a provider returns before the answer so that the answer is read.</li>
+            <li><strong>Advisors of this call:</strong> those added with <code>addAdvisor(...)</code> are attached only to <code>execute()</code>, <code>executeEntity()</code> and tool calls.</li>
+            <li><strong><code>advisorEnabled(false)</code>:</strong> only the global advisors are left out. <code>ThinkingGenerationAdvisor</code> and this call's advisors are still attached, and <code>event.userId</code> · <code>event.sessionId</code> are not passed. Left empty (null), advisors count as on.</li>
+            <li><strong><code>stream()</code>:</strong> only the global advisors are attached. This call's advisors and the user ID are not passed.</li>
+          </ul>
+
+          <h2 id="limits">Time limits, retries and failures</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Item</th><th><code>execute()</code> · <code>executeEntity()</code> · tool calls</th><th><code>stream()</code></th></tr></thead>
+            <tbody>
+              <tr><td>Time limit</td><td><code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code> (default 60000 ms). The metadata <code>callTimeoutMs</code> wins when smaller. With neither (0), no limit</td><td><code>timeoutMs</code> (when set) and the layer time limit <code>contexa.security.tiered.llm.tiered.layer1.timeout-ms</code> · <code>layer2.timeout-ms</code> (default 30000 · 60000 ms, at most 120000 ms)</td></tr>
+              <tr><td>Retry of transient errors</td><td>Up to 4 times</td><td>None</td></tr>
+              <tr><td>Resend without a refused field</td><td>Once</td><td>None</td></tr>
+              <tr><td>Provider call throttling</td><td>When on</td><td>None</td></tr>
+              <tr><td>Advisors</td><td>Global + this call's</td><td>Global only</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>Past the time limit the call fails with <code>LLM provider call exceeded timeout …</code>, and the metadata <code>providerCallFailureCategory</code> becomes <code>PROVIDER_CALL_TIMEOUT</code>.</li>
+            <li>When <code>stream()</code> has a layer (<code>analysisLevel</code> · <code>securityTaskType</code> · <code>tier</code>), that layer's time limit applies. When time runs out, layer 1 turns the timeout error into the text <code>TIMEOUT</code>; layer 2 keeps the timeout error. A value that makes layer 3, such as <code>DEEP</code>, finds no layer time limit and ends with the error <code>Invalid tier value: 3</code>. Without a layer there is no layer time limit.</li>
+          </ul>
+
+          <h3 id="retry">When a call is sent again</h3>
+          <ul>
+            <li><strong>Retry of transient errors (<code>execute()</code> family):</strong> up to 4 more tries, waiting from 2 seconds and longer each time (at most 12 seconds). Retried: errors Spring AI classifies as transient, I/O errors (IOException), HTTP 408 · 409 · 429, 502 · 503 · 504, dropped or refused connections, and rate-limit messages such as "rate limit" or "try again in". Any other 4xx (the request itself was refused) is not retried.</li>
+            <li><strong>Turning it off:</strong> the metadata <code>disableRetries=true</code>. The number of retries is recorded in <code>providerRetryCount</code>.</li>
+            <li><strong>Refused fields:</strong> when the provider refuses the request with a 4xx (other than 408 · 409 · 429) because of a thinking or sampling field it carried, the request is sent once more without that field, within the time left. The model's later requests leave that field out too.</li>
+            <li>The security decision engine handles a failed decision call on its own (<a href="../architecture/decision-engine.html#overrides">When the model's answer is changed</a>).</li>
+          </ul>
+
+          <h3 id="throttle">Provider call throttling (off by default)</h3>
+          <p>Makes calls wait so that the provider's per-minute request and token limits (429) are not hit. Each application instance counts on its own.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting (<code>contexa.security.plane.llm-provider-throttle.*</code>)</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>enabled</code></td><td><code>false</code></td><td>Turns it on</td></tr>
+              <tr><td><code>open-ai-only</code></td><td><code>true</code></td><td>Throttle only calls to OpenAI models</td></tr>
+              <tr><td><code>requests-per-minute</code></td><td><code>0</code></td><td>Requests per minute (0: no such limit)</td></tr>
+              <tr><td><code>tokens-per-minute</code></td><td><code>0</code></td><td>Tokens per minute (0: no such limit). With both limits at 0 nothing is throttled</td></tr>
+              <tr><td><code>max-burst-requests</code> · <code>max-burst-tokens</code></td><td><code>0</code></td><td>How much can be used at once (0: the same as the per-minute limit)</td></tr>
+              <tr><td><code>estimated-output-tokens</code></td><td><code>1024</code></td><td>Expected output tokens added to the prompt tokens when counting</td></tr>
+              <tr><td><code>max-wait-ms</code></td><td><code>120000</code></td><td>A call that would wait longer fails with <code>LLM provider throttle wait exceeded</code></td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="provider-options">Options fitted to each provider</h2>
+          <p>Providers take different option names and rules. Contexa looks at the provider of the chosen model and fits the options to it. Which models follow which rule can be changed in <a href="model-provider.html#capabilities">Provider capability settings</a>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Provider</th><th>What Contexa does</th></tr></thead>
+            <tbody>
+              <tr><td>OpenAI</td><td>For the gpt-5 and o series (default list), <code>maxTokens</code> is sent as <code>max_completion_tokens</code>, and for models that take only the default sampling <code>temperature</code> · <code>topP</code> are left out. These models also get <code>seed</code> and the metadata <code>openAiReasoningEffort</code> · <code>openAiVerbosity</code>. The metadata <code>promptCacheKey</code>, when present, is sent as the prompt cache key.</td></tr>
+              <tr><td>Anthropic</td><td>The model's default options (including the prompt cache setting) are copied and the request values put on top. For Claude models that take only the default sampling, <code>temperature</code> · <code>topP</code> · <code>topK</code> are left out.</td></tr>
+              <tr><td>Ollama</td><td><code>OllamaChatOptions</code> get the model name, <code>temperature</code>, <code>topP</code>, <code>seed</code> and <code>numPredict</code> (= <code>maxTokens</code>). For a model on the thinking-off list, or with the metadata <code>disableOllamaThinking=true</code>, thinking is turned off.</td></tr>
+              <tr><td>Others</td><td>Spring AI's common <code>ChatOptions</code> (model name, <code>temperature</code>, <code>topP</code>, <code>maxTokens</code>)</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="check">Checking a call</h2>
+          <p>When a call ends, its results are in <code>getMetadata()</code> of the same <code>ExecutionContext</code>. The keys you will look at most are below.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>selectedModelId</code> · <code>selectedModelProvider</code></td><td>The model and provider actually chosen</td></tr>
+              <tr><td><code>modelSelectionSource</code> · <code>modelSelectionFallbackUsed</code></td><td>Why that model (for example <code>explicit_model</code>, <code>tier:2</code>, <code>primary_chat_model</code>) and whether selection fell back</td></tr>
+              <tr><td><code>chatModelClass</code></td><td>The class of the chat model called</td></tr>
+              <tr><td><code>providerCallMs</code> · <code>providerCallTimeoutMs</code></td><td>Time taken by the provider call, and the time limit applied</td></tr>
+              <tr><td><code>providerRetryCount</code></td><td>How many times the call was sent again</td></tr>
+              <tr><td><code>providerResponseModel</code> · <code>providerFinishReason</code></td><td>The model name the provider reported and why it stopped</td></tr>
+              <tr><td><code>actualPromptTokens</code> · <code>actualCompletionTokens</code> · <code>actualTotalTokens</code></td><td>Token counts (when the provider reports them)</td></tr>
+              <tr><td><code>cachedPromptTokens</code> · <code>promptCacheHit</code></td><td>Tokens read from the prompt cache (when the provider reports them)</td></tr>
+              <tr><td><code>providerCallFailureCategory</code></td><td>The kind of failure (for example <code>PROVIDER_CALL_TIMEOUT</code>, <code>PROVIDER_CALL_FAILED</code>)</td></tr>
+              <tr><td><code>determinismNotApplied</code></td><td><code>temperature</code> · <code>seed</code> requested but not carried by the options</td></tr>
+            </tbody>
+          </table></div>
+          <p>Every call writes one INFO line, and a retry writes WARN <code>LLM Retry #1 - RequestId: …</code>.</p>
+          <pre><code class="language-text">[UnifiedLLMOrchestrator.timing] requestId=3f2a… modelClass=org.springframework.ai.openai.OpenAiChatModel modelSelectionMs=0 chatClientBuildMs=1 promptSpecPrepareMs=2 providerThrottleWaitMs=0 providerCallMs=842 responseMetadataMs=0</code></pre>
+          <p>When the application has one <code>ObservationRegistry</code> bean, the ChatClients the orchestrator builds record Spring AI's chat client and advisor observations through it.</p>
+
+          <h2 id="settings">Settings you will change most</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code></td><td><code>60000</code></td><td>Time limit (ms) of one provider call</td><td>When slow models or long outputs time out often</td></tr>
+              <tr><td><code>contexa.security.tiered.llm.layer1.model</code><br><code>contexa.security.tiered.llm.layer2.model</code></td><td>None</td><td>The model of each layer (empty: the primary chat model)</td><td>When the layers use different models</td></tr>
+              <tr><td><code>contexa.llm.selection.chat.priority</code></td><td><code>openai,anthropic,ollama</code></td><td>The provider order for choosing the primary chat model</td><td>When several providers are present (<a href="model-provider.html#primary">Choosing the primary chat model</a>)</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.enabled</code></td><td><code>false</code></td><td>Provider call throttling</td><td>When the provider's limit (429) is hit often</td></tr>
+              <tr><td><code>contexa.llm.enabled</code></td><td><code>true</code></td><td>The whole LLM auto-configuration</td><td>When you do not use Contexa's LLM beans</td></tr>
+            </tbody>
+          </table></div>
+          <p>All model connection settings are in <a href="../../install/configuration/ai.html">AI model settings</a>.</p>
+
+          <h2 id="api">API reference</h2>
+          <details>
+            <summary><strong><code>LLMOperations</code></strong> — methods that take an <code>ExecutionContext</code></summary>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>Method</th><th>Returns</th><th>What it does</th></tr></thead>
               <tbody>
-                <tr><td><code>spring.ai.security.layer1.model</code></td><td>Primary model selected for layer 1 requests</td><td>qwen2.5:7b</td></tr>
-                <tr><td><code>spring.ai.security.layer2.model</code></td><td>Primary model selected for layer 2 requests</td><td>gpt-4o-mini</td></tr>
-                <tr><td><code>spring.ai.security.tiered.layer1.timeout-ms</code></td><td>Execution timeout budget for layer 1 model calls</td><td>30000</td></tr>
-                <tr><td><code>contexa.llm.chat.ollama.base-url</code></td><td>Ollama chat runtime base URL when the dedicated Contexa Ollama path is enabled</td><td>empty</td></tr>
-                <tr><td><code>contexa.llm.chat.ollama.model</code></td><td>Default Ollama chat model for the Contexa-managed runtime</td><td>empty</td></tr>
+                <tr><td><code>execute(ExecutionContext)</code></td><td><code>Mono&lt;String&gt;</code></td><td>The answer text, with time limit, retries and metadata</td></tr>
+                <tr><td><code>stream(ExecutionContext)</code></td><td><code>Flux&lt;String&gt;</code></td><td>The answer in pieces. With tool execution on it goes to tool streaming</td></tr>
+                <tr><td><code>executeEntity(ExecutionContext, Class&lt;T&gt;)</code></td><td><code>Mono&lt;T&gt;</code></td><td>The answer as an object of that type. The decision engine's response type (<code>SecurityDecisionResponseLite</code>) is received as text and read by the decision engine's parser, which asks once more when the format is wrong</td></tr>
               </tbody>
             </table></div>
-
-            <div class="callout callout-info">
-              <strong>Full Configuration Reference</strong><br>
-              See <a href="../../../docs/install/configuration/ai.html">AI Configuration</a> for all model, tier, advisor, and retry properties.
-            </div>
-          </section>
-
-          <!-- API Reference (collapsible) -->
-          <section class="docs-section">
-            <h2 id="api-reference">API Reference</h2>
-
-            <details>
-              <summary><strong>LLMOperations Interface</strong></summary>
-              <div class="api-signature">
-                <code>public interface LLMOperations</code>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">execute(ExecutionContext context)</span>
-                  <span class="api-method-return">Mono&lt;String&gt;</span>
-                </div>
-                <div class="api-method-desc">Executes an LLM call with full context including tier, model preferences, and tools.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">stream(ExecutionContext context)</span>
-                  <span class="api-method-return">Flux&lt;String&gt;</span>
-                </div>
-                <div class="api-method-desc">Streams the LLM response.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">executeEntity(ExecutionContext context, Class&lt;T&gt; targetType)</span>
-                  <span class="api-method-return">Mono&lt;T&gt;</span>
-                </div>
-                <div class="api-method-desc">Executes and deserializes into a typed entity.</div>
-              </div>
-            </details>
-
-            <details>
-              <summary><strong>LLMClient Interface</strong></summary>
-              <div class="api-signature">
-                <code>public interface LLMClient</code>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">call(Prompt prompt)</span>
-                  <span class="api-method-return">Mono&lt;String&gt;</span>
-                </div>
-                <div class="api-method-desc">Sends a prompt and returns the text response.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">entity(Prompt prompt, Class&lt;T&gt; targetType)</span>
-                  <span class="api-method-return">Mono&lt;T&gt;</span>
-                </div>
-                <div class="api-method-desc">Sends a prompt and deserializes the response.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">stream(Prompt prompt)</span>
-                  <span class="api-method-return">Flux&lt;String&gt;</span>
-                </div>
-                <div class="api-method-desc">Streams the response as string chunks.</div>
-              </div>
-            </details>
-
-            <details>
-              <summary><strong>ToolCapableLLMClient Interface</strong></summary>
-              <div class="api-signature">
-                <code>public interface ToolCapableLLMClient extends LLMClient</code>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">callTools(Prompt prompt, List&lt;Object&gt; toolProviders)</span>
-                  <span class="api-method-return">Mono&lt;String&gt;</span>
-                </div>
-                <div class="api-method-desc">Calls LLM with tool provider objects.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">callToolCallbacks(Prompt prompt, ToolCallback[] toolCallbacks)</span>
-                  <span class="api-method-return">Mono&lt;String&gt;</span>
-                </div>
-                <div class="api-method-desc">Calls LLM with explicit ToolCallback array.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">callToolsResponse(Prompt prompt, List&lt;Object&gt; toolProviders)</span>
-                  <span class="api-method-return">Mono&lt;ChatResponse&gt;</span>
-                </div>
-                <div class="api-method-desc">Returns full <code>ChatResponse</code> including tool call details.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">callToolCallbacksResponse(Prompt prompt, ToolCallback[] toolCallbacks)</span>
-                  <span class="api-method-return">Mono&lt;ChatResponse&gt;</span>
-                </div>
-                <div class="api-method-desc">Same as <code>callToolsResponse</code> but accepts an explicit <code>ToolCallback</code> array.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">streamTools(Prompt prompt, List&lt;Object&gt; toolProviders)</span>
-                  <span class="api-method-return">Flux&lt;String&gt;</span>
-                </div>
-                <div class="api-method-desc">Streaming with tool calling enabled.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">streamToolCallbacks(Prompt prompt, ToolCallback[] toolCallbacks)</span>
-                  <span class="api-method-return">Flux&lt;String&gt;</span>
-                </div>
-                <div class="api-method-desc">Streaming with explicit ToolCallback array.</div>
-              </div>
-            </details>
-
-            <details>
-              <summary><strong>UnifiedLLMOrchestrator</strong></summary>
-              <div class="api-signature">
-                <code>public class UnifiedLLMOrchestrator implements LLMOperations, ToolCapableLLMClient</code>
-              </div>
-              <h4>Constructor Dependencies</h4>
-              <div class="table-scroll"><table class="api-table">
-                <thead>
-                  <tr><th>Dependency</th><th>Description</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td><code>ModelSelectionStrategy</code></td><td>Selects the <code>ChatModel</code> based on execution context.</td></tr>
-                  <tr><td><code>StreamingHandler</code></td><td>Handles streaming response processing.</td></tr>
-                  <tr><td><code>TieredLLMProperties</code></td><td>Configuration for the model tier hierarchy.</td></tr>
-                  <tr><td><code>AdvisorRegistry</code></td><td>Registry of Spring AI Advisors applied to each request.</td></tr>
-                </tbody>
-              </table></div>
-              <h4>Key Behaviors</h4>
-              <ul>
-                <li><strong>Advisor Integration</strong> &mdash; Automatically applies all enabled advisors from <code>AdvisorRegistry</code>.</li>
-                <li><strong>Model Selection</strong> &mdash; Delegates to <code>ModelSelectionStrategy.selectModel()</code> considering tier, preferred model, analysis level, and security task type.</li>
-                <li><strong>Retry Logic</strong> &mdash; Exponential backoff retry (up to 2 retries) for <code>IOException</code>.</li>
-                <li><strong>Ollama Optimization</strong> &mdash; Detects <code>OllamaChatModel</code> and applies <code>OllamaOptions</code> with model name, temperature, topP, and numPredict.</li>
-              </ul>
-            </details>
-          </section>
-
-          <!-- Related -->
-          <section class="docs-section">
-            <h2 id="related">Related</h2>
-            <div class="related-links">
-              <div class="related-links-grid">
-                <a href="../../../docs/reference/core/strategy.html" class="related-link-card">
-                  <h3>Building Custom AI</h3>
-                  <p>End-to-end guide for creating custom AI features. The pipeline calls the orchestrator during LLM_EXECUTION.</p>
-                </a>
-                <a href="../../../docs/reference/core/model-provider.html" class="related-link-card">
-                  <h3>Model Providers</h3>
-                  <p>Dynamic model registry and selection strategy used by the orchestrator.</p>
-                </a>
-                <a href="../../../docs/reference/core/advisor.html" class="related-link-card">
-                  <h3>Advisor System</h3>
-                  <p>Spring AI Advisors and the AdvisorRegistry for request/response interception.</p>
-                </a>
-                <a href="../../../docs/install/configuration/ai.html" class="related-link-card">
-                  <h3>AI Configuration</h3>
-                  <p>Model tier properties, retry settings, and advisor configuration.</p>
-                </a>
-              </div>
-            </div>
-          </section>
-
+          </details>
+          <details>
+            <summary><strong><code>LLMClient</code></strong> — methods that take only a prompt</summary>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>Method</th><th>Returns</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr><td><code>call(Prompt)</code></td><td><code>Mono&lt;String&gt;</code></td><td><code>execute()</code> with <code>ExecutionContext.from(prompt)</code></td></tr>
+                <tr><td><code>entity(Prompt, Class&lt;T&gt;)</code></td><td><code>Mono&lt;T&gt;</code></td><td><code>executeEntity()</code> the same way</td></tr>
+                <tr><td><code>stream(Prompt)</code></td><td><code>Flux&lt;String&gt;</code></td><td><code>stream()</code> the same way</td></tr>
+              </tbody>
+            </table></div>
+          </details>
+          <details>
+            <summary><strong><code>ToolCapableLLMClient</code></strong> — <code>LLMClient</code> plus tool calling</summary>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>Method</th><th>Returns</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr><td><code>callTools(Prompt, List&lt;Object&gt;)</code></td><td><code>Mono&lt;String&gt;</code></td><td>Tool calling with objects that have <code>@Tool</code> methods</td></tr>
+                <tr><td><code>callToolCallbacks(Prompt, ToolCallback[])</code></td><td><code>Mono&lt;String&gt;</code></td><td>Tool calling with a <code>ToolCallback</code> array</td></tr>
+                <tr><td><code>callToolsResponse(Prompt, List&lt;Object&gt;)</code></td><td><code>Mono&lt;ChatResponse&gt;</code></td><td>The whole response, including the tool calls</td></tr>
+                <tr><td><code>callToolCallbacksResponse(Prompt, ToolCallback[])</code></td><td><code>Mono&lt;ChatResponse&gt;</code></td><td>The same, with a <code>ToolCallback</code> array</td></tr>
+                <tr><td><code>streamTools(Prompt, List&lt;Object&gt;)</code></td><td><code>Flux&lt;String&gt;</code></td><td>Streaming while the model calls tools</td></tr>
+                <tr><td><code>streamToolCallbacks(Prompt, ToolCallback[])</code></td><td><code>Flux&lt;String&gt;</code></td><td>Runs the tools first, adds the results and streams (<a href="#tools">above</a>)</td></tr>
+              </tbody>
+            </table></div>
+          </details>
+          <details>
+            <summary><strong><code>UnifiedLLMOrchestrator</code></strong> — the implementation of the three interfaces</summary>
+            <p><code>public class UnifiedLLMOrchestrator implements LLMOperations, ToolCapableLLMClient</code>. The auto-configuration creates it with five constructor arguments.</p>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>Argument</th><th>Used for</th></tr></thead>
+              <tbody>
+                <tr><td><code>ModelSelectionStrategy</code></td><td>Choosing the model for each call (<a href="model-provider.html">Connecting and Choosing Models</a>)</td></tr>
+                <tr><td><code>StreamingHandler</code></td><td>Handling <code>stream()</code> (it also applies the layer time limit)</td></tr>
+                <tr><td><code>TieredLLMProperties</code></td><td>The layer model name used when building Ollama options</td></tr>
+                <tr><td><code>AdvisorRegistry</code></td><td>The enabled global advisors</td></tr>
+                <tr><td><code>SecurityPlaneProperties</code></td><td>The provider call time limit and the throttling settings</td></tr>
+              </tbody>
+            </table></div>
+            <p><code>setObservationRegistry(…)</code> changes the registry used for observations (the ChatClients already built are rebuilt).</p>
+          </details>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/core/overview.html" class="docs-nav-link prev">
+            <a href="streaming.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">AI Engine Overview</span>
+              <span class="docs-nav-title">Streaming: AI Answers on the Screen as They Are Written</span>
             </a>
-            <a href="../../../docs/reference/core/pipeline.html" class="docs-nav-link next">
+            <a href="model-provider.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Pipeline &amp; RAG</span>
+              <span class="docs-nav-title">Connecting and Choosing Models</span>
             </a>
           </div>

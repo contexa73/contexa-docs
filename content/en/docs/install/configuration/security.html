@@ -1,573 +1,379 @@
 <nav class="breadcrumb">
             <a href="../../../index.html">Home</a>
             <span class="breadcrumb-separator">/</span>
-            <a href="../../../docs/install/configuration.html">Configuration</a>
+            <a href="../../../docs/install/configuration.html">Configuration Guide</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Security</span>
+            <span class="breadcrumb-current">Enforcement Modes and Decision Tuning</span>
           </nav>
+
           <div class="docs-page-header">
-            <h1>Security Configuration</h1>
-            <p class="lead">Configuration properties for the Contexa security engine, including Zero Trust, HCAD detection, and SecurityPlane agent settings.</p>
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-secondary">Configuration</span>
+            </div>
+            <h1>Enforcement Modes and Decision Tuning</h1>
+            <p class="lead">Choose whether Contexa makes and applies decisions (the enforcement mode), and tune request-time enforcement, decision time and throughput, the decision prompt, minimum-action rules and behavioral baseline learning with settings. How a decision is made and applied is explained in <a href="../../reference/architecture/decision-engine.html">Decision Engine</a> and <a href="../../reference/identity/zero-trust-filters.html">request-time enforcement</a>.</p>
           </div>
 
-          <!-- SecurityZeroTrustProperties -->
-          <section>
-            <h2 id="zero-trust">Zero Trust Properties</h2>
-            <p>Properties under <code>contexa.security.zerotrust</code>, bound to <code>SecurityZeroTrustProperties</code>. These settings control the Zero Trust decision mode, core thresholds, hot-path handling, cache windows, and request-tracking behavior. HCAD is configured separately under the <code>hcad</code> prefix.</p>
+          <h2 id="overview">At a glance</h2>
+          <p>The path of one decision, and the section of this page that controls each point on it.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The path of a decision and its settings sections</strong>Each tag is a section of this page. Steps 1–2 happen at request time, 3–7 after the response has left.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-tag"><a href="#request-time">Request-time enforcement</a></span><span class="dg-node-title">1. Apply the stored decision to the request</span><span class="dg-node-desc">MFA, block and hold-for-review responses, recognizing the session</span></li>
+              <li class="dg-node"><span class="dg-node-tag"><a href="#mode">Enforcement mode</a></span><span class="dg-node-title">2. Decide whether to analyze</span><span class="dg-node-desc">Disabled · Observe end here; Shadow · Enforce go on to analysis</span></li>
+              <li class="dg-node"><span class="dg-node-tag"><a href="#throughput">Throughput</a></span><span class="dg-node-title">3. Analysis queue and threads</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag"><a href="#timeouts">Time limits</a> · <a href="#prompt">Prompt</a></span><span class="dg-node-title">4. Layer 1, and Layer 2 if Layer 1 cannot decide</span><span class="dg-node-desc">If Layer 2 cannot decide either, the <a href="#escalate">fallback action</a></span></li>
+              <li class="dg-node"><span class="dg-node-tag"><a href="#minimum-action">Minimum-action rules</a></span><span class="dg-node-title">5. Check the model's answer (v19 · v20 bundles)</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-tag"><a href="#mode">Enforcement mode</a></span><span class="dg-node-title">6. Store the decision, apply it from the next request</span><span class="dg-node-desc">Shadow mode records but does not store</span></li>
+              <li class="dg-node"><span class="dg-node-tag"><a href="#baseline">Behavioral baseline learning</a></span><span class="dg-node-title">7. Learn</span><span class="dg-node-desc">Only allow decisions that were actually applied</span></li>
+            </ol>
+          </figure>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enable the Zero Trust engine</td></tr>
-                <tr><td><code>.mode</code></td><td><code>SecurityMode</code></td><td><code>ENFORCE</code></td><td>Execution mode: <code>SHADOW</code> (observe) or <code>ENFORCE</code> (block)</td></tr>
-                <tr><td><code>.max-block-mfa-attempts</code></td><td><code>int</code></td><td><code>2</code></td><td>Max MFA attempts allowed when bypassing a block</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.sampling</code></td></tr>
-                <tr><td><code>.rate</code></td><td><code>double</code></td><td><code>1.0</code></td><td>Request sampling ratio (0.0–1.0)</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.hotpath</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enable hot-path fast decision</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.thresholds</code></td></tr>
-                <tr><td><code>.skip</code></td><td><code>double</code></td><td><code>0.3</code></td><td>Skip-evaluation threshold (below this score)</td></tr>
-                <tr><td><code>.optional</code></td><td><code>double</code></td><td><code>0.5</code></td><td>Optional authentication threshold</td></tr>
-                <tr><td><code>.required</code></td><td><code>double</code></td><td><code>0.7</code></td><td>Required authentication threshold</td></tr>
-                <tr><td><code>.strict</code></td><td><code>double</code></td><td><code>0.9</code></td><td>Strict block threshold</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.protectable</code></td></tr>
-                <tr><td><code>.rapid-reentry-window-ms</code></td><td><code>long</code></td><td><code>5000</code></td><td>Rapid re-entry window for protected resources (ms)</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.redis</code></td></tr>
-                <tr><td><code>.timeout</code></td><td><code>int</code></td><td><code>5</code></td><td>Redis operation timeout (seconds)</td></tr>
-                <tr><td><code>.update-interval-seconds</code></td><td><code>int</code></td><td><code>30</code></td><td>Redis state update interval (seconds)</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.threat</code></td></tr>
-                <tr><td><code>.initial</code></td><td><code>double</code></td><td><code>0.3</code></td><td>Initial threat score</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.cache</code></td></tr>
-                <tr><td><code>.ttl-hours</code></td><td><code>int</code></td><td><code>24</code></td><td>Decision cache TTL (hours)</td></tr>
-                <tr><td><code>.session-ttl-minutes</code></td><td><code>int</code></td><td><code>30</code></td><td>Session cache TTL (minutes)</td></tr>
-                <tr><td><code>.invalidated-ttl-minutes</code></td><td><code>int</code></td><td><code>60</code></td><td>Invalidated cache TTL (minutes)</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.zerotrust.session</code></td></tr>
-                <tr><td><code>.tracking-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enable session tracking</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="mode">Choosing the enforcement mode</h2>
+          <p>The enforcement mode (<code>contexa.security.zerotrust.mode</code>) decides whether decisions are made with the AI model, and whether a decision is stored and applied from the next request.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Mode</th><th>AI analysis</th><th>Store · apply decisions</th><th>Learning</th><th>Use it when</th></tr></thead>
+            <tbody>
+              <tr><td><code>DISABLED</code></td><td>No</td><td>No</td><td>No</td><td>You do not use decisions</td></tr>
+              <tr><td><code>OBSERVE</code></td><td colspan="3">In the current code it behaves exactly like <code>DISABLED</code>. Only the admin console monitor label differs.</td><td>—</td></tr>
+              <tr><td><code>SHADOW</code></td><td>Yes</td><td>Decisions go to the observation and audit records only; nothing is stored, blocked or changed in responses</td><td>No</td><td>Watching decisions in the first stage of adoption</td></tr>
+              <tr><td><code>ENFORCE</code> (default)</td><td>Yes</td><td>Stored and applied from the same user's next request</td><td>Only allow decisions that were actually applied</td><td>Operation</td></tr>
+            </tbody>
+          </table></div>
+          <p>Precisely, AI analysis happens when <code>enabled</code> is on and the mode is <code>SHADOW</code> · <code>ENFORCE</code>, and storing · applying decisions only when <code>enabled</code> is on and the mode is <code>ENFORCE</code>.</p>
+          <ul>
+            <li><strong>Some requests still wait in shadow mode.</strong> Immediate-decision methods (<code>@Protectable(sync = true)</code>) and agent requests with no decision on record are analyzed inside the request. Even when the result is not allow, they are not stopped.</li>
+            <li><strong><code>contexa.security.zerotrust.enabled: false</code> turns off more than <code>DISABLED</code>.</strong> Besides not analyzing, it stops the receiver of analysis events and the step that applies decisions to the login context.</li>
+            <li>The order of raising the mode step by step is in <a href="../shadow-mode.html">Starting safely with enforcement modes</a>.</li>
+          </ul>
+          <pre><code class="language-yaml">contexa:
+  security:
+    zerotrust:
+      mode: SHADOW     # watch first, then ENFORCE</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.enabled</code></td><td><code>true</code></td><td>Turns zero trust decisions on as a whole</td><td>To stop Contexa decisions entirely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td><code>DISABLED</code> · <code>OBSERVE</code> · <code>SHADOW</code> · <code>ENFORCE</code></td><td>To match the adoption stage</td></tr>
+            </tbody>
+          </table></div>
 
-            <p><strong>Related:</strong> <a href="../../../docs/reference/architecture/zero-trust-flow.html">Zero Trust Flow</a></p>
-          </section>
+          <h3 id="mode-console">Changing it in the admin console</h3>
+          <p>You can also change the enforcement mode in the admin console's system settings (<code>/contexa/admin/system-settings</code>). It applies as soon as you save, without a restart.</p>
+          <ul>
+            <li>Once saved, <strong>the saved value wins over YAML</strong> from then on. Every start-up replaces <code>contexa.security.zerotrust.mode</code> with the saved value. Changing only YAML does not change the mode; change it in the console.</li>
+            <li>Until you save for the first time, the console shows the current mode pre-filled. Saving with the mode field empty makes it <code>SHADOW</code>.</li>
+          </ul>
+          <div class="callout callout-warning">
+            <strong>Lowering the mode may leave restrictions already stored in force.</strong> <code>@Protectable</code> methods follow the mode (in shadow mode they only record a stored restriction; in Disabled · Observe they do not look). But when Contexa owns login (<code>CONTEXA_OWNED</code>), the two request-time filters (step-up authentication · access control) do not read <code>enabled</code> · <code>mode</code>, so they keep applying a BLOCK · CHALLENGE · ESCALATE already stored at the URL step. They go away when an administrator releases them or the decision's lifetime passes.
+          </div>
 
-          <!-- HcadProperties -->
-          <section>
-            <h2 id="hcad">HCAD Properties</h2>
-            <p>Properties under the <code>hcad</code> prefix, bound to <code>HcadProperties</code>. Configures the Hierarchical Context-Aware Detection (HCAD) filter pipeline and baseline learning.</p>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr>
-                  <th>Property</th>
-                  <th>Type</th>
-                  <th>Default</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad</code></td></tr>
-                <tr>
-                  <td><code>.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable or disable the HCAD filter pipeline.</td>
-                </tr>
-                <tr>
-                  <td><code>.filter-order</code></td>
-                  <td><code>int</code></td>
-                  <td><code>100</code></td>
-                  <td>HCAD filter order in the servlet filter chain.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.resource</code></td></tr>
-                <tr>
-                  <td><code>.sensitive-patterns</code></td>
-                  <td><code>List&lt;String&gt;</code></td>
-                  <td><code>[]</code></td>
-                  <td>URL patterns for sensitive resources requiring enhanced analysis.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.analysis</code></td></tr>
-                <tr>
-                  <td><code>.max-age-ms</code></td>
-                  <td><code>long</code></td>
-                  <td><code>3600000</code></td>
-                  <td>Maximum age (ms) for cached analysis results.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.threshold</code></td></tr>
-                <tr>
-                  <td><code>.base</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.7</code></td>
-                  <td>Base anomaly detection threshold.</td>
-                </tr>
-                <tr>
-                  <td><code>.min</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.3</code></td>
-                  <td>Minimum threshold after adaptive adjustment.</td>
-                </tr>
-                <tr>
-                  <td><code>.max</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.95</code></td>
-                  <td>Maximum threshold after adaptive adjustment.</td>
-                </tr>
-                <tr>
-                  <td><code>.adjustment-rate</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.01</code></td>
-                  <td>Rate of threshold adaptation per feedback cycle.</td>
-                </tr>
-                <tr>
-                  <td><code>.sensitivity</code></td>
-                  <td><code>double</code></td>
-                  <td><code>1.0</code></td>
-                  <td>Global sensitivity multiplier for detection.</td>
-                </tr>
-                <tr>
-                  <td><code>.warn</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.7</code></td>
-                  <td>Warning threshold before block action.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.cache</code></td></tr>
-                <tr>
-                  <td><code>.max-size</code></td>
-                  <td><code>int</code></td>
-                  <td><code>100000</code></td>
-                  <td>Maximum number of cached analysis entries.</td>
-                </tr>
-                <tr>
-                  <td><code>.ttl-ms</code></td>
-                  <td><code>long</code></td>
-                  <td><code>300000</code></td>
-                  <td>Cache entry time-to-live in milliseconds.</td>
-                </tr>
-                <tr>
-                  <td><code>.clear-on-startup</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>false</code></td>
-                  <td>Clear all cache entries on application startup.</td>
-                </tr>
-                <tr>
-                  <td><code>.local.ttl-minutes</code></td>
-                  <td><code>int</code></td>
-                  <td><code>10</code></td>
-                  <td>Local cache TTL in minutes.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.baseline</code></td></tr>
-                <tr>
-                  <td><code>.min-confidence</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.3</code></td>
-                  <td>Minimum confidence for baseline data.</td>
-                </tr>
-                <tr>
-                  <td><code>.update-alpha</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.1</code></td>
-                  <td>Exponential moving average alpha for baseline updates.</td>
-                </tr>
-                <tr>
-                  <td><code>.learning.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable baseline learning from live traffic.</td>
-                </tr>
-                <tr>
-                  <td><code>.learning.alpha</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.1</code></td>
-                  <td>Online baseline adaptation learning rate.</td>
-                </tr>
-                <tr>
-                  <td><code>.bootstrap.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable bootstrap mode for initial baseline building.</td>
-                </tr>
-                <tr>
-                  <td><code>.bootstrap.initial-samples</code></td>
-                  <td><code>int</code></td>
-                  <td><code>10</code></td>
-                  <td>Number of initial samples required before enforcement.</td>
-                </tr>
-                <tr>
-                  <td><code>.bootstrap.max-anomaly-score</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.85</code></td>
-                  <td>Maximum anomaly score during bootstrap phase.</td>
-                </tr>
-                <tr>
-                  <td><code>.statistical.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable statistical baseline analysis.</td>
-                </tr>
-                <tr>
-                  <td><code>.statistical.min-samples</code></td>
-                  <td><code>int</code></td>
-                  <td><code>20</code></td>
-                  <td>Minimum samples for statistical analysis.</td>
-                </tr>
-                <tr>
-                  <td><code>.statistical.z-score-threshold</code></td>
-                  <td><code>double</code></td>
-                  <td><code>3.0</code></td>
-                  <td>Z-score threshold for outlier detection.</td>
-                </tr>
-                <tr>
-                  <td><code>.redis.ttl-days</code></td>
-                  <td><code>int</code></td>
-                  <td><code>30</code></td>
-                  <td>Redis baseline data TTL in days.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.feedback</code></td></tr>
-                <tr>
-                  <td><code>.learning-rate</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.1</code></td>
-                  <td>Feedback loop learning rate for threshold adjustment.</td>
-                </tr>
-                <tr>
-                  <td><code>.retrain-threshold</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.7</code></td>
-                  <td>Accuracy threshold triggering model retrain.</td>
-                </tr>
-                <tr>
-                  <td><code>.window-size</code></td>
-                  <td><code>int</code></td>
-                  <td><code>1000</code></td>
-                  <td>Sliding window size for feedback collection.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.orchestrator</code></td></tr>
-                <tr>
-                  <td><code>.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable the HCAD orchestrator for coordinated analysis.</td>
-                </tr>
-                <tr>
-                  <td><code>.feedback-interval</code></td>
-                  <td><code>int</code></td>
-                  <td><code>300</code></td>
-                  <td>Feedback processing interval in seconds.</td>
-                </tr>
-                <tr>
-                  <td><code>.sync-batch-size</code></td>
-                  <td><code>int</code></td>
-                  <td><code>50</code></td>
-                  <td>Batch size for baseline synchronization.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.vector</code></td></tr>
-                <tr>
-                  <td><code>.embedding-dimension</code></td>
-                  <td><code>int</code></td>
-                  <td><code>384</code></td>
-                  <td>Embedding vector dimension for behavioral analysis.</td>
-                </tr>
-                <tr>
-                  <td><code>.similarity-threshold</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.85</code></td>
-                  <td>Similarity threshold for behavioral pattern matching.</td>
-                </tr>
-                <tr>
-                  <td><code>.scenario-detection-enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>true</code></td>
-                  <td>Enable scenario-based anomaly detection via vectors.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.session</code></td></tr>
-                <tr>
-                  <td><code>.cookie-name</code></td>
-                  <td><code>String</code></td>
-                  <td><code>JSESSIONID</code></td>
-                  <td>Session cookie name for HCAD tracking.</td>
-                </tr>
-                <tr>
-                  <td><code>.header-name</code></td>
-                  <td><code>String</code></td>
-                  <td><code>X-Session-Id</code></td>
-                  <td>Header name for session ID in stateless mode.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.signal</code></td></tr>
-                <tr>
-                  <td><code>.chi-square-threshold</code></td>
-                  <td><code>double</code></td>
-                  <td><code>14.07</code></td>
-                  <td>Chi-square threshold for signal anomaly detection.</td>
-                </tr>
-                <tr>
-                  <td><code>.history-size</code></td>
-                  <td><code>int</code></td>
-                  <td><code>100</code></td>
-                  <td>Number of historical signals to retain.</td>
-                </tr>
-                <tr>
-                  <td><code>.geoip.provider</code></td>
-                  <td><code>String</code></td>
-                  <td><code>api</code></td>
-                  <td>GeoIP provider: <code>api</code> or <code>local</code>.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.adaptive</code></td></tr>
-                <tr>
-                  <td><code>.adjustment-rate</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.1</code></td>
-                  <td>Adaptive threshold adjustment rate.</td>
-                </tr>
-                <tr>
-                  <td><code>.cusum.threshold</code></td>
-                  <td><code>double</code></td>
-                  <td><code>5.0</code></td>
-                  <td>CUSUM change-point detection threshold.</td>
-                </tr>
-                <tr>
-                  <td><code>.cusum.slack</code></td>
-                  <td><code>double</code></td>
-                  <td><code>0.5</code></td>
-                  <td>CUSUM slack parameter for drift tolerance.</td>
-                </tr>
-                <tr>
-                  <td><code>.baseline.window</code></td>
-                  <td><code>int</code></td>
-                  <td><code>100</code></td>
-                  <td>Adaptive baseline window size.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.geoip</code></td></tr>
-                <tr>
-                  <td><code>.enabled</code></td>
-                  <td><code>boolean</code></td>
-                  <td><code>false</code></td>
-                  <td>Enable GeoIP-based location analysis.</td>
-                </tr>
-                <tr>
-                  <td><code>.db-path</code></td>
-                  <td><code>String</code></td>
-                  <td><code>data/GeoLite2-City.mmdb</code></td>
-                  <td>Path to MaxMind GeoLite2 database file.</td>
-                </tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>hcad.redis</code></td></tr>
-                <tr>
-                  <td><code>.key-prefix</code></td>
-                  <td><code>String</code></td>
-                  <td><code>hcad:baseline:v2:</code></td>
-                  <td>Redis key prefix for HCAD baseline data.</td>
-                </tr>
-              </tbody>
-            </table></div>
+          <h2 id="request-time">Tuning request-time enforcement</h2>
+          <div class="callout callout-info">
+            <strong>The settings in this section act when Contexa owns login (<code>CONTEXA_OWNED</code>).</strong> The request-time filters and the login context handling run only inside the security chain Contexa builds. By default (<code>HOST_OWNED</code>) enforcement happens only at <a href="#protectable"><code>@Protectable</code> methods</a>. Responses per decision and how to release them are in <a href="../../reference/identity/zero-trust-filters.html">request-time enforcement</a>.
+          </div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.max-block-mfa-attempts</code></td><td><code>2</code></td><td>Attempt limit of the MFA a blocked (BLOCK) user goes through before asking for release. The access control filter · the release API · the notice screen use this value. The MFA failure handler clears the pending release at the second failure regardless of this value</td><td>To allow more release MFA attempts (the failure handler's limit stays 2)</td></tr>
+              <tr><td><code>contexa.security.zerotrust.challenge.lock-wait-time</code></td><td><code>0</code></td><td>How long to wait for the per-user lock when starting step-up authentication (MFA). 0 gives up at once</td><td>To let requests that came in together wait for the same MFA</td></tr>
+              <tr><td><code>contexa.security.zerotrust.challenge.lock-lease-time</code></td><td><code>30s</code></td><td>Longest time that lock is held</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.challenge.busy-retry-after-seconds</code></td><td><code>3</code></td><td><code>Retry-After</code> (seconds) on the <code>503 MFA_BUSY_RETRY</code> answered when the lock is not taken</td><td>To match the client's retry interval</td></tr>
+              <tr><td><code>contexa.security.zerotrust.threat.initial</code></td><td><code>0.3</code></td><td>Threat score of a user who has none yet (trust score = 1 − threat score)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.cache.ttl-hours</code></td><td><code>24</code></td><td>How long records of sessions · tokens invalidated (for example by a forced logout) are kept (hours). Not a decision cache</td><td>When invalidations must be remembered longer</td></tr>
+              <tr><td><code>contexa.security.zerotrust.cache.session-ttl-minutes</code></td><td><code>30</code></td><td>How long the "previous logged-in user" kept per session to notice a logout lives (minutes, from the last access)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.cache.invalidated-ttl-minutes</code></td><td><code>60</code></td><td>How long this JVM remembers an invalidated session (minutes)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.session.tracking-enabled</code></td><td><code>true</code></td><td>Records the user's session when the login context is saved, so a forced logout reaches all of the user's sessions</td><td>When you do not track sessions</td></tr>
+              <tr><td><code>contexa.security.zerotrust.redis.update-interval-seconds</code></td><td><code>30</code></td><td>Shortest interval between rewrites of the same session's tracking record (seconds). Despite the name it applies in standalone mode too</td><td>To reduce store writes</td></tr>
+              <tr><td><code>contexa.security.zerotrust.session-tracking.max-untimed-sessions-per-user</code></td><td><code>64</code></td><td>How many session identifiers whose expiry is unknown are tracked per user. Past it, the ones not seen longest drop out of tracking. 0 or less has no limit</td><td>When one user uses very many sessions</td></tr>
+              <tr><td><code>contexa.security.zerotrust.analysis.max-age-ms</code></td><td><code>3600000</code></td><td>Oldest stored analysis the login MFA policy trusts (ms). An older analysis is treated as step-up authentication</td><td>To require a fresher analysis at login</td></tr>
+            </tbody>
+          </table></div>
+          <p>Some values are fixed, not settings: decisions are cached for 5 seconds after they are read, the <code>Retry-After</code> of a held-for-review (ESCALATE) response is 30 seconds, and each decision has a fixed lifetime (allow 15 seconds · step-up 1,800 seconds · held for review 300 seconds · block until released, <a href="../../reference/architecture/decision-engine.html#storage">Decision Engine</a>).</p>
 
+          <h3 id="protectable"><code>@Protectable</code> methods (both ownership modes)</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.protectable.rapid-reentry-window-ms</code></td><td><code>5000</code></td><td>When the same user · session comes back within this time (ms), an ordinary method runs without analysis and an immediate-decision method answers <code>503</code> (analysis in progress); in shadow mode it runs</td><td>When a screen fires the same call many times in a short time</td></tr>
+            </tbody>
+          </table></div>
+          <p>How an agent request with no decision on record is handled (<code>contexa.security.zerotrust.protectable.unrecorded-agent-request</code>) is in <a href="../../reference/agent/controls.html#unrecorded">Agent limits</a>.</p>
 
-            <h3>Additional HCAD Fields in Current OSS Code</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>hcad.baseline.statistical.update-interval</code></td><td><code>10</code></td><td>Refresh interval for the statistical baseline.</td></tr>
-                <tr><td><code>hcad.feedback.baseline.update-threshold</code></td><td><code>0.95</code></td><td>Threshold for writing feedback into the learned baseline.</td></tr>
-                <tr><td><code>hcad.orchestrator.performance-tracking</code></td><td><code>true</code></td><td>Enable orchestrator performance tracking.</td></tr>
-                <tr><td><code>hcad.vector.cache-ttl-hours</code></td><td><code>24</code></td><td>TTL for cached behavioral embeddings.</td></tr>
-                <tr><td><code>hcad.vector.max-cached-embeddings</code></td><td><code>1000</code></td><td>Maximum cached embedding entries.</td></tr>
-                <tr><td><code>hcad.signal.covariance.min-samples</code></td><td><code>30</code></td><td>Minimum samples for covariance analysis.</td></tr>
-                <tr><td><code>hcad.signal.geoip.api-url</code></td><td><code>https://ipapi.co/{ip}/json/</code></td><td>Remote GeoIP API template.</td></tr>
-                <tr><td><code>hcad.signal.timing.bucket-count</code></td><td><code>7</code></td><td>Timing bucket count.</td></tr>
-                <tr><td><code>hcad.signal.timing.interval.history-size</code></td><td><code>100</code></td><td>Timing interval history size.</td></tr>
-                <tr><td><code>hcad.sampling.random.floor</code></td><td><code>0.01</code></td><td>Minimum random sampling rate.</td></tr>
-                <tr><td><code>hcad.sampling.random.ceiling</code></td><td><code>0.03</code></td><td>Maximum random sampling rate.</td></tr>
-                <tr><td><code>hcad.sampling.composite.identifier.enabled</code></td><td><code>true</code></td><td>Enable composite identifier sampling.</td></tr>
-                <tr><td><code>hcad.similarity.hot-path-threshold</code></td><td><code>0.7</code></td><td>Similarity threshold used by hot-path decisions.</td></tr>
-                <tr><td><code>hcad.adaptive.min.trust.score</code></td><td><code>0.7</code></td><td>Minimum trust score used by adaptive controls.</td></tr>
-                <tr><td><code>hcad.pre-trigger.enabled</code></td><td><code>true</code></td><td>Enable pre-trigger heuristics before full analysis.</td></tr>
-                <tr><td><code>hcad.pre-trigger.cooldown-seconds</code></td><td><code>15</code></td><td>Cooldown for repeated pre-triggers.</td></tr>
-                <tr><td><code>hcad.pre-trigger.in-flight-ttl-seconds</code></td><td><code>15</code></td><td>TTL for in-flight pre-trigger markers.</td></tr>
-                <tr><td><code>hcad.pre-trigger.negative-cache-seconds</code></td><td><code>3</code></td><td>Negative cache lifetime.</td></tr>
-                <tr><td><code>hcad.pre-trigger.redline-score</code></td><td><code>70</code></td><td>Redline score threshold.</td></tr>
-                <tr><td><code>hcad.pre-trigger.high-risk-score</code></td><td><code>50</code></td><td>High-risk score threshold.</td></tr>
-                <tr><td><code>hcad.pre-trigger.medium-risk-score</code></td><td><code>30</code></td><td>Medium-risk score threshold.</td></tr>
-                <tr><td><code>hcad.pre-trigger.low-baseline-confidence-threshold</code></td><td><code>0.35</code></td><td>Low baseline confidence threshold.</td></tr>
-                <tr><td><code>hcad.pre-trigger.failed-login-burst-threshold</code></td><td><code>3</code></td><td>Failed-login burst threshold.</td></tr>
-                <tr><td><code>hcad.pre-trigger.request-burst-threshold</code></td><td><code>12</code></td><td>Request burst threshold.</td></tr>
-                <tr><td><code>hcad.pre-trigger.rapid-request-interval-ms</code></td><td><code>1000</code></td><td>Rapid-request interval window.</td></tr>
-                <tr><td><code>hcad.pre-trigger.sensitive-path-indicators</code></td><td><code>[/admin/, /export, /download, /sensitive/, /critical/]</code></td><td>Sensitive path indicators (substring match).</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="session-id">Names for recognizing the session</h2>
+          <p>To recognize a request's session, Contexa first looks at the JWT's <code>jti</code>, then the HTTP session. If neither exists, it looks for the names below in the order cookie → header → Bearer token. With this identifier it filters invalidated sessions and tracks sessions (<code>CONTEXA_OWNED</code>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.session.cookie.name</code></td><td><code>SESSION</code></td><td>Name of the cookie holding the session ID</td><td>When you renamed the session cookie</td></tr>
+              <tr><td><code>contexa.security.session.header.name</code></td><td><code>X-Auth-Token</code></td><td>Name of the header holding the session ID (a leading <code>Bearer </code> is stripped)</td><td>When you use header sessions</td></tr>
+              <tr><td><code>contexa.security.session.bearer.enabled</code></td><td><code>true</code></td><td>Also look for the session ID in <code>Authorization: Bearer</code></td><td>When Bearer is not used as a session ID</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3>Example Configuration</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-              </div>
-              <pre><code class="language-yaml">hcad:
-  enabled: true
-  filter-order: 100
-  resource:
-    sensitive-patterns:
-      - /admin/api/security-test/sensitive/**
-      - /admin/api/security-test/critical/**
-  threshold:
-    base: 0.7
-    sensitivity: 1.0
-  baseline:
-    learning:
-      enabled: true
-      alpha: 0.1
-    bootstrap:
-      enabled: true
-      initial-samples: 10
-  geoip:
-    enabled: false
-    db-path: data/GeoLite2-City.mmdb</code></pre>
-            </div>
-          </section>
+          <h2 id="timeouts">Decision time limits</h2>
+          <p>When Layer 1 cannot decide (ESCALATE), Layer 2 decides again (<a href="../../reference/architecture/decision-engine.html#layers">Decision Engine</a>). All time limits are in milliseconds.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.layer1.timeout.llm-ms</code></td><td><code>90000</code></td><td>Limit of the whole Layer 1 analysis, and a candidate limit for one Layer 1 model call</td><td>When a slow model makes Layer 1 end by timeout</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.timeout.rag-ms</code></td><td><code>8000</code></td><td>Longest Layer 1 waits for the past decision record search</td><td>When the vector store is slow</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.timeout.interactive-rag-wait-ms</code></td><td><code>600</code></td><td>How long a decision made inside the request waits for the past record search</td><td>To cut the delay of immediate decisions, or wait longer for records</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.timeout.background-rag-warmup-on-interactive-timeout</code></td><td><code>true</code></td><td>When that wait ends, finish the search in the background</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.timeout-ms</code></td><td><code>30000</code></td><td>Limit of the whole Layer 2 analysis. Past it, held for review (ESCALATE) stays as the final decision</td><td>When a slow Layer 2 model leaves held-for-review decisions</td></tr>
+              <tr><td><code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code></td><td><code>60000</code></td><td>Limit of one model call (or the layer's limit if that is shorter)</td><td>When the provider answers slowly</td></tr>
+              <tr><td><code>contexa.security.plane.agent.event-timeout-ms</code></td><td><code>180000</code></td><td>Whole budget for analyzing one event (minimum 1000). Past it, the event ends without a decision and queues again</td><td>When Layer 1 + Layer 2 take longer than this</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>With the defaults, the Layer 2 limit (30 seconds) is shorter than the model call limit (60 seconds), so a slow Layer 2 ends as held for review, stored for 5 minutes.</li>
+            <li>When a Layer 1 model call gets no answer (provider failure · call timeout), it does not go to Layer 2 and ends as step-up authentication (CHALLENGE) (<a href="../../reference/architecture/decision-engine.html#overrides">When the model's answer is changed</a>).</li>
+          </ul>
 
-          <!-- SecurityPlaneProperties -->
-          
+          <h2 id="throughput">Throughput and queues</h2>
+          <div class="callout callout-info">
+            <strong><code>contexa.security.plane.agent.*</code> is not an AI agent setting.</strong> It configures the worker of Contexa's decision engine. AI agent limits are in <a href="../../reference/agent/controls.html#settings">Agent limits</a>.
+          </div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.plane.monitor.queue-size</code></td><td><code>10000</code></td><td>Size of the analysis queue. When it is full, the request thread adding an event waits</td><td>When there are very many events at once</td></tr>
+              <tr><td><code>contexa.security.plane.monitor.batch-size</code></td><td><code>8</code></td><td>Events taken from the queue at a time</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.plane.monitor.flush-interval-ms</code></td><td><code>500</code></td><td>Interval of waiting on the queue (ms)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.plane.agent.analysis-stripes</code></td><td><code>256</code></td><td>Worker threads handling the per-user · per-session lines (one at a time for the same user · session)</td><td>When there are very many concurrent users</td></tr>
+              <tr><td><code>contexa.security.plane.llm-executor.core-pool-size</code></td><td><code>32</code></td><td>Base size of the model analysis thread pool</td><td>To fit model call concurrency to the provider's limits</td></tr>
+              <tr><td><code>contexa.security.plane.llm-executor.max-pool-size</code></td><td><code>64</code></td><td>Maximum size of that pool</td><td>Same as above</td></tr>
+              <tr><td><code>contexa.security.plane.llm-executor.queue-capacity</code></td><td><code>256</code></td><td>Waiting places of that pool. When all are taken, work is refused (recorded as overload)</td><td>Same as above</td></tr>
+              <tr><td><code>contexa.security.plane.llm-executor.queue-timeout-ms</code></td><td><code>60000</code></td><td>Longest wait in the pool's waiting places. Past it, recorded as a timeout</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.plane.llm-executor.prestart-core-threads</code></td><td><code>true</code></td><td>Start the base number of threads in advance</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.plane.agent.max-deferred-retries</code></td><td><code>3</code></td><td>How many times an event with a temporary failure queues again</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.plane.agent.auto-start</code></td><td><code>true</code></td><td>Start the decision engine worker automatically. <code>false</code> stops analysis, and events are dropped after retries</td><td>Do not use it (for tests)</td></tr>
+              <tr><td><code>contexa.security.plane.agent.name</code></td><td><code>SecurityPlaneAgent-1</code></td><td>Worker name (used in processing records · metrics)</td><td>To tell nodes apart</td></tr>
+              <tr><td><code>contexa.security.plane.agent.deleted-account-fence-margin-ms</code></td><td><code>60000</code></td><td>Margin for recognizing a result that arrives late for a deleted account (ms)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.analysis.audit-failure-cooldown-ms</code></td><td><code>30000</code></td><td>When the decision's audit observation record could not be written to the database, how long new analysis for the same context stops (ms). Without that record the decision is not applied</td><td>Rarely</td></tr>
+            </tbody>
+          </table></div>
 
+          <h3 id="provider-throttle">Throttling provider calls (off by default)</h3>
+          <p>Makes model calls wait so a paid API's per-minute request · token limits are not exceeded. By default only OpenAI model calls are throttled.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.enabled</code></td><td><code>false</code></td><td>Turn throttling on</td><td>When a paid API limit is hit</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.open-ai-only</code></td><td><code>true</code></td><td>Throttle only OpenAI model calls</td><td>false to throttle other providers too</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.requests-per-minute</code></td><td><code>0</code></td><td>Requests per minute (0 ignores it)</td><td>To match the provider account's request limit</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.tokens-per-minute</code></td><td><code>0</code></td><td>Tokens per minute (0 ignores it). If both are 0, nothing is throttled</td><td>To match the provider account's token limit</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.max-burst-requests</code></td><td><code>0</code></td><td>Requests allowed at once</td><td>To allow short bursts</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.max-burst-tokens</code></td><td><code>0</code></td><td>Tokens allowed at once</td><td>To allow short bursts</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.estimated-output-tokens</code></td><td><code>1024</code></td><td>Output tokens added to the prompt when counting the tokens of one call</td><td>When decision answers are much longer or shorter</td></tr>
+              <tr><td><code>contexa.security.plane.llm-provider-throttle.max-wait-ms</code></td><td><code>120000</code></td><td>Longest wait for a free place (ms)</td><td>To fit within the event budget (<code>event-timeout-ms</code>)</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- SecuritySessionProperties (summary) -->
-          <section>
-            <h2 id="session">Session Security Properties</h2>
-            <p>Properties under <code>contexa.security.session</code>, bound to <code>SecuritySessionProperties</code>. The OSS class configures token creation, header and bearer token extraction, hijack notification wiring, cookie naming, and risk thresholds used by session anomaly evaluation.</p>
+          <h3 id="context">Collecting decision context</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.plane.context.time-zone</code></td><td>none</td><td>Company time zone in which an event's hour · minute · weekday are read (for example <code>Asia/Seoul</code>). Empty uses the system time zone</td><td>When the server and the company are in different time zones</td></tr>
+              <tr><td><code>contexa.security.plane.context.login-failure-window-minutes</code></td><td><code>5</code></td><td>Window (minutes) for counting the user's recent login failures put in the decision facts</td><td>To look at failures over a longer time</td></tr>
+              <tr><td><code>contexa.security.plane.context.observation-capacity</code></td><td><code>5000</code></td><td>Observations kept per work profile · role scope (oldest leave first). Usual behavior is read from up to this many</td><td>To read a longer history, or use less memory</td></tr>
+            </tbody>
+          </table></div>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr>
-                  <th>Property</th>
-                  <th>Type</th>
-                  <th>Default</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.security.session.create.allowed</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Allows session/token creation</td></tr>
-                <tr><td><code>contexa.security.session.header.name</code></td><td><code>String</code></td><td><code>X-Auth-Token</code></td><td>Header name for token transport</td></tr>
-                <tr><td><code>contexa.security.session.bearer.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables bearer token parsing</td></tr>
-                <tr><td><code>contexa.security.session.cookie.name</code></td><td><code>String</code></td><td><code>SESSION</code></td><td>Cookie name used for session transport</td></tr>
-                <tr><td><code>contexa.security.session.hijack.channel</code></td><td><code>String</code></td><td><code>security:session:hijack:event</code></td><td>Hijack event channel name</td></tr>
-                <tr><td><code>contexa.security.session.hijack.detection.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Hijack detection toggle</td></tr>
-                <tr><td><code>contexa.security.session.threat.ip-change-risk</code></td><td><code>double</code></td><td><code>0.4</code></td><td>Risk contribution for IP changes</td></tr>
-                <tr><td><code>contexa.security.session.threat.ua-change-risk</code></td><td><code>double</code></td><td><code>0.3</code></td><td>Risk contribution for user-agent changes</td></tr>
-                <tr><td><code>contexa.security.session.threat.rapid-access-threshold-ms</code></td><td><code>int</code></td><td><code>100</code></td><td>Rapid-access threshold window</td></tr>
-                <tr><td><code>contexa.security.session.threat.rapid-access-risk</code></td><td><code>double</code></td><td><code>0.2</code></td><td>Risk contribution for rapid access bursts</td></tr>
-                <tr><td><code>contexa.security.session.threat.thresholds.monitoring</code></td><td><code>double</code></td><td><code>0.5</code></td><td>Monitoring threshold</td></tr>
-                <tr><td><code>contexa.security.session.threat.thresholds.grace-period</code></td><td><code>double</code></td><td><code>0.7</code></td><td>Grace-period threshold</td></tr>
-                <tr><td><code>contexa.security.session.threat.thresholds.invalidation</code></td><td><code>double</code></td><td><code>0.9</code></td><td>Invalidation threshold</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="escalate">When a decision cannot be made</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.layer2.escalate-fallback-action</code></td><td><code>CHALLENGE</code></td><td>The action used when Layer 2 also picks held for review in a normal answer (writing <code>ESCALATE</code> · <code>PENDING_ANALYSIS</code> gives <code>CHALLENGE</code>)</td><td>To treat undecided requests more strictly (<code>BLOCK</code>)</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.allow-escalate-final-action</code></td><td><code>false</code></td><td>With <code>true</code>, Layer 2's held for review is stored as it is (later requests are handled by <a href="../../reference/identity/zero-trust-filters.html">request-time enforcement</a>)</td><td>To keep undecided requests held for review with no fallback action</td></tr>
+              <tr><td><code>contexa.security.coldpath.max-escalation-windows</code></td><td><code>10000</code></td><td>Most scope · scenario windows remembered for overload protection</td><td>When there are very many scopes</td></tr>
+            </tbody>
+          </table></div>
+          <p>Overload protection: when Layer 1 returns held for review, and among the last 100 cases of the same scope · scenario there are 11 or more and over half of them are held for review, it ends as step-up authentication without Layer 2. Values such as 100 and half are fixed in code.</p>
 
-            <p><strong>Related:</strong> <a href="../../../docs/reference/identity/state-management.html">State Management Reference</a></p>
-          </section>
+          <h2 id="prompt">Tuning the decision prompt</h2>
+          <p>Decide what and how much is sent to the AI model, and which prompt bundle is used. What the bundles contain is in <a href="../../reference/architecture/prompt-engineering.html">Decision Prompts and Bundles</a>. The model per layer · output token limits · provider options are in <a href="ai.html">Connecting AI Models</a>.</p>
 
+          <h3 id="prompt-bundle">Choosing the prompt bundle</h3>
+          <p>This build can run three bundles: <code>2026.10.24-v19.21</code> (default) · <code>2026.10.24-v20.26</code> · <code>2026.10.30-v21.19</code>. If you write a version this build does not know, the default bundle runs. The v21 lines used for agent decisions appear only when you choose the v21 bundle.</p>
+          <pre><code class="language-yaml">contexa:
+  security:
+    tiered:
+      prompt-bundle:
+        active: 2026.10.30-v21.19</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.active</code></td><td>none</td><td>Bundle version to run. Empty runs the build default (v19.21)</td><td>To use the v20 · v21 bundle</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.selector</code></td><td><code>CONFIGURATION</code></td><td>With <code>registry</code>, the bundle is chosen by the releases registered in the admin console's prompt governance (state · scope · canary share)</td><td>To roll out bundles step by step from the admin console</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.shadow.sample-percent</code></td><td><code>0</code></td><td>Share of requests a governance shadow release runs on (0–100)</td><td>To test a new bundle beside real decisions</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.shadow.daily-call-cap</code></td><td><code>100</code></td><td>Model calls allowed per day (UTC) for shadow runs</td><td>To cap the cost of tests</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- SecurityRouterProperties -->
-          
+          <h3 id="prompt-content">How much goes into the prompt</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.layer1.vector-search-limit</code></td><td><code>12</code></td><td>Number of past records Layer 1's similarity search returns (v19 bundle; v20 · v21 look up past records exactly)</td><td>To show more or fewer past records</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.rag.similarity-threshold</code></td><td><code>0.5</code></td><td>Minimum similarity of Layer 1's search</td><td>Raise it when unrelated records mix in</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.rag.multi-query-search-enabled</code></td><td><code>false</code></td><td>By default Layer 1 makes one search within the user's scope. On, it makes broader searches too (for diagnostics)</td><td>Only for diagnostics</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.rag.supporting-search-enabled</code></td><td><code>false</code></td><td>Layer 1's supporting searches (for diagnostics)</td><td>Only for diagnostics</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.rag-top-k</code></td><td><code>5</code></td><td>Number of records Layer 2's similarity search returns (v19 bundle)</td><td>To give Layer 2 more records</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.rag.similarity-threshold</code></td><td><code>0.5</code></td><td>Minimum similarity of Layer 2's search</td><td>Raise it when unrelated records mix in</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.prompt.max-similar-events</code></td><td><code>2</code></td><td>Number of similar past event examples (v19 bundle)</td><td>To give more examples</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.prompt.max-rag-documents</code></td><td><code>12</code></td><td>Number of past record documents put in the prompt</td><td>Lower it when long prompts cost too much time or money</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.prompt.include-event-id</code></td><td><code>false</code></td><td>Include the event ID (v19 event section)</td><td>To match decisions to events</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.prompt.include-raw-timestamp</code></td><td><code>false</code></td><td>Include the raw time string (v19 event section)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.tiered.truncation.layer1.payload</code></td><td><code>200</code></td><td>Length the request body is cut to (characters)</td><td>Raise it when the request body matters to the decision</td></tr>
+              <tr><td><code>contexa.security.tiered.truncation.layer1.rag-document</code></td><td><code>180</code></td><td>Length one past record document is cut to (characters). One assembly path uses 240 when the value is smaller</td><td>To show more of each record</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.session.max-recent-actions</code></td><td><code>100</code></td><td>Recent actions Layer 1's session context holds</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.cache.max-size</code></td><td><code>1000</code></td><td>Maximum entries of Layer 1's session context cache</td><td>When there are very many concurrent sessions</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.cache.ttl-minutes</code></td><td><code>30</code></td><td>Lifetime of that cache (minutes, from the last read)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.tiered.argument-origin.quote-excerpt</code></td><td><code>true</code></td><td>Quote the sentence of the agent tool output an argument came from. Off, only which tool it came from is stated</td><td>false when tool output may hold sensitive text</td></tr>
+              <tr><td><code>contexa.security.tiered.argument-origin.max-excerpt-chars</code></td><td><code>300</code></td><td>Longest quoted sentence (0–300; 0 quotes nothing)</td><td>To shorten or turn off quotes</td></tr>
+            </tbody>
+          </table></div>
 
+          <h3 id="prompt-runtime">Determinism and output format</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.determinism.temperature</code></td><td><code>0.0</code></td><td>Temperature of decision calls (where the provider · model takes it)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.tiered.determinism.seed</code></td><td><code>1</code></td><td>Seed of decision calls (where the provider · model takes it)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.default-budget-profile</code></td><td><code>CORTEX_L1_INTERACTIVE_STRICT</code></td><td>Default token budget profile of Layer 1 prompts</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.default-budget-profile</code></td><td><code>CORTEX_L2_EXPERT_STRICT</code></td><td>Default token budget profile of Layer 2 prompts</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-runtime.budget-enforcement</code></td><td><code>OBSERVE_ONLY</code></td><td>With <code>ENFORCE</code>, v20 · v21 prompts over budget drop entries, lowest priority first. By default it is only recorded</td><td>To keep prompts within their budget</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-runtime.native-structured-output-enabled</code></td><td><code>true</code></td><td>Use the model's structured output feature. Off, the answer is read in a validated conversion mode</td><td>false when the model does not handle structured output well</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-runtime.native-structured-output-disabled-profiles</code></td><td>none</td><td>Budget profiles for which structured output is not used</td><td>To turn it off for some profiles only</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- SecurityEventProperties -->
-          
+          <h3 id="vector-cache">Past record search cache</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.vector-cache.enabled</code></td><td><code>true</code></td><td>Cache of past record search results</td><td>false when search results must always be read fresh</td></tr>
+              <tr><td><code>contexa.security.tiered.vector-cache.max-size</code></td><td><code>10000</code></td><td>Maximum entries</td><td>When there are very many users</td></tr>
+              <tr><td><code>contexa.security.tiered.vector-cache.expire-minutes</code></td><td><code>5</code></td><td>Lifetime (minutes)</td><td>Lower it to see new records sooner</td></tr>
+              <tr><td><code>contexa.security.tiered.vector-cache.record-stats</code></td><td><code>true</code></td><td>Record cache statistics</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.tiered.vector-cache.invalidate-on-write</code></td><td><code>true</code></td><td>When new records are stored, clear the search results of those users · organizations</td><td>Rarely</td></tr>
+            </tbody>
+          </table></div>
 
+          <h3 id="trusted-proxies">Client IP and trusted proxies</h3>
+          <p>Settings used when decision events · session fingerprints · IP access restrictions decide a request's client IP. With the defaults (check on, list empty), <code>X-Forwarded-For</code> is not trusted and the connecting address is used. It is separate from <code>contexa.bridge.network.trusted-proxies</code> of the existing-login connection.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.security.trusted-proxies</code></td><td>none</td><td>Trusted proxy addresses · CIDRs. <code>X-Forwarded-For</code> (or <code>X-Real-IP</code> if absent) is used only when the connecting address is among them</td><td>When a load balancer · gateway sits in front</td></tr>
+              <tr><td><code>contexa.security.tiered.security.trusted-proxy-validation-enabled</code></td><td><code>true</code></td><td><code>false</code> trusts forwarding headers from any sender</td><td>Do not use it (headers can be forged)</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- SecurityColdPathProperties -->
-          
+          <h2 id="minimum-action">Minimum-action rules (v19 · v20 bundles)</h2>
+          <p>A floor: when the decision facts meet a condition below, the model's answer must be at least that action. The default <code>OBSERVE</code> only records a violation; with <code>ENFORCE</code> the model is asked once more and, if the answer is still weaker, it becomes held for review. The v21 bundle does not evaluate these rules.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.mode</code></td><td><code>OBSERVE</code></td><td><code>OBSERVE</code> (record only) or <code>ENFORCE</code></td><td><code>ENFORCE</code> to enforce the floors with the v19 · v20 bundles</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.identity.enabled</code></td><td><code>true</code></td><td>Rule 1: on a sensitive resource, when the unexplained differences among time · weekday · network · device reach the threshold, the floor is CHALLENGE</td><td>To turn rule 1 off</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.identity.min-deviations</code></td><td><code>2</code></td><td>Number of differences for rule 1</td><td>To make rule 1 stricter or looser</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.identity.min-resource-class</code></td><td><code>SENSITIVE</code></td><td>Lowest resource class rule 1 looks at</td><td>To change rule 1's resource range</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.new-device-export.enabled</code></td><td><code>true</code></td><td>Rule 2: an export (EXPORT) of a sensitive or higher resource from an unexplained new device · network has the floor CHALLENGE</td><td>To turn rule 2 off</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.policy-satisfaction.enabled</code></td><td><code>true</code></td><td>Rule 3: when the policy facts say "not satisfied", the floor below</td><td>To turn rule 3 off</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.policy-satisfaction.action</code></td><td><code>ESCALATE</code></td><td>Floor of rule 3. Only <code>CHALLENGE</code> or <code>ESCALATE</code>; any other value stops start-up</td><td><code>CHALLENGE</code> to lower an unmet policy to step-up authentication</td></tr>
+            </tbody>
+          </table></div>
 
+          <h2 id="baseline">Behavioral baseline learning</h2>
+          <p>Contexa learns, for each person, the usual working hours · devices · networks · targets (the behavioral baseline) and uses them as facts in later decisions. Only allow decisions that were actually applied are learned, and nothing is learned in shadow mode (<a href="../../reference/architecture/decision-engine.html#learning">What is learned</a>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.enabled</code></td><td><code>true</code></td><td>Turn baseline learning on</td><td>To stop learning</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.alpha</code></td><td><code>0.1</code></td><td>Exponential moving average factor (higher weighs recent requests more)</td><td>To follow changes faster or slower</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.verified-weight</code></td><td><code>0.5</code></td><td>Weight when learning a request that passed step-up authentication or whose block an administrator released (an allowed request counts 1)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.unverified-expiry</code></td><td><code>30d</code></td><td>How long a value learned without verification stays in the baseline when it is not seen again</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.half-life</code></td><td><code>14d</code></td><td>Half-life by which older frequencies count less when values compete for places</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.retention</code></td><td><code>30d</code></td><td>A baseline with no new learning for this long after its last learning is removed</td><td>When your retention policy differs</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.statistical.min-samples</code></td><td><code>20</code></td><td>Minimum learned requests before a personal baseline is established</td><td>When baselines are established too late or too early</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.statistical.min-days</code></td><td><code>5</code></td><td>Minimum number of dates the learning must span</td><td>When baselines are established too late or too early</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.statistical.convergence-window</code></td><td><code>10</code></td><td>Recent learnings over which the share of new values is checked</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.statistical.max-new-value-ratio</code></td><td><code>0.2</code></td><td>At or below this share of first-seen values in that window, the baseline counts as established</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.statistical.min-organization-members</code></td><td><code>3</code></td><td>Different members needed before an organization baseline is established</td><td>For an organization with few members</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.enabled</code></td><td><code>true</code></td><td>Hold back an unexplained new value instead of learning it at once</td><td>false to learn new values at once</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.min-resource-class</code></td><td><code>SENSITIVE</code></td><td>Lowest resource class at which a person's request is held back</td><td>To change which resources hold values back</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.min-observations</code></td><td><code>2</code></td><td>How many times the same value must be seen before a held value is learned</td><td>To promote faster or slower</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.min-distinct-days</code></td><td><code>2</code></td><td>Different dates on which that value must be seen</td><td>To promote faster or slower</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.verified-promotes</code></td><td><code>true</code></td><td>Learn at once when a verification passes with that value</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.promotion.agent.enabled</code></td><td><code>true</code></td><td>For an agent request, hold back a first-seen target · action · size · rate · network · device at any resource class</td><td>To turn off holding back for agents</td></tr>
+            </tbody>
+          </table></div>
+          <p>Standalone mode keeps learning state in memory, so it is lost on restart. Use distributed mode to keep it (<a href="infrastructure.html#modes">Standalone and distributed</a>).</p>
 
-          <!-- SecurityPipelineProperties -->
-          
+          <h2 id="risk-signals">Receiving outside risk signals (off by default)</h2>
+          <p>Receives revocation · risk signals other systems send (Security Event Tokens, OpenID SSF · CAEP · RISC) at <code>POST /contexa/api/risk-signals</code>. A signal whose signature verifies is answered with <code>202</code>, and the subject's decision is removed so the next request is decided again. A restriction already in force (BLOCK · ESCALATE · CHALLENGE) stays. A signal that ends sessions (session revoked · credential compromised · account disabled and so on) logs the user out of every session. A signal that fails verification is answered with <code>400</code>. The application's authorization policy must let the sender reach this path.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.risk-signals.receiver-enabled</code></td><td><code>false</code></td><td>Turn the receiving path on</td><td>When an IdP or another system sends risk signals</td></tr>
+              <tr><td><code>contexa.security.zerotrust.risk-signals.audience</code></td><td>none</td><td>Audience (aud) of tokens accepted</td><td>Set it together when turning it on</td></tr>
+              <tr><td><code>contexa.security.zerotrust.risk-signals.transmitters[].issuer</code></td><td>none</td><td>Issuer (iss) of a sender</td><td>One per sender</td></tr>
+              <tr><td><code>contexa.security.zerotrust.risk-signals.transmitters[].jwks-uri</code></td><td>none</td><td>Where a sender publishes its signing keys</td><td>One per sender</td></tr>
+            </tbody>
+          </table></div>
 
+          <h2 id="examples">Examples by situation</h2>
+          <p><strong>First week of adoption: only watch decisions</strong></p>
+          <pre><code class="language-yaml">contexa:
+  security:
+    zerotrust:
+      mode: SHADOW</code></pre>
+          <p><strong>A slow model (a local model and so on): raise the time limits</strong> — raise the Layer 1 · Layer 2 limits, the limit of one call and the whole event budget together.</p>
+          <pre><code class="language-yaml">contexa:
+  security:
+    tiered:
+      layer1:
+        timeout:
+          llm-ms: 120000
+      layer2:
+        timeout-ms: 90000
+    plane:
+      llm-timeout:
+        provider-call-timeout-ms: 120000
+      agent:
+        event-timeout-ms: 300000</code></pre>
+          <p><strong>Staying within a paid API's limits (OpenAI)</strong></p>
+          <pre><code class="language-yaml">contexa:
+  security:
+    plane:
+      llm-provider-throttle:
+        enabled: true
+        requests-per-minute: 500
+        tokens-per-minute: 200000</code></pre>
 
-          
-          <!-- SecurityStepUpProperties -->
-          <section>
-            <h2 id="step-up">Step-Up Properties</h2>
-            <p>Properties under <code>contexa.security.stepup</code>, bound to <code>SecurityStepUpProperties</code>. Defines the maximum authentication attempts and lock duration for step-up auth during high-risk actions that require multi-factor authentication (MFA) or extra approval.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.stepup</code></td></tr>
-                <tr><td><code>.max-attempts</code></td><td><code>int</code></td><td><code>3</code></td><td>Maximum attempts allowed for step-up auth.</td></tr>
-                <tr><td><code>.lockout-duration</code></td><td><code>int</code></td><td><code>300</code></td><td>Account lockout duration (seconds) upon exceeding max attempts.</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- SaasForwardingProperties (Decision Plane) -->
-          <section>
-            <h2 id="decision-plane">Decision Plane Properties</h2>
-            <p>Properties under <code>contexa.saas</code>, controlling integration with the Contexa SaaS Decision Plane. Configures endpoint, intervals, retry policy, and OAuth2 client settings for forwarding local decisions, feedback, and telemetry data to the remote cloud plane.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.saas</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Enables decision forwarding to SaaS Decision Plane.</td></tr>
-                <tr><td><code>.endpoint</code></td><td><code>String</code></td><td><code>https://saas.ctxa.ai</code></td><td>SaaS Decision Plane base endpoint URL.</td></tr>
-                <tr><td><code>.include-reasoning</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Includes decision logic/reasoning in forwarded payloads.</td></tr>
-                <tr><td><code>.include-raw-analysis-data</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Includes raw analysis data in forwarded payloads.</td></tr>
-                <tr><td><code>.outbox-batch-size</code></td><td><code>int</code></td><td><code>50</code></td><td>Outbox event batch size.</td></tr>
-                <tr><td><code>.max-retry-attempts</code></td><td><code>int</code></td><td><code>10</code></td><td>Maximum attempts for retrying failed dispatches.</td></tr>
-                <tr><td><code>.retry-initial-backoff-ms</code></td><td><code>long</code></td><td><code>1000</code></td><td>Initial backoff delay in milliseconds.</td></tr>
-                <tr><td><code>.retry-max-backoff-ms</code></td><td><code>long</code></td><td><code>60000</code></td><td>Maximum backoff delay in milliseconds.</td></tr>
-                <tr><td><code>.dispatch-interval-ms</code></td><td><code>long</code></td><td><code>30000</code></td><td>Outbox dispatch interval in milliseconds.</td></tr>
-                <tr><td><code>.pseudonymization-secret</code></td><td><code>String</code></td><td><code>default-dev-secret-change-in-prod</code></td><td>Secret key used for pseudonymizing data.</td></tr>
-                <tr><td><code>.global-correlation-secret</code></td><td><code>String</code></td><td><code>default-dev-correlation-secret</code></td><td>Secret key used for generating global correlation IDs.</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.saas.oauth2</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables OAuth2 integration.</td></tr>
-                <tr><td><code>.registration-id</code></td><td><code>String</code></td><td><code>contexa-saas-client</code></td><td>OAuth2 client registration ID.</td></tr>
-                <tr><td><code>.token-uri</code></td><td><code>String</code></td><td><code>https://saas.ctxa.ai/oauth2/token</code></td><td>OAuth2 token request URI.</td></tr>
-                <tr><td><code>.client-id</code></td><td><code>String</code></td><td><code>dev-client</code></td><td>OAuth2 client ID.</td></tr>
-                <tr><td><code>.client-secret</code></td><td><code>String</code></td><td><code>dev-secret</code></td><td>OAuth2 client secret.</td></tr>
-                <tr><td><code>.scope</code></td><td><code>String</code></td><td><code>saas.xai.decision.ingest,...</code></td><td>Comma-separated OAuth2 scopes requested.</td></tr>
-                <tr><td><code>.expiry-skew-seconds</code></td><td><code>int</code></td><td><code>30</code></td><td>Clock skew buffer (seconds) for token expiry detection.</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- TieredStrategyProperties -->
-          <section>
-            <h2 id="distributed-enforcement">Distributed Enforcement Properties</h2>
-            <p>Properties under <code>contexa.security.tiered</code>, bound to <code>TieredStrategyProperties</code>. Configures tiered security analysis and enforcement policies between the local agent and cloud/remote agents. Fine-tunes active tiers, truncation parameters, vector search limits, and timeout thresholds.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.tiered</code></td></tr>
-                <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables the tiered analysis strategy.</td></tr>
-                <tr><td><code>.native-structured-output-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Leverages native structured JSON schemas supported by LLMs.</td></tr>
-                <tr><td><code>.telemetry-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables tiered security telemetry.</td></tr>
-                <tr><td><code>.trusted-proxy-validation-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables validation of trusted proxy IPs.</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.tiered.layer1</code> / <code>layer2</code> (Layer configurations)</td></tr>
-                <tr><td><code>.layer1.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enables layer-1 (local fast check) analysis.</td></tr>
-                <tr><td><code>.layer1.default-budget-profile</code></td><td><code>String</code></td><td><code>CORTEX_L1_INTERACTIVE_STRICT</code></td><td>Resource budget profile for layer-1.</td></tr>
-                <tr><td><code>.layer2.enabled</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Enables layer-2 (cloud deep check) analysis.</td></tr>
-                <tr><td><code>.layer2.default-budget-profile</code></td><td><code>String</code></td><td><code>CORTEX_L2_EXPERT_STRICT</code></td><td>Resource budget profile for layer-2.</td></tr>
-                <tr><td><code>.layer2.enable-soar</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Automatically triggers SOAR actions based on layer-2 decisions.</td></tr>
-                <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>contexa.security.tiered.security</code> (Decision fine-tuning)</td></tr>
-                <tr><td><code>.security.vector-search-limit</code></td><td><code>int</code></td><td><code>3</code></td><td>Maximum database matches for similar decision vectors.</td></tr>
-                <tr><td><code>.security.max-similar-events</code></td><td><code>int</code></td><td><code>2</code></td><td>Maximum past events matched to detect attack scenarios.</td></tr>
-                <tr><td><code>.security.max-rag-documents</code></td><td><code>int</code></td><td><code>3</code></td><td>Maximum documents injected via RAG to enrich decision context.</td></tr>
-                <tr><td><code>.security.timeout-ms</code></td><td><code>long</code></td><td><code>7000</code></td><td>Timeout in milliseconds for remote layer-2 requests.</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-
-<div class="docs-nav-footer">
-            <a href="../../../docs/install/configuration/infrastructure.html" class="docs-nav-link prev">
+          <h2 id="elsewhere">Settings on other pages</h2>
+          <ul>
+            <li>The model per layer · backup model · output token limits · OpenAI · Anthropic options: <a href="ai.html">Connecting AI Models</a></li>
+            <li>Agent call limits · confirmation by the accountable person · scope narrowing · decision merging: <a href="../../reference/agent/controls.html#settings">Agent limits</a></li>
+            <li>Agent registration · the AuthZEN decision API: <a href="../../reference/agent/overview.html#settings">Agents as Security Subjects</a></li>
+            <li>Delegation records · objective contracts: <a href="../../reference/agent/delegation.html#settings">Delegation and Objective Contracts</a></li>
+            <li>Signing keys and retention of decision records · sealed evidence: <a href="../../reference/architecture/evidence.html#settings">Evidence · inspection</a></li>
+            <li>Inspection of sealed prompts: <a href="../../reference/architecture/prompt-inspection.html">Prompt inspection</a></li>
+            <li>Sending decisions to Contexa SaaS: <a href="../../reference/core/saas.html#settings">Contexa SaaS</a></li>
+            <li>Memory limits in standalone mode · the Redis time limit in distributed mode: <a href="infrastructure.html#modes">First Start and Deployment</a></li>
+            <li>Settings that have no effect (<code>contexa.security.zerotrust.thresholds.*</code> and others): <a href="../configuration.html#unused-keys">Configuration Guide</a></li>
+          </ul>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="ai.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Infrastructure Configuration</span>
+              <span class="docs-nav-title">Connecting AI Models</span>
             </a>
-            <a href="../../../docs/install/configuration/ai.html" class="docs-nav-link next">
+            <a href="identity.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">AI Configuration</span>
+              <span class="docs-nav-title">When Contexa Owns Sign-in</span>
             </a>
           </div>

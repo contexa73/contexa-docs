@@ -3,284 +3,128 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">@SoarTool</span>
+            <a href="index.html">SOAR Extension Points</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">@SoarTool and Tool Approval Levels</span>
           </nav>
+
           <div class="docs-page-header">
             <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-common</span>
               <span class="badge badge-primary">contexa-core</span>
-              <span class="badge badge-danger">Enterprise</span>
+              <span class="badge badge-secondary">Extension point · Enterprise</span>
             </div>
-            <h1>@SoarTool Annotation</h1>
-            <p class="lead">Marks a method or class as a SOAR response tool available for AI-driven invocation. Configures approval requirements, rate limits, environment restrictions, retry behavior, and audit settings for each tool.</p>
+            <h1>@SoarTool and Tool Approval Levels</h1>
+            <p class="lead"><code>@SoarTool</code> is the annotation that attaches a name, an approval requirement and execution limits to a response tool the AI calls. This page covers what each attribute means, the rules that set the approval level, where it must go to be read, and how to apply the other attributes yourself.</p>
           </div>
 
-          <!-- Overview -->
-          <section>
-            <h2>Overview</h2>
-            <p>The <code>@SoarTool</code> annotation transforms ordinary Java methods into SOAR-invocable tools. When the SOAR pipeline's LLM determines that a specific response action is needed (e.g., blocking an IP, isolating a host, or sending a notification), it selects the appropriate <code>@SoarTool</code>-annotated method based on the tool's <code>name</code> and <code>description</code>.</p>
-            <p>Before execution, the framework checks approval requirements, validates permissions, enforces rate limits, and ensures environment compatibility. After execution, it records an audit trail if <code>auditRequired</code> is enabled.</p>
+          <div class="callout callout-warning">
+            <strong>The OSS reads one attribute: <code>approval</code>.</strong> It is read only on a class that implements Spring AI's <code>ToolCallback</code>, at class level, and no OSS code injects the evaluator that reads it (<code>RiskAssessment</code>). The OSS has no code that finds, registers or runs tools carrying <code>@SoarTool</code> either. The other attributes take effect only through your own implementation or the enterprise SOAR module (<a href="index.html">SOAR extension points</a>).
+          </div>
 
-            <div class="api-signature">
-              <code>@Target({ElementType.TYPE, ElementType.METHOD})<br>@Retention(RetentionPolicy.RUNTIME)<br>public @interface SoarTool</code>
-              <span style="margin-left: 1rem;"><code>io.contexa.contexacommon.annotation</code></span>
-            </div>
-          </section>
+          <h2 id="attributes">Attributes</h2>
+          <p>Package <code>io.contexa.contexacommon.annotation</code>; it goes on classes and methods (<code>@Target({TYPE, METHOD})</code>) and is kept at run time (<code>RUNTIME</code>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Attribute</th><th>Type</th><th>Default</th><th>Read by the OSS</th><th>Meaning when you implement it</th></tr></thead>
+            <tbody>
+              <tr><td><code>name</code></td><td><code>String</code></td><td><code>""</code></td><td>No</td><td>Tool name</td></tr>
+              <tr><td><code>description</code></td><td><code>String</code></td><td><code>""</code></td><td>No</td><td>Tool description (the text a model reads to choose the tool)</td></tr>
+              <tr><td><code>approval</code></td><td><code>ApprovalRequirement</code></td><td><code>AUTO</code></td><td><strong>Yes</strong> (on a <code>ToolCallback</code> implementation class only)</td><td>Approval requirement (<a href="#approval">below</a>)</td></tr>
+              <tr><td><code>requiredPermissions</code></td><td><code>String[]</code></td><td><code>{}</code></td><td>No</td><td>Permissions needed to run</td></tr>
+              <tr><td><code>allowedEnvironments</code></td><td><code>String[]</code></td><td><code>{"dev", "staging", "prod"}</code></td><td>No</td><td>Environments where it may run</td></tr>
+              <tr><td><code>maxExecutionsPerHour</code></td><td><code>int</code></td><td><code>100</code></td><td>No</td><td>Maximum runs per hour</td></tr>
+              <tr><td><code>auditRequired</code></td><td><code>boolean</code></td><td><code>true</code></td><td>No</td><td>Whether runs go to the audit log</td></tr>
+              <tr><td><code>retryable</code></td><td><code>boolean</code></td><td><code>true</code></td><td>No</td><td>Whether to retry on failure</td></tr>
+              <tr><td><code>maxRetries</code></td><td><code>int</code></td><td><code>3</code></td><td>No</td><td>Maximum retries</td></tr>
+              <tr><td><code>timeoutMs</code></td><td><code>long</code></td><td><code>30000</code></td><td>No</td><td>Run time limit (ms)</td></tr>
+            </tbody>
+          </table></div>
 
-          <!-- Annotation Attributes -->
-          <section>
-            <h2>Attributes</h2>
+          <h2 id="approval">The rules that set the approval level</h2>
+          <h3 id="approval-requirement"><code>ApprovalRequirement</code> and <code>ApprovalType</code></h3>
+          <p>The annotation states an approval requirement (<code>SoarTool.ApprovalRequirement</code>, 5 values), and the evaluator turns it into an approval type (<code>ApprovalRequest.ApprovalType</code>, 6 values). Only <code>MANUAL</code> and <code>MULTI</code> count as needing approval (<code>requiresApproval</code> is true).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>ApprovalRequirement</code></th><th>Becomes <code>ApprovalType</code></th><th>Approval needed</th></tr></thead>
+            <tbody>
+              <tr><td><code>NONE</code></td><td><code>AUTO</code></td><td>No</td></tr>
+              <tr><td><code>AUTO</code> (default)</td><td><code>AUTO</code></td><td>No</td></tr>
+              <tr><td><code>NOTIFICATION</code></td><td><code>SINGLE</code></td><td>No</td></tr>
+              <tr><td><code>REQUIRED</code></td><td><code>MANUAL</code></td><td>Yes</td></tr>
+              <tr><td><code>MULTI_APPROVAL</code></td><td><code>MULTI</code></td><td>Yes</td></tr>
+            </tbody>
+          </table></div>
+          <p>This table only maps levels. The OSS has no code that sends a notice, waits and then proceeds, or counts the approvals of several approvers.</p>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>name</code></td>
-                  <td>String</td>
-                  <td><code>""</code></td>
-                  <td>Unique tool name used for LLM tool selection. If empty, the method name is used.</td>
-                </tr>
-                <tr>
-                  <td><code>description</code></td>
-                  <td>String</td>
-                  <td><code>""</code></td>
-                  <td>Human-readable description of the tool's purpose. Included in LLM tool selection prompts.</td>
-                </tr>
-                <tr>
-                  <td><code>approval</code></td>
-                  <td>ApprovalRequirement</td>
-                  <td><code>AUTO</code></td>
-                  <td>Approval level required before this tool can execute. See <a href="#approval-requirement">ApprovalRequirement</a> enum.</td>
-                </tr>
-                <tr>
-                  <td><code>requiredPermissions</code></td>
-                  <td>String[]</td>
-                  <td><code>{}</code></td>
-                  <td>Security permissions required to invoke this tool. Checked against the current session's granted authorities.</td>
-                </tr>
-                <tr>
-                  <td><code>allowedEnvironments</code></td>
-                  <td>String[]</td>
-                  <td><code>{"dev", "staging", "prod"}</code></td>
-                  <td>Environments where this tool is available. Restricts dangerous tools to non-production or vice versa.</td>
-                </tr>
-                <tr>
-                  <td><code>maxExecutionsPerHour</code></td>
-                  <td>int</td>
-                  <td><code>100</code></td>
-                  <td>Maximum number of times this tool can be invoked per hour. Prevents runaway automation.</td>
-                </tr>
-                <tr>
-                  <td><code>auditRequired</code></td>
-                  <td>boolean</td>
-                  <td><code>true</code></td>
-                  <td>Whether tool execution is recorded in the <code>CentralAuditFacade</code>.</td>
-                </tr>
-                <tr>
-                  <td><code>retryable</code></td>
-                  <td>boolean</td>
-                  <td><code>true</code></td>
-                  <td>Whether the tool can be automatically retried on transient failures.</td>
-                </tr>
-                <tr>
-                  <td><code>maxRetries</code></td>
-                  <td>int</td>
-                  <td><code>3</code></td>
-                  <td>Maximum retry attempts if <code>retryable</code> is true.</td>
-                </tr>
-                <tr>
-                  <td><code>timeoutMs</code></td>
-                  <td>long</td>
-                  <td><code>30000</code></td>
-                  <td>Maximum execution time in milliseconds before the tool invocation is cancelled.</td>
-                </tr>
-              </tbody>
-            </table></div>
-          </section>
+          <h3 id="risk-assessment">The evaluator <code>RiskAssessment</code></h3>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Grading a tool</strong>Four things are evaluated separately and the strictest value wins.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node"><span class="dg-node-tag">Input</span><span class="dg-node-title"><code>assess(ToolCallback tool, Map context)</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">Four evaluations</span><span class="dg-node-title">Annotation, tool name, context, time of day</span><span class="dg-node-desc">Each gives one approval type (table below).</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Result</span><span class="dg-node-title">The strictest type</span><span class="dg-node-desc">Strictness: <code>AUTO</code> &lt; <code>SINGLE</code> &lt; <code>MANUAL</code> &lt; <code>MULTI</code> &lt; <code>UNANIMOUS</code> &lt; <code>EMERGENCY</code></span></li>
+            </ol>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Evaluation</th><th>Rule</th></tr></thead>
+            <tbody>
+              <tr><td>Annotation</td><td>The <code>@SoarTool(approval)</code> of the <code>ToolCallback</code> implementation class, mapped as above. <code>AUTO</code> when absent; <code>MANUAL</code> when reading fails (the safe side)</td></tr>
+              <tr><td>Tool name</td><td>A value set with <code>setToolApprovalType(name, type)</code> wins. Otherwise the lower-cased name is checked in order: one of <code>system</code>, <code>kernel</code>, <code>root</code>, <code>admin</code>, <code>production</code>, <code>critical</code> together with a risk word gives <code>MULTI</code> → a risk word (<code>delete</code>, <code>remove</code>, <code>kill</code>, <code>terminate</code>, <code>shutdown</code>, <code>destroy</code>, <code>format</code>, <code>wipe</code>, <code>purge</code>, <code>quarantine</code>, <code>isolate</code>) gives <code>MANUAL</code> → <code>scan</code>, <code>analysis</code> or <code>detect</code> gives <code>SINGLE</code> → <code>read</code>, <code>list</code>, <code>get</code> or <code>view</code> gives <code>AUTO</code> → anything else gives <code>SINGLE</code></td></tr>
+              <tr><td>Context</td><td><code>MANUAL</code> if <code>productionEnvironment</code> is <code>true</code>, <code>target</code> contains <code>production</code> or <code>critical</code>, or <code>userId</code> is <code>admin</code>. Otherwise (also with no context) <code>AUTO</code></td></tr>
+              <tr><td>Time of day</td><td><code>SINGLE</code> after 22:00 or before 06:00 server local time, otherwise <code>AUTO</code></td></tr>
+            </tbody>
+          </table></div>
+          <p><code>RiskAssessment</code> is registered as a bean and can be replaced with a bean of the same type (<code>@ConditionalOnMissingBean</code>), but <strong>no OSS code injects and uses it.</strong> In your own execution flow, inject it and call <code>assess(...)</code> or <code>assessWithDetails(...)</code> (level, whether approval is needed, evaluation factors).</p>
 
-          <!-- ApprovalRequirement Enum -->
-          <section id="approval-requirement">
-            <h2>ApprovalRequirement</h2>
-            <p>Defines the level of human oversight required before a tool can execute.</p>
+          <h2 id="where">Where it must go to be read</h2>
+          <p>The evaluator reads only the class-level <code>@SoarTool</code> of the tool object's class. So put it on a <strong>class that implements <code>ToolCallback</code></strong>, as below. A value on a method, or on a service bean class of your application, is not read (and no code merges class and method values).</p>
+          <pre><code class="language-java">import io.contexa.contexacommon.annotation.SoarTool;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
 
-            <div class="api-signature">
-              <code>public enum ApprovalRequirement</code>
-              <span style="margin-left: 1rem;">(nested in <code>@SoarTool</code>)</span>
-            </div>
+@SoarTool(name = "session_termination",
+          description = "Terminates every session of the given user",
+          approval = SoarTool.ApprovalRequirement.REQUIRED)
+public class SessionTerminationTool implements ToolCallback {
 
-            <table class="enum-table">
-              <thead>
-                <tr><th>Value</th><th>Description</th><th>Use Case</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>NONE</code></td>
-                  <td>No approval required. Tool executes immediately.</td>
-                  <td>Low-risk read-only operations (log lookup, status check).</td>
-                </tr>
-                <tr>
-                  <td><code>AUTO</code></td>
-                  <td>Automatic approval based on risk assessment and tool policy.</td>
-                  <td>Default for most tools. The <code>ToolApprovalPolicyManager</code> decides.</td>
-                </tr>
-                <tr>
-                  <td><code>NOTIFICATION</code></td>
-                  <td>Notification sent to approvers, then auto-proceeds after a delay.</td>
-                  <td>Medium-risk actions where awareness is needed but blocking is not.</td>
-                </tr>
-                <tr>
-                  <td><code>REQUIRED</code></td>
-                  <td>Single approver must explicitly approve before execution.</td>
-                  <td>High-risk actions (IP blocking, account suspension).</td>
-                </tr>
-                <tr>
-                  <td><code>MULTI_APPROVAL</code></td>
-                  <td>Multiple approvers must independently approve before execution.</td>
-                  <td>Critical actions (firewall rule changes, data deletion, production deployments).</td>
-                </tr>
-              </tbody>
-            </table>
-          </section>
+    private final ToolDefinition definition = ToolDefinition.builder()
+            .name("session_termination")
+            .description("Terminates every session of the given user")
+            .inputSchema("{\"type\":\"object\",\"properties\":{\"userId\":{\"type\":\"string\"}}}")
+            .build();
 
-          <!-- Code Examples -->
-          <section>
-            <h2>Code Examples</h2>
-
-            <h3>Read-Only Investigation Tool</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@SoarTool(
-    name = "lookup_user_activity",
-    description = "Retrieves recent activity logs for a specific user",
-    approval = ApprovalRequirement.NONE,
-    maxExecutionsPerHour = 500,
-    timeoutMs = 10000
-)
-public List&lt;ActivityLog&gt; lookupUserActivity(String userId, int hours) {
-    return activityLogRepository.findRecentByUserId(userId, hours);
-}</code></pre>
-            </div>
-
-            <h3>High-Risk Blocking Tool</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@SoarTool(
-    name = "block_ip_address",
-    description = "Blocks an IP address at the firewall level",
-    approval = ApprovalRequirement.REQUIRED,
-    requiredPermissions = {"SOAR_BLOCK_IP"},
-    allowedEnvironments = {"staging", "prod"},
-    maxExecutionsPerHour = 50,
-    retryable = false,
-    timeoutMs = 60000
-)
-public BlockResult blockIpAddress(String ipAddress, String reason, int durationHours) {
-    return firewallService.blockIp(ipAddress, reason, Duration.ofHours(durationHours));
-}</code></pre>
-            </div>
-
-            <h3>Critical Infrastructure Tool</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@SoarTool(
-    name = "isolate_host",
-    description = "Isolates a compromised host from the network",
-    approval = ApprovalRequirement.MULTI_APPROVAL,
-    requiredPermissions = {"SOAR_ISOLATE_HOST", "INFRA_ADMIN"},
-    allowedEnvironments = {"prod"},
-    maxExecutionsPerHour = 10,
-    retryable = false,
-    auditRequired = true,
-    timeoutMs = 120000
-)
-public IsolationResult isolateHost(String hostname, String incidentId) {
-    return networkService.isolateHost(hostname, incidentId);
-}</code></pre>
-            </div>
-
-            <h3>Class-Level Annotation</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Class-level annotation applies defaults to all methods in the class
-@SoarTool(
-    approval = ApprovalRequirement.NOTIFICATION,
-    requiredPermissions = {"SOAR_NOTIFICATION"},
-    maxExecutionsPerHour = 200
-)
-@Component
-public class NotificationTools {
-
-    @SoarTool(
-        name = "send_slack_alert",
-        description = "Sends a security alert to the designated Slack channel"
-    )
-    public void sendSlackAlert(String channel, String message, String severity) {
-        slackService.sendMessage(channel, formatAlert(message, severity));
+    @Override
+    public ToolDefinition getToolDefinition() {
+        return definition;
     }
 
-    @SoarTool(
-        name = "send_email_alert",
-        description = "Sends a security alert email to the incident response team"
-    )
-    public void sendEmailAlert(String subject, String body, List&lt;String&gt; recipients) {
-        emailService.send(recipients, subject, body);
+    @Override
+    public String call(String toolInput) {
+        // Your application implements the actual session termination.
+        return "{\"terminated\":true}";
     }
 }</code></pre>
-            </div>
-          </section>
+          <pre><code class="language-java">ApprovalRequest.ApprovalType type = riskAssessment.assess(
+        new SessionTerminationTool(), Map.of("target", "production-db"));
+// annotation REQUIRED → MANUAL, context target contains production → MANUAL
+// result MANUAL, riskAssessment.requiresApproval(type) == true</code></pre>
 
-          <!-- Related Links -->
-          <section>
-            <h2>Related</h2>
-            <div class="related-links-grid">
-              <a href="index.html" class="related-link-card">
-                <h3>SOAR Overview</h3>
-                <p>Architecture and execution flow of the SOAR pipeline that invokes @SoarTool methods.</p>
-              </a>
-              <a href="approval.html" class="related-link-card">
-                <h3>Approval Workflows</h3>
-                <p>How the ApprovalService manages the approval lifecycle for REQUIRED and MULTI_APPROVAL tools.</p>
-              </a>
-              <a href="../../../docs/install/shadow-mode.html" class="related-link-card">
-                <h3>Shadow Mode</h3>
-                <p>Operational modes that control whether SOAR tools actually execute or run in observation mode.</p>
-              </a>
-            </div>
-          </section>
-
+          <h2 id="implement">Implementing the rest yourself</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What you want</th><th>What the OSS gives</th><th>What you do</th></tr></thead>
+            <tbody>
+              <tr><td>List the tools</td><td>The <code>ToolResolver</code> interface (<code>ToolCallback[] getAllToolCallbacks()</code>). No implementation or caller</td><td>Collect the <code>ToolCallback</code>s carrying <code>@SoarTool</code> and hand them to the model</td></tr>
+              <tr><td>Block a tool, decide approval, approval time limit</td><td>The <code>ToolApprovalPolicyManager</code> interface (<code>isBlocked</code>, <code>requiresApproval</code>, <code>getApprovalTimeout</code>). No implementation or caller</td><td>Implement the policy and check it before running</td></tr>
+              <tr><td>Record filtered tools</td><td>The <code>ToolExecutionMetrics</code> interface (<code>recordFiltered</code>). No implementation or caller</td><td>Implement the metrics</td></tr>
+              <tr><td>Grade approval levels</td><td>The <code>RiskAssessment</code> bean (above)</td><td>Inject it and call it</td></tr>
+              <tr><td>Permissions, environments, run counts, retries, time limits, audit</td><td>The attribute values only</td><td>Read the attributes and apply them in your execution flow</td></tr>
+              <tr><td>Human approval</td><td>The <code>ApprovalService</code> interface</td><td>Implement it (<a href="approval.html">Connecting Human Approval</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The OSS has no code that controls this execution by the enforcement mode (shadow, enforce) either. If you need a watch-only behavior, read the enforcement mode in your own execution flow.</p>
           <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="index.html" class="docs-nav-link prev">
+            <a href="approval.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">SOAR Overview</span>
-            </a>
-            <a href="approval.html" class="docs-nav-link next">
-              <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Approval Workflows</span>
+              <span class="docs-nav-title">Connecting Human Approval (Implementing ApprovalService)</span>
             </a>
           </div>

@@ -9,95 +9,169 @@
 
 <!-- Page Header -->
 <div class="docs-page-header">
+  <div class="docs-module-badge">
+    <span class="badge badge-primary">spring-boot-starter-contexa</span>
+  </div>
   <h1>Troubleshooting</h1>
-  <p class="lead">Self-healing guidelines for diagnosing and resolving installation, initialization, and runtime environment issues with Contexa CLI.</p>
+  <p class="lead">Find the errors you meet when installing Contexa and starting it for the first time by their message, and fix them. The order is CLI install and init errors, application startup errors, model and vector store errors, and dependency errors.</p>
 </div>
 
-<!-- Section 1: Contexa Doctor -->
-<section>
-  <h2 id="contexa-doctor">Diagnosing with Contexa Doctor</h2>
-  <p>Contexa always requires a JDK runtime. Database, Docker, and LLM checks depend on the features you selected in the installer. If you hit any issue during installation, scan your environment using the doctor command:</p>
+<h2 id="first-look">Look here first</h2>
+<p>Contexa works when the JDK, the dedicated database, the AI models and (optionally) Docker all fit together. When something goes wrong, look at two places first.</p>
+<ul>
+  <li><strong>The application's startup log:</strong> the lines Contexa writes and what they mean are in <a href="installation-guide.html#verify">Check that it is on</a>. Look especially for the ERROR-level <code>[ContexaCapability]</code> and <code>[Contexa]</code> lines.</li>
+  <li><strong>Connection refused:</strong> when PostgreSQL or Ollama cannot be reached, check with <code>docker ps</code> that the containers are up and check the ports (PostgreSQL 5432, Ollama 11434), and read the Ollama log with <code>docker logs contexa-ollama</code>.</li>
+  <li><strong>The CLI checks:</strong> <code>contexa init --check</code> checks only Java 17+ and Docker without changing the project, then exits. <code>contexa doctor</code> also checks the PostgreSQL port and the Ollama model.</li>
+</ul>
+<pre><code class="language-bash">contexa doctor</code></pre>
 
-  <div class="code-block">
-    <div class="code-block-header">
-      <span class="code-block-lang">Shell</span>
-      <button class="code-copy-btn" type="button" aria-label="Copy code">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-        <span>Copy</span>
-      </button>
-    </div>
-    <pre><code class="language-bash">contexa doctor</code></pre>
-  </div>
+<h2 id="error-catalog">CLI install and init errors</h2>
 
-  <p>Diagnostics check only what the selected installation path needs. Run <code>contexa init --check</code> to perform preflight checks and exit without changing the project, or use <code>contexa doctor</code> for a separate status report.</p>
-</section>
+<h3 id="cli-not-found">The <code>contexa</code> command is not found</h3>
+<p><strong>Fix:</strong> open a new terminal, check that the folder the installer named at the end is on your <code>PATH</code>, then run <code>contexa --version</code>. Instead of the script you can download the binary for your OS from the <a href="https://github.com/contexa-security/contexa-cli/releases">releases page</a> and put it on your <code>PATH</code>.</p>
 
-<!-- Section 2: Error Catalog -->
-<section>
-  <h2 id="error-catalog">Common Issues and Fixes</h2>
+<h3 id="docker-not-running">Docker is missing or not running</h3>
+<div class="callout callout-warning">
+  <p><strong>Messages</strong>: <code>x Docker CLI is not installed.</code>, <code>x Docker daemon is not running.</code>, <code>Docker is installed but the daemon is not running.</code></p>
+</div>
+<p><strong>When:</strong> in the pre-check of <code>contexa init</code> (without <code>--yes</code>) and when creating infrastructure (<code>--distributed</code>, <code>--simulate</code>). The default <code>init</code>, which creates no infrastructure, only shows the pre-check result as a warning and goes on.</p>
+<p><strong>Fix:</strong> on Windows and macOS start Docker Desktop and wait until it is ready; on Linux run <code>sudo systemctl start docker</code>. To go on without Docker, run <code>init</code> without the infrastructure options and prepare PostgreSQL yourself (<a href="installation-guide.html#step-database">Create the dedicated database</a>). <code>--no-docker</code> writes the Compose file without starting containers.</p>
 
-  <h3>① Permission Denied</h3>
-  <p>Occurs when the installer script does not have write access to system binary directories (such as <code>/usr/local/bin</code>).</p>
-  <div class="callout callout-warning">
-    <p><strong>Error snippet</strong>: <code>Permission denied to write /usr/local/bin/contexa</code></p>
-  </div>
-  <p><strong>Resolution</strong>: the installer automatically falls back to <code>~/.local/bin</code> when <code>/usr/local/bin</code> is not writable. Do not run the installer script itself with <code>sudo</code>; run the command below again.</p>
-  <pre><code>curl -fsSL https://install.ctxa.ai/install.sh | sh</code></pre>
-  <p>If <code>~/.local/bin</code> is not on <code>PATH</code>, add it to your shell profile, open a new terminal, and run <code>contexa --version</code>.</p>
+<h3 id="port-in-use">A port is already in use</h3>
+<div class="callout callout-warning">
+  <p><strong>Message</strong>: <code>Port 5432 (PostgreSQL) is already in use on 127.0.0.1.</code> followed by <code>Local service PostgreSQL is already running on host. Contexa will skip starting this docker container and reuse the host service.</code></p>
+</div>
+<p><strong>Cause:</strong> when creating infrastructure, the CLI checks PostgreSQL 5432, (with Ollama) 11434, and (distributed) Redis 6379, Zookeeper 2181 and Kafka 9092. For a port in use it does not create the container and reuses the existing service. When a container with the same name already exists, it is reused instead of created again (<code>Existing infrastructure detected (...); reusing it.</code>). If that container's configuration has drifted, remove it with <code>docker rm -f &lt;container name&gt;</code> and run <code>contexa init</code> again.</p>
+<p><strong>Fix:</strong> check that the service on the port is the PostgreSQL or Ollama you meant to use, and match its connection details in <code>contexa.datasource.*</code> and the other settings. To practice apart from existing services, use the isolated environment: container names become <code>ctxa-sim-</code> and ports move by +20000 (5432 → 25432, 11434 → 31434 and so on).</p>
+<pre><code class="language-bash">contexa init --simulate</code></pre>
 
-  <h3>② Docker not running</h3>
-  <p>Occurs only when you selected local Docker-managed infrastructure, simulation, or distributed mode and the Docker service is inactive.</p>
-  <div class="callout callout-warning">
-    <p><strong>Error snippet</strong>: <code>Docker daemon is not running or unreachable.</code></p>
-  </div>
-  <p><strong>Resolution</strong>:</p>
-  <ul>
-    <li><strong>Windows / macOS</strong>: Launch Docker Desktop and wait for the status icon to turn green.</li>
-    <li><strong>Linux</strong>: Start the systemd daemon:
-      <pre><code>sudo systemctl start docker</code></pre>
-    </li>
-  </ul>
-
-  <h3>③ PostgreSQL / Ollama Port Conflict</h3>
-  <p>Happens when standard infrastructure ports (5432, 11434, etc.) are already bound by another database instance or container on your host machine.</p>
-  <div class="callout callout-warning">
-    <p><strong>Error snippet</strong>: <code>Port 5432 is already in use on 127.0.0.1. Skip creating postgres container.</code></p>
-  </div>
-  <p><strong>Resolution</strong>:</p>
-  <ul>
-    <li><strong>Inspect the existing service</strong>: Verify that the process holding the port is the intended PostgreSQL or Ollama instance. The CLI does not terminate it or rewrite settings arbitrarily; make the reused connection details match the infrastructure path you selected.</li>
-    <li><strong>Isolated Simulation Mode</strong>: If you want to spin up isolated containers side-by-side with your existing stack, use the simulation installer. Ports are automatically shifted by <code>+20000</code>:
-      <pre><code>contexa init --simulate</code></pre>
-    </li>
-  </ul>
-
-  <h3>④ Ollama Model Missing</h3>
-  <p>Occurs only when you selected Ollama as the AI provider and the required model files have not yet been pulled into the runtime environment.</p>
-  <div class="callout callout-warning">
-    <p><strong>Error snippet</strong>: <code>Model 'qwen2.5:7b' is missing on Ollama server.</code></p>
-  </div>
-  <p><strong>Resolution</strong>: Manually pull the missing model assets using docker command:</p>
-  <pre><code>docker exec -it contexa-ollama ollama pull qwen2.5:7b
+<h3 id="ollama-model-missing">An Ollama model is missing</h3>
+<div class="callout callout-warning">
+  <p><strong>Message</strong> (<code>contexa doctor</code>): <code>Ollama Model 'qwen2.5:7b' is missing.</code></p>
+</div>
+<p><strong>Fix:</strong> pull the model, and the embedding model with it.</p>
+<pre><code class="language-bash">docker exec -it contexa-ollama ollama pull qwen2.5:7b
 docker exec -it contexa-ollama ollama pull mxbai-embed-large</code></pre>
-  <p>For low-spec or memory-limited environments, you can define the environment variable <code>OLLAMA_CHAT_MODEL</code> as a smaller variant (e.g. <code>qwen2.5:3b</code> or <code>1.5b</code>) and synchronize it with your <code>application.yml</code> configurations.</p>
-  <h3>⑤ No Contexa tables after adding only the Starter</h3>
-  <p>This is expected in dependency-only state without <code>@EnableAISecurity</code>. Adding the Starter alone does not create Contexa filters, authentication providers, or the IAM schema. OSS and Enterprise tables are created and validated by the corresponding activated server runtime.</p>
+<ul>
+  <li><strong>The model you pull must be the model the application uses.</strong> The application's chat model is <code>contexa.llm.chat.ollama.model</code> (empty means <code>qwen3:8b</code>); in the settings the CLI writes, it is overridden by the environment variable <code>CONTEXA_CHAT_OLLAMA_MODEL</code> (default <code>qwen2.5:7b</code>). The model the CLI pulls and checks is another environment variable, <code>OLLAMA_CHAT_MODEL</code> (default <code>qwen2.5:7b</code>).</li>
+  <li>To use a lighter model on a small machine (for example <code>qwen2.5:3b</code>), set both to the same model. You can also pull it with <code>contexa ollama pull --chat-model qwen2.5:3b</code> (the environment variable wins when set).</li>
+</ul>
 
-  <h3>⑥ <code>contexa reset</code> does not revert every change</h3>
-  <p><code>reset</code> reverts only CLI-owned changes recorded in the installation manifest. It does not arbitrarily delete a Starter dependency that the user already owned or overwrite files edited after installation. If a conflict is reported, inspect the file and manifest, then resolve the user-owned change explicitly. Use <code>contexa reset --simulate</code> for a dry run.</p>
+<h3 id="reset-scope">What <code>contexa reset</code> reverts</h3>
+<p><code>reset</code> keeps no install record; it reverts with the backups <code>init</code> made before changing files (<code>contexa/bak/</code>) and with fixed rules.</p>
+<ul>
+  <li><strong>Code (<code>-c</code>):</strong> overwrites files with the originals from the backup, so changes you made after <code>init</code> are lost too. For build files and settings without a backup it removes the Contexa lines (all of <code>contexa:</code>, all of <code>spring.ai</code> and more), and removes <code>@EnableAISecurity</code> and its import from every Java file (even ones you added yourself). It deletes the <code>&lt;project&gt;/contexa</code> folder.</li>
+  <li><strong>Infrastructure (<code>-i</code>):</strong> takes the project's Compose stack down and removes its containers and volumes.</li>
+  <li><strong>Simulation (<code>-s</code>):</strong> removes the <code>ctxa-sim</code> stack and its volumes and reverts the code too. <code>-a</code> does everything.</li>
+</ul>
+<p>Keep a copy of files you changed yourself before resetting.</p>
 
-  <h3>⑦ Maven cannot resolve an <code>ai.ctxa</code> dependency</h3>
-  <p>Stable <code>0.1.0</code> consumers need only <code>mavenCentral()</code>. Do not add Spring milestone/snapshot or Sonatype snapshot repositories to a normal consumer build. Immediately after publication, wait for Maven Central synchronization, then verify the coordinate is <code>ai.ctxa:spring-boot-starter-contexa:0.1.0</code>.</p>
-</section>
+<h2 id="startup-errors">Application startup errors</h2>
 
-<!-- Navigation Footer -->
-<div class="docs-nav-footer">
-  <a href="installation-guide.html" class="docs-nav-link prev">
-    <span class="docs-nav-label">Previous</span>
-    <span class="docs-nav-title">Installation Guide</span>
-  </a>
-  <a href="spring-boot.html" class="docs-nav-link next">
-    <span class="docs-nav-label">Next</span>
-    <span class="docs-nav-title">Spring Boot Integration</span>
-  </a>
+<h3 id="datasource-missing"><code>contexa.datasource.url must be configured for @EnableAISecurity</code></h3>
+<div class="callout callout-warning">
+  <p><strong>Full message</strong>: <code>java.lang.IllegalStateException: contexa.datasource.url must be configured for @EnableAISecurity. Use a dedicated Contexa database by default; sharing the application database requires explicit POC approval.</code></p>
 </div>
+<p><strong>Cause:</strong> once <code>@EnableAISecurity</code> is on, a dedicated Contexa database address is required.</p>
+<p><strong>Fix:</strong> create the dedicated database (<a href="installation-guide.html#step-database">Create the dedicated database</a>) and set its address. In an existing application do not set <code>contexa.datasource.isolation.contexa-owned-application: true</code> (<a href="installation-guide.html#step-config">Minimal settings</a>).</p>
+<pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+    username: contexa
+    password: ${CONTEXA_DB_PASSWORD}</code></pre>
+
+<h3 id="datasource-shared"><code>contexa.datasource must not share ...</code></h3>
+<div class="callout callout-warning">
+  <p><strong>Message</strong>: <code>contexa.datasource must not share spring.datasource unless contexa.datasource.isolation.allow-shared-application-datasource=true and contexa.datasource.isolation.shared-application-datasource-risk-accepted=true are both set for an approved POC</code>, or <code>contexa.datasource must not share the application datasource in production profiles</code></p>
+</div>
+<p><strong>Cause:</strong> <code>contexa.datasource.url</code> equals your application's <code>spring.datasource.url</code>.</p>
+<p><strong>Fix:</strong> keep a separate dedicated database. If you must use the same database for a trial, set both settings above to <code>true</code>; it is still refused under the <code>prod</code> and <code>production</code> profiles. An application owned by Contexa (<code>contexa-owned-application: true</code>) skips this check.</p>
+
+<h3 id="app-datasource-missing">Your application has no default database connection</h3>
+<div class="callout callout-warning">
+  <p><strong>Message</strong> (Spring Boot): <code>Failed to configure a DataSource: 'url' attribute is not specified and no embedded datasource could be configured.</code></p>
+</div>
+<p><strong>Cause:</strong> the starter brings JPA, and while Contexa is on it does not filter out Spring Boot's database auto-configuration. When your application has neither its own database address (<code>spring.datasource.url</code>) nor an embedded database, Spring Boot cannot create your application's default connection.</p>
+<p><strong>Fix:</strong> set a database address for your application. With <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>, where Contexa owns sign-in, the Contexa database becomes your application's default connection and this error does not occur.</p>
+
+<h3 id="schema-partial"><code>Contexa schema is partially installed ...</code></h3>
+<div class="callout callout-warning">
+  <p><strong>Message</strong>: <code>Contexa schema is partially installed without a complete ownership contract. No schema changes were applied. Restore a verified OSS backup or use a clean database.</code></p>
+</div>
+<p><strong>Cause:</strong> only some Contexa tables exist in the Contexa database. Contexa does not repair such a database and stops the startup. If the tables are still incomplete after the first installation, it stops with <code>Contexa schema is partially installed after canonical schema execution.</code></p>
+<p><strong>Fix:</strong> use a clean database or restore a verified backup. Also check that the database account can create the <code>vector</code> extension.</p>
+
+<h3 id="boot-4">Spring Boot 4.x</h3>
+<div class="callout callout-warning">
+  <p><strong>Messages</strong>: <code>Contexa does not support Spring Boot 4.x. Current version: ...</code> (ERROR log), <code>Spring Boot 4.x is not supported by Contexa. Current version: ...</code> (<code>IllegalStateException</code>)</p>
+</div>
+<p><strong>Fix:</strong> use Spring Boot 3.x. Contexa is built and tested with 3.5.4.</p>
+
+<h3 id="host-chain-missing">Every request asks for sign-in · <code>HOST_OWNED mode: no SecurityFilterChain is declared</code></h3>
+<p><strong>Cause:</strong> the starter brings Spring Security, so an application without its own <code>SecurityFilterChain</code> gets Spring Boot's default security. This happens with the starter alone too (without <code>@EnableAISecurity</code>). In the default way with <code>@EnableAISecurity</code> on (<code>HOST_OWNED</code>), Contexa logs <code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared by the application ...</code> as an ERROR at startup.</p>
+<p><strong>Fix:</strong> declare your application's <code>SecurityFilterChain</code>. Do not stop at the <code>anyRequest().permitAll()</code> the log names as an example; protect the admin console <code>/contexa/admin/**</code> too (<a href="installation-guide.html#legacy-integration">Connect your existing sign-in</a>). To leave sign-in to Contexa, use <code>contexa.bridge.ownership: CONTEXA_OWNED</code> or <code>mode = SecurityMode.FULL</code>.</p>
+
+<h3 id="legacy-prefix">ERROR logs about old setting names</h3>
+<div class="callout callout-warning">
+  <p><strong>Message</strong>: <code>Contexa legacy property prefix '&lt;old prefix&gt;*' detected. Migrate to '&lt;new prefix&gt;*'. Aliases will be removed in v0.3.0.</code></p>
+</div>
+<p><strong>Cause:</strong> you used an old setting name outside <code>contexa.*</code>. It is still read under the new name for now, but an ERROR is logged once per prefix at every startup, and the aliases are to be removed in v0.3.0. If the new name already has a value, the new name's value is used. The vector store settings (<code>spring.ai.vectorstore.pgvector.*</code>) are on this list too; write them as <code>contexa.vectorstore.pgvector.*</code>.</p>
+<p><strong>Fix:</strong> change to the new prefix the log names. All moved names are in the <a href="configuration.html">configuration guide</a>.</p>
+
+<h3 id="standalone-warning">The <code>contexa.infrastructure.mode is standalone</code> warning</h3>
+<p>An expected warning (WARN) that in the default infrastructure mode (<code>standalone</code>) learned state lives in memory and is lost on restart. You can leave it during development. To keep learning in operation, switch to <a href="installation-guide.html#distributed"><code>distributed</code></a>.</p>
+
+<h3 id="dependency-only-tables">The starter is added but there are no Contexa tables</h3>
+<p>Expected without <code>@EnableAISecurity</code> (the dependency only). The starter alone creates no Contexa filter, authentication provider or table. The tables are created and verified in the Contexa database when an application with Contexa turned on starts. If they are still missing after turning it on, check that <code>contexa.iam.seed.enabled</code> is not <code>false</code> and that <code>contexa.datasource.*</code> points at the Contexa database.</p>
+
+<h2 id="model-errors">Model and vector store errors</h2>
+
+<h3 id="capability-missing"><code>[ContexaCapability] ...</code> · <code>Contexa required capability check failed.</code></h3>
+<div class="callout callout-warning">
+  <p><strong>Log format</strong>: <code>[ContexaCapability] &lt;capability&gt; status=&lt;status&gt; required=&lt;true|false&gt;</code> followed by <code>Reason</code>, <code>Missing beans</code> and <code>Recommended actions</code>.</p>
+</div>
+<p><strong>Cause:</strong> when the startup finished, a part that decisions need was missing. An application that owns sign-in (<code>WARN</code>) logs ERRORs and keeps starting; an application owned by Contexa (<code>FAIL_FAST</code>: <code>contexa-owned-application: true</code>, <code>FULL</code>, or <code>spring.application.name</code> starting with <code>contexa-</code>) stops with <code>Contexa required capability check failed.</code></p>
+<div class="table-scroll"><table class="api-table prose-table">
+  <thead><tr><th>Capability</th><th>What is missing</th><th>Fix</th></tr></thead>
+  <tbody>
+    <tr><td><code>llm-runtime</code></td><td>Chat model (<code>ChatModel</code>)</td><td>Add a Spring AI chat provider starter and set its key or address (<code>spring.ai.*</code>; for Ollama, <code>contexa.llm.chat.ollama.base-url</code> also works).</td></tr>
+    <tr><td><code>embedding-runtime</code></td><td>Embedding model (<code>EmbeddingModel</code>)</td><td>Set up OpenAI or Ollama embeddings.</td></tr>
+    <tr><td><code>rag-vector</code></td><td>Vector store (<code>VectorStore</code>)</td><td>Add <code>org.springframework.ai:spring-ai-starter-vector-store-pgvector</code> and check the database connection and the <code>vector</code> extension.</td></tr>
+    <tr><td><code>security-learning</code></td><td>Learning parts after decisions</td><td>When the log says <code>Resolve rag-vector first</code>, fix <code>rag-vector</code> first (they need the vector store).</td></tr>
+    <tr><td><code>autonomous-decision</code></td><td>The decision strategy or the decision record store</td><td>Provide a chat model and a vector store. Without them no decision strategy is created and every protected request stays pending analysis. To run without the decision engine, set <code>contexa.autonomous.enabled: false</code>.</td></tr>
+  </tbody>
+</table></div>
+<p>Change how strict the check is with <code>contexa.capability.mode</code> (<a href="installation-guide.html#capability">Capability check</a>).</p>
+
+<h3 id="no-chat-model"><code>No Spring AI ChatModel is configured for CONTEXA</code></h3>
+<div class="callout callout-warning">
+  <p><strong>Message (start)</strong>: <code>No Spring AI ChatModel is configured for CONTEXA. Add at least one Spring AI chat provider starter to your application dependencies ... then configure the matching provider under spring.ai.*</code></p>
+</div>
+<p><strong>Cause:</strong> a chat model bean exists, but Contexa could not build the chat client and model selection it uses. The message advises that, if the dependency is already present, you check that the provider's key or address is actually set. With no provider starter at all you get the <code>llm-runtime</code> capability result above instead of this message.</p>
+<p><strong>Fix:</strong> put provider keys in the Spring AI settings, not under <code>contexa.llm</code>: <code>spring.ai.openai.api-key</code>, <code>spring.ai.anthropic.api-key</code>, and for Ollama <code>spring.ai.ollama.*</code> or <code>contexa.llm.chat.ollama.base-url</code>. Set the provider order with <code>contexa.llm.selection.chat.priority</code> (<a href="installation-guide.html#step-config">Minimal settings</a>).</p>
+
+<h3 id="vector-extension">The <code>vector</code> extension is missing (PostgreSQL)</h3>
+<p><strong>Fix:</strong> use an image with pgvector (for example <code>pgvector/pgvector:pg16</code>), or on an existing database run this once with an account that has the privilege. Both the Contexa database and your application's default database, where the vector table is created, need it.</p>
+<pre><code class="language-sql">CREATE EXTENSION IF NOT EXISTS vector;</code></pre>
+
+<h3 id="decisions-pending">No decisions come out</h3>
+<ul>
+  <li><strong>Enforcement mode:</strong> with <code>DISABLED</code> or <code>OBSERVE</code>, <code>@Protectable</code> calls are not analyzed. A mode saved in the admin console wins over YAML, so check <code>/contexa/admin/system-settings</code> (startup log <code>System runtime settings applied to AI decision mode: ...</code>).</li>
+  <li><strong>Parts:</strong> without a chat model and a vector store, requests stay pending analysis (<a href="#capability-missing">above</a>).</li>
+  <li><strong>What is protected:</strong> what gets analyzed is <code>@Protectable</code> method calls. Calls without sign-in (anonymous) are refused before analysis.</li>
+  <li><strong>Decisions apply from the next request:</strong> the default asynchronous methods are decided after the response, so the decision applies to the next call.</li>
+</ul>
+
+<h2 id="dependency-not-found">The <code>ai.ctxa</code> dependency is not found</h2>
+<p>The official <code>0.1.0</code> needs only <code>mavenCentral()</code>. Do not add Spring milestone or snapshot repositories, or the Sonatype snapshot repository, to a regular application build. Check that the coordinates are <code>ai.ctxa:spring-boot-starter-contexa:0.1.0</code>; right after a release, try again once the Maven Central sync has finished.</p>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="shadow-mode.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Start Safely with Enforcement Modes</span>
+            </a>
+            <a href="examples.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Examples</span>
+            </a>
+          </div>

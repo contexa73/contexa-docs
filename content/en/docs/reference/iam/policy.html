@@ -5,726 +5,401 @@
             <span class="breadcrumb-separator">/</span>
             <span class="breadcrumb-current">Policy Management</span>
           </nav>
+
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-warning">contexa-iam</span>
+              <span class="badge badge-secondary">Authorization</span>
             </div>
             <h1>Policy Management</h1>
-            <p class="lead">PAP (Policy Administration Point) services for policy lifecycle management: CRUD operations, automatic role-based synchronization, Policy Center authoring flows, policy versioning, AI-assisted drafting, and business rule translation.</p>
+            <p class="lead">This page shows how to create URL and method access policies in the admin console's Policy Center, how to approve drafts written by AI, and how to check what a saved policy decides for a request. Policies are stored in the Contexa database and are reloaded the moment you save them, so they apply from the next request.</p>
           </div>
 
-                    <!-- PolicyService -->
-          <section>
-            <h2 id="policy-service">PolicyService</h2>
-            <p>The primary service for policy CRUD, search, approval, validation, simulation, impact analysis, and version rollback. The Policy Center controller uses this service as the main orchestration entry point.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public interface PolicyService {
-    List&lt;Policy&gt; getAllPolicies();
-    Page&lt;Policy&gt; searchPolicies(String keyword, Pageable pageable);
-    Page&lt;Policy&gt; searchPolicies(String keyword,
-                                Policy.ApprovalStatus approvalStatus,
-                                Boolean activeFilter,
-                                Pageable pageable);
-    Policy findById(Long id);
-    Policy createPolicy(PolicyDto policyDto);
-    void updatePolicy(PolicyDto policyDto);
-    void deletePolicy(Long id);
-    void deletePolicy(Long id, String changeReason);
-    void synchronizePolicyForPermission(Permission permission);
-    void approvePolicy(Long id, String approver);
-    void rejectPolicy(Long id, String rejector);
-    List&lt;PolicyConflictDto&gt; detectConflicts(PolicyDto policyDto);
-    PolicyValidationReport validateBeforeCreate(PolicyDto policyDto);
-    List&lt;PolicyVersion&gt; getVersions(Long policyId);
-    Policy rollbackPolicy(Long policyId, int versionNumber, String reason);
-    PolicyImpactReport analyzeImpact(PolicyDto policyDto);
-    SimulationReport simulate(PolicyDto candidatePolicy,
-                              List&lt;SimulationTestCase&gt; testCases);
-    AIPolicyValidationReport validateAIPolicy(Long policyId);
-}</code></pre>
-            </div>
-
-            <h3>PolicyDto Structure</h3>
-            <p>The <code>PolicyDto</code> is the transport shape used by Policy Center, classic controllers, version snapshots, and AI validation output.</p>
-            <table>
-              <thead>
-                <tr><th>Field</th><th>Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>id</code></td><td><code>Long</code></td><td>Policy ID (null for creation)</td></tr>
-                <tr><td><code>name</code></td><td><code>String</code></td><td>Unique policy name</td></tr>
-                <tr><td><code>description</code></td><td><code>String</code></td><td>Human-readable description</td></tr>
-                <tr><td><code>effect</code></td><td><code>Policy.Effect</code></td><td><code>ALLOW</code> or <code>DENY</code></td></tr>
-                <tr><td><code>priority</code></td><td><code>int</code></td><td>Evaluation priority (lower = higher)</td></tr>
-                <tr><td><code>targets</code></td><td><code>List&lt;TargetDto&gt;</code></td><td>Policy targets supplied by the client form</td></tr>
-                <tr><td><code>rules</code></td><td><code>List&lt;RuleDto&gt;</code></td><td>Rule list containing one or more SpEL conditions</td></tr>
-                <tr><td><code>source</code></td><td><code>Policy.PolicySource</code></td><td><code>MANUAL</code>, <code>AI_GENERATED</code>, <code>AI_EVOLVED</code>, or <code>IMPORTED</code></td></tr>
-                <tr><td><code>approvalStatus</code></td><td><code>Policy.ApprovalStatus</code></td><td>Pending/approved state used for AI-generated policies</td></tr>
-                <tr><td><code>isActive</code></td><td><code>Boolean</code></td><td>Current activation flag</td></tr>
-                <tr><td><code>friendlyDescription</code></td><td><code>String</code></td><td>Natural-language description generated by <code>PolicyEnrichmentService</code></td></tr>
-                <tr><td><code>approvedBy</code>, <code>approvedAt</code></td><td><code>String</code>, <code>LocalDateTime</code></td><td>Approval metadata</td></tr>
-                <tr><td><code>confidenceScore</code>, <code>aiModel</code>, <code>reasoning</code></td><td><code>Double</code>, <code>String</code>, <code>String</code></td><td>AI generation metadata when present</td></tr>
-                <tr><td><code>createdAt</code>, <code>updatedAt</code></td><td><code>LocalDateTime</code></td><td>Timestamps used in detail and version views</td></tr>
-                <tr><td><code>changeReason</code></td><td><code>String</code></td><td>Optional operator-supplied reason used during update/delete/rollback flows</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-          <!-- PolicySynchronizationService -->
-          <section>
-            <h2 id="synchronization">PolicySynchronizationService</h2>
-            <p>Automatically generates and updates policies when role-permission assignments change. Listens for <code>RolePermissionsChangedEvent</code> via Spring's <code>@EventListener</code> and executes asynchronously with <code>@Async</code>.</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public class PolicySynchronizationService {
-
-    @Async
-    @EventListener
-    @Transactional
-    public void handleRolePermissionsChange(
-            RolePermissionsChangedEvent event) { ... }
-}</code></pre>
-            </div>
-
-            <h3>Synchronization Flow</h3>
-            <div class="diagram-container">
-              <div class="diagram-title">Policy Synchronization Pipeline</div>
-              <div class="diagram-flow-vertical">
-                <div class="diagram-box diagram-highlight">
-                  <span class="diagram-box-name">RolePermissionsChangedEvent</span>
-                  <span class="diagram-box-desc">Triggered when role-permission assignments change</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-box">
-                  <span class="diagram-box-name">Load Role</span>
-                  <span class="diagram-box-desc">Fetch role with permissions and managed resources</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-box">
-                  <span class="diagram-box-name">Build Targets</span>
-                  <span class="diagram-box-desc">Create targets from ManagedResource (URL or METHOD type)</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-box">
-                  <span class="diagram-box-name">Build Condition</span>
-                  <span class="diagram-box-desc">hasAuthority('ROLE_NAME') and (permission expressions)</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-box diagram-accent">
-                  <span class="diagram-box-name">Create PolicyDto</span>
-                  <span class="diagram-box-desc">Name: AUTO_POLICY_FOR_{roleName}, Priority: 500</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-box diagram-success">
-                  <span class="diagram-box-name">Upsert Policy</span>
-                  <span class="diagram-box-desc">Existing policy by name? Update : Create new</span>
-                </div>
-              </div>
-            </div>
-
-            <p>Auto-generated policies use the naming convention <code>AUTO_POLICY_FOR_{roleName}</code> with a priority of 500. The condition expression combines the role authority check with individual permission authority checks joined by <code>or</code>.</p>
-          </section>
-
-                    <!-- PolicyBuilderService -->
-          <section>
-            <h2 id="builder">PolicyBuilderService</h2>
-            <p>The builder service still exists in the server layer for template lookup, visual-model conversion, and conflict analysis. In the current OSS UI, operators primarily use the integrated Policy Center create tab rather than a separate standalone builder template.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public interface PolicyBuilderService {
-    List&lt;PolicyTemplateDto&gt; getAvailableTemplates(PolicyContext context);
-    Policy buildPolicyFromVisualComponents(VisualPolicyDto visualPolicyDto);
-    List&lt;PolicyConflictDto&gt; detectConflicts(Policy newPolicy);
-}</code></pre>
-            </div>
-            <p><code>PolicyBuilderController</code> and <code>/admin/policy-builder</code> still exist in server code, including <code>/from-resource</code>. However, the current OSS template bundle routes day-to-day authoring through <code>/admin/policy-center</code>.</p>
-          </section>
-
-          <!-- PolicyEnrichmentService -->
-          <section>
-            <h2 id="enrichment">PolicyEnrichmentService</h2>
-            <p>Enriches policy entities with human-readable descriptions by delegating to <code>PolicyTranslator</code>. This service translates SpEL expressions in policy conditions into natural language descriptions.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public class PolicyEnrichmentService {
-
-    private final PolicyTranslator policyTranslator;
-
-    public void enrichPolicyWithFriendlyDescription(Policy policy) {
-        // Translates policy rules/conditions to human-readable text
-        // Sets policy.friendlyDescription
-    }
-}</code></pre>
-            </div>
-            <p>Example: A policy with condition <code>hasAuthority('ROLE_ADMIN') and isAuthenticated()</code> would be enriched to <code>"(User has authority ROLE_ADMIN and User is authenticated)"</code>.</p>
-          </section>
-
-          <!-- BusinessPolicyService -->
-          <section>
-            <h2 id="business">BusinessPolicyService</h2>
-            <p>Provides bidirectional translation between business-level access rules and technical policy definitions, enabling non-technical administrators to manage authorization.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">public interface BusinessPolicyService {
-    // Create a technical policy from a business rule definition
-    Policy createPolicyFromBusinessRule(BusinessPolicyDto dto);
-
-    // Update an existing policy from business rule changes
-    Policy updatePolicyFromBusinessRule(Long policyId, BusinessPolicyDto dto);
-
-    // Get the business rule representation for a technical policy
-    BusinessPolicyDto getBusinessRuleForPolicy(Long policyId);
-
-    // Translate an existing technical policy to business rule format
-    BusinessPolicyDto translatePolicyToBusinessRule(Long policyId);
-}</code></pre>
-            </div>
-          </section>
-
-          <!-- Policy Entity Model -->
-          <section>
-            <h2 id="entity-model">Policy Entity Model</h2>
-            <div class="diagram-container">
-              <div class="diagram-title">Policy Entity Structure</div>
-              <div class="diagram-flow-vertical">
-                <div class="diagram-box diagram-large diagram-highlight">
-                  <span class="diagram-box-name">Policy</span>
-                  <span class="diagram-box-desc">name (unique) | description | effect: ALLOW / DENY | priority: int | source | approvalStatus | isActive | friendlyDescription | approvedBy | approvedAt | confidenceScore | aiModel | reasoning</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-grid diagram-grid-2">
-                  <div class="diagram-box diagram-accent">
-                    <span class="diagram-box-name">PolicyTarget (set)</span>
-                    <span class="diagram-box-desc">targetType: URL | METHOD -- targetIdentifier: URL pattern or method signature -- httpMethod: GET, POST, ANY, etc.</span>
-                  </div>
-                  <div class="diagram-box diagram-accent">
-                    <span class="diagram-box-name">PolicyRule (set)</span>
-                    <span class="diagram-box-desc">description: String</span>
-                  </div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-box">
-                  <span class="diagram-box-name">PolicyCondition (set per rule)</span>
-                  <span class="diagram-box-desc">expression: String (SpEL) | authorizationPhase: PRE_AUTHORIZE / POST_AUTHORIZE</span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- Policy Authoring Flow -->
-          <section>
-            <h2 id="policy-builder">Policy Authoring Flow</h2>
-            <p>The current OSS policy authoring experience is centered on Policy Center, with related admin policy routes and detail editing supporting the same lifecycle.</p>
-
-            <h3>Five-Step Workflow</h3>
-            <ol>
-              <li><strong>Name &amp; Description</strong> &mdash;Set the policy name, description, and effect (ALLOW/DENY)</li>
-              <li><strong>Targets</strong> &mdash;Define URL patterns or method identifiers this policy applies to</li>
-              <li><strong>Rules</strong> &mdash;Configure ALLOW/DENY rules with priority ordering</li>
-              <li><strong>Conditions</strong> &mdash;Write SpEL expressions for each rule</li>
-              <li><strong>Condition Picker</strong> &mdash;Select from compatible condition templates</li>
+          <h2 id="overview">At a glance</h2>
+          <p>A policy has four parts: <strong>where</strong> (targets), <strong>under which condition</strong> (conditions), <strong>allow or deny</strong> (effect), and <strong>which policy is looked at first</strong> (priority). For example, "for <code>/api/v1/invoices/**</code>, if the user has <code>ROLE_FINANCE</code>, allow, priority 100" is one policy.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>From a saved policy to enforcement</strong>Saving reloads the policies at once, so they apply from the next request. Nothing is rebuilt.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-host"><span class="dg-node-tag">Administrator</span><span class="dg-node-title">Write it in Policy Center</span><span class="dg-node-desc">Quick Mode · Manual Mode · AI Mode</span></li>
+              <li class="dg-node dg-contexa"><span class="dg-node-tag">Before saving</span><span class="dg-node-title">Expression safety and conflict checks</span><span class="dg-node-desc">A forbidden expression or a severe conflict is not saved</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-tag">Store</span><span class="dg-node-title">Saved to the Contexa database</span><span class="dg-node-desc">With a version record and an audit record</span></li>
+              <li class="dg-node dg-contexa"><span class="dg-node-tag">Reload</span><span class="dg-node-title">Clear the policy cache and read again</span><span class="dg-node-desc">In distributed mode the other instances are told as well</span></li>
+              <li class="dg-node dg-request"><span class="dg-node-tag">Request</span><span class="dg-node-title">URL requests and method calls are evaluated</span><span class="dg-node-desc">The conditions of the policies whose targets match are evaluated and combined</span></li>
             </ol>
+          </figure>
+          <div class="callout callout-warning">
+            <strong>URL policies are evaluated only when the request passes the dynamic authorization manager.</strong> With <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>, the security chain Contexa builds sends every request to <code>CustomDynamicAuthorizationManager</code>. In the default <code>HOST_OWNED</code> mode Contexa builds no security chain, so the application's own chain has to call it, for example <code>.anyRequest().access(customDynamicAuthorizationManager)</code> (<a href="end-to-end-workflow.html#prepare">Preparation</a>). <code>@Protectable</code> method policies are evaluated in both modes, whenever the method is called.
+          </div>
 
-            <h3>From-Resource Mode</h3>
-            <p>When policy creation starts from a selected resource in the Policy Center integrated resources area, or from the legacy <code>/admin/policy-builder/from-resource</code> route, the builder enters from-resource mode:</p>
-            <ul>
-              <li>Resource target information is pre-filled</li>
-              <li>Only compatible condition templates are shown (filtered by <code>ConditionCompatibilityService</code>)</li>
-              <li>Domain-specific variables and ABAC applicability are considered</li>
-            </ul>
-          </section>
+          <h2 id="structure">What a policy is made of</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Part</th><th>Meaning</th><th>Values and rules</th></tr></thead>
+            <tbody>
+              <tr><td>Name <code>name</code></td><td>The policy name</td><td>Required, unique among policies</td></tr>
+              <tr><td>Description <code>description</code></td><td>Free text</td><td>Optional</td></tr>
+              <tr><td>Effect <code>effect</code></td><td>Allow or deny when the condition holds</td><td><code>ALLOW</code> · <code>DENY</code>, required</td></tr>
+              <tr><td>Priority <code>priority</code></td><td>Evaluation order. Lower numbers go first</td><td>100 for Quick Mode, AI Mode and batch creation, 500 for automatic role policies</td></tr>
+              <tr><td>Targets <code>targets</code></td><td>Where the policy applies</td><td>Type (<code>URL</code> · <code>METHOD</code>), identifier, HTTP method, order (<code>targetOrder</code>), source (<code>RESOURCE</code> · <code>MANUAL</code>). At least one in Manual Mode</td></tr>
+              <tr><td>Rules <code>rules</code></td><td>A description and a group of conditions</td><td>Rules have no effect and no order; effect and priority belong to the policy</td></tr>
+              <tr><td>Condition</td><td>One SpEL expression</td><td>Expression, phase (<code>PRE_AUTHORIZE</code> · <code>POST_AUTHORIZE</code> · <code>PROTECTABLE</code>), description. The phase is stored, but the evaluation code does not read it today</td></tr>
+              <tr><td>Source <code>source</code></td><td>Who made it</td><td><code>MANUAL</code> (default) · <code>AI_GENERATED</code> · <code>AI_EVOLVED</code> · <code>IMPORTED</code></td></tr>
+              <tr><td>Approval status <code>approvalStatus</code></td><td>Whether it may be evaluated</td><td><code>PENDING</code> · <code>APPROVED</code> · <code>REJECTED</code> · <code>NOT_REQUIRED</code> (<a href="#approval">Approving AI drafts</a>)</td></tr>
+              <tr><td>Active <code>isActive</code></td><td>Whether it takes part in evaluation</td><td>Always active when created; a rejection makes it inactive</td></tr>
+              <tr><td>Readable description <code>friendlyDescription</code></td><td>The conditions in words</td><td>Filled in when saved (<a href="#on-save">What saving does</a>)</td></tr>
+              <tr><td>AI fields <code>confidenceScore</code> · <code>aiModel</code> · <code>reasoning</code></td><td>Confidence, model and reasoning of an AI draft</td><td>Filled in by AI Mode</td></tr>
+              <tr><td>Approval record <code>approvedBy</code> · <code>approvedAt</code></td><td>Who approved or rejected it, and when</td><td>Filled in on approval or rejection</td></tr>
+              <tr><td>Times <code>createdAt</code> · <code>updatedAt</code></td><td>Created and updated</td><td>Automatic</td></tr>
+              <tr><td>Change reason <code>changeReason</code></td><td>Why this change was made</td><td>Only in the input (<code>PolicyDto</code>); kept in the version record</td></tr>
+            </tbody>
+          </table></div>
+          <p>URL targets are matched with Spring path patterns (<code>/api/**</code>, <code>/api/v1/invoices/{id}</code>). A target without an HTTP method, or with <code>ANY</code> or <code>ALL</code>, matches every method; choosing <code>ALL</code> on screen stores no method. Path variables can be used in conditions, for example <code>#id</code>.</p>
+          <p>A method target identifier looks like <code>package.Class.method(SimpleParameterTypes)</code>, for example <code>com.example.docs.DocumentService.getDocument(Long)</code>. It is the same identifier the <a href="resource-scanner.html#method-resources">Resource Scanner</a> produces.</p>
 
-          <!-- Condition Template System -->
-          <section>
-            <h2 id="condition-templates">Condition Template System</h2>
-            <p>Condition templates are reusable SpEL expression patterns that simplify policy creation.</p>
-
-            <h3>Three-Tier Classification</h3>
-            <table>
-              <thead>
-                <tr><th>Tier</th><th>Name</th><th>Scope</th><th>Examples</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>1</td><td>UNIVERSAL</td><td>All resources</td><td>Time-based restrictions, IP range checks</td></tr>
-                <tr><td>2</td><td>CONTEXT_DEPENDENT</td><td>Domain-specific</td><td>User ownership verification, department checks</td></tr>
-                <tr><td>3</td><td>CUSTOM_COMPLEX</td><td>Advanced</td><td>Multi-factor conditions, composite rules</td></tr>
-              </tbody>
-            </table>
-
-            <h3>AI Auto-Generation</h3>
-            <p>The <code>AutoConditionTemplateService</code> exists to generate condition templates through admin/maintenance flows and AI-backed generation services. In the current OSS tree, this is not wired as an always-on startup step for Policy Center authoring:</p>
-            <ul>
-              <li>Batch generation based on resource types and access patterns</li>
-              <li>Complexity scoring (1-10 scale) for each template</li>
-              <li>SpEL safety validation to block dangerous patterns</li>
-            </ul>
-
-            <h3>Condition Compatibility</h3>
-            <p><code>ConditionCompatibilityService</code> filters conditions per resource:</p>
-            <ul>
-              <li><strong>Domain compatibility</strong> &mdash;matches condition domain to resource domain</li>
-              <li><strong>Available variables</strong> &mdash;ensures referenced SpEL variables exist in the evaluation context</li>
-              <li><strong>ABAC applicability</strong> &mdash;checks if Attribute-Based Access Control conditions are relevant</li>
-            </ul>
-          </section>
-
-          <!-- Business Policy Service -->
-          <section>
-            <h2 id="business-policy">Business Policy Service</h2>
-            <p><code>BusinessPolicyService</code> translates business-level authorization rules into technical SpEL policy conditions, persists the policy, records a version snapshot, updates linked resource status when permission-backed targets are involved, and reloads runtime authorization mappings.</p>
-
-            <h3>SpEL Expression Conversion</h3>
-            <table>
-              <thead>
-                <tr><th>Input Type</th><th>Generated SpEL</th><th>Example</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Role-based</td><td><code>hasAuthority('ROLE_NAME')</code></td><td><code>hasAuthority('ROLE_ADMIN')</code></td></tr>
-                <tr><td>CRUD-based</td><td><code>hasAuthority('READ')</code> / <code>hasAuthority('WRITE')</code> ...</td><td><code>hasAuthority('READ')</code></td></tr><tr><td>Manual permission</td><td><code>hasAuthority('PERMISSION_NAME')</code></td><td><code>hasAuthority('USER_EXPORT')</code></td></tr>
-                <tr><td>AI action</td><td><code>#ai.isAllowed()</code>, <code>#ai.needsChallenge()</code>, <code>#ai.hasActionIn(...)</code></td><td><code>#ai.isAllowed() and hasAuthority('ROLE_USER')</code></td></tr>
-                <tr><td>Custom SpEL</td><td>Validated and used directly</td><td><code>isAuthenticated() and hasIpAddress('10.0.0.0/8')</code></td></tr>
-              </tbody>
-            </table>
-
-            <h3>Safety Validation</h3>
-            <p>Custom SpEL expressions are validated before storage to block:</p>
-            <ul>
-              <li>System-level method calls</li>
-              <li>Reflection-based access</li>
-              <li>Runtime class loading</li>
-              <li>File system operations</li>
-            </ul>
-
-            <h3>Policy Creation Flow</h3>
-            <div class="diagram-container">
-              <div class="diagram-title">Business Policy Creation Pipeline</div>
-              <div class="diagram-flow">
-                <div class="diagram-box diagram-highlight">
-                  <span class="diagram-box-name">BusinessPolicyDto</span>
-                  <span class="diagram-box-desc">UI form input</span>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box">
-                  <span class="diagram-box-name">Policy Entity</span>
-                  <span class="diagram-box-desc">Create from DTO</span>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-accent">
-                  <span class="diagram-box-name">Enrichment</span>
-                  <span class="diagram-box-desc">Human-readable description</span>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box">
-                  <span class="diagram-box-name">Save to DB</span>
-                  <span class="diagram-box-desc">Persist policy</span>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-success">
-                  <span class="diagram-box-name">Hot-Reload</span>
-                  <span class="diagram-box-desc">authorizationManager.reload()</span>
-                </div>
-              </div>
+          <h3 id="combining">How conditions are combined</h3>
+          <p>When a policy has several conditions, Contexa joins them into one expression. URL policies and method policies join them differently.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>URL policies use OR, method policies use AND</strong>All conditions of the policy are joined at once, however many rules hold them.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side dg-request"><p class="dg-side-title">URL policy</p><ul><li>All conditions are joined with <strong>OR</strong>; one true condition is enough</li><li>When every condition is a bare authority name (an upper-case name such as <code>ROLE_ADMIN</code>), the result is <code>hasAnyAuthority('A','B')</code></li><li>No condition means <code>permitAll</code> (always true)</li><li><code>hasPermission(...)</code> is removed. If nothing is left, an ALLOW policy becomes <code>denyAll</code> and a DENY policy <code>permitAll</code></li></ul></div>
+              <div class="dg-side dg-host"><p class="dg-side-title">Method policy (<code>@Protectable</code>)</p><ul><li>All conditions are joined with <strong>AND</strong>; all must be true</li><li>No condition means always true</li><li><code>hasPermission(...)</code> is evaluated as written; with <code>@Protectable(ownerField)</code> the owner is checked as well</li></ul></div>
             </div>
-          </section>
+          </figure>
+          <pre><code class="language-text">Condition 1: hasAuthority('ROLE_ADMIN')
+Condition 2: #ai.isAllowed()
 
-          <!-- Policy Wizard Guide -->
-          <section>
-            <h2 id="wizard-guide">Policy Wizard: Quick Grant Guide</h2>
-            <p>The quick-create flow inside Policy Center is the fastest way to author a simple policy. Use it when you need straightforward role-based access with selected roles, stored permissions, CRUD actions, or a saved <code>SecuritySpel</code> expression, without editing the full manual form.</p>
+URL policy    → (hasAuthority('ROLE_ADMIN')) or (#ai.isAllowed())
+Method policy → (hasAuthority('ROLE_ADMIN')) and (#ai.isAllowed())</code></pre>
+          <div class="callout callout-warning">
+            <strong>The Manual Mode screen describes this differently from what the code does.</strong> The screen says "each rule combined with OR, AND within a rule". In fact, regardless of rules, all conditions of a URL policy are joined with OR and all conditions of a method policy with AND. If a URL policy needs several conditions to hold together, write them in one condition joined with <code>and</code>.
+          </div>
 
-            <h3>When to Use the Wizard</h3>
-            <ul>
-              <li>Simple role-based permission grants without complex conditions</li>
-              <li>Granting access to a single resource for one or more roles</li>
-              <li>Quick setup during initial resource onboarding</li>
-              <li>No need for time-based, IP-based, or AI-assisted conditions</li>
-            </ul>
+          <h3 id="effect">Effect, priority and combining</h3>
+          <p>The policies whose targets match the request are evaluated in ascending priority. For method policies the <code>targetOrder</code> of the target bound to that method comes first, then priority, then policy ID. The effect turns the condition result into a decision:</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Effect</th><th>Condition true</th><th>Condition false</th></tr></thead>
+            <tbody>
+              <tr><td><code>ALLOW</code></td><td>Allow</td><td>Deny</td></tr>
+              <tr><td><code>DENY</code></td><td>Deny</td><td>Not applicable (this policy gives no result)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The default combining algorithm <code>FIRST_APPLICABLE</code> takes the first result that is not "not applicable". So an ALLOW policy evaluated first decides even when its condition is false: it denies. When no policy matches, or every matching one is not applicable, the "decision when no policy applies" (default <code>PERMIT</code>) is used. See <a href="#decision-settings">Decision settings</a> to change it.</p>
+          <p>Example: to stop users with a BLOCK decision and decide everyone else by role, write both in one condition: <code>hasAuthority('ROLE_FINANCE') and !#ai.isBlocked()</code>. Putting a separate DENY policy and ALLOW policy on the same target fails the conflict check below and is not saved.</p>
+          <div class="callout callout-warning">
+            <strong>Policies with opposite effects are not saved when their targets overlap.</strong> On save, Contexa looks for active policies with the opposite effect whose targets overlap. URL targets with the same path and HTTP method are <code>CRITICAL</code>; a pattern that contains the other, or two wildcard patterns that share at least their first two segments, are <code>HIGH</code>; both block the save. The same path with <code>ANY</code> on one side only is <code>MEDIUM</code> and is saved. Different HTTP methods (<code>GET</code> and <code>DELETE</code>) do not overlap. Method targets with the same identifier are <code>CRITICAL</code>. So a broad DENY policy such as <code>/**</code> cannot be used to build a "default deny". Set default deny with the "decision when no policy applies" in <a href="#decision-settings">Decision settings</a>.
+          </div>
 
-            <h3>Step-by-Step Guide</h3>
-            <div class="diagram-container">
-              <div class="diagram-title">Policy Wizard: 4-Step Quick Grant</div>
-              <div class="diagram-flow-vertical">
-                <div class="diagram-step">
-                  <div class="diagram-step-number">1</div>
-                  <div class="diagram-step-content">
-                    <div class="diagram-step-title">Start from Policy Center Resources</div>
-                    <div class="diagram-step-desc">Open <code>/admin/policy-center?tab=create</code>, review a resource in the integrated resources area, define its permission when needed, and continue into the quick-create panel with the resource context preselected.</div>
-                  </div>
-                </div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">2</div>
-                  <div class="diagram-step-content">
-                    <div class="diagram-step-title">Select Permissions</div>
-                    <div class="diagram-step-desc">Choose stored permissions, CRUD actions, or a saved <code>SecuritySpel</code> shortcut. The quick panel keeps the selected resource or manual target context while you compose the request.</div>
-                  </div>
-                </div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">3</div>
-                  <div class="diagram-step-content">
-                    <div class="diagram-step-title">Select Target Roles</div>
-                    <div class="diagram-step-desc">Pick one or more roles that the new policy condition should match. The quick panel also supports selecting CRUD permissions or a stored <code>SecuritySpel</code> expression.</div>
-                  </div>
-                </div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">4</div>
-                  <div class="diagram-step-content">
-                    <div class="diagram-step-title">Confirm and Commit</div>
-                    <div class="diagram-step-desc">Review the summary and click "Grant". In the current flow, permission definition happens first, then Policy Center saves the policy, records a version, updates linked resource status, and reloads authorization mappings.</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+          <h2 id="create">Three ways to create a policy</h2>
+          <p>Open "Policy → Policy Center" (<code>/contexa/admin/policy-center</code>) in the admin console and go to the "Policy Creation" tab. It holds the resource list and the three authoring modes. The resource list is filled by the <a href="resource-scanner.html">Resource Scanner</a>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Mode</th><th>Use it to</th><th>How to get there</th><th>Resulting policy</th></tr></thead>
+            <tbody>
+              <tr><td>Quick Mode</td><td>Attach roles and permissions to resources</td><td>A resource's "Create Permission &amp; Policy" → "Quick Mode", or "Configure Resource Permissions" (enter a target yourself)</td><td>Priority 100, source <code>MANUAL</code>, effective at once</td></tr>
+              <tr><td>Manual Mode</td><td>Write targets, rules and conditions yourself</td><td>The "Manual Mode" card</td><td>Exactly as entered, source <code>MANUAL</code>, effective at once</td></tr>
+              <tr><td>AI Mode</td><td>Describe the policy in words and get a draft</td><td>The "AI Mode" card, or a resource's "AI Policy Wizard" (one resource only)</td><td>Source <code>AI_GENERATED</code>, effective after approval</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3>What the Wizard Auto-Creates</h3>
-            <p>When you confirm, the quick flow persists a policy and updates the linked runtime metadata shown below:</p>
-            <div class="diagram-container">
-              <div class="diagram-flow">
-                <div class="diagram-box diagram-highlight">
-                  <span class="diagram-box-name">Permission</span>
-                  <span class="diagram-box-desc">Linked to resource</span>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-accent">
-                  <span class="diagram-box-name">Policy</span>
-                  <span class="diagram-box-desc">Effect, target, and rule condition from the quick-create request</span>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-success">
-                  <span class="diagram-box-name">Version + Reload</span>
-                  <span class="diagram-box-desc">Version snapshot, resource status sync, authorization reload</span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- Policy Authoring Guide -->
-          <section>
-            <h2 id="builder-guide">Policy Authoring: Advanced Policy Creation</h2>
-            <p>The advanced authoring flow is exposed primarily through the Policy Center create tab. The legacy <code>/admin/policy-builder</code> controller path still exists in server code, but the current OSS bundle centers operator workflows on Policy Center.</p>
-
-            <h3>When to Use the Builder</h3>
-            <ul>
-              <li>Policies with time-based, IP-based, or ownership conditions</li>
-              <li>AI-assisted authorization expressions (<code>#ai.isAllowed()</code>)</li>
-              <li>Multi-rule policies with different condition combinations</li>
-              <li>DENY policies or priority-sensitive configurations</li>
-              <li>Policies requiring custom SpEL expressions</li>
-            </ul>
-
-            <h3>Step-by-Step Guide</h3>
-            <div class="diagram-container">
-              <div class="diagram-title">Policy Authoring: 5-Step Advanced Creation</div>
-              <div class="diagram-flow-vertical">
-                <div class="diagram-step">
-                  <div class="diagram-step-number">1</div>
-                  <div class="diagram-step-content">
-                    <div class="diagram-step-title">Name and Description</div>
-                    <div class="diagram-step-desc">Set a unique policy name, human-readable description, and the policy effect (ALLOW or DENY). Choose the priority level (lower number = higher priority).</div>
-                  </div>
-                </div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">2</div>
-                  <div class="diagram-step-content">
-                    <div class="diagram-step-title">Targets</div>
-                    <div class="diagram-step-desc">Define URL patterns (e.g., /api/users/**) or method identifiers this policy applies to. Specify HTTP methods (GET, POST, ANY). In from-resource mode, this step is pre-filled.</div>
-                  </div>
-                </div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">3</div>
-                  <div class="diagram-step-content">
-                    <div class="diagram-step-title">Rules</div>
-                    <div class="diagram-step-desc">Configure one or more rules. Each rule can have its own description and contains conditions evaluated together. Rules are evaluated in priority order.</div>
-                  </div>
-                </div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">4</div>
-                  <div class="diagram-step-content">
-                    <div class="diagram-step-title">Conditions</div>
-                    <div class="diagram-step-desc">Write SpEL expressions for each rule. Conditions define who can access the target and under what circumstances. Manual mode binds each condition to an <code>authorizationPhase</code> and the server validates dangerous custom SpEL patterns before persistence.</div>
-                  </div>
-                </div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">5</div>
-                  <div class="diagram-step-content">
-                    <div class="diagram-step-title">Condition Picker</div>
-                    <div class="diagram-step-desc">Browse and select from compatible condition templates (UNIVERSAL, CONTEXT_DEPENDENT, CUSTOM_COMPLEX). The system recommends templates based on the target resource context.</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <h3>Context-Aware Mode (from-resource)</h3>
-            <p>When launched from a selected Policy Center resource or the legacy <code>/admin/policy-builder/from-resource</code> route, the builder enters <strong>from-resource mode</strong>:</p>
-            <ul>
-              <li><strong>Pre-filled target:</strong> The resource URL pattern or method signature is automatically set as the policy target</li>
-              <li><strong>Filtered conditions:</strong> <code>ConditionCompatibilityService</code> filters condition templates to show only those compatible with the resource domain</li>
-              <li><strong>Domain-specific variables:</strong> Available SpEL context variables are displayed based on the resource type</li>
-              <li><strong>ABAC applicability:</strong> Attribute-Based Access Control conditions are shown only when relevant to the resource</li>
-            </ul>
-
-            <h3>Condition Template Selection</h3>
-            <table>
-              <thead>
-                <tr><th>Tier</th><th>Name</th><th>When to Use</th><th>AI Recommendation</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>1</td><td>UNIVERSAL</td><td>Conditions that apply to any resource: time-based, IP range, authentication level</td><td>Recommended for general access control</td></tr>
-                <tr><td>2</td><td>CONTEXT_DEPENDENT</td><td>Domain-specific conditions: ownership checks, department verification, data sensitivity</td><td>Recommended based on resource domain analysis</td></tr>
-                <tr><td>3</td><td>CUSTOM_COMPLEX</td><td>Multi-factor conditions: combined role + AI + time checks, composite authorization rules</td><td>AI generates based on security posture analysis</td></tr>
-              </tbody>
-            </table>
-
-            <h3>AI-Assisted Condition Recommendation</h3>
-            <p>Policy authoring can use AI-assisted draft generation and condition suggestions backed by the resource, role, permission, template, and existing policy data already loaded into Policy Center. In OSS, the AI result feeds the existing business-rule and manual authoring model rather than introducing a separate policy language or a dedicated AI action editor.</p>
-            <ul>
-              <li>The selected resource metadata such as type, identifier, and HTTP method</li>
-              <li>Existing policies and validation data already loaded for similar targets</li>
-              <li>The currently selected roles, CRUD permissions, and stored SpEL shortcuts</li>
-              <li>Stored condition templates and compatibility results for the resource context</li>
-            </ul>
-            <p>Suggested conditions can be reviewed, edited, or replaced before the policy is saved.</p>
-          </section>
-
-          <!-- Wizard vs Builder Decision -->
-          <section>
-            <h2 id="wizard-vs-builder">Wizard vs. Builder: Decision Guide</h2>
-            <div class="diagram-container">
-              <div class="diagram-title">Which Tool Should You Use?</div>
-              <div class="diagram-compare">
-                <div class="diagram-compare-side">
-                  <h4>Policy Center Quick Mode</h4>
-                  <ul>
-                    <li>Simple role-to-permission grants</li>
-                    <li>No custom conditions needed</li>
-                    <li>Single resource or manual target, one or more roles</li>
-                    <li>ALLOW effect only</li>
-                    <li>4-step quick-create flow</li>
-                    <li>Uses the current quick-create request model in Policy Center</li>
-                  </ul>
-                  <p><strong>Best for:</strong> Initial resource onboarding, straightforward access grants, and quick OSS authoring from the integrated Policy Center flow.</p>
-                </div>
-
-                <div class="diagram-compare-vs">VS</div>
-
-                <div class="diagram-compare-side">
-                  <h4>Policy Center Manual / AI Mode</h4>
-                  <ul>
-                    <li>Complex multi-condition policies</li>
-                    <li>Time, IP, AI, ownership conditions</li>
-                    <li>Multiple rules per policy</li>
-                    <li>ALLOW or DENY effects</li>
-                    <li>5 steps, full control</li>
-                    <li>Assisted condition suggestions</li>
-                  </ul>
-                  <p><strong>Best for:</strong> Production security policies, compliance requirements, fine-grained access control.</p>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- AI Policy Approval Workflow -->
-          <section>
-            <h2 id="ai-approval">AI Policy Approval Workflow</h2>
-            <p>Policies generated by the AI engine follow an approval workflow to ensure human oversight before enforcement.</p>
-
-            <h3>Approval Lifecycle</h3>
-            <div class="diagram-container">
-              <div class="diagram-title">AI-Generated Policy Approval Flow</div>
-              <div class="diagram-flow-vertical">
-                <div class="diagram-box diagram-highlight">
-                  <span class="diagram-box-name">AI Generates Policy</span>
-                  <span class="diagram-box-desc">source = AI_GENERATED or AI_EVOLVED, approvalStatus = PENDING</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-box diagram-warning">
-                  <span class="diagram-box-name">PENDING Review</span>
-                  <span class="diagram-box-desc">Policy is visible in Policy Center list and detail flows but is not loaded into active authorization mappings</span>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-grid diagram-grid-2">
-                  <div class="diagram-box diagram-success">
-                    <span class="diagram-box-name">APPROVED</span>
-                    <span class="diagram-box-desc">Admin approves -- Policy becomes enforceable when isActive = true</span>
-                  </div>
-                  <div class="diagram-box diagram-danger">
-                    <span class="diagram-box-name">REJECTED</span>
-                    <span class="diagram-box-desc">Admin rejects -- Policy is archived and never enforced</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <h3>Enforcement Rules</h3>
-            <p><code>CustomDynamicAuthorizationManager</code> only evaluates policies that meet <strong>all</strong> of the following criteria:</p>
-            <ul>
-              <li><code>isActive = true</code> -- the policy is currently enabled</li>
-              <li><code>approvalStatus</code> is neither <code>PENDING</code> nor <code>REJECTED</code> -- AI-generated policies must be <code>APPROVED</code>, while manual policies typically remain <code>NOT_REQUIRED</code></li>
-            </ul>
-            <p>Policies created through the normal quick/manual Policy Center flows typically use <code>source = MANUAL</code> and <code>approvalStatus = NOT_REQUIRED</code>. They can be enforced as soon as they are saved and activated.</p>
-
-            <h3>Admin Review Process</h3>
-            <ol>
-              <li>Open <code>/admin/policy-center?tab=list</code> and filter the policy list by <code>approvalStatus = PENDING</code></li>
-              <li>Review the policy details in the list/detail flow: name, description, targets, rules, and conditions</li>
-              <li>Check the generated <code>friendlyDescription</code>, reasoning, and source metadata for accuracy</li>
-              <li>Use the Policy Center simulator or <code>/admin/policy-center/api/simulate</code> to preview the impact before approval</li>
-              <li>Use validation, AI validation, and impact-analysis results to review conflicts before approval</li>
-              <li>Approve or reject the policy through <code>/admin/policies/{id}/approve</code> or <code>/admin/policies/{id}/reject</code> while working from the Policy Center list/detail flow</li>
+          <h3 id="quick">Quick Mode</h3>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Quick Mode in four steps</strong>Pick at least one of roles, permissions or an expression permission.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">Select Role</span><span class="dg-node-desc">One or more roles from the list</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title">Select Permission</span><span class="dg-node-desc">CRUD permissions (READ · WRITE · UPDATE · DELETE; the one that fits the resource's HTTP method is checked in advance) and the permission list (searchable; permissions already mapped to the chosen roles are picked at first). Or one item from "Expression Permissions" (a saved SpEL expression); choosing it turns off role and permission selection</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Policy Settings</span><span class="dg-node-desc">Name, description, effect (ALLOW · DENY)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">Create</span><span class="dg-node-desc"><code>POST /contexa/admin/policy-center/api/quick-create</code></span></div></li>
             </ol>
-          </section>
+          </figure>
+          <p>Choosing two roles and the CRUD permission READ produces this condition:</p>
+          <pre><code class="language-text">(hasAuthority('ROLE_ADMIN') or hasAuthority('ROLE_FINANCE')) and (hasAuthority('READ'))</code></pre>
+          <ul>
+            <li>Roles are joined with <code>or</code>, CRUD permissions with <code>or</code>, your own permissions with <code>or</code>, and the groups with <code>and</code>.</li>
+            <li>The permission created automatically when a resource is defined (<code>URL_…</code> · <code>METHOD_…</code>) only sets the policy target; it is not part of the condition.</li>
+            <li>The target is the chosen resource's path with that resource's single HTTP method. A target entered with "Configure Resource Permissions" is a <code>MANUAL</code> target and lets you pick the HTTP method (<code>ANY</code> when none is given).</li>
+            <li>Only roles can be chosen as subjects, not groups. Quick Mode creates no permissions and attaches no permissions to roles. Giving users and groups roles and CRUD permissions is done in the <a href="admin.html#access-center">Access Center</a>.</li>
+            <li>If an automatic policy of a chosen role already exists (<code>AUTO_POLICY_FOR_&lt;role name&gt;</code>, <a href="#role-sync">Automatic role sync</a>), the policy is still created and a warning is returned with it.</li>
+            <li>Run the checks before creating with <code>POST /contexa/admin/policy-center/api/validate-quick</code>.</li>
+          </ul>
 
-          <!-- Extended Condition Template Examples -->
-          <section>
-            <h2 id="condition-examples">Condition Template Examples</h2>
-            <p>The following examples illustrate common condition templates used in policy rules. Each template is a SpEL expression that is evaluated at authorization time.</p>
+          <h3 id="manual">Manual Mode</h3>
+          <ol>
+            <li><strong>Basics:</strong> policy name (unique), description, effect, priority (lower is evaluated first)</li>
+            <li><strong>Targets:</strong> type (<code>URL</code> · <code>METHOD</code>), identifier (for example <code>/api/v1/invoices/**</code> or a method identifier), HTTP method. You can add several targets.</li>
+            <li><strong>Rules:</strong> a rule description</li>
+            <li><strong>Conditions:</strong> a SpEL expression and a phase ("Pre-Authorize" · "Post-Authorize")</li>
+            <li><strong>Save Policy:</strong> saved with <code>POST /contexa/admin/policy-center/create-policy</code>, then the Policy List tab opens.</li>
+          </ol>
+          <p>Manual Mode has no condition-template picker and no recommendation step; you write the conditions (<a href="#conditions">Writing conditions</a>). Before saving, <code>POST /contexa/admin/policy-center/api/validate</code> shows the expression check and conflicts.</p>
 
-            <table>
-              <thead>
-                <tr><th>Category</th><th>Description</th><th>SpEL Expression</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><strong>Time-based</strong></td>
-                  <td>Allow access only during business hours (9 AM to 6 PM)</td>
-                  <td><code>T(java.time.LocalTime).now().isAfter(T(java.time.LocalTime).of(9,0)) and T(java.time.LocalTime).now().isBefore(T(java.time.LocalTime).of(18,0))</code></td>
-                </tr>
-                <tr>
-                  <td><strong>IP Range</strong></td>
-                  <td>Allow access only from internal network</td>
-                  <td><code>hasIpAddress('10.0.0.0/8')</code></td>
-                </tr>
-                <tr>
-                  <td><strong>Ownership</strong></td>
-                  <td>Allow access if AI approves and user has permission on the resource</td>
-                  <td><code>#ai.isAllowed() and hasPermission(#id, 'USER', 'READ')</code></td>
-                </tr>
-                <tr>
-                  <td><strong>AI Assessment</strong></td>
-                  <td>Allow access if AI analysis passes without requiring a challenge</td>
-                  <td><code>#ai.isAllowed() and !#ai.needsChallenge()</code></td>
-                </tr>
-                <tr>
-                  <td><strong>Combined (Role + AI)</strong></td>
-                  <td>Allow admin access unconditionally, or require AI approval with permission check for others</td>
-                  <td><code>hasAnyAuthority('ROLE_ADMIN') or (#ai.isAllowed() and hasPermission(#id, 'DOCUMENT', 'UPDATE'))</code></td>
-                </tr>
-                <tr>
-                  <td><strong>Role-based</strong></td>
-                  <td>Allow access for users with a specific role</td>
-                  <td><code>hasAuthority('ROLE_MANAGER')</code></td>
-                </tr>
-                <tr>
-                  <td><strong>Authentication Level</strong></td>
-                  <td>Require full authentication (not remember-me)</td>
-                  <td><code>isFullyAuthenticated()</code></td>
-                </tr>
-              </tbody>
-            </table>
-          </section>
+          <h3 id="ai">AI Mode</h3>
+          <ol>
+            <li>Describe the policy in words (for example "the finance team can read the invoice list"). Coming from a resource through the "AI Policy Wizard" puts that resource in front of your text.</li>
+            <li>Contexa sends the model the roles, permissions and condition templates you can use, a summary of existing policies, the role hierarchy, and 5 similar policies found in the vector store.</li>
+            <li>The model returns a draft: policy name, effect, role IDs, permission IDs, CRUD permissions, condition templates with values, <code>#ai</code> decision conditions, custom SpEL, tables that map IDs to names, and its reasoning. The screen receives it through <code>POST /contexa/admin/api/ai/policies/generate/stream</code> (SSE); <code>POST /contexa/admin/api/ai/policies/generate</code> returns it in one response.</li>
+            <li>The screen checks the draft against the items that exist and shows it as a card. After your edits, saving calls <code>POST /contexa/admin/api/policies/build-from-business-rule</code> and creates a policy with source <code>AI_GENERATED</code>.</li>
+            <li>The policy is saved as pending (<code>PENDING</code>) and is not evaluated until approved (<a href="#approval">Approving AI drafts</a>).</li>
+          </ol>
+          <div class="callout callout-info">
+            <strong>AI Mode writes policy drafts.</strong> It does not recommend conditions separately or apply them with one click. It needs an AI model connection (<a href="../../install/configuration/ai.html">Connecting AI models</a>).
+          </div>
 
-          <!-- Policy Center REST API -->
-          <section>
-            <h2 id="rest-api">Policy Center REST API</h2>
-            <p>The current Policy Center server surface is centered on <code>/admin/policy-center</code>, with analysis APIs under <code>/admin/policy-center/api/</code>, form submission under <code>/admin/policy-center/create-policy</code>, and business-rule creation under <code>/admin/api/policies/build-from-business-rule</code>.</p>
+          <h3 id="batch">Many resources at once</h3>
+          <p>Selecting several resources in the list and choosing Quick Mode creates a permission for each resource (<code>define-batch</code>) and then all policies in one call (<code>POST /contexa/admin/policy-center/api/batch-create</code>).</p>
+          <ul>
+            <li>At least one role is required. A resource without a CRUD permission is skipped.</li>
+            <li>Each resource gets the condition <code>(role or …) and (CRUD permission or …)</code>, priority 100, and the name <code>&lt;EFFECT&gt;_&lt;ROLES&gt;_&lt;CRUD&gt;_&lt;PATH&gt;</code> (up to 200 characters).</li>
+            <li>Each resource is checked before saving; a blocked one is skipped on its own. The result lists <code>CREATED</code> · <code>SKIPPED</code> · <code>ERROR</code> per resource.</li>
+            <li>The AI Policy Wizard takes one resource only.</li>
+          </ul>
 
-            <h3>Policy CRUD</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>POST</code></td><td><code>/api/quick-create</code></td><td>Quick-create a policy from a simplified request body.</td></tr>
-                <tr><td><code>POST</code></td><td><code>/create-policy</code></td><td>Create a policy from the Policy Center manual authoring form using a full <code>PolicyDto</code> payload.</td></tr>
-                <tr><td><code>POST</code></td><td><code>/api/batch-create</code></td><td>Batch-create policies for multiple resources in one request.</td></tr>
-                <tr><td><code>POST</code></td><td><code>/api/validate</code></td><td>Validate a policy definition without saving.</td></tr>
-                <tr><td><code>POST</code></td><td><code>/api/validate-quick</code></td><td>Validate a quick-create policy definition.</td></tr>
-              </tbody>
-            </table></div>
+          <h3 id="business-rule-api">Creating from code (business rule API)</h3>
+          <p>You can create a policy over HTTP without the screen. Quick Mode and AI Mode use the same translation.</p>
+          <pre><code class="language-http">POST /contexa/admin/api/policies/build-from-business-rule
+Content-Type: application/json
 
-            <h3>Policy Analysis</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>POST</code></td><td><code>/api/simulate</code></td><td>Simulate a policy against a test request to preview the decision.</td></tr>
-                <tr><td><code>POST</code></td><td><code>/api/impact-analysis</code></td><td>Analyze the impact of a policy change on existing resources.</td></tr>
-                <tr><td><code>GET</code></td><td><code>/api/{policyId}/ai-validation</code></td><td>Get the AI-generated validation report for a policy.</td></tr>
-                <tr><td><code>GET</code></td><td><code>/api/matrix</code></td><td>Generate a policy matrix report (role x resource x action).</td></tr>
-              </tbody>
-            </table></div>
+{
+  "policyName": "INVOICE_READ_FOR_FINANCE",
+  "description": "Finance team reads invoices",
+  "effect": "ALLOW",
+  "roleIds": [4],
+  "permissionIds": [15],
+  "crudPermissions": ["READ"],
+  "aiActionEnabled": true,
+  "allowedActions": ["ALLOW"]
+}</code></pre>
+          <p>When a permission in <code>permissionIds</code> is linked to a resource, that resource becomes a target. One of roles, permissions or <code>spelId</code> is required. On success the created policy is returned; on failure a <code>400</code> without a body.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Input</th><th>Resulting condition</th></tr></thead>
+            <tbody>
+              <tr><td><code>roleIds</code></td><td><code>hasAuthority('ROLE_…')</code> joined with <code>or</code></td></tr>
+              <tr><td><code>crudPermissions</code></td><td><code>hasAuthority('READ')</code> and so on, joined with <code>or</code></td></tr>
+              <tr><td><code>permissionIds</code></td><td>Only permissions you created: <code>hasAuthority('permission name')</code> joined with <code>or</code>. Automatically created and CRUD permissions are left out</td></tr>
+              <tr><td><code>aiActionEnabled</code> + one <code>allowedActions</code></td><td><code>ALLOW</code> → <code>#ai.isAllowed()</code>, <code>BLOCK</code> → <code>#ai.isBlocked()</code>, <code>CHALLENGE</code> → <code>#ai.needsChallenge()</code>, <code>ESCALATE</code> → <code>#ai.needsEscalation()</code>, anything else → <code>#ai.hasAction('X')</code></td></tr>
+              <tr><td>Several <code>allowedActions</code></td><td><code>#ai.hasActionIn('ALLOW','CHALLENGE')</code></td></tr>
+              <tr><td><code>customConditionSpel</code></td><td><code>(expression)</code> as written</td></tr>
+              <tr><td><code>conditions</code> (template ID → values)</td><td>The condition template with the quoted values in its <code>%s</code> slots</td></tr>
+              <tr><td><code>spelId</code></td><td>Only the stored expression permission; role and permission input is not used</td></tr>
+            </tbody>
+          </table></div>
+          <p>All of these are joined with <code>and</code> into one condition. The priority is fixed at 100. A <code>source</code> of <code>AI_GENERATED</code> or <code>AI_EVOLVED</code> makes the policy pending; anything else needs no approval. <code>sourceType: "MANUAL"</code> with <code>manualTargetType</code> · <code>manualTargetIdentifier</code> · <code>manualHttpMethod</code> · <code>manualTargetOrder</code> sets a target directly.</p>
 
-            <h3>Policy Versioning</h3><p>The versioning endpoints are implemented and active. The current OSS Policy Center template does not render a dedicated version-history panel, so operators typically consume these endpoints from automation, custom tooling, or future UI extensions.</p>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>GET</code></td><td><code>/api/{policyId}/versions</code></td><td>List all versions of a policy with timestamps and change summaries.</td></tr>
-                <tr><td><code>POST</code></td><td><code>/api/{policyId}/rollback/{versionNumber}</code></td><td>Rollback a policy to a previous version.</td></tr>
-                              <tr><td><code>GET</code></td><td><code>/api/{policyId}/versions/{versionNumber}</code></td><td>Load a single stored version snapshot for inspection.</td></tr>
-                <tr><td><code>GET</code></td><td><code>/api/{policyId}/versions/compare?v1=...&amp;v2=...</code></td><td>Compare two stored versions and list field-level changes.</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="conditions">Writing conditions</h2>
+          <p>Conditions are Spring Security expressions (SpEL). Expressions that start with <code>#ai</code> read the AI decision stored for the user (<a href="ai-security-expressions.html">AI security expressions</a>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Goal</th><th>Condition</th><th>Where it works</th></tr></thead>
+            <tbody>
+              <tr><td>Business hours only (9:00 to 18:00)</td><td><code>T(java.time.LocalTime).now().isAfter(T(java.time.LocalTime).of(9,0)) and T(java.time.LocalTime).now().isBefore(T(java.time.LocalTime).of(18,0))</code></td><td>URL · method</td></tr>
+              <tr><td>Internal network only</td><td><code>hasIpAddress('10.0.0.0/8')</code></td><td>URL</td></tr>
+              <tr><td>One role only</td><td><code>hasAuthority('ROLE_MANAGER')</code></td><td>URL · method</td></tr>
+              <tr><td>A full login, not remember-me</td><td><code>isFullyAuthenticated()</code></td><td>URL · method</td></tr>
+              <tr><td>AI decision is ALLOW and no step-up is pending</td><td><code>#ai.isAllowed() and !#ai.needsChallenge()</code></td><td>URL · method</td></tr>
+              <tr><td>AI allows and the object permission holds (owner)</td><td><code>#ai.isAllowed() and hasPermission(#id, 'USER', 'READ')</code></td><td>Method. In a URL policy <code>hasPermission(...)</code> is removed and only <code>#ai.isAllowed()</code> is left</td></tr>
+              <tr><td>Administrators always, others with AI allow and object permission</td><td><code>hasAnyAuthority('ROLE_ADMIN') or (#ai.isAllowed() and hasPermission(#id, 'DOCUMENT', 'UPDATE'))</code></td><td>Method. As a URL policy it becomes <code>hasAnyAuthority('ROLE_ADMIN') or (#ai.isAllowed())</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>In a method policy, <code>hasPermission(target ID, 'target type', 'action')</code> needs a domain permission evaluator for that target type (<a href="permission-evaluators.html">Permission evaluators</a>). On a method with <code>@Protectable(ownerField = "createdBy")</code>, after the evaluator allows it, the object's <code>createdBy</code> value is compared with the login name as well. <code>ROLE_ADMIN</code> skips that owner comparison.</p>
 
-            <h3>Resource &amp; Permission Queries</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>GET</code></td><td><code>/api/roles</code></td><td>List available roles for policy target assignment.</td></tr>
-                <tr><td><code>GET</code></td><td><code>/api/resources</code></td><td>List registered resources (URL, METHOD types).</td></tr>
-                <tr><td><code>GET</code></td><td><code>/api/available-permissions</code></td><td>List available permissions and existing role-permission mappings used by the quick-create panel.</td></tr>
-                <tr><td><code>GET</code></td><td><code>/api/conditions</code></td><td>List stored condition templates, optionally filtered by keyword.</td></tr>
-                <tr><td><code>GET</code></td><td><code>/api/stats</code></td><td>Get aggregate counts for roles, permissions, conditions, policies, and resource status buckets.</td></tr>
-                <tr><td><code>GET</code></td><td><code>/api/policy-summaries</code></td><td>Get lightweight policy summaries containing the policy id, name, and effect.</td></tr>
-                <tr><td><code>GET</code></td><td><code>/api/spel-permissions</code></td><td>Get registered <code>SecuritySpel</code> expressions available to quick-create and SpEL-based policy authoring.</td></tr>
-              </tbody>
-            </table></div>
+          <h3 id="safety">Expression safety rules</h3>
+          <p>Conditions are expressions stored in the database. Contexa checks them when saving and again when loading, and evaluates them in a restricted environment (sandbox).</p>
+          <ul>
+            <li><strong>Not allowed:</strong> <code>T(...)</code> type references (only <code>LocalTime</code> · <code>LocalDate</code> · <code>LocalDateTime</code> · <code>DayOfWeek</code> from <code>java.time</code>), constructor calls (<code>new</code>), bean references (<code>@name</code>), assignment, and the methods and properties used for reflection, class loading or process execution (<code>getClass</code> · <code>forName</code> · <code>exec</code> · <code>getRuntime</code>, <code>class</code> · <code>classLoader</code> and others). Expressions only read values and cannot change them.</li>
+            <li><strong>On save:</strong> every save path (screen, API, version rollback and others) checks the expression, and a rejected one is not saved. The condition entity is checked once more right before it is written.</li>
+            <li><strong>On load:</strong> a stored expression that fails is not dropped; the policy is turned into a deny. A URL policy denies all its target paths, and a method policy is made to yield deny for its effect. Dropping the policy could open the target through the "decision when no policy applies" (allow by default). The error log names the policy ID and the reason.</li>
+          </ul>
 
-            <h3>Migration &amp; Maintenance</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-              <tbody>
-                <tr><td><code>POST</code></td><td><code>/api/reset-policy-status</code></td><td>Reset policy link status for selected resources.</td></tr>
-                <tr><td><code>POST</code></td><td><code>/api/migrate-to-crud</code></td><td>Migrate legacy SpEL expressions to CRUD-based permissions.</td></tr>
-                <tr><td><code>POST</code></td><td><code>/api/cleanup-old-permissions</code></td><td>Clean up orphaned permission entries.</td></tr>
-                <tr><td><code>POST</code></td><td><code>/refresh-resources</code></td><td>Trigger a resource cache refresh from the database.</td></tr>
-              </tbody>
-            </table></div>
-          </section>
+          <h3 id="condition-templates">Condition templates</h3>
+          <p>A condition template is a reusable SpEL fragment with <code>%s</code> slots for values. AI Mode drafts pick a template ID and values to build a condition. The condition list in Policy Center (<code>GET /contexa/admin/policy-center/api/conditions</code>) filters by a keyword in the name or description only.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Class</th><th>Assigned when</th><th>Approval required</th></tr></thead>
+            <tbody>
+              <tr><td><code>UNIVERSAL</code></td><td>Complexity score 3 or less</td><td>No</td></tr>
+              <tr><td><code>CONTEXT_DEPENDENT</code></td><td>Complexity score 4 to 6</td><td>No</td></tr>
+              <tr><td><code>CUSTOM_COMPLEX</code></td><td>Complexity score 7 or more</td><td>Yes</td></tr>
+            </tbody>
+          </table></div>
+          <p>The complexity score is set from 1 to 10 when a template is saved, by counting <code>#</code>, parentheses, <code>and</code>, <code>or</code>, comparison operators, <code>hasPermission</code>, <code>hasRole</code> and similar parts. A template that contains <code>permitAll</code> or <code>denyAll</code>, or only <code>isAuthenticated()</code> without a role or authority check, is marked as requiring approval whatever its score.</p>
+          <p>Templates are written by the AI model: common templates plus templates for each method resource that has parameters, 10 resources per batch. Nothing is generated when there is no method resource. To generate them while resources are loaded, set <code>contexa.iam.admin.condition-templates.enabled: true</code> (default <code>false</code>). You can also call the API below.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>API (under <code>/contexa/admin/api/conditions</code>)</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET /classified</code></td><td>Templates by class</td></tr>
+              <tr><td><code>GET /compatible/{resourceId}</code></td><td>Templates and compatibility results for that resource</td></tr>
+              <tr><td><code>POST /check-compatibility</code></td><td>Compatibility of one template with one resource</td></tr>
+              <tr><td><code>PUT /{conditionId}/classification</code></td><td>Change the class and the approval flag by hand</td></tr>
+              <tr><td><code>POST /regenerate-fixed-templates</code></td><td>Delete the generated templates and generate them again (<code>400</code> when there is no resource)</td></tr>
+              <tr><td><code>POST /generate-managed-resource-based</code> · <code>POST /generate-permission-based</code></td><td>Generate templates (both paths run the same generation)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The compatibility check treats <code>UNIVERSAL</code> templates as always compatible. For other templates it checks, in order, whether ABAC conditions can be used on the resource (always for URLs, decided by the parameters for methods), whether the domain fits, and whether the variables the expression uses are available on that resource.</p>
 
+          <h2 id="on-save">What saving does</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Save order</strong>If any step blocks, nothing is saved.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">Input check</span><span class="dg-node-desc">Manual Mode requires name, effect and targets</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title">Expression safety check</span><span class="dg-node-desc">A forbidden expression is rejected</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Conflict check</span><span class="dg-node-desc">A <code>CRITICAL</code> or <code>HIGH</code> conflict with an existing policy is rejected</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">Readable description</span><span class="dg-node-desc">The conditions in English sentences, stored in <code>friendlyDescription</code></span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node dg-store"><span class="dg-node-title">Save and version</span><span class="dg-node-desc">Version types <code>CREATED</code> · <code>UPDATED</code> · <code>ROLLBACK</code></span></div></li>
+              <li class="dg-step"><span class="dg-step-no">6</span><div class="dg-node"><span class="dg-node-title">Resource status and audit</span><span class="dg-node-desc">Quick and AI paths mark the linked resources "Protected"; an audit record (<code>POLICY_CREATED</code> and so on)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">7</span><div class="dg-node"><span class="dg-node-title">Reload</span><span class="dg-node-desc">Clear the policy cache and rebuild the URL matchers; in distributed mode tell the other instances</span></div></li>
+            </ol>
+          </figure>
+          <p>The readable description of <code>hasAuthority('ROLE_ADMIN') and isAuthenticated()</code> is <code>((Has authority(ROLE_ADMIN) and Authenticated user))</code>. Each rule is put in parentheses, and rules are joined with <code>or</code>.</p>
+          <ul>
+            <li><strong>Telling other instances</strong> goes through a Redis topic when <code>contexa.infrastructure.mode: distributed</code> is set and Redisson is present. In standalone mode only the local instance reloads.</li>
+            <li><strong>Deleting</strong> resets to "Unset" every resource of the policy's targets that no other policy uses, deletes the automatically created permissions and the version records, and reloads. The audit record (<code>POLICY_DELETED</code>) is written before the deletion.</li>
+            <li>Editing on the policy detail screen first records the content before the change as a version (<code>UPDATED</code>), then saves through the same checks.</li>
+            <li>When the policy service saves a policy whose conditions name permissions with <code>hasAuthority('…')</code>, it publishes a policy change event (<code>PolicyChangedEvent</code>) with those permission IDs; on delete it publishes one without permission IDs.</li>
+          </ul>
+
+          <h2 id="approval">Approving AI drafts</h2>
+          <p>A policy written by AI must be approved before it is evaluated. Policies written by people (<code>MANUAL</code> · <code>IMPORTED</code>) need no approval (<code>NOT_REQUIRED</code>) and apply at once.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Approval states</strong>Only active policies with <code>APPROVED</code> or <code>NOT_REQUIRED</code> are evaluated.</figcaption>
+            <ol class="dg-flow dg-flow-h">
+              <li class="dg-node dg-model"><span class="dg-node-tag">AI Mode</span><span class="dg-node-title">Source <code>AI_GENERATED</code> · <code>AI_EVOLVED</code></span></li>
+              <li class="dg-node dg-pending"><span class="dg-node-title">Pending <code>PENDING</code></span><span class="dg-node-desc">Listed, but not evaluated</span></li>
+            </ol>
+            <p class="dg-outcomes-title">Administrator decision</p>
+            <ul class="dg-outcomes">
+              <li class="dg-node dg-allow"><span class="dg-node-title">Approve <code>APPROVED</code></span><span class="dg-node-desc">Becomes active and is evaluated at once</span></li>
+              <li class="dg-node dg-block"><span class="dg-node-title">Reject <code>REJECTED</code></span><span class="dg-node-desc">Inactive, never evaluated</span></li>
+            </ul>
+          </figure>
+          <ol>
+            <li>In Policy Center's "Policy List" tab (<code>/contexa/admin/policy-center?tab=list</code>), filter by approval status. You can also filter by keyword and by active state.</li>
+            <li>Open the policy (<code>/contexa/admin/policies/{id}</code>) to see its targets, conditions and the AI reasoning. Check the result in advance with the simulator and the impact analysis (<a href="#verify">Checking the effect</a>).</li>
+            <li>"Approve" in the list opens the AI validation window (<code>GET /contexa/admin/policy-center/api/{policyId}/ai-validation</code>). The policy can be approved only when no item fails.</li>
+            <li>Approve with <code>POST /contexa/admin/policies/{id}/approve</code>, reject with <code>POST /contexa/admin/policies/{id}/reject</code>. The person and time are recorded and the policies reload. The list shows the reject button for pending policies only.</li>
+          </ol>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>AI validation item</th><th>Fail (blocks approval)</th><th>Warning</th></tr></thead>
+            <tbody>
+              <tr><td>Referential integrity</td><td>A role or permission the condition uses does not exist</td><td>—</td></tr>
+              <tr><td>Conflicts</td><td>A <code>CRITICAL</code> conflict</td><td>Other conflicts</td></tr>
+              <tr><td>Duplicates</td><td>An identical policy exists</td><td>A similar policy exists</td></tr>
+              <tr><td>Least privilege</td><td>—</td><td>The condition uses more than 10 roles or permissions</td></tr>
+              <tr><td>Dangerous patterns</td><td>—</td><td><code>permitAll</code> in an ALLOW or a DENY policy, or <code>isAuthenticated()</code> without a role check</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="verify">Checking the effect</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Tool</th><th>Path</th><th>What it shows</th></tr></thead>
+            <tbody>
+              <tr><td>Simulator tab</td><td><code>POST /contexa/admin/policy-center/api/simulate</code></td><td>Enter a user and a request (URL path or method identifier, HTTP method) to see what the current policies decide. Add an unsaved candidate policy to compare before and after (allow → deny, deny → allow)</td></tr>
+              <tr><td>Impact analysis</td><td><code>POST /contexa/admin/policy-center/api/impact-analysis</code></td><td>Users who gain or lose access through this policy; the same as "Impact Analysis" on the policy detail screen</td></tr>
+              <tr><td>Access Matrix tab</td><td><code>GET /contexa/admin/policy-center/api/matrix</code></td><td>A roles × resources table: access, the deciding policy, inheritance and conflicts per cell</td></tr>
+              <tr><td>Validation report</td><td><code>GET /contexa/admin/policy-center/api/validation-report</code></td><td>Check results for all policies</td></tr>
+              <tr><td>Records of real requests</td><td><a href="admin.html#security-monitor">Real-time Monitor</a></td><td>Every URL policy decision is audited, both allow (<code>AUTHORIZATION_GRANTED</code>) and deny (<code>AUTHORIZATION_DENIED</code>)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The simulator uses the same rules as enforcement: which policies take part, their order, how conditions are joined, the effect and the combining algorithm. Facts that exist only in a live request cannot be simulated, so <code>#ai</code> conditions count as true, and conditions that need the request or method arguments, such as <code>hasIpAddress</code> or an object-level <code>hasPermission</code>, count as false.</p>
+
+          <h2 id="versions">Versions and rollback</h2>
+          <p>The policy detail screen (<code>/contexa/admin/policies/{id}</code>) has "Version History", "Compare", "Rollback to this version" and "Impact Analysis". A rollback takes a change reason, restores that version's content, runs the expression and conflict checks again, and records a new version (<code>ROLLBACK</code>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>API (under <code>/contexa/admin/policy-center</code>)</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET /api/{policyId}/versions</code></td><td>List versions</td></tr>
+              <tr><td><code>GET /api/{policyId}/versions/{versionNumber}</code></td><td>One version's content</td></tr>
+              <tr><td><code>GET /api/{policyId}/versions/compare?v1=&amp;v2=</code></td><td>Differences between two versions</td></tr>
+              <tr><td><code>POST /api/{policyId}/rollback/{versionNumber}</code></td><td>Roll back to that version (body <code>{"reason": "…"}</code>)</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="role-sync">Automatic role sync</h2>
+          <p>When permissions are attached to a role or changed, Contexa creates or updates that role's automatic policy.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Role permissions change → automatic policy</strong>Runs apart from request handling (asynchronously).</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-host"><span class="dg-node-tag">Administrator</span><span class="dg-node-title">Creates a role or changes its permissions</span><span class="dg-node-desc">Creating it with permissions, or updating it</span></li>
+              <li class="dg-node dg-contexa"><span class="dg-node-tag">Event</span><span class="dg-node-title"><code>RolePermissionsChangedEvent</code></span><span class="dg-node-desc">Handled by <code>PolicySynchronizationService</code></span></li>
+              <li class="dg-node dg-contexa"><span class="dg-node-tag">Policy</span><span class="dg-node-title"><code>AUTO_POLICY_FOR_&lt;role name&gt;</code></span><span class="dg-node-desc">Targets: the resources linked to the role's permissions. Condition: <code>hasAuthority('role') and (permission1 or permission2 …)</code>, <code>false</code> without permissions. ALLOW, priority 500</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-tag">Save</span><span class="dg-node-title">Update if the name exists, otherwise create</span><span class="dg-node-desc">Same checks, versions and reload as any save</span></li>
+            </ol>
+          </figure>
+          <p>Deleting a role deletes its automatic policy too. The policy service also has a method that creates an automatic policy per permission (<code>synchronizePolicyForPermission</code>), but nothing calls it today.</p>
+
+          <h2 id="decision-settings">Decision settings</h2>
+          <p>These decide how several matching policies are combined, and what happens when no policy applies.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.policy.combining-algorithm</code></td><td><code>FIRST_APPLICABLE</code></td><td>Combining algorithm (table below)</td><td>When results should be combined by a rule such as "any deny wins" instead of priority</td></tr>
+              <tr><td><code>contexa.policy.no-matching-url-policy-decision</code></td><td><code>PERMIT</code></td><td>When no URL policy matches, or every matching one is not applicable (<code>DENY_UNLESS_PERMIT</code> denies in the latter case). <code>PERMIT</code> keeps URLs without a policy open</td><td>To close the remaining URLs by default once your policies are in place (<code>DENY</code>)</td></tr>
+              <tr><td><code>contexa.policy.missing-method-policy-decision</code></td><td><code>PERMIT</code></td><td>When no method policy can run, or every one is not applicable (<code>DENY_UNLESS_PERMIT</code> denies in the latter case)</td><td>To close <code>@Protectable</code> methods that have no policy (<code>DENY</code>)</td></tr>
+            </tbody>
+          </table></div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Algorithm</th><th>Result</th></tr></thead>
+            <tbody>
+              <tr><td><code>FIRST_APPLICABLE</code></td><td>The first result that is not "not applicable"</td></tr>
+              <tr><td><code>DENY_OVERRIDES</code></td><td>Deny if any policy denies, otherwise allow if any allows</td></tr>
+              <tr><td><code>PERMIT_OVERRIDES</code></td><td>Allow if any policy allows, otherwise deny if any denies</td></tr>
+              <tr><td><code>DENY_UNLESS_PERMIT</code></td><td>Allow only if a matching policy allows, otherwise deny (also when all are not applicable). With no matching policy at all, the "decision when no policy applies"</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>YAML values are overwritten by the system settings at startup.</strong> The default seed creates a <code>system_settings</code> row (algorithm <code>FIRST_APPLICABLE</code>, both decisions <code>PERMIT</code>), and Contexa applies that row's values at startup and every time the system settings are saved. So change these three values in the admin console under "IAM → System Settings". Saving applies them to the instance at once, reloads the URL policies, and in distributed mode tells the other instances. YAML values are used only when there is no <code>system_settings</code> row (for example with <code>contexa.iam.seed.enabled: false</code> before anyone saves the system settings).
+          </div>
+          <pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+  iam:
+    seed:
+      enabled: false          # the values below apply only when no system_settings row is created
+  policy:
+    combining-algorithm: DENY_OVERRIDES
+    no-matching-url-policy-decision: DENY
+    missing-method-policy-decision: PERMIT</code></pre>
+
+          <h2 id="api">API reference</h2>
+          <p>All of these are administrator (<code>ADMIN</code> role) paths. In the default <code>HOST_OWNED</code> mode the application has to protect them (<a href="admin.html#access">Protecting the admin console</a>). The paths in the table are under <code>/contexa/admin/policy-center</code>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Method · path</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET /api/roles</code></td><td>Search roles (keyword, page)</td></tr>
+              <tr><td><code>GET /api/available-permissions</code></td><td>Permissions found by keyword, and the permission IDs already mapped to each chosen role</td></tr>
+              <tr><td><code>GET /api/resources</code></td><td>Resources (status, service owner, keyword)</td></tr>
+              <tr><td><code>GET /api/conditions</code></td><td>Condition templates (filtered by a name or description keyword only)</td></tr>
+              <tr><td><code>GET /api/spel-permissions</code></td><td>Search stored expression permissions (SecuritySpel)</td></tr>
+              <tr><td><code>GET /api/stats</code></td><td>Counts of roles, permissions, condition templates, policies, and resources per status</td></tr>
+              <tr><td><code>GET /api/policy-summaries</code></td><td>Policy ID, name and effect</td></tr>
+              <tr><td><code>POST /api/quick-create</code></td><td>Quick Mode creation</td></tr>
+              <tr><td><code>POST /create-policy</code></td><td>Manual Mode save (form post, then the Policy List opens)</td></tr>
+              <tr><td><code>POST /api/batch-create</code></td><td>Batch creation for several resources</td></tr>
+              <tr><td><code>POST /api/validate</code> · <code>POST /api/validate-quick</code></td><td>Checks before saving (manual, quick)</td></tr>
+              <tr><td><code>GET /api/validation-report</code></td><td>Validation report for all policies</td></tr>
+              <tr><td><code>GET /api/{policyId}/ai-validation</code></td><td>Validation before approving an AI policy</td></tr>
+              <tr><td><code>POST /api/simulate</code> · <code>POST /api/impact-analysis</code> · <code>GET /api/matrix</code></td><td><a href="#verify">Checking the effect</a></td></tr>
+              <tr><td><code>POST /refresh-resources</code></td><td>Run the resource scan again to register new resources, fill empty policy descriptions, and align resource status with the policies (<a href="resource-scanner.html#scan">Running a scan</a>)</td></tr>
+              <tr><td><code>POST /api/reset-policy-status</code></td><td>For the chosen resources that are "Awaiting Policy" (<code>PERMISSION_CREATED</code>) only, delete the linked permission and go back to "Unset". The "Release Policy Link" button</td></tr>
+              <tr><td><code>POST /api/migrate-to-crud</code></td><td>Rewrite <code>hasAuthority('URL_…')</code> · <code>hasAuthority('METHOD_…')</code> in conditions to CRUD permissions (READ · WRITE · UPDATE · DELETE). Also runs once automatically when the application is ready</td></tr>
+              <tr><td><code>POST /api/cleanup-old-permissions</code></td><td>Delete every automatically created permission whose name starts with <code>URL_</code> or <code>METHOD_</code> (whether used or not)</td></tr>
+            </tbody>
+          </table></div>
+          <p>Paths for one policy are under <code>/contexa/admin/policies</code>: detail and edit screen <code>GET /{id}</code>, update <code>POST /{id}/edit</code>, delete <code>POST /delete/{id}</code>, approve and reject <code>POST /{id}/approve</code> · <code>/{id}/reject</code>. <code>GET /contexa/admin/policies</code> redirects to the Policy List tab.</p>
+
+          <h2 id="extension">Using it from code, and old paths</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Bean · path</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>PolicyService</code> (<code>io.contexa.contexaiam.security.xacml.pap.service</code>)</td><td>Find and search, create, update, delete, approve and reject, conflicts, validation, impact analysis, simulation, versions and rollback. The default implementation is <code>DefaultPolicyService</code>. The class of the same name <code>io.contexa.contexaiam.service.PolicyService</code> is a different class that only finds and saves</td></tr>
+              <tr><td><code>BusinessPolicyService</code></td><td>Create and update from a business rule, read a policy back as a business rule</td></tr>
+              <tr><td><code>PolicyEnrichmentService</code></td><td>Fills the readable description through <code>PolicyTranslator</code></td></tr>
+              <tr><td><code>PolicyBuilderService</code></td><td>An interface for templates, visual models and conflict analysis. It is registered as a bean, but nothing calls it today</td></tr>
+              <tr><td><code>/contexa/admin/policy-builder</code></td><td>The old policy builder path (including <code>from-resource</code>). The controller remains, but its screen file does not exist, so it cannot be used. Author policies in Policy Center</td></tr>
+            </tbody>
+          </table></div>
+          <p>Each of these service beans gives way to a bean of the same type that the application declares (<code>@ConditionalOnMissingBean</code>).</p>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/iam/permission-evaluators.html" class="docs-nav-prev">
+            <a href="permission-evaluators.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Permission Evaluators</span>
+              <span class="docs-nav-title">Permission Evaluators: hasPermission</span>
             </a>
-            <a href="../../../docs/reference/iam/resource-scanner.html" class="docs-nav-next">
+            <a href="resource-scanner.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
               <span class="docs-nav-title">Resource Scanner</span>
             </a>

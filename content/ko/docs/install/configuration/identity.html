@@ -1,417 +1,267 @@
-﻿<nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">홈</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/install/configuration.html">설정</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Identity</span>
+            <span class="breadcrumb-current">Contexa가 로그인을 맡을 때</span>
           </nav>
 
           <div class="docs-page-header">
-            <h1>Identity 구성</h1>
-            <p class="lead">OSS Identity 런타임 구성을 설명합니다. 이 페이지는 현재 Contexa 코드베이스가 실제로 사용하는 <code>contexa.auth.*</code>, <code>contexa.identity.statemachine.*</code> 속성과, <code>AuthUrlProvider</code>, <code>MfaFlowUrlRegistry</code>, <code>IdentityDslRegistry</code>, <code>MfaDslConfigurerImpl</code>, <code>SessionStateConfigurer</code> 같은 런타임 클래스가 이 설정을 어디에서 소비하는지를 함께 정리합니다.</p>
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-identity</span>
+              <span class="badge badge-secondary">CONTEXA_OWNED</span>
+            </div>
+            <h1>Contexa가 로그인을 맡을 때</h1>
+            <p class="lead">Contexa가 로그인 · MFA · 토큰 발급을 직접 맡을 때(<code>CONTEXA_OWNED</code>) 쓰는 설정입니다. 로그인 상태를 세션과 토큰 중 무엇으로 유지할지, 토큰 수명, Contexa 인가 서버, 로그인 · MFA 주소, MFA 제한 시간, MFA 상태를 저장하는 곳을 정할 수 있습니다.</p>
           </div>
 
-          <section>
-            <h2 id="auth-context">Auth Context 속성</h2>
-            <p><code>AuthContextProperties</code>는 <code>contexa.auth</code> prefix에 바인딩됩니다. 인증 상태 모드, 토큰 전송 방식, 토큰 발급자 모드, URL 그룹, MFA 기본값, 토큰 수명 주기를 제어합니다.</p>
+          <h2 id="when">이 설정이 쓰일 때</h2>
+          <p>Contexa가 로그인을 맡는 것은 인증 소유권이 <code>CONTEXA_OWNED</code>일 때입니다. <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>이면 이것이 기본이고, <code>contexa.bridge.ownership</code>으로 직접 정할 수도 있습니다. 기본인 <code>HOST_OWNED</code>에서는 앱의 Spring Security가 로그인을 처리하고 Contexa는 보안 체인을 만들지 않으므로 이 페이지의 설정은 쓰이지 않습니다. 그때 앱의 로그인 정보를 Contexa에 알리는 방법은 <a href="../../reference/common/bridge.html">인증 브리지</a>에 있습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>하려는 일</th><th>설정</th><th>절</th></tr></thead>
+            <tbody>
+              <tr><td>로그인 상태를 세션 또는 토큰으로 유지</td><td><code>contexa.auth.state-type</code>, <code>contexa.auth.token-transport-type</code></td><td><a href="#state">로그인 상태</a></td></tr>
+              <tr><td>토큰 수명 · 동시 로그인 정하기</td><td><code>contexa.auth.access-token-validity</code> 등</td><td><a href="#tokens">토큰 수명</a></td></tr>
+              <tr><td>Contexa가 토큰을 발급하게 하기</td><td><code>contexa.auth.oauth2.*</code></td><td><a href="#issuer">인가 서버</a></td></tr>
+              <tr><td>로그인 · MFA 주소 바꾸기</td><td><code>contexa.auth.urls.*</code></td><td><a href="#urls">주소</a></td></tr>
+              <tr><td>MFA 제한 시간 · 재시도 횟수</td><td><code>contexa.auth.mfa.*</code></td><td><a href="#mfa">MFA</a></td></tr>
+              <tr><td>MFA 상태를 저장하는 곳</td><td><code>contexa.infrastructure.mode</code>, <code>contexa.identity.statemachine.*</code></td><td><a href="#storage">저장 위치</a></td></tr>
+            </tbody>
+          </table></div>
 
-            <h3 id="auth-core">핵심 인증 설정</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.auth.state-type</code></td><td><code>StateType</code></td><td><code>OAUTH2</code></td><td>기본 상태 모드를 선택합니다. 현재 enum 값은 <code>OAUTH2</code>, <code>SESSION</code>입니다.</td></tr>
-                <tr><td><code>contexa.auth.token-transport-type</code></td><td><code>TokenTransportType</code></td><td><code>HEADER</code></td><td>토큰 전송 방식을 제어합니다. 현재 enum 값은 <code>COOKIE</code>, <code>HEADER</code>, <code>HEADER_COOKIE</code>입니다.</td></tr>
-                <tr><td><code>contexa.auth.token-issuer</code></td><td><code>TokenIssuer</code></td><td><code>INTERNAL</code></td><td>Contexa가 직접 토큰을 발급할지, 외부 Authorization Server를 사용할지 선택합니다. 현재 enum 값은 <code>INTERNAL</code>, <code>AUTHORIZATION_SERVER</code>입니다.</td></tr>
-                <tr><td><code>contexa.auth.factor-selection-type</code></td><td><code>FactorSelectionType</code></td><td><code>SELECT</code></td><td>MFA 팩터를 사용자가 명시적으로 선택할지, 자동 선택할지 결정합니다. 현재 enum 값은 <code>AUTO</code>, <code>SELECT</code>입니다.</td></tr>
-                <tr><td><code>contexa.auth.access-token-validity</code></td><td><code>long</code></td><td><code>3600000</code></td><td>액세스 토큰 유효 기간(밀리초)입니다.</td></tr>
-                <tr><td><code>contexa.auth.refresh-token-validity</code></td><td><code>long</code></td><td><code>604800000</code></td><td>리프레시 토큰 유효 기간(밀리초)입니다.</td></tr>
-                <tr><td><code>contexa.auth.refresh-rotate-threshold</code></td><td><code>long</code></td><td><code>43200000</code></td><td>리프레시 토큰 사용 시 회전을 트리거하는 임계값입니다.</td></tr>
-                <tr><td><code>contexa.auth.enable-refresh-token</code></td><td><code>boolean</code></td><td><code>true</code></td><td>리프레시 토큰 발급을 활성화합니다.</td></tr>
-                <tr><td><code>contexa.auth.allow-multiple-logins</code></td><td><code>boolean</code></td><td><code>false</code></td><td>동일 principal의 동시 활성 로그인을 허용합니다.</td></tr>
-                <tr><td><code>contexa.auth.max-concurrent-logins</code></td><td><code>int</code></td><td><code>3</code></td><td>다중 로그인을 허용할 때의 동시 로그인 상한입니다.</td></tr>
-                <tr><td><code>contexa.auth.cookie-secure</code></td><td><code>boolean</code></td><td><code>true</code></td><td>인증 쿠키를 기본적으로 secure로 표시합니다.</td></tr>
-                <tr><td><code>contexa.auth.token-persistence</code></td><td><code>String</code></td><td><code>memory</code></td><td>로그인/MFA 페이지에 전달되는 프런트엔드 토큰 저장 방식입니다. 현재 OSS 클라이언트 모드는 <code>memory</code>, <code>localstorage</code>, <code>sessionstorage</code>입니다.</td></tr>
-                <tr><td><code>contexa.auth.token-prefix</code></td><td><code>String</code></td><td><code>Bearer </code></td><td>Authorization 헤더 prefix입니다.</td></tr>
-                <tr><td><code>contexa.auth.roles-claim</code></td><td><code>String</code></td><td><code>roles</code></td><td>역할을 읽어오는 JWT claim 이름입니다.</td></tr>
-                <tr><td><code>contexa.auth.scopes-claim</code></td><td><code>String</code></td><td><code>scopes</code></td><td>스코프를 읽어오는 JWT claim 이름입니다.</td></tr>
-                <tr><td><code>contexa.auth.oauth2-csrf</code></td><td><code>boolean</code></td><td><code>false</code></td><td>OAuth2 성격의 엔드포인트에 대한 CSRF 보호를 토글합니다.</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="state">로그인 상태: 세션 또는 OAuth2 토큰</h2>
+          <p>로그인한 사용자를 HTTP 세션으로 기억할지(<code>SESSION</code>), OAuth2 액세스 토큰으로 기억할지(<code>OAUTH2</code>)를 정합니다. 흐름마다 DSL에서 <code>.session()</code> · <code>.oauth2()</code>로 정할 수 있고, 그 값이 먼저입니다. <code>contexa.auth.state-type</code>은 흐름이 정하지 않았을 때 쓰이며, 로그아웃 처리 같은 몇몇 공통 처리는 흐름과 상관없이 이 값을 읽습니다. 기본 FULL 체인은 흐름에 <code>.session()</code>을 지정합니다. DSL은 <a href="../../reference/identity/dsl.html">인증 DSL</a>에 있습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.state-type</code></td><td><code>OAUTH2</code></td><td>흐름에 지정이 없을 때의 상태 방식(<code>OAUTH2</code> · <code>SESSION</code>)</td></tr>
+              <tr><td><code>contexa.auth.oauth2-server-mode</code></td><td><code>COMBINED</code></td><td>OAuth2 상태 흐름에서 Contexa가 맡는 서버 역할(아래 표). 토큰을 발급할지 정하는 실제 스위치입니다</td></tr>
+              <tr><td><code>contexa.auth.token-transport-type</code></td><td><code>HEADER</code></td><td>토큰을 주고받는 방법(아래 표)</td></tr>
+              <tr><td><code>contexa.auth.token-persistence</code></td><td><code>memory</code></td><td>Contexa가 그리는 MFA 화면의 스크립트가 토큰을 둘 곳: <code>memory</code>(새로 고침하면 사라짐) · <code>localStorage</code> · <code>sessionStorage</code></td></tr>
+              <tr><td><code>contexa.auth.oauth2-csrf</code></td><td><code>false</code></td><td>OAuth2 체인의 CSRF 보호. <code>COOKIE</code> 전송에서는 이 값과 상관없이 늘 켜집니다</td></tr>
+              <tr><td><code>contexa.auth.cookie-secure</code></td><td><code>true</code></td><td>토큰 쿠키에 Secure 표시. Redis MFA 세션 쿠키는 이 값이 <code>true</code>이고 HTTPS 요청일 때만 Secure가 붙습니다</td></tr>
+              <tr><td><code>contexa.auth.cookie-same-site</code></td><td><code>Lax</code></td><td>토큰 쿠키의 SameSite(<code>Strict</code> · <code>Lax</code> · <code>None</code>). <code>None</code>은 <code>cookie-secure: true</code>일 때만 됩니다(아니면 기동이 멈춤)</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="oauth2-roles">OAuth2 서버 역할</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>값</th><th>하는 일</th></tr></thead>
+            <tbody>
+              <tr><td><code>RESOURCE_SERVER</code></td><td>요청의 액세스 토큰을 검사만 합니다. Contexa는 토큰을 발급하지 않습니다.</td></tr>
+              <tr><td><code>AUTHORIZATION_SERVER</code></td><td>Contexa가 토큰을 발급합니다(인가 서버 끝점과 로그아웃).</td></tr>
+              <tr><td><code>COMBINED</code>(기본)</td><td>둘 다 합니다.</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="transport">토큰 전송 방식</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>값</th><th>액세스 토큰</th><th>갱신 토큰</th></tr></thead>
+            <tbody>
+              <tr><td><code>COOKIE</code></td><td>쿠키 <code>accessToken</code></td><td>쿠키 <code>refreshToken</code></td></tr>
+              <tr><td><code>HEADER</code>(기본)</td><td><code>Authorization: Bearer …</code> 헤더</td><td><code>X-Refresh-Token</code> 헤더</td></tr>
+              <tr><td><code>HEADER_COOKIE</code></td><td><code>Authorization: Bearer …</code> 헤더</td><td>쿠키 <code>refreshToken</code></td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>서버가 그리는 페이지를 쓰는 앱은 <code>COOKIE</code>로 둡니다.</strong> 헤더 방식에 <code>token-persistence: memory</code>를 함께 쓰면 브라우저가 페이지를 옮길 때 토큰이 실리지 않아, 로그인한 뒤에도 서버 페이지가 인증되지 않습니다. 이 조합이면 기동 때 ERROR 로그가 한 번 남습니다. 헤더 방식은 SPA에 맞습니다.</li>
+            <li><strong><code>COOKIE</code>에서는 CSRF 보호가 늘 켜집니다.</strong> 브라우저가 쿠키를 모든 요청에 실어 보내기 때문입니다. <code>COOKIE</code>와 <code>oauth2-csrf: false</code>를 함께 적으면 기동이 멈춥니다.</li>
+          </ul>
 
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  auth:
-    state-type: oauth2
-    token-transport-type: header
-    token-issuer: internal
-    factor-selection-type: select
-    access-token-validity: 3600000
-    refresh-token-validity: 604800000
-    refresh-rotate-threshold: 43200000
-    enable-refresh-token: true
-    allow-multiple-logins: false
-    max-concurrent-logins: 3
-    cookie-secure: true
-    token-persistence: memory
-    token-prefix: "Bearer "
-    roles-claim: roles
-    scopes-claim: scopes
-    oauth2-csrf: false</code></pre>
-            </div>
+          <h2 id="tokens">토큰 수명과 동시 로그인</h2>
+          <p>OAuth2 상태 흐름에서 Contexa가 발급하는 토큰의 수명과, 한 사용자가 동시에 유지할 수 있는 로그인 수입니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.access-token-validity</code></td><td><code>3600000</code></td><td>액세스 토큰 수명(ms, 1시간)</td></tr>
+              <tr><td><code>contexa.auth.refresh-token-validity</code></td><td><code>604800000</code></td><td>갱신 토큰 수명(ms, 7일)</td></tr>
+              <tr><td><code>contexa.auth.enable-refresh-token</code></td><td><code>true</code></td><td><code>false</code>면 갱신 토큰을 만들지 않습니다</td></tr>
+              <tr><td><code>contexa.auth.allow-multiple-logins</code></td><td><code>false</code></td><td><code>false</code>면 새로 로그인할 때 같은 사용자의 이전 로그인(유효한 갱신 토큰)을 모두 무효로 합니다</td></tr>
+              <tr><td><code>contexa.auth.max-concurrent-logins</code></td><td><code>3</code></td><td><code>allow-multiple-logins: true</code>일 때 동시 로그인 상한. 넘으면 가장 오래된 로그인부터 무효로 합니다</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>두 수명은 Contexa 인가 서버의 내부 클라이언트 토큰 설정과 토큰 쿠키에 함께 쓰입니다. 이미 DB에 저장된 내부 클라이언트도 기동할 때 이 수명으로 맞춥니다.</li>
+            <li>갱신할 때마다 새 갱신 토큰을 발급하고 이전 것을 다시 쓰지 않습니다.</li>
+          </ul>
 
-            <p>관련 런타임 문서: <a href="../../../docs/reference/identity/authentication.html">Authentication</a>, <a href="../../../docs/reference/identity/mfa.html">Adaptive MFA</a>, <a href="../../../docs/reference/identity/state-management.html">State Management</a>.</p>
-          </section>
-
-          <section>
-            <h2 id="auth-urls">URL 구성 그룹</h2>
-            <p><code>contexa.auth.urls</code>는 <code>AuthUrlProvider</code>가 소비합니다. MFA 흐름에서는 <code>MfaFlowUrlRegistry</code>가 플로우별 provider를 생성해, 이름 있는 MFA 플로우가 전역 상태를 건드리지 않고 prefix를 안전하게 분리해서 쓸 수 있게 합니다.</p>
-
-            <h3>단일 인증 URL</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>속성</th><th>기본값</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.auth.urls.single.form-login-processing</code></td><td><code>/login</code></td><td>단일 팩터 폼 로그인 처리 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.form-login-page</code></td><td><code>/login</code></td><td>단일 팩터 폼 로그인 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.rest-login-processing</code></td><td><code>/api/login</code></td><td>단일 팩터 REST 로그인 처리 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.login-failure</code></td><td><code>/login?error</code></td><td>단일 팩터 로그인 실패 리다이렉트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.login-success</code></td><td><code>/</code></td><td>단일 팩터 로그인 성공 리다이렉트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.logout-page</code></td><td><code>/logout</code></td><td>단일 팩터 로그아웃 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.ott.request-email</code></td><td><code>/login/ott</code></td><td>단일 팩터 OTT 요청 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.ott.code-generation</code></td><td><code>/ott/generate</code></td><td>단일 팩터 OTT 코드 생성 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.ott.code-sent</code></td><td><code>/login/ott/sent</code></td><td>단일 팩터 OTT 전송 완료 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.ott.challenge</code></td><td><code>/login/ott/verify</code></td><td>단일 팩터 OTT 검증 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.ott.login-processing</code></td><td><code>/login/ott</code></td><td>단일 팩터 OTT 검증 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.ott.login-failure</code></td><td><code>/login/ott?error</code></td><td>단일 팩터 OTT 실패 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.passkey.login-page</code></td><td><code>/login/webauthn</code></td><td>단일 팩터 패스키 로그인 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.passkey.login-processing</code></td><td><code>/login/webauthn</code></td><td>단일 팩터 패스키 검증 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.passkey.login-failure</code></td><td><code>/login/webauthn?error</code></td><td>단일 팩터 패스키 실패 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.passkey.assertion-options</code></td><td><code>/webauthn/authenticate/options</code></td><td>패스키 assertion options 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.passkey.registration-options</code></td><td><code>/webauthn/register/options</code></td><td>패스키 등록 options 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.single.passkey.registration-processing</code></td><td><code>/webauthn/register</code></td><td>패스키 등록 처리 엔드포인트입니다.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>MFA URL 그룹</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>속성</th><th>기본값</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.auth.urls.primary.form-login-processing</code></td><td><code>/mfa/login</code></td><td>MFA 플로우 내부의 1차 폼 로그인 처리 경로입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.primary.form-login-page</code></td><td><code>/mfa/login</code></td><td>MFA 플로우 내부의 1차 폼 로그인 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.primary.rest-login-processing</code></td><td><code>/api/mfa/login</code></td><td>MFA 플로우 내부의 1차 REST 로그인 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.primary.login-failure</code></td><td><code>/login?error</code></td><td>1차 인증 실패 리다이렉트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.primary.login-success</code></td><td><code>/</code></td><td>1차 인증 성공 리다이렉트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.primary.logout-page</code></td><td><code>/logout</code></td><td>1차 인증 로그아웃 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.mfa.select-factor</code></td><td><code>/mfa/select-factor</code></td><td>MFA 팩터 선택 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.mfa.success</code></td><td><code>/mfa/success</code></td><td>MFA 성공 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.mfa.failure</code></td><td><code>/mfa/failure</code></td><td>MFA 실패 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.mfa.cancel</code></td><td><code>/mfa/cancel</code></td><td>MFA 취소 엔드포인트/페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.mfa.status</code></td><td><code>/mfa/status</code></td><td>MFA 상태 조회 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.mfa.request-ott-code</code></td><td><code>/mfa/request-ott-code</code></td><td>OTT 코드 요청 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.mfa.config</code></td><td><code>/api/mfa/config</code></td><td>페이지 생성기와 클라이언트 코드가 사용하는 MFA 구성 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.ott.request-code-ui</code></td><td><code>/mfa/ott/request-code-ui</code></td><td>OTT 요청 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.ott.code-generation</code></td><td><code>/mfa/ott/generate-code</code></td><td>OTT 코드 생성 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.ott.code-sent</code></td><td><code>/mfa/ott/code-sent</code></td><td>OTT 코드 전송 완료 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.ott.challenge-ui</code></td><td><code>/mfa/challenge/ott</code></td><td>OTT 챌린지 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.ott.login-processing</code></td><td><code>/login/mfa-ott</code></td><td>OTT 로그인 처리 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.ott.default-failure</code></td><td><code>/mfa/challenge/ott?error=true</code></td><td>기본 OTT 실패 리다이렉트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.ott.single-ott-request-email</code></td><td><code>/loginOtt</code></td><td><code>OttUrls</code>가 유지하는 레거시 단일 OTT 요청 페이지 경로입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.ott.single-ott-code-generation</code></td><td><code>/login/ott/generate</code></td><td><code>OttUrls</code>가 유지하는 레거시 단일 OTT 생성 경로입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.ott.single-ott-challenge</code></td><td><code>/loginOttVerifyCode</code></td><td><code>OttUrls</code>가 유지하는 레거시 단일 OTT 챌린지 경로입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.ott.single-ott-sent</code></td><td><code>/ott/sent</code></td><td><code>OttUrls</code>가 유지하는 레거시 단일 OTT 전송 완료 페이지 경로입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.passkey.rp-id</code></td><td><code>localhost</code></td><td>기본 패스키 relying-party ID입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.passkey.rp-name</code></td><td><code>contexa-identity</code></td><td>기본 패스키 relying-party 이름입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.passkey.allowed-origins</code></td><td><code>null</code></td><td>허용 origin 목록입니다. 값이 없으면 패스키 빌더가 <code>http://localhost:{server.port}</code>를 fallback으로 사용합니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.passkey.login-processing</code></td><td><code>/login/mfa-webauthn</code></td><td>MFA 모드 패스키 인증 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.passkey.challenge-ui</code></td><td><code>/mfa/challenge/passkey</code></td><td>패스키 챌린지 페이지입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.passkey.registration-processing</code></td><td><code>/webauthn/register</code></td><td>패스키 등록 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.passkey.assertion-options</code></td><td><code>/webauthn/authenticate/options</code></td><td>패스키 assertion options 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.passkey.registration-options</code></td><td><code>/webauthn/register/options</code></td><td>패스키 등록 options 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.recovery-code-login-processing</code></td><td><code>/login/recovery/verify</code></td><td>복구 코드 검증 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.urls.factors.recovery-code-challenge-ui</code></td><td><code>/mfa/challenge/recovery</code></td><td>복구 코드 챌린지 페이지입니다.</td></tr>
-              </tbody>
-            </table></div>
-
-            <p>런타임 소비 지점: <code>AuthUrlProvider</code>가 이 경로들을 해석하고, <code>MfaFlowUrlRegistry</code>가 이름 있는 MFA 플로우마다 별도 provider를 만들어 prefix를 안전하게 격리합니다.</p>
-          </section>
-
-          <section>
-            <h2 id="auth-token-settings">토큰 발급자 설정</h2>
-            <p><code>contexa.auth.internal</code>과 <code>contexa.auth.oauth2</code>는 <code>contexa.auth.token-issuer</code> 선택값에 따라 사용되는 두 가지 토큰 발급 설정입니다.</p>
-
-            <h3>내부 JWT 엔드포인트</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>속성</th><th>기본값</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.auth.internal.login-uri</code></td><td><code>/api/login</code></td><td>내부 JWT 로그인 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.internal.logout-uri</code></td><td><code>/logout</code></td><td>내부 로그아웃 엔드포인트입니다.</td></tr>
-                <tr><td><code>contexa.auth.internal.refresh-uri</code></td><td><code>/api/refresh</code></td><td>내부 리프레시 엔드포인트입니다.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>OAuth2 / Authorization Server 설정</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>속성</th><th>기본값</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.auth.oauth2.client-id</code></td><td><code>default-client</code></td><td>OAuth2 client identifier입니다.</td></tr>
-                <tr><td><code>contexa.auth.oauth2.client-secret</code></td><td><code>173f8245-5f7d-4623-a612-aa0c68f6da4a</code></td><td><code>OAuth2TokenSettings</code>가 선언하는 기본 client secret입니다. 실제 배포에서는 반드시 override해야 합니다.</td></tr>
-                <tr><td><code>contexa.auth.oauth2.issuer-uri</code></td><td><code>http://localhost:9000</code></td><td>Issuer base URI입니다.</td></tr>
-                <tr><td><code>contexa.auth.oauth2.token-endpoint</code></td><td><code>/oauth2/token</code></td><td>토큰 엔드포인트 경로입니다.</td></tr>
-                <tr><td><code>contexa.auth.oauth2.scope</code></td><td><code>read</code></td><td>기본 요청 scope입니다.</td></tr>
-                <tr><td><code>contexa.auth.oauth2.redirect-uri</code></td><td><code>http://localhost:8080</code></td><td>인증 후 redirect URI입니다.</td></tr>
-                <tr><td><code>contexa.auth.oauth2.authorized-uri</code></td><td><code>null</code></td><td>선택적인 post-authorization redirect override입니다.</td></tr>
-                <tr><td><code>contexa.auth.oauth2.jwk-key-store-path</code></td><td><code>null</code></td><td>JWK keystore 경로입니다.</td></tr>
-                <tr><td><code>contexa.auth.oauth2.jwk-key-store-password</code></td><td><code>null</code></td><td>Keystore 비밀번호입니다.</td></tr>
-                <tr><td><code>contexa.auth.oauth2.jwk-key-alias</code></td><td><code>null</code></td><td>Keystore 내부 키 alias입니다.</td></tr>
-                <tr><td><code>contexa.auth.oauth2.jwk-key-password</code></td><td><code>null</code></td><td>키별 비밀번호 override입니다.</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
+          <h2 id="issuer">Contexa가 토큰을 발급할 때(인가 서버)</h2>
+          <p><code>CONTEXA_OWNED</code>이면 Contexa 인가 서버가 구성됩니다. 실제로 토큰을 발급하는 것은 서버 역할에 <code>AUTHORIZATION_SERVER</code>가 들어 있고(<code>COMBINED</code> 포함), OAuth2 상태를 쓰는 흐름이 있을 때입니다. 끝점은 정해져 있습니다: <code>/oauth2/authorize</code> · <code>/oauth2/token</code> · <code>/oauth2/jwks</code> · <code>/oauth2/revoke</code> · <code>/oauth2/introspect</code> · <code>/connect/register</code> · <code>/userinfo</code>.</p>
+          <pre><code class="language-yaml"># 기존 설정에 더하는 부분
+contexa:
   auth:
     oauth2:
-      client-id: my-client-app
-      client-secret: ${OAUTH2_CLIENT_SECRET}
+      client-secret: ${CONTEXA_OAUTH2_CLIENT_SECRET}
       issuer-uri: https://auth.example.com
-      token-endpoint: /oauth2/token
-      scope: read
-      redirect-uri: https://app.example.com/callback
-      authorized-uri: https://app.example.com/dashboard
-      jwk-key-store-path: /etc/contexa/keys/jwk-keystore.p12
-      jwk-key-store-password: ${JWK_STORE_PASSWORD}
-      jwk-key-alias: contexa-signing-key
-      jwk-key-password: ${JWK_KEY_PASSWORD}</code></pre>
-            </div>
-          </section>
+      jwk-key-store-path: file:/etc/contexa/keys/jwk-keystore.p12
+      jwk-key-store-password: ${CONTEXA_JWK_STORE_PASSWORD}
+      jwk-key-alias: contexa</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.oauth2.client-id</code></td><td><code>default-client</code></td><td>Contexa 내부 클라이언트 ID. 처음 기동할 때 이 ID로 클라이언트를 DB에 저장합니다</td></tr>
+              <tr><td><code>contexa.auth.oauth2.client-secret</code></td><td>없음</td><td>내부 클라이언트 비밀. 토큰을 발급할 때 필수이고(없으면 기동이 멈춤), 재시작해도 같은 값이어야 합니다. 예전 기본 비밀값은 거부합니다</td></tr>
+              <tr><td><code>contexa.auth.oauth2.issuer-uri</code></td><td><code>http://localhost:9000</code></td><td>발급하는 토큰의 발급자(<code>iss</code>), 리소스 서버가 기대하는 발급자, Contexa가 스스로 토큰을 받는 주소의 앞부분. 운영에서는 실제 주소로 바꿉니다</td></tr>
+              <tr><td><code>contexa.auth.oauth2.token-endpoint</code></td><td><code>/oauth2/token</code></td><td>Contexa가 스스로 토큰을 받을 때 <code>issuer-uri</code> 뒤에 붙이는 경로</td></tr>
+              <tr><td><code>contexa.auth.oauth2.scope</code></td><td><code>read</code></td><td>내부 클라이언트의 범위(쉼표 · 공백으로 여러 개). 비면 <code>read</code></td></tr>
+              <tr><td><code>contexa.auth.oauth2.redirect-uri</code></td><td><code>http://localhost:8080</code></td><td>내부 클라이언트를 처음 저장할 때 등록하는 redirect URI</td></tr>
+              <tr><td><code>contexa.auth.oauth2.authorized-uri</code></td><td>없음</td><td>함께 등록하는 redirect URI</td></tr>
+              <tr><td><code>contexa.auth.oauth2.jwk-key-store-path</code></td><td>없음</td><td>토큰 서명 키를 담은 PKCS12 저장소. 일반 경로는 클래스패스에서 찾고, 파일은 <code>file:</code> 접두사를 붙입니다. 비우면 기동할 때마다 임시 RSA 키를 만들어(ERROR 로그) 재시작하면 이전 토큰을 검증하지 못합니다</td></tr>
+              <tr><td><code>contexa.auth.oauth2.jwk-key-store-password</code></td><td>없음</td><td>키 저장소 비밀번호</td></tr>
+              <tr><td><code>contexa.auth.oauth2.jwk-key-alias</code></td><td>없음</td><td>저장소 안 키의 별칭. 토큰의 키 ID로도 쓰입니다</td></tr>
+              <tr><td><code>contexa.auth.oauth2.jwk-key-password</code></td><td>없음</td><td>키 비밀번호. 비우면 저장소 비밀번호를 씁니다</td></tr>
+              <tr><td><code>contexa.auth.internal.refresh-uri</code></td><td><code>/api/refresh</code></td><td>브라우저가 액세스 토큰을 새로 받는 주소. 인가 서버를 같은 앱에 둘 때(<code>AUTHORIZATION_SERVER</code> · <code>COMBINED</code>) 등록됩니다</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>저장된 내부 클라이언트와 비밀이 다르면 기동이 멈춥니다.</strong> 내부 클라이언트는 처음 기동할 때 DB에 한 번 저장되고, 그 뒤에는 토큰 수명만 맞춥니다. 저장된 클라이언트가 지금의 <code>client-secret</code>을 받지 않으면 Contexa는 저장된 값을 몰래 바꾸지 않고 기동을 멈춥니다. 저장된 클라이언트의 비밀을 바꾸거나, 그 클라이언트를 지워 다시 등록되게 하십시오. 서명 키 저장소를 <code>/etc/…</code> 같은 일반 경로로 적으면 클래스패스에서 찾다가 <code>KeyStore not found</code>로 기동이 멈추니, 파일이면 <code>file:</code>을 붙이십시오.
+          </div>
+          <h3 id="resource-server">리소스 서버의 토큰 검사와 서비스 클라이언트</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.oauth2.issuer-validation-enabled</code></td><td><code>true</code></td><td>발급자(<code>iss</code>)가 Contexa 인가 서버의 발급자(없으면 <code>issuer-uri</code>)인 토큰만 받습니다. 아니면 401</td></tr>
+              <tr><td><code>contexa.auth.oauth2.audiences</code></td><td><code>[]</code></td><td>적으면 <code>aud</code>에 이 가운데 하나가 있는 토큰만 받습니다(아니면 401). 비면 검사하지 않습니다. Contexa 인가 서버는 토큰을 받은 클라이언트 ID를 <code>aud</code>에 넣습니다</td></tr>
+              <tr><td><code>contexa.auth.oauth2.service-client-ids</code></td><td><code>[]</code></td><td>자기 이름으로 받은 토큰(client credentials)을 사용자 계정 없이 인증할 클라이언트. 토큰의 범위가 권한이 됩니다. 내부 클라이언트는 이렇게 인증하지 않습니다</td></tr>
+              <tr><td><code>contexa.auth.oauth2.token-exchange-enabled</code></td><td><code>false</code></td><td>RFC 8693 토큰 교환 허용. 꺼져 있으면 모든 클라이언트의 교환 요청을 거부합니다. 에이전트가 사람 대신 토큰을 받을 때 씁니다(<a href="../../reference/agent/delegation.html">위임</a>)</td></tr>
+              <tr><td><code>contexa.auth.oauth2.delegation-claim-enabled</code></td><td><code>true</code></td><td>교환으로 에이전트가 받는 토큰에 그 사람의 위임 ID(<code>delegation_id</code>)를 넣습니다</td></tr>
+            </tbody>
+          </table></div>
 
-          <section>
-            <h2 id="mfa-settings">MFA 설정</h2>
-            <p><code>MfaSettings</code>는 <code>contexa.auth.mfa</code> 아래에 중첩되며, MFA 세션 저장소, 팩터별 URL, 타임아웃, 모니터링 플래그, state-machine 연동 타이밍을 함께 제어합니다.</p>
+          <h2 id="urls">로그인 · MFA 주소</h2>
+          <p>Contexa가 만드는 로그인 · MFA 화면과 처리 주소입니다. 흐름의 DSL에 주소를 적으면 그 값이 먼저이고, 적지 않은 주소만 이 설정을 씁니다. 이름이 있는 MFA 흐름이 여럿이면 흐름마다 주소 앞에 접두사가 붙을 수 있습니다. 로그아웃 처리 주소는 <code>/logout</code>(흐름 접두사 포함)으로 정해져 있습니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>MFA 로그인이 지나가는 주소(기본값)</strong>상자마다 그 단계의 주소와 설정 이름을 적었습니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-host"><span class="dg-node-tag">1차 로그인</span><span class="dg-node-title"><code>/mfa/login</code></span><span class="dg-node-desc">화면 <code>primary.form-login-page</code>, 처리 <code>primary.form-login-processing</code>(REST는 <code>/api/mfa/login</code>)</span></li>
+              <li class="dg-node"><span class="dg-node-tag">요소 선택</span><span class="dg-node-title"><code>/mfa/select-factor</code></span><span class="dg-node-desc"><code>mfa.select-factor</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">요소 확인</span><span class="dg-node-title">OTT <code>/mfa/challenge/ott</code> · 패스키 <code>/mfa/challenge/passkey</code> · 복구 코드 <code>/mfa/challenge/recovery</code></span><span class="dg-node-desc"><code>factors.ott.challenge-ui</code> · <code>factors.passkey.challenge-ui</code> · <code>factors.recovery-code-challenge-ui</code></span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">끝</span><span class="dg-node-title">성공 <code>/mfa/success</code> · 실패 <code>/mfa/failure</code> · 취소 <code>/mfa/cancel</code></span><span class="dg-node-desc"><code>mfa.success</code> · <code>mfa.failure</code> · <code>mfa.cancel</code></span></li>
+            </ol>
+          </figure>
+          <p>아래 표의 설정 이름은 모두 <code>contexa.auth.urls.*</code> 아래에 있습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정(한 번에 로그인)</th><th>기본값</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.urls.single.form-login-page</code></td><td><code>/login</code></td><td>폼 로그인 화면</td></tr>
+              <tr><td><code>contexa.auth.urls.single.form-login-processing</code></td><td><code>/login</code></td><td>폼 로그인 처리</td></tr>
+              <tr><td><code>contexa.auth.urls.single.rest-login-processing</code></td><td><code>/api/login</code></td><td>REST 로그인 처리</td></tr>
+              <tr><td><code>contexa.auth.urls.single.login-success</code></td><td><code>/</code></td><td>로그인 성공 뒤 갈 곳</td></tr>
+              <tr><td><code>contexa.auth.urls.single.ott.request-email</code></td><td><code>/login/ott</code></td><td>OTT 메일 요청 화면</td></tr>
+              <tr><td><code>contexa.auth.urls.single.ott.code-generation</code></td><td><code>/ott/generate</code></td><td>OTT 코드 만들기</td></tr>
+              <tr><td><code>contexa.auth.urls.single.ott.challenge</code></td><td><code>/login/ott/verify</code></td><td>OTT 코드 입력 화면</td></tr>
+              <tr><td><code>contexa.auth.urls.single.ott.login-processing</code></td><td><code>/login/ott</code></td><td>OTT 로그인 처리</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.ott.single-ott-sent</code></td><td><code>/ott/sent</code></td><td>OTT 메일을 보냈다는 화면</td></tr>
+              <tr><td><code>contexa.auth.urls.single.passkey.login-processing</code></td><td><code>/login/webauthn</code></td><td>패스키 로그인 처리</td></tr>
+              <tr><td><code>contexa.auth.urls.single.passkey.assertion-options</code></td><td><code>/webauthn/authenticate/options</code></td><td>패스키 인증 옵션</td></tr>
+              <tr><td><code>contexa.auth.urls.single.passkey.registration-options</code></td><td><code>/webauthn/register/options</code></td><td>패스키 등록 옵션</td></tr>
+              <tr><td><code>contexa.auth.urls.single.passkey.registration-processing</code></td><td><code>/webauthn/register</code></td><td>패스키 등록 처리</td></tr>
+            </tbody>
+          </table></div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정(MFA)</th><th>기본값</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.urls.primary.form-login-page</code></td><td><code>/mfa/login</code></td><td>1차 로그인 화면</td></tr>
+              <tr><td><code>contexa.auth.urls.primary.form-login-processing</code></td><td><code>/mfa/login</code></td><td>1차 폼 로그인 처리</td></tr>
+              <tr><td><code>contexa.auth.urls.primary.rest-login-processing</code></td><td><code>/api/mfa/login</code></td><td>1차 REST 로그인 처리</td></tr>
+              <tr><td><code>contexa.auth.urls.primary.login-success</code></td><td><code>/</code></td><td>로그인을 마친 뒤 갈 곳</td></tr>
+              <tr><td><code>contexa.auth.urls.primary.login-failure</code></td><td><code>/login?error</code></td><td>1차 로그인 실패</td></tr>
+              <tr><td><code>contexa.auth.urls.primary.logout-page</code></td><td><code>/logout</code></td><td>로그아웃 화면</td></tr>
+              <tr><td><code>contexa.auth.urls.mfa.select-factor</code></td><td><code>/mfa/select-factor</code></td><td>요소 선택</td></tr>
+              <tr><td><code>contexa.auth.urls.mfa.success</code></td><td><code>/mfa/success</code></td><td>MFA 성공</td></tr>
+              <tr><td><code>contexa.auth.urls.mfa.failure</code></td><td><code>/mfa/failure</code></td><td>MFA 실패</td></tr>
+              <tr><td><code>contexa.auth.urls.mfa.cancel</code></td><td><code>/mfa/cancel</code></td><td>MFA 취소</td></tr>
+              <tr><td><code>contexa.auth.urls.mfa.status</code></td><td><code>/mfa/status</code></td><td>MFA 진행 상태 API</td></tr>
+              <tr><td><code>contexa.auth.urls.mfa.request-ott-code</code></td><td><code>/mfa/request-ott-code</code></td><td>OTT 코드 요청 API</td></tr>
+              <tr><td><code>contexa.auth.urls.mfa.config</code></td><td><code>/api/mfa/config</code></td><td>MFA 화면 스크립트가 주소를 받아 가는 API</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.ott.request-code-ui</code></td><td><code>/mfa/ott/request-code-ui</code></td><td>OTT 코드 요청 화면</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.ott.code-generation</code></td><td><code>/mfa/ott/generate-code</code></td><td>OTT 코드 만들기</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.ott.code-sent</code></td><td><code>/mfa/ott/code-sent</code></td><td>OTT 코드를 보냈다는 화면</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.ott.challenge-ui</code></td><td><code>/mfa/challenge/ott</code></td><td>OTT 코드 입력 화면</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.ott.login-processing</code></td><td><code>/login/mfa-ott</code></td><td>OTT 확인 처리</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.ott.default-failure</code></td><td><code>/mfa/challenge/ott?error=true</code></td><td>OTT 확인 실패</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.challenge-ui</code></td><td><code>/mfa/challenge/passkey</code></td><td>패스키 확인 화면</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.login-processing</code></td><td><code>/login/mfa-webauthn</code></td><td>패스키 확인 처리</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.assertion-options</code></td><td><code>/webauthn/authenticate/options</code></td><td>패스키 인증 옵션</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.registration-options</code></td><td><code>/webauthn/register/options</code></td><td>패스키 등록 옵션</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.registration-processing</code></td><td><code>/webauthn/register</code></td><td>패스키 등록 처리</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.recovery-code-challenge-ui</code></td><td><code>/mfa/challenge/recovery</code></td><td>복구 코드 입력 화면</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.recovery-code-login-processing</code></td><td><code>/login/recovery/verify</code></td><td>복구 코드 확인 처리</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="passkey-rp">패스키 신뢰 당사자(RP)</h3>
+          <p>패스키는 브라우저가 사이트 도메인에 묶어 만듭니다. 한 번에 로그인과 MFA의 패스키가 모두 아래 값을 씁니다. 운영에서는 <code>rp-id</code>를 사이트 도메인으로, <code>allowed-origins</code>를 실제 https 주소로 바꾸십시오.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.urls.factors.passkey.rp-id</code></td><td><code>localhost</code></td><td>신뢰 당사자 ID(보통 사이트 도메인)</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.rp-name</code></td><td><code>contexa-identity</code></td><td>사용자에게 보이는 이름</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.allowed-origins</code></td><td>없음</td><td>패스키를 받을 출처(쉼표로만 구분, 공백 없이). 비우면 <code>http://localhost:{server.port}</code>(포트가 없으면 8080)</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3>MFA 타임아웃과 기본 동작</h3>
-            <p>아래 설정은 <code>MfaSettings</code>와 이를 사용하는 state-machine/MFA request 처리 코드가 함께 소비합니다.</p>
+          <h2 id="mfa">MFA 제한 시간과 재시도</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.auth.mfa.session-timeout-ms</code></td><td><code>600000</code></td><td>MFA 세션이 만들어지거나 마지막 MFA 단계를 지난 뒤 유지되는 시간(ms, 10분)</td></tr>
+              <tr><td><code>contexa.auth.mfa.challenge-timeout-ms</code></td><td><code>300000</code></td><td>요소 확인을 시작한 뒤 이 시간이 지나면 확인 요청에 403(<code>MFA session expired</code>)으로 답합니다(ms, 5분)</td></tr>
+              <tr><td><code>contexa.auth.mfa.max-retry-attempts</code></td><td><code>5</code></td><td>요소마다 실패를 허용하는 횟수. 넘으면 그 요소의 확인 요청에 403으로 답하고 MFA 상태를 재시도 초과로 넘깁니다</td></tr>
+              <tr><td><code>contexa.auth.mfa.minimum-delay-ms</code></td><td><code>500</code></td><td>로그인 · 요소 확인 응답이 이보다 빨리 나가지 않도록 기다리는 시간(ms)</td></tr>
+              <tr><td><code>contexa.auth.mfa.otp-token-validity-seconds</code></td><td><code>300</code></td><td>OTT 메일에 적는 유효 시간(분으로 바꿔 적음). 실제 코드 유효 시간은 Spring Security 기본값 5분이고 이 설정으로 바뀌지 않습니다</td></tr>
+              <tr><td><code>contexa.auth.mfa.metrics-enabled</code></td><td><code>true</code></td><td><code>false</code>면 MFA 상태 변화 리스너(<code>MfaStateChangeListener</code>)를 만들지 않습니다</td></tr>
+              <tr><td><code>contexa.auth.ott.fail-on-email-error</code></td><td><code>true</code></td><td>메일 발송 설정이 없거나 보내기에 실패하면 OTT 요청을 실패로 처리합니다. <code>false</code>면 코드는 만들고 메일만 건너뜁니다(경고 로그)</td></tr>
+            </tbody>
+          </table></div>
+          <p>차단된 사용자가 차단을 풀려고 거치는 MFA의 횟수는 이 설정이 아니라 <a href="security.html">집행 모드와 판정 조정</a>에 있습니다. MFA 화면과 요소는 <a href="../../reference/identity/mfa.html">MFA</a>에 있습니다.</p>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.auth.mfa.session-timeout-ms</code></td><td><code>long</code></td><td><code>600000</code></td><td>전체 MFA 세션 타임아웃입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.challenge-timeout-ms</code></td><td><code>long</code></td><td><code>300000</code></td><td>개별 챌린지 타임아웃입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.inactivity-timeout</code></td><td><code>long</code></td><td><code>900000</code></td><td>MFA 상태 idle timeout입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.cache-ttl</code></td><td><code>long</code></td><td><code>300000</code></td><td>MFA 런타임 캐시 TTL입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.session-refresh-interval-ms</code></td><td><code>long</code></td><td><code>30000</code></td><td>활성 MFA 세션 refresh 주기입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.state-machine-timeout-ms</code></td><td><code>long</code></td><td><code>10000</code></td><td>state-machine 연동 MFA 핸들러의 timeout budget입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.max-retry-attempts</code></td><td><code>int</code></td><td><code>5</code></td><td>잠금 로직이 적용되기 전까지 허용되는 최대 검증 재시도 횟수입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.account-lockout-duration-ms</code></td><td><code>long</code></td><td><code>900000</code></td><td>재시도 초과 후 MFA 잠금 지속 시간입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.minimum-delay-ms</code></td><td><code>long</code></td><td><code>500</code></td><td>응답 시간 편차를 줄이기 위한 최소 지연값입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.device-remember-duration-ms</code></td><td><code>long</code></td><td><code>2592000000</code></td><td>기기 기억 기간입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.otp-token-validity-seconds</code></td><td><code>int</code></td><td><code>300</code></td><td>OTP 유효 기간입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.otp-token-length</code></td><td><code>int</code></td><td><code>6</code></td><td>OTP 코드 길이입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.sms-resend-interval-seconds</code></td><td><code>int</code></td><td><code>60</code></td><td>SMS 재전송 throttle입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.email-resend-interval-seconds</code></td><td><code>int</code></td><td><code>120</code></td><td>이메일 재전송 throttle입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.state-machine-pool-size</code></td><td><code>int</code></td><td><code>100</code></td><td><code>MfaSettings</code>가 유지하는 legacy state-machine pool size 설정입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.state-machine-cache-ttl-ms</code></td><td><code>long</code></td><td><code>300000</code></td><td><code>MfaSettings</code>가 유지하는 legacy state-machine cache TTL 설정입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.circuit-breaker-failure-threshold</code></td><td><code>int</code></td><td><code>5</code></td><td>MFA circuit breaker open 전 실패 임계값입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.circuit-breaker-timeout-seconds</code></td><td><code>int</code></td><td><code>30</code></td><td>MFA circuit breaker open-state timeout입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.detailed-logging-enabled</code></td><td><code>boolean</code></td><td><code>false</code></td><td>상세 MFA 진단 로그를 활성화합니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.metrics-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>MFA 메트릭 수집을 활성화합니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.audit-logging-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>MFA 감사 로그를 활성화합니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.session-storage-type</code></td><td><code>String</code></td><td><code>http-session</code></td><td>기본 MFA 세션 저장소 라벨입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.auto-select-repository</code></td><td><code>boolean</code></td><td><code>false</code></td><td>저장소 자동 선택을 활성화합니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.repository-priority</code></td><td><code>String</code></td><td><code>redis,memory,http-session</code></td><td>저장소 우선순위 문자열입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.fallback-repository-type</code></td><td><code>String</code></td><td><code>http-session</code></td><td>fallback 저장소 라벨입니다.</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="storage">MFA 세션과 상태 머신을 저장하는 곳</h2>
+          <p>저장 위치를 고르는 MFA 전용 설정은 없습니다. <code>contexa.infrastructure.mode</code>(<a href="infrastructure.html">처음 켜기와 배포</a>)가 정합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>무엇</th><th>단독(<code>standalone</code>, 기본)</th><th>분산(<code>distributed</code>)</th></tr></thead>
+            <tbody>
+              <tr><td>MFA 세션</td><td>HTTP 세션(속성 <code>MFA_SESSION_ID</code>). 앱에 Redis가 있어도 HTTP 세션입니다</td><td>Redis(<code>StringRedisTemplate</code> 빈이 있을 때, 없으면 HTTP 세션). 쿠키 <code>MFA_SID</code>(HttpOnly, SameSite=Lax), 키 접두사 <code>mfa:session:v2:</code></td></tr>
+              <tr><td>MFA 상태 머신</td><td>메모리</td><td>Redis(Redisson이 있을 때, 없으면 메모리)</td></tr>
+            </tbody>
+          </table></div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.identity.statemachine.persistence.ttl-minutes</code></td><td><code>30</code></td><td>상태 머신 맥락이 마지막 저장 뒤 유지되는 시간(분, 메모리 · Redis 모두). 0 이하면 30</td></tr>
+              <tr><td><code>contexa.identity.statemachine.mfa.transition-timeout-seconds</code></td><td><code>30</code></td><td>상태 전이 하나를 기다리는 시간(초)</td></tr>
+              <tr><td><code>contexa.identity.statemachine.distributed-lock.lock-wait-time-seconds</code></td><td><code>10</code></td><td>같은 MFA 세션의 상태를 하나씩 바꾸려고 거는 잠금을 내부 작업이 기다리는 시간(초). 0 이하면 <code>timeout-seconds</code></td></tr>
+              <tr><td><code>contexa.identity.statemachine.distributed-lock.timeout-seconds</code></td><td><code>10</code></td><td><code>lock-wait-time-seconds</code>가 0 이하일 때만 대신 쓰는 값(초)</td></tr>
+              <tr><td><code>contexa.identity.statemachine.distributed-lock.lock-lease-time-seconds</code></td><td><code>30</code></td><td>잠금을 잡고 있는 최대 시간(초)</td></tr>
+              <tr><td><code>contexa.identity.statemachine.distributed-lock.user-request-lock-wait-time-ms</code></td><td><code>750</code></td><td>사용자 요청이 잠금을 기다리는 시간(ms). 못 잡으면 <code>429 MFA_BUSY_RETRY</code>와 <code>Retry-After</code>(최소 1초)로 답합니다</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3>MFA 저장소 설정</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>속성</th><th>기본값</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.auth.mfa.http-session.enabled</code></td><td><code>true</code></td><td>HTTP-session 기반 MFA 저장소를 활성화합니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.http-session.create-session-if-not-exists</code></td><td><code>true</code></td><td>필요 시 HTTP 세션을 생성합니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.http-session.session-attribute-name</code></td><td><code>MFA_SESSION_ID</code></td><td>MFA 세션 식별자를 저장하는 attribute 이름입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.redis.enabled</code></td><td><code>true</code></td><td>Redis 기반 MFA 저장소를 활성화합니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.redis.key-prefix</code></td><td><code>mfa:session:</code></td><td>Redis key prefix입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.redis.cookie-name</code></td><td><code>MFA_SID</code></td><td>Redis 기반 MFA 세션 식별자를 담는 cookie 이름입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.redis.secure-cookie</code></td><td><code>true</code></td><td>MFA 세션 cookie를 secure로 표시합니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.redis.http-only-cookie</code></td><td><code>true</code></td><td>MFA 세션 cookie를 HTTP-only로 표시합니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.redis.same-site</code></td><td><code>Strict</code></td><td>SameSite cookie 속성입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.redis.connection-timeout</code></td><td><code>3000</code></td><td>Redis connection timeout입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.redis.max-retries</code></td><td><code>3</code></td><td>Redis retry limit입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.memory.enabled</code></td><td><code>true</code></td><td>메모리 기반 MFA 저장소를 활성화합니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.memory.cleanup-interval-minutes</code></td><td><code>5</code></td><td>메모리 MFA 세션 정리 주기입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.memory.max-sessions</code></td><td><code>10000</code></td><td>메모리 MFA 세션 최대 개수입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.memory.enable-metrics</code></td><td><code>true</code></td><td>메모리 저장소 메트릭을 활성화합니다.</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="switches">자동 구성 끄기</h2>
+          <p>모두 기본으로 켜져 있습니다. 끄면 그 자동 구성의 빈이 만들어지지 않으므로, 같은 일을 하는 빈을 앱이 직접 등록할 때만 끕니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>끄는 것</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.identity.statemachine.enabled</code></td><td><code>true</code></td><td>MFA 상태 머신(MFA 흐름에 필요)</td></tr>
+              <tr><td><code>contexa.identity.mfa.enabled</code></td><td><code>true</code></td><td>MFA 정책 평가기 · 정책 제공자, MFA 화면 생성</td></tr>
+              <tr><td><code>contexa.identity.security-core.enabled</code></td><td><code>true</code></td><td>인증 보안 핵심(보안 체인을 만드는 부트스트랩 포함)</td></tr>
+              <tr><td><code>contexa.identity.service.enabled</code></td><td><code>true</code></td><td>주소 제공자, OTT 메일 서비스, MFA 설정 API</td></tr>
+              <tr><td><code>contexa.identity.handler.enabled</code></td><td><code>true</code></td><td>OTT 발급 성공 처리기, 세션 로그인 성공 · 실패 처리기(<code>CONTEXA_OWNED</code>에서만 만들어짐)</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3>MFA 팩터 설정</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>속성</th><th>기본값</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.auth.mfa.sms-factor.provider</code></td><td><code>default</code></td><td>SMS provider 식별자입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.sms-factor.template-id</code></td><td><code>mfa_sms_template</code></td><td>SMS template 식별자입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.sms-factor.max-daily-attempts</code></td><td><code>10</code></td><td>일일 SMS 전송 상한입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.sms-factor.enabled</code></td><td><code>true</code></td><td>SMS MFA 팩터를 활성화합니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.email-factor.from-address</code></td><td><code>noreply@company.com</code></td><td>이메일 OTP 발신 주소입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.email-factor.template-id</code></td><td><code>mfa_email_template</code></td><td>이메일 template 식별자입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.email-factor.max-daily-attempts</code></td><td><code>5</code></td><td>일일 이메일 전송 상한입니다.</td></tr>
-                <tr><td><code>contexa.auth.mfa.email-factor.enabled</code></td><td><code>true</code></td><td>이메일 MFA 팩터를 활성화합니다.</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  auth:
-    mfa:
-      session-timeout-ms: 600000
-      challenge-timeout-ms: 300000
-      max-retry-attempts: 5
-      repository-priority: redis,memory,http-session
-      redis:
-        enabled: true
-        key-prefix: mfa:session:
-        cookie-name: MFA_SID
-      memory:
-        enabled: true
-        max-sessions: 10000
-      sms-factor:
-        enabled: true
-        provider: default
-      email-factor:
-        enabled: true
-        from-address: noreply@company.com</code></pre>
-            </div>
-          </section>
-
-          <section>
-            <h2 id="state-machine">상태 머신 속성</h2>
-            <p><code>StateMachineProperties</code>는 <code>contexa.identity.statemachine</code>에 바인딩됩니다. Identity 모듈과 관련 필터/핸들러가 사용하는 MFA 상태 머신 런타임을 제어합니다.</p>
-
-            <h3>핵심 상태 머신 설정</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>속성</th><th>타입</th><th>기본값</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.identity.statemachine.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>MFA 상태 머신 런타임 전체를 켜고 끄는 master switch입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.operation-timeout-seconds</code></td><td><code>int</code></td><td><code>10</code></td><td>상태 머신 연산 timeout budget입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.circuit-breaker.failure-threshold</code></td><td><code>int</code></td><td><code>5</code></td><td>circuit breaker open 전 실패 임계값입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.circuit-breaker.timeout-seconds</code></td><td><code>int</code></td><td><code>30</code></td><td>circuit breaker open-state timeout입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.circuit-breaker.half-open-requests</code></td><td><code>int</code></td><td><code>3</code></td><td>half-open 상태에서 허용되는 요청 수입니다.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>풀, 영속화, 캐시, 이벤트</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>속성</th><th>기본값</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.identity.statemachine.pool.core-size</code></td><td><code>10</code></td><td>상태 머신 executor core size입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.pool.max-size</code></td><td><code>50</code></td><td>상태 머신 executor max size입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.pool.keep-alive-time</code></td><td><code>10</code></td><td>풀 worker keep-alive 시간입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.pool.expansion-threshold</code></td><td><code>0.8</code></td><td>worker 확장 임계값입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.pool.shrink-threshold</code></td><td><code>0.2</code></td><td>worker 축소 임계값입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.persistence.type</code></td><td><code>memory</code></td><td>영속화 backend label입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.persistence.enable-fallback</code></td><td><code>true</code></td><td>fallback 영속화를 활성화합니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.persistence.ttl-minutes</code></td><td><code>30</code></td><td>영속화 TTL(분)입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.persistence.enable-compression</code></td><td><code>true</code></td><td>영속화 payload 압축을 활성화합니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.persistence.compression-threshold</code></td><td><code>1024</code></td><td>압축 임계값(바이트)입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.cache.max-size</code></td><td><code>1000</code></td><td>상태 머신 snapshot용 메모리 캐시 크기입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.cache.ttl-minutes</code></td><td><code>5</code></td><td>캐시 TTL(분)입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.cache.enable-warmup</code></td><td><code>false</code></td><td>시작 시 캐시 warmup을 활성화합니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.events.enabled</code></td><td><code>true</code></td><td>상태 머신 이벤트 발행을 활성화합니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.events.type</code></td><td><code>local</code></td><td>이벤트 전송 타입입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.events.batch-size</code></td><td><code>100</code></td><td>이벤트 배치 크기입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.events.batch-interval-ms</code></td><td><code>100</code></td><td>이벤트 배치 간격입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.events.backpressure-threshold</code></td><td><code>1000</code></td><td>백프레셔 임계값입니다.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>MFA, Redis, Distributed Lock</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead><tr><th>속성</th><th>기본값</th><th>설명</th></tr></thead>
-              <tbody>
-                <tr><td><code>contexa.identity.statemachine.mfa.enable-metrics</code></td><td><code>true</code></td><td>상태 머신 MFA 메트릭을 활성화합니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.mfa.max-retries</code></td><td><code>3</code></td><td>상태 머신이 사용하는 재시도 상한입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.mfa.session-timeout-minutes</code></td><td><code>30</code></td><td>세션 timeout(분)입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.mfa.max-concurrent-sessions</code></td><td><code>1000</code></td><td>동시 상태 머신 세션 상한입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.mfa.transition-timeout-seconds</code></td><td><code>30</code></td><td>상태 전이별 timeout입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.redis.enabled</code></td><td><code>false</code></td><td>Redis 기반 상태 머신 저장소를 활성화합니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.redis.ttl-minutes</code></td><td><code>30</code></td><td>Redis TTL(분)입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.redis.key-prefix</code></td><td><code>mfa:statemachine:</code></td><td>상태 머신 엔트리용 Redis key prefix입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.redis.connection-timeout-ms</code></td><td><code>2000</code></td><td>Redis connection timeout입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.redis.command-timeout-ms</code></td><td><code>1000</code></td><td>Redis command timeout입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.distributed-lock.enabled</code></td><td><code>true</code></td><td>상태 전이 주변의 distributed lock을 활성화합니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.distributed-lock.timeout-seconds</code></td><td><code>10</code></td><td>distributed lock timeout입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.distributed-lock.max-retry-attempts</code></td><td><code>3</code></td><td>lock 획득 재시도 상한입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.distributed-lock.retry-interval-ms</code></td><td><code>100</code></td><td>lock 획득 재시도 간격입니다.</td></tr>
-                <tr><td><code>contexa.identity.statemachine.distributed-lock.enable-deadlock-detection</code></td><td><code>true</code></td><td>distributed lock deadlock detection을 활성화합니다.</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  identity:
-    statemachine:
-      enabled: true
-      operation-timeout-seconds: 10
-      pool:
-        core-size: 10
-        max-size: 50
-      persistence:
-        type: memory
-        ttl-minutes: 30
-      events:
-        enabled: true
-        type: local
-      mfa:
-        max-retries: 3
-        session-timeout-minutes: 30
-      distributed-lock:
-        enabled: true
-        timeout-seconds: 10</code></pre>
-            </div>
-
-            <p><strong>관련 런타임 문서:</strong> <a href="../../../docs/reference/identity/dsl.html">Identity DSL</a>, <a href="../../../docs/reference/identity/authentication.html">Authentication</a>, <a href="../../../docs/reference/identity/mfa.html">Adaptive MFA</a>, <a href="../../../docs/reference/identity/state-management.html">State Management</a>.</p>
-          </section>
-
-          <!-- BridgeProperties -->
-          
-
+          <h2 id="related">관련 페이지</h2>
+          <ul>
+            <li>흐름 · 상태 방식을 코드로 정하기: <a href="../../reference/identity/dsl.html">인증 DSL</a> · <a href="../../reference/identity/state-management.html">상태 관리</a></li>
+            <li>앱이 로그인을 맡을 때(<code>HOST_OWNED</code>): <a href="../../reference/common/bridge.html">인증 브리지</a></li>
+            <li>단독 · 분산 모드와 Redis 연결: <a href="infrastructure.html">처음 켜기와 배포</a></li>
+            <li>에이전트의 토큰 교환과 위임: <a href="../../reference/agent/delegation.html">위임과 목표 계약</a></li>
+          </ul>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/install/configuration/ai.html" class="docs-nav-link prev">
+            <a href="security.html" class="docs-nav-link prev">
               <span class="docs-nav-label">이전</span>
-              <span class="docs-nav-title">AI 구성</span>
+              <span class="docs-nav-title">집행 모드와 판정 조정</span>
             </a>
-            <a href="../../../docs/install/configuration/iam.html" class="docs-nav-link next">
+            <a href="iam.html" class="docs-nav-link next">
               <span class="docs-nav-label">다음</span>
-              <span class="docs-nav-title">IAM 구성</span>
+              <span class="docs-nav-title">인가 정책</span>
             </a>
           </div>

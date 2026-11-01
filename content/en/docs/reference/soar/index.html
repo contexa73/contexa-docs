@@ -3,239 +3,134 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">SOAR Overview</span>
+            <span class="breadcrumb-current">SOAR Extension Points</span>
           </nav>
+
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
-              <span class="badge badge-danger">Enterprise</span>
+              <span class="badge badge-primary">contexa-common</span>
+              <span class="badge badge-secondary">Extension point · Enterprise</span>
             </div>
-            <h1>SOAR Overview</h1>
-            <p class="lead">Security Orchestration, Automation and Response (SOAR). An AI-driven incident response system that processes security incidents through a tool-execution pipeline with configurable approval workflows and execution modes.</p>
+            <h1>SOAR Extension Points: What the OSS Has and What You Build</h1>
+            <p class="lead">The interfaces, data types and hooks the OSS contains for SOAR (security orchestration, automation and response). Learn what is already there, what you build yourself or fill with the enterprise module, and where the OSS calls these hooks.</p>
           </div>
 
-          <!-- Overview -->
-          <section>
-            <h2>Overview</h2>
-            <p>Contexa SOAR bridges the gap between AI-driven threat detection and automated incident response. When the tiered evaluation pipeline produces a critical security decision (e.g., Layer 2 detects a <span class="zt-badge zt-block">BLOCK</span>-worthy threat), the SOAR system orchestrates the response: selecting appropriate tools, managing approval workflows, executing response actions, and maintaining audit trails.</p>
-            <p>The SOAR architecture follows the AI Lab pattern: a <code>SoarLab</code> receives a <code>SoarRequest</code> containing the incident context, processes it through the LLM-powered pipeline, determines which <code>@SoarTool</code>-annotated methods to invoke, and manages the approval flow before execution.</p>
+          <div class="callout callout-warning">
+            <strong>The OSS has no SOAR execution or approval implementation.</strong> With the OSS modules alone, no automated response such as running a tool happens, and no flow pauses a response for human approval and resumes it. These features need the enterprise SOAR module. Contexa's startup diagnostics also treat them as an enterprise capability (<code>ENTERPRISE_SOAR</code>) and advise to "enable enterprise mode and include the enterprise SOAR module on the runtime classpath". What the OSS provides are interfaces, an annotation and data types (and empty database tables), which you can also implement and plug in yourself.
+          </div>
 
-            <div class="arch-flow">
-              <div class="arch-flow-node">Security Incident</div>
-              <div class="arch-flow-node">SoarRequest</div>
-              <div class="arch-flow-node">SoarLab</div>
-              <div class="arch-flow-node">Tool Selection</div>
-              <div class="arch-flow-node">Approval Workflow</div>
-              <div class="arch-flow-node">Tool Execution</div>
-              <div class="arch-flow-node">SoarResponse</div>
+          <h2 id="boundary">What is there and what is not</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The OSS SOAR boundary</strong>The types in the middle column are in the code, but the OSS has no code that implements them or calls them through to the end.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side"><p class="dg-side-title">What actually happens in the OSS</p><ul><li>When a blocked user fails the unblock MFA, a <code>SecurityActionEvent</code> (<code>SOAR_AUTO_RESPONSE</code>) is published as a Spring event. The OSS has no receiver</li><li>An administrator's unblock approval (separate from SOAR, <a href="approval.html#oss-approval">approval page</a>)</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">The frame the OSS provides</p><ul><li>Interfaces: <code>SoarLab</code>, <code>ApprovalService</code>, <code>SoarApprovalNotifier</code>, tool policy and metrics interfaces</li><li>Annotation: <code>@SoarTool</code></li><li>Data types: <code>SoarContext</code>, <code>SoarRequest</code>, <code>SoarResponse</code>, <code>ApprovalRequest</code>, ...</li><li>7 database tables (no code writes them)</li></ul></div>
+              <div class="dg-side dg-host"><p class="dg-side-title">You build it, or the enterprise module</p><ul><li>Choosing and running response tools</li><li>Requesting, waiting for and resuming on human approval</li><li>Notifying approvers (mail, messenger)</li><li>Storing approval and incident records</li></ul></div>
             </div>
-          </section>
+          </figure>
+          <p>The startup diagnostics count enterprise SOAR as on when <code>contexa.enterprise.enabled=true</code> and the enterprise module has registered the SOAR context bean (<code>soarContextRetriever</code>). How the enterprise module works is outside this documentation.</p>
 
-          <!-- SoarLab -->
-          <section>
-            <h2>SoarLab</h2>
-            <p>The SOAR processing lab. Implements the AI Lab interface to provide reactive incident processing.</p>
+          <h2 id="hooks">Where the hooks are called</h2>
+          <p>These are all the places where OSS code calls a SOAR hook. The "In the OSS today" column is what actually happens with the OSS modules alone.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Hook</th><th>Where and when the OSS calls it</th><th>In the OSS today</th></tr></thead>
+            <tbody>
+              <tr><td>Layer 2 playbook record</td><td>With <code>contexa.security.tiered.layer2.enable-soar=true</code>, when the Layer 2 decision is BLOCK</td><td>No code fills the decision's playbook value (<code>soarPlaybook</code>), so it returns at once. Even with a value, all it does is leave a list of <code>BLOCK_IP</code>, <code>INVESTIGATE_IOC</code> and <code>NOTIFY_SOC</code> descriptions in the data store; nothing is actually blocked or notified.</td></tr>
+              <tr><td><code>ApprovalService</code> bean</td><td>If the Layer 2 decision carries the "approval required" flag and the bean exists, it requests a <code>SOAR_CRITICAL_RESPONSE</code> approval</td><td>The flag is set only on Layer 2's technical-failure fallback decision, which returns before this call, so it is never reached. Even when it requests, it does not wait for the result (<a href="approval.html#called-from">details</a>).</td></tr>
+              <tr><td>A <code>PipelineStep</code> bean named <code>pipelineSoarToolExecutionStep</code></td><td>In the general AI pipeline, when the request context is a <code>SoarContext</code>, this step runs instead of the LLM execution step</td><td>The OSS has neither this bean nor a <code>SoarLab</code> implementation, so it does not happen.</td></tr>
+              <tr><td><code>SoarApprovalNotifier</code> bean</td><td>When the distributed-mode Redis configuration is on, messages on the Redis channel <code>soar:approval:requests</code> go to this bean</td><td>No OSS code sends to this channel (<a href="approval.html#notifier">details</a>).</td></tr>
+              <tr><td><code>SecurityActionEvent</code> receiver</td><td>Published when a blocked user fails the unblock MFA</td><td>It is published. The receiver is yours to write (<a href="#build">example below</a>).</td></tr>
+              <tr><td><code>RiskAssessment</code> bean (tool approval level)</td><td>Registered as a bean</td><td>Nothing injects it (<a href="soar-tool.html#approval">@SoarTool and Tool Approval Levels</a>).</td></tr>
+            </tbody>
+          </table></div>
 
-            <div class="api-signature">
-              <code>public interface SoarLab</code>
-            </div>
+          <h2 id="types">Data types</h2>
+          <h3 id="types-request">Request and context</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Type</th><th>What it holds</th><th>Good to know</th></tr></thead>
+            <tbody>
+              <tr><td><code>SoarLab</code><br>(<code>io.contexa.contexacore.soar</code>)</td><td>One interface: <code>Mono&lt;?&gt; processAsync(SoarRequest request)</code>. Analysis, tool choice, approval and execution are up to the implementer.</td><td>Extends no other interface (separate from the general AI Lab interface). No OSS implementation.</td></tr>
+              <tr><td><code>SoarRequest</code></td><td>Extends <code>AIRequest&lt;SoarContext&gt;</code>. <code>incidentId</code>, <code>threatType</code>, <code>description</code>, <code>initialQuery</code>, <code>approvalId</code>, <code>metadata</code></td><td><code>getIncidentId()</code> reads <code>"incidentId"</code> from <code>metadata</code>, not the <code>incidentId</code> field, and returns <code>soar-inc-&lt;current millis&gt;</code> when it is absent. Creating one without <code>templateType</code> or <code>diagnosisType</code> throws.</td></tr>
+              <tr><td><code>SoarContext</code></td><td>Extends <code>DomainContext</code>. Incident (<code>incidentId</code>, <code>threatType</code>, <code>severity</code>, <code>description</code>, <code>affectedAssets</code>, <code>currentStatus</code>, <code>organizationId</code>), progress (<code>sessionState</code>, <code>executionMode</code>, <code>threatLevel</code>, <code>riskScore</code>, <code>conversationHistory</code>), approval (<code>approvalRequests</code>, <code>approvedTools</code>, <code>humanApprovalNeeded</code>)</td><td>A value holder that changes no state by itself. <code>riskScore</code> is a <code>Double</code> (may be empty), <code>executionMode</code> defaults to <code>AUTO</code>, and nothing reads <code>emergencyMode</code>.</td></tr>
+              <tr><td><code>SoarResponse</code></td><td>Extends <code>AIResponse</code>. Analysis result, session state, executed tools, recommendations, summary, incident ID, threat level</td><td>—</td></tr>
+            </tbody>
+          </table></div>
+          <p>The <code>SoarContext</code> methods only change values: <code>transitionTo(state)</code> sets <code>sessionState</code> (no checks), <code>approveTool(name)</code> adds the name to the approved tool set, and <code>addToolExecutionResult(name, result)</code> puts it into the context's extracted value map as <code>tool_result_&lt;name&gt;</code> (not an audit record). The <code>threatLevel</code> values are <code>CRITICAL</code>, <code>HIGH</code>, <code>MEDIUM</code>, <code>LOW</code>, <code>INFO</code>, <code>UNKNOWN</code>.</p>
+          <pre><code class="language-java">SoarContext context = new SoarContext();
+context.setIncidentId("INC-2024-001");
+context.setThreatLevel(SoarContext.ThreatLevel.HIGH);
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">processAsync</span>
-                <span class="api-method-return">Mono&lt;?&gt;</span>
-              </div>
-              <p class="api-method-desc">Processes a SOAR request through the AI pipeline asynchronously. Analyzes the incident, selects appropriate tools, manages approval workflows, and executes the response plan.</p>
-              <div class="api-method-params">
-                <div class="api-param">
-                  <span class="api-param-name">request</span>
-                  <span class="api-param-type">SoarRequest</span>
-                  <span class="api-param-desc">The SOAR request containing incident context and processing parameters.</span>
-                </div>
-              </div>
-            </div>
-          </section>
+SoarRequest request = SoarRequest.builder()
+        .context(context)
+        .templateType(new TemplateType("SOAR"))
+        .diagnosisType(new DiagnosisType("SOAR"))
+        .incidentId("INC-2024-001")
+        .threatType("UNAUTHORIZED_ACCESS")
+        .description("Unusual export from the finance report API")
+        .metadata(new HashMap&lt;&gt;(Map.of("incidentId", "INC-2024-001")))   // where getIncidentId() reads
+        .build();</code></pre>
 
-          <!-- SoarContext -->
-          <section>
-            <h2>SoarContext</h2>
-            <p>The rich context object that tracks the full lifecycle of a SOAR session. Extends <code>DomainContext</code> and maintains incident details, session state, conversation history, approval requests, tool execution results, and LLM interaction state.</p>
+          <h3 id="types-modes">Execution mode and session state</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Enum</th><th>Values</th><th>Good to know</th></tr></thead>
+            <tbody>
+              <tr><td><code>SoarExecutionMode</code></td><td><code>SYNC</code> (code <code>sync</code>, waits for approval), <code>ASYNC</code> (<code>async</code>, stored and handled later), <code>AUTO</code> (<code>auto</code>, chosen by context)</td><td>These are only the enum's descriptions; no implementation behaves this way. The only OSS code that sets a mode is <code>SoarContextProviderImpl</code>, which nothing uses: <code>SYNC</code> for an emergency context, otherwise <code>ASYNC</code> or the setting.</td></tr>
+              <tr><td><code>SessionState</code></td><td><code>NEW</code>, <code>INITIALIZED</code>, <code>ACTIVE</code>, <code>ANALYZING</code>, <code>INVESTIGATING</code>, <code>WAITING_APPROVAL</code>, <code>AWAITING_APPROVAL</code>, <code>CONFIRMED</code>, <code>APPROVED</code>, <code>EXECUTING</code>, <code>COMPLETED</code>, <code>FAILED</code>, <code>ERROR</code></td><td>There are two waiting-for-approval values (<code>WAITING_APPROVAL</code>, <code>AWAITING_APPROVAL</code>), and no code decides which to use.</td></tr>
+            </tbody>
+          </table></div>
 
-            <div class="api-signature">
-              <code>public class SoarContext extends DomainContext</code>
-            </div>
+          <h3 id="types-incident">Incidents and security action events</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Type</th><th>Values and content</th></tr></thead>
+            <tbody>
+              <tr><td><code>SoarIncident</code> (domain, <code>io.contexa.contexacore.domain</code>)</td><td><code>IncidentStatus</code> (10): <code>NEW</code>, <code>INVESTIGATING</code>, <code>IN_PROGRESS</code>, <code>CONTAINED</code>, <code>MITIGATED</code>, <code>ERADICATED</code>, <code>RECOVERED</code>, <code>RESOLVED</code>, <code>CLOSED</code>, <code>FALSE_POSITIVE</code><br><code>IncidentSeverity</code> (5): <code>CRITICAL</code>, <code>HIGH</code>, <code>MEDIUM</code>, <code>LOW</code>, <code>INFO</code><br><code>IncidentType</code> (10): <code>MALWARE</code>, <code>RANSOMWARE</code>, <code>PHISHING</code>, <code>DATA_BREACH</code>, <code>UNAUTHORIZED_ACCESS</code>, <code>DOS_ATTACK</code>, <code>INSIDER_THREAT</code>, <code>VULNERABILITY</code>, <code>COMPLIANCE_VIOLATION</code>, <code>OTHER</code></td></tr>
+              <tr><td><code>SoarIncident</code> (JPA entity, <code>io.contexa.contexacore.domain.entity</code>)</td><td>Same name, different class. Table <code>soar_incidents</code>, status enum <code>SoarIncidentStatus</code> (11: <code>NEW</code>, <code>TRIAGE</code>, <code>INVESTIGATION</code>, <code>PLANNING</code>, <code>PENDING_APPROVAL</code>, <code>EXECUTION</code>, <code>REPORTING</code>, <code>COMPLETED</code>, <code>AUTO_CLOSED</code>, <code>FAILED</code>, <code>CLOSED_BY_ADMIN</code>)</td></tr>
+              <tr><td><code>SecurityActionEvent</code> (<code>contexa-common</code>)</td><td>A security action event passed between modules. <code>ActionType</code>: <code>IP_BLOCK</code>, <code>IP_UNBLOCK</code>, <code>SESSION_TERMINATE</code>, <code>SESSION_TERMINATE_ALL</code>, <code>THREAT_INTEL_ALERT</code>, <code>SOAR_AUTO_RESPONSE</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>The OSS schema creates 7 SOAR tables (<code>soar_incidents</code>, <code>soar_approval_policies</code>, <code>soar_approval_requests</code>, <code>soar_approval_steps</code>, <code>soar_approval_assignments</code>, <code>soar_approval_votes</code>, <code>approval_notifications</code>), and entities and repositories exist, but no OSS code writes or reads these tables.</p>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Field</th><th>Type</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>incidentId</code></td><td>String</td><td>Unique identifier for the security incident.</td></tr>
-                <tr><td><code>threatType</code></td><td>String</td><td>Classification of the threat (e.g., "UNAUTHORIZED_ACCESS").</td></tr>
-                <tr><td><code>severity</code></td><td>String</td><td>Incident severity level.</td></tr>
-                <tr><td><code>description</code></td><td>String</td><td>Human-readable incident description.</td></tr>
-                <tr><td><code>affectedAssets</code></td><td>List&lt;String&gt;</td><td>List of affected system assets.</td></tr>
-                <tr><td><code>currentStatus</code></td><td>String</td><td>Current incident status.</td></tr>
-                <tr><td><code>organizationId</code></td><td>String</td><td>The organization context.</td></tr>
-                <tr><td><code>sessionState</code></td><td>SessionState</td><td>Current session lifecycle state (NEW, INITIALIZED, ACTIVE, ANALYZING, INVESTIGATING, WAITING_APPROVAL, EXECUTING, etc.).</td></tr>
-                <tr><td><code>executionMode</code></td><td>SoarExecutionMode</td><td>How the SOAR pipeline processes this context (SYNC, ASYNC, AUTO).</td></tr>
-                <tr><td><code>threatLevel</code></td><td>ThreatLevel</td><td>Assessed threat level (CRITICAL, HIGH, MEDIUM, LOW, INFO, UNKNOWN).</td></tr>
-                <tr><td><code>riskScore</code></td><td>double</td><td>Numeric risk assessment.</td></tr>
-                <tr><td><code>conversationHistory</code></td><td>List&lt;Message&gt;</td><td>Full LLM conversation history for this session.</td></tr>
-                <tr><td><code>approvalRequests</code></td><td>List&lt;ApprovalRequest&gt;</td><td>All approval requests generated during processing.</td></tr>
-                <tr><td><code>approvedTools</code></td><td>Set&lt;String&gt;</td><td>Tools that have been approved for execution.</td></tr>
-                <tr><td><code>humanApprovalNeeded</code></td><td>boolean</td><td>Whether human approval is currently required.</td></tr>
-                <tr><td><code>emergencyMode</code></td><td>boolean</td><td>Whether emergency mode is active (bypasses normal approval flows).</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="settings">Settings</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Effect in the OSS</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.layer2.enable-soar</code></td><td><code>false</code></td><td>No effect when on. Layer 2 tries to record a playbook, but the playbook value is always empty.</td><td>No need with the OSS modules alone.</td></tr>
+              <tr><td><code>contexa.security.plane.agent.execution-mode</code></td><td><code>ASYNC</code></td><td>Read only by <code>SoarContextProviderImpl</code>, which nothing uses.</td><td>No need with the OSS modules alone.</td></tr>
+            </tbody>
+          </table></div>
+          <p>Other settings with <code>soar</code> in their names (advisor, router threshold, Kafka topic name, cache domain) are either read by no code or used by no call, so changing them does not change how the OSS behaves.</p>
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">transitionTo</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <p class="api-method-desc">Transitions the session to a new state.</p>
-            </div>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">approveTool</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <p class="api-method-desc">Marks a tool as approved for execution in this session.</p>
-            </div>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">addToolExecutionResult</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <p class="api-method-desc">Records the result of a tool execution for audit and context tracking.</p>
-            </div>
-          </section>
+          <h2 id="build">If you build it yourself</h2>
+          <ol>
+            <li><strong>Running responses:</strong> implement <code>SoarLab</code>; to run tools through the general AI pipeline, provide a <code>PipelineStep</code> bean named <code>pipelineSoarToolExecutionStep</code>.</li>
+            <li><strong>Tool approval levels:</strong> put <code>@SoarTool</code> on your tools and grade them with <code>RiskAssessment</code> (<a href="soar-tool.html">@SoarTool and Tool Approval Levels</a>).</li>
+            <li><strong>Human approval:</strong> implement <code>ApprovalService</code> (<a href="approval.html">Connecting Human Approval</a>).</li>
+            <li><strong>Automated response for blocked users:</strong> receive the <code>SecurityActionEvent</code> the OSS already publishes and run your application's response.</li>
+          </ol>
+          <pre><code class="language-java">import io.contexa.contexacommon.soar.event.SecurityActionEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Component;
 
-          <!-- SoarRequest -->
-          <section>
-            <h2>SoarRequest</h2>
-            <p>The request object that initiates SOAR processing. Extends <code>AIRequest&lt;SoarContext&gt;</code> and wraps the context with template and diagnosis type configuration.</p>
+@Component
+public class SecurityActionListener {
 
-            <div class="api-signature">
-              <code>public class SoarRequest extends AIRequest&lt;SoarContext&gt;</code>
-            </div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">SoarRequest request = SoarRequest.builder()
-    .context(soarContext)
-    .incidentId("INC-2024-001")
-    .threatType("UNAUTHORIZED_ACCESS")
-    .description("Suspicious login from unrecognized IP range")
-    .initialQuery("Investigate and contain the unauthorized access attempt")
-    .sessionId("session-abc-123")
-    .userId("admin-user")
-    .build();</code></pre>
-            </div>
-          </section>
-
-          <!-- SoarExecutionMode -->
-          <section>
-            <h2>SoarExecutionMode</h2>
-
-            <div class="api-signature">
-              <code>public enum SoarExecutionMode</code>
-            </div>
-
-            <table class="enum-table">
-              <thead>
-                <tr><th>Value</th><th>Code</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>SYNC</code></td><td><code>sync</code></td><td>Synchronous approval processing with blocking wait. The caller blocks until approval is received or times out.</td></tr>
-                <tr><td><code>ASYNC</code></td><td><code>async</code></td><td>Asynchronous approval processing with persistence. Approval requests are stored and can be resolved later.</td></tr>
-                <tr><td><code>AUTO</code></td><td><code>auto</code></td><td>Automatic mode selection based on context. Low-risk tools use SYNC; high-risk tools use ASYNC with mandatory approval.</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-          <!-- SoarIncident -->
-          <section>
-            <h2>SoarIncident</h2>
-            <p>Represents a security incident with full lifecycle tracking from detection through resolution.</p>
-
-            <div class="api-signature">
-              <code>public class SoarIncident</code>
-            </div>
-
-            <h3>IncidentStatus</h3>
-            <table class="enum-table">
-              <thead>
-                <tr><th>Value</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>NEW</code></td><td>Incident just created.</td></tr>
-                <tr><td><code>INVESTIGATING</code></td><td>Under active investigation.</td></tr>
-                <tr><td><code>IN_PROGRESS</code></td><td>Response actions in progress.</td></tr>
-                <tr><td><code>CONTAINED</code></td><td>Threat contained but not eradicated.</td></tr>
-                <tr><td><code>MITIGATED</code></td><td>Impact mitigated.</td></tr>
-                <tr><td><code>ERADICATED</code></td><td>Threat fully removed.</td></tr>
-                <tr><td><code>RECOVERED</code></td><td>Systems recovered to normal operation.</td></tr>
-                <tr><td><code>RESOLVED</code></td><td>Incident resolved.</td></tr>
-                <tr><td><code>CLOSED</code></td><td>Incident closed after post-mortem.</td></tr>
-                <tr><td><code>FALSE_POSITIVE</code></td><td>Confirmed as false positive.</td></tr>
-              </tbody>
-            </table>
-
-            <h3>IncidentType</h3>
-            <table class="enum-table">
-              <thead>
-                <tr><th>Value</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>MALWARE</code></td><td>Malware infection.</td></tr>
-                <tr><td><code>RANSOMWARE</code></td><td>Ransomware attack.</td></tr>
-                <tr><td><code>PHISHING</code></td><td>Phishing attempt.</td></tr>
-                <tr><td><code>DATA_BREACH</code></td><td>Data breach or exfiltration.</td></tr>
-                <tr><td><code>UNAUTHORIZED_ACCESS</code></td><td>Unauthorized access attempt.</td></tr>
-                <tr><td><code>DOS_ATTACK</code></td><td>Denial of Service attack.</td></tr>
-                <tr><td><code>INSIDER_THREAT</code></td><td>Insider threat activity.</td></tr>
-                <tr><td><code>VULNERABILITY</code></td><td>Vulnerability exploitation.</td></tr>
-                <tr><td><code>COMPLIANCE_VIOLATION</code></td><td>Compliance policy violation.</td></tr>
-                <tr><td><code>OTHER</code></td><td>Uncategorized incident.</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-          <!-- Related Links -->
-          <section>
-            <h2>Related</h2>
-            <div class="related-links-grid">
-              <a href="soar-tool.html" class="related-link-card">
-                <h3>@SoarTool Annotation</h3>
-                <p>Define custom SOAR tools with approval requirements, rate limits, and audit configuration.</p>
-              </a>
-              <a href="approval.html" class="related-link-card">
-                <h3>Approval Workflows</h3>
-                <p>Human-in-the-loop approval for sensitive SOAR tool executions.</p>
-              </a>
-              <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="related-link-card">
-                <h3>Threat Evaluation</h3>
-                <p>The Layer 2 strategy that triggers SOAR playbook execution.</p>
-              </a>
-            </div>
-          </section>
-
+    @EventListener
+    public void onSecurityAction(SecurityActionEvent event) {
+        if (event.getActionType() == SecurityActionEvent.ActionType.SOAR_AUTO_RESPONSE) {
+            // Run your application's response here (end sessions, notify the owner, ...).
+            // event.getUserId(), event.getSourceIp() and event.getMetadata() are available.
+        }
+    }
+}</code></pre>
           <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/install/shadow-mode.html" class="docs-nav-link prev">
+            <a href="../core/saas.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Shadow Mode</span>
+              <span class="docs-nav-title">Connecting Contexa SaaS (Optional)</span>
             </a>
-            <a href="soar-tool.html" class="docs-nav-link next">
+            <a href="approval.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">@SoarTool Annotation</span>
+              <span class="docs-nav-title">Connecting Human Approval (Implementing ApprovalService)</span>
             </a>
           </div>

@@ -1,0 +1,230 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Delegation and Objective Contracts</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-secondary">Agent security</span>
+            </div>
+            <h1>Delegation and Objective Contracts</h1>
+            <p class="lead">How to tell Contexa the scope of work a person gave an agent (operations, targets, period, quantity), and how Contexa compares that scope with the actual request and passes the result to the decision model as facts. The engine never blocks a request for leaving the scope: it only compares, and the model decides.</p>
+          </div>
+
+          <h2 id="overview">At a glance</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>From a delegation to decision facts</strong>The delegation a request states is narrowed by the delegation record, then compared with the actual request.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">The delegation the request states</span><span class="dg-node-desc">The delegation stamp read from token claims, the session, request attributes or headers</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-tag">Delegation record</span><span class="dg-node-title">Narrowed by the record</span><span class="dg-node-desc">The record a person left (or your business system) narrows the scope; it never widens it</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">Scope comparison</span><span class="dg-node-desc">Whether the current operation, target and item count are within the delegation and the objective contract, as the fact "drift yes / no"</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">AI model</span><span class="dg-node-title">Decision</span><span class="dg-node-desc">Weighs the comparison with the rest of the context and decides allow, challenge or block</span></li>
+            </ol>
+          </figure>
+
+          <h2 id="fields">What one delegation holds</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Field</th><th>Meaning</th><th>Example</th></tr></thead>
+            <tbody>
+              <tr><td><code>agentId</code></td><td>The agent given the work (required)</td><td><code>report-bot</code></td></tr>
+              <tr><td><code>objectiveId</code> / <code>objectiveFamily</code></td><td>The work's ID / its kind (an <a href="#contracts">objective family</a> your application declares)</td><td><code>RPT-2026-10</code> / <code>MONTHLY_REPORT</code></td></tr>
+              <tr><td><code>objectiveSummary</code></td><td>The work as the delegator described it (up to 1000 characters). Handled as untrusted text in decisions</td><td>Write the October sales report</td></tr>
+              <tr><td><code>allowedOperations</code></td><td>Allowed operations, in the words of <code>@Protectable</code> <code>actions</code> (upper-cased)</td><td><code>["READ"]</code></td></tr>
+              <tr><td><code>allowedResources</code></td><td>Allowed targets: path patterns or your business IDs</td><td><code>["/api/reports/**"]</code></td></tr>
+              <tr><td><code>approvalRequired</code></td><td>Whether the delegator must approve before the work is done</td><td><code>false</code></td></tr>
+              <tr><td><code>privilegedExportAllowed</code></td><td>Whether privileged data may be exported (empty when not stated)</td><td><code>false</code></td></tr>
+              <tr><td><code>containmentOnly</code></td><td>Whether the agent may only read or contain</td><td><code>false</code></td></tr>
+              <tr><td><code>validFrom</code> / <code>expiresAt</code></td><td>Start (default now) / end (required)</td><td><code>2026-11-30T00:00:00Z</code></td></tr>
+              <tr><td><code>maxItemsPerRequest</code> / <code>maxItemsTotal</code></td><td>The most items one export may carry / the most items in the session in all (at least 1; none when not stated)</td><td><code>100</code> / <code>1000</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>Each of the operation and target lists holds up to 100 items. A delegation ends when it expires or is revoked, but its record is kept: when it ended is itself a fact the decision weighs.</p>
+
+          <h2 id="sources">Ways to state a delegation</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Way</th><th>Who</th><th>How</th></tr></thead>
+            <tbody>
+              <tr><td>Delegation API</td><td>The delegator</td><td><code>POST /contexa/api/agent-delegations</code>. Recorded in the signed-in person's name only.</td></tr>
+              <tr><td>Admin API</td><td>An administrator or an integration</td><td><code>POST /contexa/admin/api/agent-delegations</code> (<code>ADMIN</code> role). The delegator, writer and time are given as your records state them.</td></tr>
+              <tr><td>Token claims</td><td>The authorization server</td><td><code>delegation_id</code>, <code>objective_*</code>, <code>allowed_*</code>, <code>authorization_details</code> (RFC 9396) and so on (<a href="#settings">claim names</a>)</td></tr>
+              <tr><td>Business system lookup</td><td>Your application</td><td>A <code>DelegationRecordLookup</code> bean. The main way when delegations live in your business system (<a href="#extension">extension points</a>).</td></tr>
+              <tr><td>Session, request attributes, headers</td><td>Your application or gateway</td><td>Session attributes, request attributes <code>ctxa.delegation.*</code>, headers <code>X-Contexa-*</code> (off by default, trusted proxies required)</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-info">
+            <strong>An agent cannot record a delegation.</strong> A delegation must be a person's word, so a call to the delegation API with a token obtained for a person (<code>act</code>), an agent's own token or an agent account is refused with <code>403</code>.
+          </div>
+
+          <h3 id="api">Delegation API</h3>
+          <pre><code class="language-http">POST /contexa/api/agent-delegations
+Content-Type: application/json
+
+{
+  "agentId": "report-bot",
+  "objectiveFamily": "MONTHLY_REPORT",
+  "objectiveSummary": "Write the October sales report",
+  "allowedOperations": ["READ"],
+  "allowedResources": ["/api/reports/**"],
+  "expiresAt": "2026-11-30T00:00:00Z",
+  "maxItemsPerRequest": 100,
+  "maxItemsTotal": 1000
+}</code></pre>
+          <ul>
+            <li>On success it returns <code>201</code> with the delegation. Its <code>state</code> is one of <code>VALID</code>, <code>NOT_STARTED</code>, <code>EXPIRED</code> and <code>REVOKED</code>.</li>
+            <li>The end must come after the start, and the period may not exceed <code>contexa.security.zerotrust.agent.delegation-max-validity</code> (default 30 days). Delegate again when the work goes on.</li>
+            <li><code>GET</code> lists your delegations, latest first, up to 200; <code>POST /{delegationId}/revoke</code> (body <code>{"reason": "..."}</code>) revokes one of yours. A revocation through the admin API requires a reason.</li>
+            <li>When a person leaves several delegations to the same agent, the one the request names by <code>delegation_id</code> is used; else the latest started one that holds now; else the latest started one at all, ended ones included.</li>
+            <li>Each record and revocation writes <code>AGENT_DELEGATION_RECORDED</code> or <code>AGENT_DELEGATION_REVOKED</code> to the audit log with who did it. Deleting the delegator's account deletes that person's delegations too.</li>
+          </ul>
+
+          <h2 id="narrowing">A delegation record only narrows the scope</h2>
+          <p>When the delegation a token or session states differs from the delegation record, Contexa always uses <strong>the narrower one</strong>. However broad the token, the record bounds the scope.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Narrowing example</strong>Operations: only those both state. Targets: no item in common, so the record's list. End: the earlier. Limit: the lower.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side dg-request"><p class="dg-side-title">Delegation the token states</p><ul><li>Operations READ, EXPORT</li><li>Targets <code>/api/**</code></li><li>Ends 18:00</li><li>No item limit</li></ul></div>
+              <div class="dg-side dg-store"><p class="dg-side-title">Delegation record</p><ul><li>Operations READ</li><li>Targets <code>/api/reports/**</code></li><li>Ends 17:00</li><li>100 items per request</li></ul></div>
+              <div class="dg-side dg-contexa"><p class="dg-side-title">Delegation the decision uses</p><ul><li>Operations READ</li><li>Targets <code>/api/reports/**</code></li><li>Ends 17:00</li><li>100 items per request</li></ul></div>
+            </div>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Item</th><th>Rule</th></tr></thead>
+            <tbody>
+              <tr><td>Objective</td><td>The record's objective when they differ</td></tr>
+              <tr><td>Allowed operations and targets</td><td>The items both state. When they share none, the record's list (an empty list means "not stated" and would widen the scope)</td></tr>
+              <tr><td>Approval required, containment only</td><td>Required when either requires it</td></tr>
+              <tr><td>Privileged export</td><td>Allowed only when neither denies it</td></tr>
+              <tr><td>End, item limits</td><td>The earlier end, the lower limit</td></tr>
+              <tr><td>A record for another agent</td><td>Not applied</td></tr>
+            </tbody>
+          </table></div>
+          <p>The lookup result is kept in the decision context as <code>delegationRecordLookup</code>: <code>FOUND</code> (applied), <code>NOT_FOUND</code> (no record; the stated delegation as is), <code>AGENT_MISMATCH</code> (a record for another agent) or <code>FAILED</code> (the lookup failed). The items the record overrode are kept as conflicts, with the record's writer and time. A person's own request is never looked up.</p>
+
+          <h3 id="standing">Standing delegation of an autonomous agent</h3>
+          <p>An autonomous agent has no delegator. Contexa then looks once more for the delegation the agent's sponsor recorded for it and applies it with the same rules as a <strong>standing delegation</strong>. The sponsor records it through the delegation API for that agent. The agent still works in its own name, so the request is not marked as delegated.</p>
+
+          <h2 id="contracts">Objective contracts</h2>
+          <p>Your application can declare, for each objective family, the operations and resource families the work needs. When a delegation states no allowed operations or resource families of its own, the contract is what it is compared with.</p>
+          <pre><code class="language-yaml">contexa:
+  security:
+    zerotrust:
+      agent:
+        objective-contracts:
+          MONTHLY_REPORT:                 # the delegation's objectiveFamily
+            operations: [READ]            # the words of @Protectable actions
+            resource-families: [REPORT]   # the words of @Protectable category
+            max-export-items: 500         # the most items one export may carry</code></pre>
+          <ul>
+            <li>Contexa already knows its own security objective families (audit, containment, learning and so on); a contract your application declares under the same name takes their place.</li>
+            <li>To declare contracts in code, declare an <code>ObjectiveContractSource</code> bean. Contexa reads its own contracts, then the settings', then the source beans'; a later contract of the same family replaces the earlier one.</li>
+            <li>The settings also accept <code>read-only</code> and <code>privileged-export-allowed</code>, but the current version does not use them in the scope comparison. A privileged export is compared against the delegation's <code>privilegedExportAllowed</code>.</li>
+          </ul>
+
+          <h2 id="drift">Drift: the engine compares, the model decides</h2>
+          <p>For each request the engine compares the items below and puts the result in the decision context as "drift yes / no" with the comparison sentences. When there is nothing to compare, it records the comparison as incomplete.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Comparison</th><th>Against</th></tr></thead>
+            <tbody>
+              <tr><td>Is the current operation allowed?</td><td>The delegation's list, else the contract's <code>operations</code>. An unknown operation is not compared</td></tr>
+              <tr><td>Is the current resource family allowed?</td><td>The delegation's list, else the contract's <code>resource-families</code></td></tr>
+              <tr><td>Does the current target match the allowed paths or IDs?</td><td>The path patterns and IDs in the delegation's <code>allowedResources</code></td></tr>
+              <tr><td>Another operation under a containment-only delegation?</td><td>Only read, query and contain are within it</td></tr>
+              <tr><td>Is the exported item count within the limits?</td><td>The contract's <code>max-export-items</code>, the delegation's <code>maxItemsPerRequest</code>, and the session total against <code>maxItemsTotal</code></td></tr>
+              <tr><td>An export under a delegation that forbids privileged export?</td><td>The delegation's <code>privilegedExportAllowed</code> = <code>false</code></td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>Item counts are compared only when your application states them.</strong> Put the request's item count in the request attribute <code>ctxa.context.requestItems</code> (or <code>requestItems</code>).</li>
+            <li><strong>No rule forces a decision because of drift.</strong> The model decides from the facts. When the model cites <code>DELEGATION_SCOPE_DRIFT</code> in the v21 bundle, Contexa only checks that the fact is really in the context.</li>
+          </ul>
+
+          <h2 id="expressions">Checking the delegation in policy expressions</h2>
+          <p>Apart from the model's decision, URL and method policies can check a delegation deterministically. These expressions read the request's delegation stamp (token, session, ...); the record-narrowed delegation is used in the model's decision.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Expression</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>isAgent()</code> / <code>isDelegatedAgent()</code> / <code>isAutonomousAgent()</code></td><td>Whether an agent makes the request / a delegated agent / an autonomous agent</td></tr>
+              <tr><td><code>agentId</code> / <code>isAgentIn('a', 'b')</code></td><td>The requesting agent's ID / whether it is one of these</td></tr>
+              <tr><td><code>delegatorId</code></td><td>The delegator (for a delegated agent)</td></tr>
+              <tr><td><code>delegationChainDepth</code> / <code>delegationChainDepthAtMost(n)</code></td><td>The delegation chain depth (0 for a person or an autonomous agent, 1 for a direct delegation) / whether it is at most n</td></tr>
+              <tr><td><code>delegationAllowsOperation('READ')</code></td><td>Whether the delegation allows the operation</td></tr>
+              <tr><td><code>delegationAllowsResource('/api/reports/1')</code></td><td>Whether the delegation allows the target (a listed item ending in <code>*</code> covers every target starting with what precedes it)</td></tr>
+              <tr><td><code>delegationRequiresApproval()</code></td><td>Whether the delegation requires the delegator's approval</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-text">isDelegatedAgent() and delegationAllowsOperation('READ') and delegationChainDepthAtMost(1)</code></pre>
+          <p>The confirmation and call-count expressions (<code>agentRequestConfirmed()</code>, <code>agentCallsInLastMinuteAtMost(n)</code>) are in <a href="controls.html#expressions">Stop, Confirm, Limit</a>. The full list is in <a href="../iam/ai-security-expressions.html">AI Security Expressions</a>.</p>
+
+          <h2 id="settings">Settings</h2>
+          <h3 id="settings-token">Token claim names (<code>contexa.bridge.delegation.token.*</code>)</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th></tr></thead>
+            <tbody>
+              <tr><td><code>enabled</code></td><td><code>true</code></td></tr>
+              <tr><td><code>actor-claims</code> / <code>may-act-claims</code></td><td><code>[act]</code> / <code>[may_act]</code> (<code>may_act</code> is kept as information only)</td></tr>
+              <tr><td><code>client-id-claims</code> / <code>agent-id-claims</code></td><td><code>[azp, client_id, appid]</code> / <code>[agent_id, agentId]</code></td></tr>
+              <tr><td><code>tenant-claims</code> / <code>delegation-id-claims</code></td><td><code>[tid, tenant_id]</code> / <code>[delegation_id, delegationId]</code></td></tr>
+              <tr><td><code>subject-type-claims</code> / <code>user-subject-types</code></td><td><code>[idtyp, sub_profile]</code> / <code>[user]</code></td></tr>
+              <tr><td><code>scope-claims</code> / <code>authorization-details-claims</code></td><td><code>[scope, scp]</code> / <code>[authorization_details]</code></td></tr>
+              <tr><td><code>objective-id-claims</code> / <code>objective-family-claims</code> / <code>objective-summary-claims</code></td><td><code>[objective_id, objectiveId]</code> / <code>[objective_family, objectiveFamily]</code> / <code>[task_purpose, objective_summary, objectiveSummary]</code></td></tr>
+              <tr><td><code>allowed-operations-claims</code> / <code>allowed-resources-claims</code></td><td><code>[allowed_operations, allowedOperations]</code> / <code>[allowed_resources, allowed_resource_families, allowedResources]</code></td></tr>
+              <tr><td><code>approval-required-claims</code> / <code>privileged-export-allowed-claims</code> / <code>containment-only-claims</code></td><td><code>[approval_required, approvalRequired]</code> / <code>[privileged_export_allowed, privilegedExportAllowed]</code> / <code>[containment_only, containmentOnly]</code></td></tr>
+              <tr><td><code>expires-at-claims</code></td><td><code>[delegation_expires_at, execution_expires_at, delegationExpiresAt]</code>. Without one, a delegation ends no later than the token</td></tr>
+            </tbody>
+          </table></div>
+          <p>The agent markers (<code>agent-actor-markers</code>, <code>delegated-markers</code>, <code>agent-client-ids</code>) are in <a href="overview.html#paths">How Contexa recognizes an agent</a>. The session, request attribute and header settings (<code>contexa.bridge.delegation.session.*</code>, <code>request-attributes.*</code>, <code>headers.*</code>) are in <a href="../common/bridge.html#settings">bridge settings</a>.</p>
+          <h3 id="settings-other">Other settings</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.agent.delegation-max-validity</code></td><td><code>30d</code></td><td>The longest a delegation recorded through the delegation API may last</td><td>To allow longer delegations (a quarter's work) or bound them tighter</td></tr>
+              <tr><td><code>contexa.security.zerotrust.agent.objective-contracts.&lt;family&gt;.*</code></td><td>Empty</td><td>Objective contracts</td><td>To declare your objectives</td></tr>
+              <tr><td><code>contexa.auth.oauth2.delegation-claim-enabled</code></td><td><code>true</code></td><td>Contexa's authorization server puts the <code>delegation_id</code> of the delegation in force in exchanged tokens (<code>CONTEXA_OWNED</code>)</td><td><code>false</code> to keep delegation IDs out of exchanged tokens</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="extension">Extension points</h2>
+          <h3 id="lookup">Reading delegations from your business system</h3>
+          <p>When delegations already live in your approval or business system, connect them with one <code>DelegationRecordLookup</code> bean. With the bean declared, Contexa applies its record to every agent request.</p>
+          <pre><code class="language-java">@Bean
+DelegationRecordLookup delegationRecordLookup(WorkOrderRepository workOrders) {
+    return query -&gt; workOrders
+            .findActive(query.delegatorId(), query.agentId(), query.requestedAt())
+            .map(order -&gt; new DelegationRecord(
+                    order.id(), order.requester(), order.agentId(),
+                    order.taskId(), "MONTHLY_REPORT", order.title(),
+                    List.of("READ"), List.of("/api/reports/**"),
+                    false, false, false,
+                    order.dueAt(), order.approver(), order.approvedAt(),
+                    100, 1000));
+}</code></pre>
+          <ul>
+            <li>It is called on the analysis thread, once for each request that names an agent or a delegation. Return <code>Optional.empty()</code> when no record matches. An exception is recorded as a failed lookup and the decision continues with the stated delegation.</li>
+            <li><strong>Return ended delegations too.</strong> When a delegation ended is a fact the decision weighs.</li>
+            <li>When <code>query.standing()</code> is <code>true</code>, it is the lookup of an autonomous agent's <a href="#standing">standing delegation</a>, and <code>delegatorId</code> is the agent's sponsor.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Bean</th><th>When you need it</th><th>Default</th></tr></thead>
+            <tbody>
+              <tr><td><code>DelegationRecordLookup</code></td><td>Delegations live in your business system</td><td>Looks up Contexa's delegation store</td></tr>
+              <tr><td><code>DelegationRegistry</code></td><td>To change the delegation store</td><td>JDBC with the Contexa database (<code>agent_delegation_record</code> table), else in memory</td></tr>
+              <tr><td><code>DelegationContextProvider</code> (add) / <code>RecordedDelegationContextProvider</code> (replace)</td><td>To add delegation facts or change the narrowing rules</td><td>The <a href="#narrowing">narrowing rules</a> above</td></tr>
+              <tr><td><code>DelegationStampResolver</code> (add)</td><td>To read delegations from another channel (ordered by <code>@Order</code>)</td><td>Five: token, session, request attributes, headers, agent account</td></tr>
+              <tr><td><code>ObjectiveContractSource</code></td><td>To declare objective contracts in code</td><td>The settings' contracts only</td></tr>
+            </tbody>
+          </table></div>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="overview.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Agents as Security Subjects</span>
+            </a>
+            <a href="controls.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Stop, Confirm, Limit</span>
+            </a>
+          </div>

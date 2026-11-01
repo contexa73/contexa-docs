@@ -1,0 +1,209 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Company Records</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-primary">contexa-iam</span>
+            </div>
+            <h1>Company Records: Telling Decisions What the Company Knows</h1>
+            <p class="lead">When you give Contexa your company's records (approvals, tickets, assignments, on-call shifts, business trips), a decision on an unusual request also checks whether a record explains the difference. This page covers the records you can put, the requests a company rule covers, the values your application states per request, the facts a decision sees, and the API and storage.</p>
+          </div>
+
+          <h2 id="overview">At a glance</h2>
+          <p>The same request can be normal or dangerous depending on what the company knows. Exporting 1,000 customer records you never looked at before is explained by an approved approval, and suspicious without one. Company records are how you tell Contexa what it needs for that judgement.</p>
+          <p><strong>Company records do not decide.</strong> Contexa only states what it found by matching the request against the records (which approval comes closest, which conditions it fails, and so on) and the company's own check under its rules. The AI model reads those facts and chooses to allow, ask for more authentication or block.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>How company records reach a decision</strong>Records are put in advance; each request is matched against its person's records.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-host"><span class="dg-node-title">Put records</span><span class="dg-node-desc">Your integration or an administrator puts them through the admin API. An application can also supply its own store</span></li>
+              <li class="dg-node dg-request"><span class="dg-node-title">A request a rule covers</span><span class="dg-node-desc">Only requests whose action and resource category match a company rule</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-title">Match against records</span><span class="dg-node-desc">The approvals, tickets, assignments, shifts and trips of the requester (for an agent, the person who answers for it) at the request time</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-title">Decision</span><span class="dg-node-desc">The matched facts go into the decision prompt and the AI model chooses the response</span></li>
+            </ol>
+          </figure>
+          <p>Company records are on by default, but <strong>they do nothing until you put company rules (<code>policies</code>) and people (<code>people</code>).</strong></p>
+
+          <h2 id="kinds">Records you can put</h2>
+          <p>You put records of several kinds together as one JSON document. The field names are the JSON fields in the table below.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Kind (JSON field)</th><th>Meaning</th><th>Main values</th></tr></thead>
+            <tbody>
+              <tr><td><code>PERSON</code> (<code>people</code>)</td><td>A person Contexa knows. <strong>Requests of a person with no person record are not looked at.</strong></td><td><code>subject</code> (the Contexa user id), <code>companyId</code> (the id your company's systems use for the person, compared with approvers), <code>displayName</code></td></tr>
+              <tr><td><code>ASSIGNMENT</code> (<code>assignments</code>)</td><td>A person assigned to a target</td><td><code>subject</code>, <code>target</code>, <code>responsibility</code> (<code>ACCOUNT_MANAGER</code> makes the person the account manager), <code>from</code> · <code>until</code> (dates, both included, open when empty)</td></tr>
+              <tr><td><code>APPROVAL</code> (<code>approvals</code>)</td><td>An approval of work on a target</td><td><code>id</code>, <code>subject</code>, <code>approver</code>, <code>target</code>, <code>purpose</code>, <code>actions</code> (empty for every action), <code>maxItems</code>, <code>status</code>, <code>validFrom</code> · <code>validUntil</code>, <code>decidedAt</code>, <code>usageReported</code>, <code>recordedBy</code> · <code>recordedAt</code></td></tr>
+              <tr><td><code>TICKET</code> (<code>tickets</code>)</td><td>A ticket of your ticket system</td><td><code>id</code>, <code>subject</code>, <code>kind</code> (<code>CHANGE</code>, <code>INCIDENT</code>, ...), <code>approver</code>, <code>target</code>, <code>purpose</code>, <code>actions</code>, <code>status</code>, <code>validFrom</code> · <code>validUntil</code>, <code>recordedBy</code> · <code>recordedAt</code></td></tr>
+              <tr><td><code>ON_CALL</code> (<code>onCall</code>)</td><td>An on-call shift</td><td><code>id</code>, <code>subject</code>, <code>team</code>, <code>startsAt</code> (included) · <code>endsAt</code> (excluded)</td></tr>
+              <tr><td><code>TRAVEL</code> (<code>travel</code>)</td><td>A registered business trip and the network used during it</td><td><code>id</code>, <code>subject</code>, <code>city</code>, <code>country</code>, <code>network</code> (CIDR), <code>validFrom</code> · <code>validUntil</code></td></tr>
+              <tr><td><code>ACCESS_HISTORY</code> (<code>accessDays</code>)</td><td>A day the person worked on a target</td><td><code>subject</code>, <code>target</code>, <code>day</code></td></tr>
+              <tr><td><code>USAGE</code> (<code>usage</code>)</td><td>Items your application delivered to the person from a target (an export, a download)</td><td><code>id</code>, <code>subject</code>, <code>target</code>, <code>items</code>, <code>at</code></td></tr>
+              <tr><td><code>POLICY</code> (<code>policies</code>)</td><td>A company rule (<a href="#rules">below</a>)</td><td><code>id</code>, <code>statement</code>, <code>requirement</code>, <code>actions</code>, <code>categories</code>, <code>exceptions</code>, ...</td></tr>
+              <tr><td><code>NETWORK</code> (<code>networks</code>)</td><td>A company network and its zone</td><td><code>cidr</code>, <code>zone</code> (<code>CORPORATE</code>, <code>VPN</code>, <code>PARTNER</code>, ...)</td></tr>
+              <tr><td><code>SOURCE</code> (<code>sources</code>)</td><td>States "we integrate this kind" without a record</td><td>A list of kind names (for example <code>["TICKET", "ON_CALL"]</code>)</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>Valid states.</strong> An approval covers a request when its <code>status</code> is <code>APPROVED</code>, <code>GRANTED</code> or <code>COMPLETED</code>; a ticket when it is <code>OPEN</code>, <code>APPROVED</code>, <code>ACTIVE</code> or <code>IN_PROGRESS</code>. An empty <code>status</code> is not checked.</li>
+            <li><strong>Items already used.</strong> When an approval's <code>usageReported</code> is <code>true</code>, the items your application reported in <code>usage</code> count as already used under it. When it is <code>false</code> or empty, the items already used are "not known".</li>
+            <li><strong>The target (<code>target</code>)</strong> is the key your company's records use for it (for example project <code>HX-310</code>). Your application states the target of each request (<a href="#request-values">below</a>).</li>
+          </ul>
+
+          <h3 id="integrated">"None found" and "not looked up"</h3>
+          <p>For six kinds (<code>ASSIGNMENT</code>, <code>APPROVAL</code>, <code>TICKET</code>, <code>ON_CALL</code>, <code>TRAVEL</code>, <code>ACCESS_HISTORY</code>) Contexa tells apart whether your company integrates the kind.</p>
+          <ul>
+            <li>A kind you integrate with no record for the person reaches the decision as <strong>"none found"</strong>. Example: tickets are integrated and no matching ticket exists.</li>
+            <li>A kind you do not integrate stays <strong>"not looked up"</strong>. It does not mean there is none, so it is not a fact against the request.</li>
+            <li>Putting even one record of a kind integrates that kind. To state that you integrate a kind before you have records of it, name it in <code>sources</code>.</li>
+          </ul>
+
+          <h2 id="rules">Company rules: which requests are looked at</h2>
+          <p>Company records look <strong>only at requests a company rule covers</strong>. A rule states what a request needs.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Field</th><th>Meaning</th><th>When empty</th></tr></thead>
+            <tbody>
+              <tr><td><code>id</code></td><td>The rule id</td><td>Required</td></tr>
+              <tr><td><code>statement</code></td><td>The rule as a sentence. It goes into the decision prompt as written</td><td>None</td></tr>
+              <tr><td><code>requirement</code></td><td>The record that must cover the request: <code>APPROVAL</code> or <code>TICKET</code></td><td>None</td></tr>
+              <tr><td><code>requiredTicketKind</code></td><td>The ticket kind needed (for example <code>CHANGE</code>)</td><td>Any kind</td></tr>
+              <tr><td><code>actions</code></td><td>The actions the rule covers</td><td>Every action</td></tr>
+              <tr><td><code>categories</code></td><td>The resource categories the rule covers (<code>@Protectable(category = ...)</code>)</td><td>Every category</td></tr>
+              <tr><td><code>exceptions</code></td><td>When no covering record is needed (<a href="#exceptions">below</a>). <code>{"kind": "...", "limit": number}</code></td><td>No exception</td></tr>
+              <tr><td><code>records</code></td><td>The record kinds a request is matched against</td><td>The kinds <code>requirement</code> and <code>exceptions</code> name, with <code>TRAVEL</code></td></tr>
+              <tr><td><code>historyDays</code></td><td>How many days of work history (days worked) the decision is shown</td><td>The <code>RECENT_WORK</code> <code>limit</code>, else 90 days</td></tr>
+            </tbody>
+          </table></div>
+          <p>A request is looked at under three conditions. If any is missing, no company records reach that request.</p>
+          <ol>
+            <li>At least one rule matches the request's action and resource category.</li>
+            <li>The records' holder (<a href="#holder">below</a>) has a person record (<code>people</code>).</li>
+            <li>The request time is known. Without it, only a summary saying the records were not looked up because the time is unknown goes in.</li>
+          </ol>
+
+          <h3 id="exceptions">Rule exceptions and the company's own check</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Exception (<code>kind</code>)</th><th>Holds when</th><th><code>limit</code></th></tr></thead>
+            <tbody>
+              <tr><td><code>ASSIGNED</code></td><td>The person is assigned to the target on the request day (not as account manager)</td><td>Only when the request's items are at most this number. It does not hold when the items are unknown</td></tr>
+              <tr><td><code>ACCOUNT_MANAGER</code></td><td>The person is the account manager of the customer the request names (a URL variable value) or of the target</td><td>Not used</td></tr>
+              <tr><td><code>RECENT_WORK</code></td><td>The person worked on the target recently</td><td>How many days back to look (else <code>historyDays</code>, else 90 days)</td></tr>
+              <tr><td><code>TICKET_WHILE_ON_CALL</code></td><td>The person is on call and has a ticket that meets every condition</td><td>Not used</td></tr>
+            </tbody>
+          </table></div>
+          <p>For each rule Contexa states <strong>the company's own check</strong>: "no covering record needed" when any exception holds, "needed" when none holds, and "unknown" when an exception cannot be decided because its kind is not integrated. This check is one more fact; the model still chooses the response.</p>
+
+          <h2 id="request-values">Values your application states per request</h2>
+          <p>Records name targets by your company's keys, which the request URL alone does not reveal. Contexa does not guess the target from the request's text. Your application states it as request attributes.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Request attribute</th><th>Format</th><th>Use</th></tr></thead>
+            <tbody>
+              <tr><td><code>resourceScope</code></td><td><code>name=value</code> (for example <code>projectKey=HX-310</code>). The name starts with a letter, letters, digits and <code>_</code>, at most 64 characters; the value uses letters, digits and <code>. _ : -</code>, at most 128 characters. A value in another format is dropped</td><td>The request's target. The value (<code>HX-310</code>) is compared with the records' <code>target</code>. Without it, the comparisons that need a target (assignment, approval, ticket, days worked) are not made</td></tr>
+              <tr><td><code>requestItems</code></td><td>A number</td><td>How many items the request handles. Compared with an approval's <code>maxItems</code> and the <code>ASSIGNED</code> <code>limit</code></td></tr>
+              <tr><td><code>claimedRecord</code></td><td>A ticket key</td><td>A key the requester offers as "this ticket covers it". It is not trusted as evidence: Contexa checks whether the person really has that ticket and whether it meets the conditions, and states the result</td></tr>
+            </tbody>
+          </table></div>
+<pre><code class="language-java">// In a controller or filter, before calling the protected method
+request.setAttribute("resourceScope", "projectKey=" + project.getKey());
+request.setAttribute("requestItems", rows.size());
+request.setAttribute("claimedRecord", form.getTicketKey()); // the ticket key the requester typed, when there is one</code></pre>
+          <p>State the action and resource category with <code>@Protectable(actions = ..., category = ...)</code> (<a href="../iam/protectable.html">@Protectable</a>). Without a declared action, rules are matched with the action family Contexa infers from the request (<code>READ</code>, <code>WRITE</code>, <code>EXPORT</code>, <code>DELETE</code>, <code>ADMIN</code>, <code>EXECUTE</code>).</p>
+
+          <h2 id="holder">Whose records are looked at</h2>
+          <ul>
+            <li><strong>A person's own request</strong> is matched with that person's records.</li>
+            <li><strong>An agent's request</strong> is matched with the records of the person who answers for it: the delegator for a delegated agent, the registered sponsor for an agent acting on its own. An agent has no assignments, shifts or tickets of its own. The decision prompt also states whose records they are (own, delegator, sponsor) (<a href="../agent/overview.html">Agents as Security Subjects</a>).</li>
+            <li><strong>Tenants.</strong> A person's records are those of the request's tenant together with those put without a tenant (shared by the deployment). Rules and networks are the tenant's when it has any, else the shared ones.</li>
+          </ul>
+
+          <h2 id="facts">What the decision sees</h2>
+          <p>For a request a rule covers, these facts go into the decision prompt.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Fact</th><th>Content</th></tr></thead>
+            <tbody>
+              <tr><td>Rules that apply</td><td>The rule statement, the record needed, the exceptions and the company's own check (needed, not needed, unknown)</td></tr>
+              <tr><td>Closest approval and ticket</td><td>Among the person's approvals and tickets, the one that comes closest to covering the request and the conditions it fails: <code>APPROVER</code> (approved by the requester), <code>TARGET</code> (another target), <code>PURPOSE</code> (another action), <code>ITEMS</code> (too many items, approvals only), <code>VALIDITY</code> (outside its validity), <code>STATUS</code> (not in a valid state)</td></tr>
+              <tr><td>A ticket the requester names</td><td>Whether that ticket exists (<code>NO_TICKET</code> when it does not) and, if it does, the same condition checks</td></tr>
+              <tr><td>Assignment, work history, on-call</td><td>Whether the person is assigned (or account manager) on the request day, recent days worked on the target, whether the person is on call at the request time</td></tr>
+              <tr><td>Network zone</td><td>The zone of the company network the request address is in, the trip network (<code>TRAVEL</code>), or anything else (<code>EXTERNAL</code>, only when you put company networks)</td></tr>
+              <tr><td>Computed at the request time</td><td>The engine computes again: whether the approval was decided before the request, whether the request is within its validity, whether the item limit is exceeded by this request alone or together with what the same session already exported, whether the rule is met by a record or an exception</td></tr>
+            </tbody>
+          </table></div>
+          <p>Where they appear depends on the prompt bundle (<a href="prompt-engineering.html">Decision Prompts and Bundles</a>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Bundle</th><th>Place</th></tr></thead>
+            <tbody>
+              <tr><td>v19</td><td>The <code>=== FRICTION AND APPROVAL HISTORY ===</code> section</td></tr>
+              <tr><td>v20</td><td>The <code>DECISION FACTS</code> block. The engine's conclusions (whether the rule is met, ...) are included</td></tr>
+              <tr><td>v21</td><td>The <code>RECORDS AND COMPARISONS</code> block. It holds the records and comparisons without the engine's conclusions, and the system text tells the model to check for itself, for every way the request differs from the usual, whether a record explains it by its target, purpose, period, limit and decision time, and whether the rule was met at the request time</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="api">Putting records: the admin API</h2>
+          <p>Every API needs the <code>ADMIN</code> role. Each put and delete is written to the audit log with who did it (<code>COMPANY_RECORDS_RECORDED</code>, <code>COMPANY_RECORDS_DELETED</code>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Request</th><th>What it does</th><th>Response</th></tr></thead>
+            <tbody>
+              <tr><td><code>POST /contexa/admin/api/company-records?tenantId=...</code></td><td>Put records. The body is JSON holding the kinds above. At most 20,000 records at once. A record with the same kind and key is replaced</td><td><code>{"records": number put, "integratedKinds": [...]}</code></td></tr>
+              <tr><td><code>GET /contexa/admin/api/company-records</code></td><td>List records. Filter by <code>tenantId</code>, <code>kind</code>, <code>subject</code>, <code>target</code>; newest put first, <code>limit</code> records (default 200, at most 1,000)</td><td>A list of records (kind, key, person, target, content, put by, put at)</td></tr>
+              <tr><td><code>POST /contexa/admin/api/company-records/delete</code></td><td>Delete by key. Body <code>{"tenantId": ..., "kind": "TICKET", "keys": ["CHG-1042"]}</code></td><td><code>{"removed": number removed}</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>An empty <code>tenantId</code> means the deployment's shared records. If any record misses a required value or has a period that ends before it starts, nothing is put and the response is 400 with a list of problems (<code>problems</code>).</p>
+<pre><code class="language-json">{
+  "people": [
+    { "subject": "alice", "companyId": "E1024", "displayName": "Alice Kim" }
+  ],
+  "assignments": [
+    { "subject": "alice", "target": "HX-310", "from": "2026-10-01" }
+  ],
+  "approvals": [{
+    "id": "APR-7781", "subject": "alice", "approver": "E2001", "target": "HX-310",
+    "purpose": "Quarterly audit data", "actions": ["EXPORT"], "maxItems": 1000, "status": "APPROVED",
+    "validFrom": "2026-11-01T00:00:00Z", "validUntil": "2026-11-08T00:00:00Z",
+    "decidedAt": "2026-10-31T09:12:00Z", "usageReported": true
+  }],
+  "policies": [{
+    "id": "EXPORT-NEEDS-APPROVAL", "statement": "Exporting customer data needs an approval",
+    "requirement": "APPROVAL", "actions": ["EXPORT"], "categories": ["customer-data"],
+    "exceptions": [{ "kind": "ASSIGNED", "limit": 100 }]
+  }],
+  "networks": [
+    { "cidr": "10.0.0.0/8", "zone": "CORPORATE" }
+  ]
+}</code></pre>
+          <p>In this example, when alice exports 1,000 customer records with <code>projectKey=HX-310</code> on November 3 from the office network through a method protected with <code>@Protectable(actions = "EXPORT", category = "customer-data")</code>, the rule <code>EXPORT-NEEDS-APPROVAL</code> applies. She is assigned, but the items exceed the exception limit (100), so the company's own check is "approval needed", and the approval <code>APR-7781</code> is stated as a record whose target, action, items, validity and status all match.</p>
+          <p>In the admin console, <strong>Security → Company Records</strong> (<code>/contexa/admin/company-records</code>) lists up to the 200 newest records, filtered by kind, person, target and tenant. The screen only shows records and decides nothing (<a href="../iam/admin.html">Admin Console</a>).</p>
+          <p>The key of each kind: <code>subject</code> for a person; <code>subject</code>, <code>target</code>, <code>responsibility</code> and <code>from</code> together for an assignment; <code>subject</code>, <code>target</code> and <code>day</code> together for a day worked; <code>id</code> for usage (else <code>subject</code>, <code>target</code> and <code>at</code>); <code>cidr</code> for a network; <code>id</code> for the rest.</p>
+
+          <h2 id="storage">Where records are kept</h2>
+          <ul>
+            <li><strong>With a Contexa database</strong> they are kept in the <code>company_record</code> table (contexa-iam). <strong>Without one they are kept in memory</strong> and are lost on restart.</li>
+            <li><strong>When your records live elsewhere</strong>, declare your own <code>CompanyRecordStore</code> bean; it is used instead of the default store. Its methods: put (<code>put</code>), delete (<code>delete</code>), a person's records (<code>ofSubject</code>), the company's rules and networks (<code>company</code>), a listing (<code>list</code>), and deleting all of a person's records (<code>deleteSubject</code>).</li>
+            <li><strong>When an account is deleted</strong>, that person's company records are deleted in every tenant.</li>
+            <li>An application's own <code>FrictionContextProvider</code> bean runs beside company records and can add the application's records to the same context.</li>
+          </ul>
+
+          <h2 id="verification">Checking that the records were really used</h2>
+          <p>The <code>SOURCE_TRUTH</code> check of prompt inspection reads the company records and delegation records again from their stores at the request time for each sealed decision, and checks that the prompt's on-call, assignment, approval (approver, item limit, items already used) and delegation lines match them. Records gone because the account was deleted are reported as not kept (<a href="prompt-inspection.html#inspection">Prompt Governance and Inspection</a>).</p>
+
+          <h2 id="next">Where to read next</h2>
+          <ul>
+            <li><a href="decision-engine.html">Decision Engine</a>: how facts, company records included, are gathered into a decision</li>
+            <li><a href="prompt-engineering.html">Decision Prompts and Bundles</a>: how each bundle states the facts</li>
+            <li><a href="../agent/delegation.html">Delegation and Objective Contracts</a>: what the delegation record does for an agent's request</li>
+          </ul>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="decision-engine.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Decision Engine: How a Decision Is Made</span>
+            </a>
+            <a href="../identity/zero-trust-filters.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Request-Time Enforcement</span>
+            </a>
+          </div>

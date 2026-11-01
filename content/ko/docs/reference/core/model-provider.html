@@ -1,543 +1,337 @@
-﻿<nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">홈</a>
             <span class="breadcrumb-separator">/</span>
-            <a href="../../../docs/reference/index.html">Reference</a>
+            <a href="../../../docs/reference/index.html">레퍼런스</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Model Providers</span>
+            <span class="breadcrumb-current">모델 연결과 선택</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-secondary">contexa-autoconfigure</span>
             </div>
-            <h1>Model Providers</h1>
-            <p class="lead">모델 프로바이더 시스템은 여러 런타임에 걸쳐 LLM 모델을 관리합니다. <code>DynamicModelRegistry</code>는 <code>LlmRuntimeCatalog</code>의 chat 바인딩과 구성된 <code>TieredLLMProperties</code> 계층에서 모델을 등록하며, <code>DynamicModelSelectionStrategy</code>는 각 요청에 대해 명시적 모델 힌트·티어 매핑·기본 <code>ChatModel</code> 폴백 순서로 런타임 모델을 해석합니다.</p>
+            <h1>모델 연결과 선택</h1>
+            <p class="lead">Contexa가 쓸 AI 모델 공급자(OpenAI · Anthropic · Ollama 등)를 연결하고, 기본 모델과 층(1차 · 2차)별 모델을 정하는 방법을 설명합니다. 요청마다 어느 모델이 쓰였는지 확인하는 방법과 임베딩 모델 고르기도 다룹니다.</p>
           </div>
 
-          <!-- Overview -->
-          <section class="docs-section">
-            <h2 id="overview">개요</h2>
-            <p>Contexa는 여러 LLM 런타임을 동시에 지원합니다. 애플리케이션 시작 시 <code>DynamicModelRegistry</code>는 두 가지 경로로 디스크립터 맵을 채웁니다:</p>
-            <ol>
-              <li><strong>LlmRuntimeCatalog chat 바인딩</strong> &mdash; <code>LlmRuntimeCatalog.getChatBindings()</code>가 반환하는 모든 <code>LlmRuntimeBinding</code>이 등록됩니다. 카탈로그는 Contexa 런타임(예: <code>contexa.llm.chat.ollama.*</code>)과 Spring AI 자동 구성(Anthropic, OpenAI 등)으로 생성된 Spring AI <code>ChatModel</code> 빈으로부터 구성됩니다.</li>
-              <li><strong>TieredLLMProperties 계층</strong> &mdash; <code>spring.ai.security.layer1</code>과 <code>spring.ai.security.layer2</code>에 구성된 기본·백업 모델이 해당 티어로 등록됩니다. 레지스트리는 <code>resolveCanonicalModelId(...)</code>를 사용하므로 동일 모델을 runtime ID, bean name, alias 어느 쪽으로도 조회할 수 있습니다.</li>
+          <h2 id="overview">한눈에 보기</h2>
+          <p>이 페이지에서 쓰는 말입니다.</p>
+          <ul>
+            <li><strong>공급자(provider):</strong> 모델을 제공하는 곳. <code>openai</code> · <code>anthropic</code> · <code>ollama</code> 같은 이름으로 부릅니다.</li>
+            <li><strong>연결(바인딩):</strong> Spring 빈으로 만들어진 채팅 모델 · 임베딩 모델 하나와 그것을 찾는 이름들(빈 이름 · 런타임 ID · 모델 ID · 별칭). 연결 목록을 카탈로그(<code>LlmRuntimeCatalog</code>)라고 합니다.</li>
+            <li><strong>기본 채팅 모델:</strong> 다른 모델을 고르지 못했을 때 늘 쓰는 채팅 모델(빈 이름 <code>primaryChatModel</code>).</li>
+            <li><strong>층 모델:</strong> 1층 · 2층에 정한 모델. 보안 판정 엔진의 1차 · 2차 분석과 층을 지정한 호출이 씁니다.</li>
+          </ul>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>설정에서 호출까지</strong>위 단계는 시작할 때 한 번, 마지막 단계는 호출마다 일어납니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-host"><span class="dg-node-tag">앱 설정</span><span class="dg-node-title">공급자 연결</span><span class="dg-node-desc">Spring AI 스타터와 <code>spring.ai.*</code>, 또는 Contexa 전용 Ollama</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">Spring 빈</span><span class="dg-node-title">채팅 · 임베딩 모델</span><span class="dg-node-desc">공급자마다 모델 빈이 만들어집니다</span></li>
+              <li class="dg-node"><span class="dg-node-tag">시작할 때</span><span class="dg-node-title">연결 목록 만들기</span><span class="dg-node-desc">빈마다 공급자 · 모델 ID를 알아내고, <code>contexa.llm.bindings</code>로 이름을 덧붙입니다</span></li>
+              <li class="dg-node"><span class="dg-node-tag">시작할 때</span><span class="dg-node-title">기본 채팅 모델 · 층 모델 정하기</span><span class="dg-node-desc"><code>contexa.llm.selection.chat</code>, <code>contexa.security.tiered.llm.layer1.model</code> · <code>layer2.model</code></span></li>
+              <li class="dg-node dg-request"><span class="dg-node-tag">호출마다</span><span class="dg-node-title">모델 고르기</span><span class="dg-node-desc">명시한 모델 → 층 모델 → 백업 모델 → 기본 채팅 모델</span></li>
             </ol>
-            <p>바인딩이 없을 때 레지스트리는 모델 ID에서 provider 이름을 추론합니다. 인식되는 부분 문자열은 <code>llama</code>, <code>qwen</code>, <code>gemma</code>, <code>mistral</code>, <code>phi</code>, <code>exaone</code>, <code>codellama</code>, <code>deepseek</code> (&rarr; <code>ollama</code>), <code>claude</code> (&rarr; <code>anthropic</code>), <code>gpt</code>·<code>o1</code>·<code>davinci</code> (&rarr; <code>openai</code>), <code>gemini</code>·<code>vertex</code> (&rarr; <code>gemini</code>), <code>bedrock</code> (&rarr; <code>bedrock</code>)입니다. 나머지는 <code>spring</code>으로 분류됩니다.</p>
+          </figure>
 
-<svg viewBox="0 0 760 310" width="100%" style="display:block;margin:1.5rem auto;font-family:Inter,system-ui,sans-serif;" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <marker id="mp-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,1.5 L8,5 L0,8.5Z" fill="#94A3B8"/>
-    </marker>
-    <marker id="mp-arr-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,1.5 L8,5 L0,8.5Z" fill="#10B981"/>
-    </marker>
-  </defs>
-  <style>
-    .mp-box{fill:#F8FAFC;stroke:#CBD5E1;stroke-width:1.5;}
-    .mp-box-start{fill:#EFF6FF;stroke:#3B82F6;stroke-width:2;}
-    .mp-box-ok{fill:#F0FDF4;stroke:#10B981;stroke-width:1.5;}
-    .mp-box-src{fill:#FFF7ED;stroke:#FCD34D;stroke-width:1.5;}
-    .mp-title{fill:#1E293B;font-size:14px;font-weight:700;}
-    .mp-sub{fill:#64748B;font-size:12px;}
-    .mp-line{stroke:#94A3B8;stroke-width:1.5;fill:none;}
-    .mp-line-ok{stroke:#10B981;stroke-width:1.5;fill:none;}
-    .mp-label{fill:#64748B;font-size:11px;}
-    .mp-head{fill:#334155;font-size:13px;font-weight:700;}
-    .mp-sep{stroke:#E2E8F0;stroke-width:1;stroke-dasharray:4,3;}
-  </style>
-
-  <!-- 상단: @PostConstruct 초기화 흐름 -->
-  <text x="380" y="18" text-anchor="middle" class="mp-head">① @PostConstruct 초기화 — DynamicModelRegistry 등록 흐름</text>
-
-  <rect x="10" y="28" width="140" height="48" rx="7" class="mp-box-start"/>
-  <text x="80" y="50" text-anchor="middle" class="mp-title">@PostConstruct</text>
-  <text x="80" y="66" text-anchor="middle" class="mp-sub">애플리케이션 시작</text>
-
-  <rect x="170" y="28" width="160" height="48" rx="7" class="mp-box-src"/>
-  <text x="250" y="50" text-anchor="middle" class="mp-title">LlmRuntimeCatalog</text>
-  <text x="250" y="66" text-anchor="middle" class="mp-sub">getChatBindings() 조회</text>
-
-  <rect x="350" y="28" width="160" height="48" rx="7" class="mp-box-src"/>
-  <text x="430" y="50" text-anchor="middle" class="mp-title">TieredLLMProperties</text>
-  <text x="430" y="66" text-anchor="middle" class="mp-sub">layer1 / layer2 설정 수집</text>
-
-  <rect x="530" y="28" width="160" height="48" rx="7" class="mp-box-ok"/>
-  <text x="610" y="50" text-anchor="middle" class="mp-title">DynamicModelRegistry</text>
-  <text x="610" y="66" text-anchor="middle" class="mp-sub">디스크립터 맵 완성</text>
-
-  <line x1="150" y1="52" x2="168" y2="52" class="mp-line" marker-end="url(#mp-arr)"/>
-  <line x1="330" y1="52" x2="348" y2="52" class="mp-line" marker-end="url(#mp-arr)"/>
-  <line x1="510" y1="52" x2="528" y2="52" class="mp-line-ok" marker-end="url(#mp-arr-g)"/>
-
-  <!-- 구분선 -->
-  <line x1="10" y1="105" x2="750" y2="105" class="mp-sep"/>
-  <text x="380" y="122" text-anchor="middle" class="mp-head">② 런타임 getModel() — 캐시 조회 및 카탈로그 해석 흐름</text>
-
-  <!-- 하단: getModel 흐름 -->
-  <rect x="10" y="132" width="120" height="48" rx="7" class="mp-box-start"/>
-  <text x="70" y="154" text-anchor="middle" class="mp-title">getModel()</text>
-  <text x="70" y="170" text-anchor="middle" class="mp-sub">modelId 요청</text>
-
-  <!-- 캐시 히트 분기 -->
-  <rect x="150" y="132" width="120" height="48" rx="7" class="mp-box"/>
-  <text x="210" y="150" text-anchor="middle" class="mp-title">캐시 조회</text>
-  <text x="210" y="166" text-anchor="middle" class="mp-sub">descriptorMap</text>
-
-  <!-- 캐시 HIT -->
-  <rect x="150" y="220" width="120" height="40" rx="7" class="mp-box-ok"/>
-  <text x="210" y="244" text-anchor="middle" class="mp-title" style="font-size:13px;">캐시 HIT → 반환</text>
-
-  <!-- 카탈로그 조회 -->
-  <rect x="290" y="132" width="140" height="48" rx="7" class="mp-box"/>
-  <text x="360" y="150" text-anchor="middle" class="mp-title">카탈로그 조회</text>
-  <text x="360" y="166" text-anchor="middle" class="mp-sub">resolveCanonicalModelId</text>
-
-  <!-- 모델 인스턴스화 -->
-  <rect x="450" y="132" width="140" height="48" rx="7" class="mp-box"/>
-  <text x="520" y="150" text-anchor="middle" class="mp-title">ChatModel 인스턴스화</text>
-  <text x="520" y="166" text-anchor="middle" class="mp-sub">provider 추론 · 빈 해석</text>
-
-  <!-- 캐시 저장 및 반환 -->
-  <rect x="610" y="132" width="130" height="48" rx="7" class="mp-box-ok"/>
-  <text x="675" y="150" text-anchor="middle" class="mp-title">캐시 저장</text>
-  <text x="675" y="166" text-anchor="middle" class="mp-sub">+ ChatModel 반환</text>
-
-  <!-- 화살표 -->
-  <line x1="130" y1="156" x2="148" y2="156" class="mp-line" marker-end="url(#mp-arr)"/>
-  <line x1="210" y1="180" x2="210" y2="218" class="mp-line-ok" marker-end="url(#mp-arr-g)"/>
-  <text x="225" y="205" class="mp-label">HIT</text>
-  <line x1="270" y1="156" x2="288" y2="156" class="mp-line" marker-end="url(#mp-arr)"/>
-  <text x="280" y="148" class="mp-label">MISS</text>
-  <line x1="430" y1="156" x2="448" y2="156" class="mp-line" marker-end="url(#mp-arr)"/>
-  <line x1="590" y1="156" x2="608" y2="156" class="mp-line-ok" marker-end="url(#mp-arr-g)"/>
-</svg>
-          </section>
-
-          <!-- LlmRuntimeCatalog -->
-          <section class="docs-section">
-            <h2 id="llm-runtime-catalog">LlmRuntimeCatalog</h2>
-            <p>탐색된 chat·embedding 런타임을 노출하는 인터페이스입니다. 레지스트리가 바인딩을 찾고 필요할 때 실제 <code>ChatModel</code> 인스턴스를 해석하는 데 사용합니다.</p>
-
-            <div class="api-signature">
-              <code>public interface LlmRuntimeCatalog</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getChatBindings()</span>
-                <span class="api-method-return">List&lt;LlmRuntimeBinding&gt;</span>
-              </div>
-              <div class="api-method-desc">카탈로그가 알고 있는 모든 chat 런타임 바인딩을 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getEmbeddingBindings()</span>
-                <span class="api-method-return">List&lt;LlmRuntimeBinding&gt;</span>
-              </div>
-              <div class="api-method-desc">카탈로그가 알고 있는 모든 embedding 런타임 바인딩을 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">findChatBinding(String selector)</span>
-                <span class="api-method-return">Optional&lt;LlmRuntimeBinding&gt;</span>
-              </div>
-              <div class="api-method-desc">runtime ID, bean name, model ID, 또는 등록된 alias로 chat 바인딩을 찾습니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">findEmbeddingBinding(String selector)</span>
-                <span class="api-method-return">Optional&lt;LlmRuntimeBinding&gt;</span>
-              </div>
-              <div class="api-method-desc">같은 선택자로 embedding 바인딩을 찾습니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolveChatModel(String selector)</span>
-                <span class="api-method-return">ChatModel</span>
-              </div>
-              <div class="api-method-desc">일치하는 바인딩에 대한 실제 Spring AI <code>ChatModel</code>을 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolveEmbeddingModel(String selector)</span>
-                <span class="api-method-return">EmbeddingModel</span>
-              </div>
-              <div class="api-method-desc">일치하는 바인딩에 대한 실제 Spring AI <code>EmbeddingModel</code>을 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolvePrimaryChatModel(String priorityConfig)</span>
-                <span class="api-method-return">Optional&lt;ChatModel&gt;</span>
-              </div>
-              <div class="api-method-desc">쉼표로 구분된 priority 설정 문자열을 사용해 기본 chat 모델을 해석합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolvePrimaryEmbeddingModel(String priorityConfig)</span>
-                <span class="api-method-return">Optional&lt;EmbeddingModel&gt;</span>
-              </div>
-              <div class="api-method-desc">priority 설정 문자열을 사용해 기본 embedding 모델을 해석합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolveSpringPrimaryChatModel()</span>
-                <span class="api-method-return">Optional&lt;ChatModel&gt;</span>
-              </div>
-              <div class="api-method-desc">컨텍스트에 존재할 경우 Spring AI primary <code>ChatModel</code> 빈을 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">resolveSpringPrimaryEmbeddingModel()</span>
-                <span class="api-method-return">Optional&lt;EmbeddingModel&gt;</span>
-              </div>
-              <div class="api-method-desc">컨텍스트에 존재할 경우 Spring AI primary <code>EmbeddingModel</code> 빈을 반환합니다.</div>
-            </div>
-          </section>
-
-          <!-- LlmRuntimeBinding -->
-          <section class="docs-section">
-            <h2 id="llm-runtime-binding">LlmRuntimeBinding</h2>
-            <p>단일 런타임 바인딩에 대한 불변 레코드입니다. 바인딩은 Contexa LLM 자동 구성이 생성하며 카탈로그와 레지스트리 모두가 소비합니다.</p>
-
-            <div class="api-signature">
-              <code>public final class LlmRuntimeBinding</code>
-            </div>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>타입</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>runtimeId</code></td><td><code>String</code></td><td>이 바인딩에 할당된 Contexa 런타임 ID.</td></tr>
-                <tr><td><code>beanName</code></td><td><code>String</code></td><td>실제 모델 빈의 Spring bean 이름.</td></tr>
-                <tr><td><code>provider</code></td><td><code>String</code></td><td>프로바이더 식별자(예: <code>ollama</code>, <code>anthropic</code>, <code>openai</code>).</td></tr>
-                <tr><td><code>modelId</code></td><td><code>String</code></td><td>런타임이 보고한 정규 모델 ID(예: <code>llama3.1:8b</code>).</td></tr>
-                <tr><td><code>aliases</code></td><td><code>Set&lt;String&gt;</code></td><td>같은 바인딩으로 해석되는 추가 선택자들.</td></tr>
-                <tr><td><code>type</code></td><td><code>LlmRuntimeType</code></td><td>Chat 또는 embedding 런타임 유형.</td></tr>
-                <tr><td><code>primary</code></td><td><code>boolean</code></td><td>이 바인딩이 해당 유형의 Spring primary로 표시되어 있는지 여부.</td></tr>
-                <tr><td><code>source</code></td><td><code>String</code></td><td>바인딩의 출처(예: 자동 구성 클래스 또는 설정 키).</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>헬퍼 메서드</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>메서드</th><th>반환</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>canonicalId()</code></td><td><code>String</code></td><td>바인딩의 선호 식별자를 반환합니다: <code>modelId</code> &rarr; <code>runtimeId</code> &rarr; <code>beanName</code> 순.</td></tr>
-                <tr><td><code>matches(String selector)</code></td><td><code>boolean</code></td><td>선택자가 <code>runtimeId</code>, <code>beanName</code>, <code>modelId</code>, 또는 alias 중 하나와 일치하는지 반환합니다.</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- ModelDescriptor -->
-          <section class="docs-section">
-            <h2 id="model-descriptor">ModelDescriptor</h2>
-            <p>모델의 정체성·기능·기본 옵션·현재 상태를 기술합니다.</p>
-
-            <div class="api-signature">
-              <code>@Data @Builder<br>public class ModelDescriptor</code>
-            </div>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>타입</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>modelId</code></td><td><code>String</code></td><td>고유 모델 식별자(예: <code>llama3.1:8b</code>, <code>claude-3-opus</code>).</td></tr>
-                <tr><td><code>displayName</code></td><td><code>String</code></td><td>사람이 읽기 쉬운 모델 이름.</td></tr>
-                <tr><td><code>provider</code></td><td><code>String</code></td><td>프로바이더 이름(<code>ollama</code>, <code>anthropic</code>, <code>openai</code>).</td></tr>
-                <tr><td><code>tier</code></td><td><code>Integer</code></td><td>모델에 할당된 구성 런타임 티어(1 또는 2). 할당되지 않으면 null.</td></tr>
-                <tr><td><code>version</code></td><td><code>String</code></td><td>모델 버전 문자열.</td></tr>
-                <tr><td><code>capabilities</code></td><td><code>ModelCapabilities</code></td><td>Streaming·Tool 호출·멀티모달·컨텍스트 윈도우·출력 예산을 기술하는 nested class.</td></tr>
-                <tr><td><code>options</code></td><td><code>ModelOptions</code></td><td>기본 샘플링 옵션(temperature, topP, topK, repetitionPenalty)을 기술하는 nested class.</td></tr>
-                <tr><td><code>status</code></td><td><code>ModelStatus</code></td><td><code>AVAILABLE</code> 또는 <code>UNAVAILABLE</code>.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>ModelCapabilities (nested class)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>필드</th><th>타입</th><th>기본값</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>streaming</code></td><td><code>boolean</code></td><td>true</td></tr>
-                <tr><td><code>toolCalling</code></td><td><code>boolean</code></td><td>false</td></tr>
-                <tr><td><code>functionCalling</code></td><td><code>boolean</code></td><td>false</td></tr>
-                <tr><td><code>multiModal</code></td><td><code>boolean</code></td><td>false</td></tr>
-                <tr><td><code>maxTokens</code></td><td><code>int</code></td><td>4096</td></tr>
-                <tr><td><code>contextWindow</code></td><td><code>int</code></td><td>4096</td></tr>
-                <tr><td><code>maxOutputTokens</code></td><td><code>int</code></td><td>4096</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>ModelOptions (nested class)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>필드</th><th>타입</th><th>기본값</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>temperature</code></td><td><code>Double</code></td><td>0.7</td></tr>
-                <tr><td><code>topP</code></td><td><code>Double</code></td><td>0.9</td></tr>
-                <tr><td><code>topK</code></td><td><code>Integer</code></td><td>null</td></tr>
-                <tr><td><code>repetitionPenalty</code></td><td><code>Double</code></td><td>1.0</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>헬퍼 메서드</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">supportsAdvancedFeatures()</span>
-                <span class="api-method-return">boolean</span>
-              </div>
-              <div class="api-method-desc">Capabilities가 tool calling·function calling·멀티모달 중 하나라도 선언할 때 <code>true</code>를 반환합니다.</div>
-            </div>
-          </section>
-
-          <!-- DynamicModelRegistry -->
-          <section class="docs-section">
-            <h2 id="dynamic-model-registry">DynamicModelRegistry</h2>
-            <p>디스크립터를 관리하고 <code>ChatModel</code> 인스턴스를 캐시하는 중앙 레지스트리입니다. <code>@PostConstruct</code> 초기화 동안 카탈로그와 티어 설정에서 모델을 등록합니다.</p>
-
-            <div class="api-signature">
-              <code>public class DynamicModelRegistry</code>
-            </div>
-
-            <h3>생성자 의존성</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>의존성</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>ApplicationContext</code></td><td>초기화 시 사용되는 Spring application context 참조.</td></tr>
-                <tr><td><code>TieredLLMProperties</code></td><td>구성된 티어 계층 구조(layer 1·layer 2, primary·backup 모델).</td></tr>
-                <tr><td><code>LlmRuntimeCatalog</code></td><td>Spring AI 런타임 바인딩 카탈로그. Optional: 없을 경우 <code>getModel(...)</code>이 <code>ModelSelectionException</code>을 던집니다.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Public API</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getModel(String modelId)</span>
-                <span class="api-method-return">ChatModel</span>
-              </div>
-              <div class="api-method-desc">주어진 ID의 <code>ChatModel</code>을 반환합니다. 정규 모델 ID를 해석하고 바인딩을 조회하여 카탈로그가 실제 모델을 해석하도록 요청하며 결과를 캐시합니다. ID나 카탈로그가 없으면 <code>ModelSelectionException</code>을 던집니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getAllModels()</span>
-                <span class="api-method-return">Collection&lt;ModelDescriptor&gt;</span>
-              </div>
-              <div class="api-method-desc">등록된 모든 모델 디스크립터의 복사본을 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getDescriptor(String modelId)</span>
-                <span class="api-method-return">ModelDescriptor</span>
-              </div>
-              <div class="api-method-desc">새 <code>ChatModel</code>을 인스턴스화하지 않고 모델 ID에 대한 등록된 디스크립터를 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getModelsByProvider(String provider)</span>
-                <span class="api-method-return">List&lt;ModelDescriptor&gt;</span>
-              </div>
-              <div class="api-method-desc">Provider 이름으로 필터링된 <code>AVAILABLE</code> 디스크립터를 반환합니다(대소문자 무시).</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">registerModel(ModelDescriptor descriptor)</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">디스크립터를 등록하거나 기존 항목에 병합합니다. 수신 디스크립터가 값을 비워둘 때 기존 tier와 provider 값이 보존됩니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">refreshModels()</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">디스크립터·인스턴스 캐시·alias를 모두 지운 뒤 카탈로그 바인딩과 설정 계층을 다시 등록합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">updateModelStatus(String modelId, ModelStatus status)</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">등록된 모델의 가용성 상태를 업데이트합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">shutdown()</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">디스크립터·인스턴스 캐시·alias를 지우는 <code>@PreDestroy</code> 훅.</div>
-            </div>
-          </section>
-
-          <!-- ModelSelectionStrategy -->
-          <section class="docs-section">
-            <h2 id="model-selection-strategy">ModelSelectionStrategy</h2>
-            <p>모델 선택 로직을 위한 인터페이스입니다. <code>DynamicModelSelectionStrategy</code>가 기본 구현체입니다.</p>
-
-            <div class="api-signature">
-              <code>public interface ModelSelectionStrategy</code>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">selectModel(ExecutionContext context)</span>
-                <span class="api-method-return">ChatModel</span>
-              </div>
-              <div class="api-method-desc">주어진 실행 컨텍스트에 가장 적합한 모델을 선택합니다. 사용 가능한 모델이 없으면 null을 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getSupportedModels()</span>
-                <span class="api-method-return">Set&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">선택에 사용 가능한 모든 모델 ID 집합을 반환합니다.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">isModelAvailable(String modelName)</span>
-                <span class="api-method-return">boolean</span>
-              </div>
-              <div class="api-method-desc">특정 모델이 현재 사용 가능한지 확인합니다.</div>
-            </div>
-          </section>
-
-          <!-- DynamicModelSelectionStrategy -->
-          <section class="docs-section">
-            <h2 id="dynamic-selection">DynamicModelSelectionStrategy</h2>
-            <p>기본 선택 전략은 명시적 모델 우선 폴백 체인을 사용합니다. <code>DynamicModelRegistry</code>, <code>TieredLLMProperties</code>, 기본 <code>ChatModel</code> 빈으로 생성됩니다.</p>
-
-            <div class="api-signature">
-              <code>public class DynamicModelSelectionStrategy implements ModelSelectionStrategy</code>
-            </div>
-
-            <ol>
-              <li><strong>명시적 모델 요청</strong> &mdash; 먼저 <code>ExecutionContext.preferredModel</code>을 시도합니다. 없으면 다음 순서로 메타데이터 키를 찾습니다: <code>requestedModelId</code>, <code>preferredModel</code>, <code>runtimeModelId</code>, <code>modelId</code>.</li>
-              <li><strong>티어 해석</strong> &mdash; 명시적 모델이 해석되지 않으면 다음 순서로 티어를 선택합니다: <code>analysisLevel.getDefaultTier()</code> &rarr; <code>securityTaskType.getDefaultTier()</code> &rarr; <code>ExecutionContext.tier</code>. 1을 초과하는 값은 구성된 layer 2로 정규화됩니다.</li>
-              <li><strong>Primary/backup 조회</strong> &mdash; 전략은 <code>TieredLLMProperties.getModelNameForTier(...)</code>로 기본 모델을, <code>getBackupModelNameForTier(...)</code>로 백업 모델을 조회합니다.</li>
-              <li><strong>Primary ChatModel 폴백</strong> &mdash; 모든 티어 후보가 실패하면 자동 구성된 기본 <code>ChatModel</code> 빈을 마지막 폴백으로 반환합니다.</li>
-            </ol>
-
-            <h3>해석 메타데이터</h3>
-            <p>전략은 결과를 <code>ExecutionContext.metadata</code>에 기록합니다. 하위 코드와 어드바이저는 다음 키를 확인할 수 있습니다:</p>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>키</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>requestedModelId</code></td><td>요청된 명시적 모델 ID(제공된 경우).</td></tr>
-                <tr><td><code>requestedModelSourceKey</code></td><td>요청 ID의 출처(예: <code>executionContext.preferredModel</code> 또는 <code>executionContext.metadata.runtimeModelId</code>).</td></tr>
-                <tr><td><code>selectedModelId</code></td><td>최종적으로 선택된 모델 ID.</td></tr>
-                <tr><td><code>selectedModelProvider</code></td><td>일치하는 <code>ModelDescriptor</code>에서 가져온 provider 이름(가능할 때).</td></tr>
-                <tr><td><code>runtimeModelId</code></td><td>해당 키를 찾는 하위 소비자를 위한 <code>selectedModelId</code>의 복제본.</td></tr>
-                <tr><td><code>modelSelectionSource</code></td><td>모델이 선택된 이유(예: <code>explicit_model</code>, <code>analysis_level:NORMAL</code>, <code>security_task_type:FORENSIC_ANALYSIS</code>, <code>tier:2</code>, <code>primary_chat_model</code>).</td></tr>
-                <tr><td><code>modelSelectionFallbackUsed</code></td><td>백업 또는 기본 폴백이 사용되었을 때 <code>true</code>.</td></tr>
-                <tr><td><code>modelSelectionCandidates</code></td><td>전략이 시도한 모델 ID의 정렬된 목록.</td></tr>
-                <tr><td><code>modelSelectionFailure</code></td><td>모델을 선택할 수 없을 때의 실패 이유.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>추가 메서드</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getModelCapabilities(String modelName)</span>
-                <span class="api-method-return">Map&lt;String, Object&gt;</span>
-              </div>
-              <div class="api-method-desc">디스크립터의 modelId, provider, capabilities 블록, 컨텍스트 윈도우, maxTokens, streaming 플래그, tier, status를 요약한 맵을 반환합니다. 모델이 등록되어 있지 않으면 빈 맵을 반환합니다.</div>
-            </div>
-          </section>
-
-          <!-- Configuration -->
-          <section class="docs-section">
-            <h2 id="configuration">설정</h2>
-
-            <h3>계층형 모델 계층 구조</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">spring:
+          <h2 id="connect">공급자 연결하기</h2>
+          <p>모델 연결은 Spring AI가 합니다. 공급자 스타터를 넣고 <code>spring.ai.&lt;공급자&gt;.*</code>를 설정하면 그 공급자의 모델 빈이 생기고, Contexa는 그 빈을 찾아 씁니다. Contexa에는 <code>contexa.llm.openai.*</code> 같은 공급자 키가 따로 없습니다.</p>
+          <pre><code class="language-yaml"># 의존성: org.springframework.ai:spring-ai-starter-model-openai
+# 그 밖의 필수 설정(contexa.datasource.url 등)은 빠른 시작을 따릅니다.
+spring:
   ai:
-    security:
-      layer1:
-        model: qwen2.5:7b
-        backup:
-          model: qwen2.5:7b
-      layer2:
-        model: gpt-4o-mini
-        backup:
-          model: llama3.1:8b
-      tiered:
-        layer1:
-          timeout-ms: 30000
-        layer2:
-          timeout-ms: 60000
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-4o-mini</code></pre>
+          <ul>
+            <li>채팅 모델이 하나도 없으면 Contexa의 LLM 빈(기본 채팅 모델 · 오케스트레이터)이 만들어지지 않습니다.</li>
+            <li><code>contexa.llm.selection.chat.priority</code>에 공급자를 하나만 적으면(<code>openai</code> · <code>anthropic</code> · <code>ollama</code>), Contexa가 <code>spring.ai.model.chat</code>을 그 공급자로 기본 설정해 Spring AI가 그 공급자의 채팅 모델만 만들게 합니다. <code>contexa.llm.selection.embedding.priority</code>의 첫 공급자(<code>openai</code> · <code>ollama</code>)는 <code>spring.ai.model.embedding</code>이 됩니다. 직접 적은 값이 늘 이깁니다.</li>
+            <li><code>contexa.llm.enabled=false</code>면 Contexa의 LLM 자동 구성 전체가 꺼집니다.</li>
+          </ul>
 
-contexa:
+          <h3 id="dedicated-ollama">Contexa 전용 Ollama 연결</h3>
+          <p>Spring AI 스타터 설정 없이 Contexa 설정만으로 Ollama 채팅 모델을 만들 수 있습니다. 클래스패스에 Spring AI Ollama 라이브러리(<code>OllamaChatModel</code>)가 있어야 합니다.</p>
+          <pre><code class="language-yaml">contexa:
   llm:
     chat:
       ollama:
-        base-url: http://localhost:11434
-        model: qwen2.5:7b</code></pre>
-            </div>
+        base-url: http://localhost:11434   # 넣으면 켜짐
+        model: qwen2.5:7b                  # 비우면 qwen3:8b
+        keep-alive: 10m                    # 비우면 Ollama 기본</code></pre>
+          <ul>
+            <li><code>base-url</code>을 넣는 것이 스위치입니다. 채팅 모델 빈 <code>contexaOllamaChatModel</code>과, 같은 서버를 쓰는 임베딩 모델 빈 <code>contexaSharedOllamaEmbeddingModel</code>이 함께 생깁니다.</li>
+            <li>임베딩 모델 이름은 <code>contexa.llm.embedding.ollama.model</code>(비우면 <code>mxbai-embed-large</code>)입니다. 임베딩을 다른 서버에서 돌리려면 <code>contexa.llm.embedding.ollama.dedicated-runtime-enabled=true</code>와 <code>contexa.llm.embedding.ollama.base-url</code>을 넣습니다.</li>
+            <li><strong>주의:</strong> 이 빈의 연결 모델 ID는 <code>contexa.llm.chat.ollama.model</code>이 아니라 <code>spring.ai.ollama.chat.options.model</code>(없으면 빈 이름)에서 옵니다. 층 모델 이름으로 이 빈을 가리키려면 <a href="#bindings">연결에 이름 붙이기</a>로 모델 ID를 적어 주세요.</li>
+          </ul>
 
-            <div class="callout callout-info">
-              <p><strong>선택 순서:</strong> 명시적 모델 요청 &rarr; <code>analysisLevel</code> &rarr; <code>securityTaskType</code> &rarr; 명시적 <code>tier</code> &rarr; 기본 <code>ChatModel</code> 폴백. 런타임은 구성된 layer 1과 2만 가지므로, 더 높은 시맨틱 티어는 layer 2로 정규화됩니다.</p>
-            </div>
-          </section>
+          <h2 id="primary">기본 채팅 모델 고르기</h2>
+          <p>공급자를 여럿 넣었을 때 어느 모델을 기본 채팅 모델로 쓸지 <code>contexa.llm.selection.chat.mode</code>로 정합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>mode</code> 값</th><th>고르는 방법</th><th>언제 쓰나</th></tr></thead>
+            <tbody>
+              <tr><td><code>dynamic-priority</code>(기본)</td><td><code>priority</code>(기본 <code>openai,anthropic,ollama</code>)의 순서대로, 빈이 준비된 첫 공급자의 모델. 목록의 공급자가 하나도 준비되지 않았으면 아무 연결이나 씁니다.</td><td>여러 공급자를 두고 순서만 정할 때</td></tr>
+              <tr><td><code>fixed</code></td><td><code>priority</code>에 적은 공급자 하나의 모델만. 둘 이상 적으면 시작하지 않고, 그 공급자가 준비되지 않았으면 다른 공급자로 바꾸지 않고 시작이 실패합니다.</td><td>반드시 한 공급자만 써야 할 때</td></tr>
+              <tr><td><code>spring-primary</code></td><td>Spring <code>@Primary</code> 표시가 된 연결. 연결이 하나뿐이면 그것. <code>@Primary</code>가 둘 이상이거나, 연결이 여럿인데 하나도 없으면 시작하지 않습니다.</td><td>앱이 이미 <code>@Primary</code> 채팅 모델을 정해 두었을 때</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>값은 소문자와 하이픈으로 씁니다.</strong> 기본 채팅 모델 빈을 만드는 조건이 <code>dynamic-priority</code> · <code>fixed</code> · <code>spring-primary</code> 표기와 비교합니다. 대문자 열거형 이름(<code>DYNAMIC_PRIORITY</code>, <code>SPRING_PRIMARY</code>)으로 쓰면 설정은 받아들여지지만 조건이 맞지 않아 기본 채팅 모델 빈이 만들어지지 않습니다.
+          </div>
+          <pre><code class="language-yaml">contexa:
+  llm:
+    selection:
+      chat:
+        mode: fixed
+        priority: anthropic</code></pre>
+          <p><code>priority</code>가 비어 있을 때만 옛 설정 <code>contexa.llm.chat-model-priority</code>를 읽습니다(폐기 예정).</p>
 
-          <!-- Related -->
-          <section class="docs-section">
-            <h2 id="related">관련 문서</h2>
-            <div class="related-links">
-              <div class="related-links-grid">
-                <a href="../../../docs/reference/core/llm-orchestrator.html" class="related-link-card">
-                  <h3>LLM Orchestrator</h3>
-                  <p>각 요청에 대해 모델을 선택하기 위해 ModelSelectionStrategy를 사용합니다.</p>
-                </a>
-                <a href="../../../docs/reference/core/pipeline.html" class="related-link-card">
-                  <h3>AI Pipeline</h3>
-                  <p>Pipeline 실행기는 오케스트레이터를 통해 모델 시스템을 사용합니다.</p>
-                </a>
-              </div>
-            </div>
-          </section>
+          <h2 id="bindings">연결에 이름 붙이기(bindings)</h2>
+          <p>Contexa는 시작할 때 채팅 · 임베딩 모델 빈마다 연결을 하나씩 만듭니다. 설정이 없어도 아래처럼 알아냅니다.</p>
+          <ul>
+            <li><strong>공급자:</strong> 빈 클래스와 빈 이름에 든 말로 정합니다. <code>ollama</code> → ollama, <code>anthropic</code> · <code>claude</code> → anthropic, <code>openai</code> · <code>azureopenai</code> → openai, <code>gemini</code> · <code>vertex</code> → gemini, <code>mistral</code> → mistral, <code>bedrock</code> → bedrock, <code>huggingface</code> · <code>hf</code> → huggingface, 그 밖은 <code>spring</code>.</li>
+            <li><strong>모델 ID:</strong> 채팅은 <code>spring.ai.openai.chat.options.model</code>(Azure는 <code>spring.ai.azure.openai.chat.options.deployment-name</code> · <code>.model</code>), <code>spring.ai.anthropic.chat.options.model</code>, <code>spring.ai.ollama.chat.options.model</code>. 임베딩은 <code>spring.ai.openai.embedding.options.model</code>(Azure 포함) · <code>spring.ai.ollama.embedding.options.model</code>. 값이 없으면 빈 이름입니다.</li>
+            <li>연결은 빈 이름 · 런타임 ID · 모델 ID · 별칭 가운데 어느 것으로도 찾을 수 있습니다.</li>
+          </ul>
+          <p>이름을 바꾸거나 더하려면 <code>contexa.llm.bindings.chat.&lt;ID&gt;</code>(임베딩은 <code>.embedding.&lt;ID&gt;</code>)를 씁니다. <code>&lt;ID&gt;</code>가 빈 이름과 같거나 <code>bean-name</code>이 빈 이름과 같으면 그 빈의 연결이 되고, <code>&lt;ID&gt;</code>가 런타임 ID가 됩니다.</p>
+          <pre><code class="language-yaml">contexa:
+  llm:
+    bindings:
+      chat:
+        contexaOllamaChatModel:        # 키 = 빈 이름
+          model-id: qwen2.5:7b         # 이 이름으로 찾게 함
+          aliases: [local-small]       # 더 붙일 이름
+          # provider: ollama             # 비우면 위 규칙으로 정함
+          # primary: true                # spring-primary 선택에서 이 연결을 고름
+          # enabled: false               # 이 설정을 쓰지 않음</code></pre>
+          <ul>
+            <li>같은 이름(선택자)이 두 연결에 걸리면 시작하지 않습니다(<code>Duplicate chat runtime selector '…'</code>). 빈 이름 · 런타임 ID · 모델 ID · 별칭을 겹치지 않게 두세요.</li>
+            <li><code>bean-name</code>이 가리키는 빈이 없으면 WARN 로그를 남기고 그 설정을 건너뜁니다.</li>
+          </ul>
 
+          <h2 id="layer-models">층(1차 · 2차) 모델 정하기</h2>
+          <p>층 모델은 <code>contexa.security.tiered.llm.layer1.model</code> · <code>layer2.model</code>로 정하고, 비워 두면 기본 채팅 모델을 씁니다. 층마다 <code>backup.model</code>도 둘 수 있습니다. 보안 판정 엔진에서 쓰는 방법은 <a href="../architecture/decision-engine.html#layer-models">판정 엔진: 층마다 다른 모델 쓰기</a>에 있고, 여기서는 이름이 실제 모델이 되는 규칙을 설명합니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>모델 이름이 실제 모델이 되는 규칙</strong>층 모델 · 명시한 모델 · 백업 모델 모두 같습니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">모델 이름</span><span class="dg-node-desc">예: <code>gpt-4o</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">질문 1</span><span class="dg-node-title">같은 이름을 가진 연결이 있나?</span><span class="dg-node-desc">빈 이름 · 런타임 ID · 모델 ID · 별칭 가운데 하나라도 같으면 있음</span></li>
+              <li class="dg-edge">없을 때만 ↓</li>
+              <li class="dg-node"><span class="dg-node-tag">질문 2</span><span class="dg-node-title">기본 채팅 모델을 복사할 수 있나?</span><span class="dg-node-desc">복사(<code>mutate()</code>)는 Spring AI 1.1.8 기준 OpenAI 채팅 모델은 되고, Anthropic · Ollama 채팅 모델은 안 됩니다</span></li>
+            </ol>
+            <div class="dg-compare">
+              <div class="dg-side dg-model"><p class="dg-side-title">연결이 있으면</p><ul><li>그 연결의 모델(그 공급자)로 보냅니다</li></ul></div>
+              <div class="dg-side dg-model"><p class="dg-side-title">복사할 수 있으면</p><ul><li>기본 채팅 모델과 같은 공급자 · 설정으로 모델 이름만 바꿔 보냅니다</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">둘 다 아니면</p><ul><li>층 모델: 애플리케이션이 시작하지 않습니다</li><li>명시한 모델 · 백업 모델: 다음 후보로 내려갑니다</li></ul></div>
+            </div>
+          </figure>
+          <p>공급자를 섞으려면 층 모델 이름을 각 연결의 모델 ID와 같게 둡니다. 아래는 1층은 Ollama, 2층과 기본 채팅 모델은 OpenAI로 두는 예입니다(스타터 <code>spring-ai-starter-model-openai</code> · <code>spring-ai-starter-model-ollama</code>를 함께 넣음).</p>
+          <pre><code class="language-yaml">spring:
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        options:
+          model: gpt-4o-mini        # OpenAI 연결의 모델 ID
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: qwen2.5:7b         # Ollama 연결의 모델 ID
+contexa:
+  llm:
+    selection:
+      chat:
+        priority: openai,ollama     # 기본 채팅 모델은 OpenAI
+  security:
+    tiered:
+      llm:
+        layer1:
+          model: qwen2.5:7b         # Ollama 연결과 같은 이름 → Ollama
+        layer2:
+          model: gpt-4o-mini        # OpenAI 연결과 같은 이름 → OpenAI</code></pre>
+          <ul>
+            <li><strong>이름이 어느 연결과도 맞지 않으면</strong> 기본 채팅 모델의 복사본이 그 이름을 그대로 그 공급자에 보냅니다. 예를 들어 기본 채팅 모델이 OpenAI인데 층 모델을 <code>qwen2.5:7b</code>로 두고 맞는 연결이 없으면, OpenAI에 <code>qwen2.5:7b</code>를 요청하게 됩니다.</li>
+            <li><strong>시작할 때 검사합니다.</strong> 층 모델(<code>layer1.model</code> · <code>layer2.model</code>)을 만들 수 없으면 <code>… cannot be used: no chat runtime binding has this model id and the primary chat model cannot be copied with it …</code>로 시작을 멈춥니다. 백업 모델은 시작할 때 검사하지 않습니다.</li>
+            <li><code>contexa.security.tiered.llm.tiered.layer1.timeout-ms</code> · <code>layer2.timeout-ms</code>는 <code>stream()</code>의 층 제한 시간에만 쓰입니다(<a href="llm-orchestrator.html#limits">LLM 호출하기</a>). 보안 판정의 1차 · 2차 제한 시간은 다른 설정입니다(<a href="../architecture/decision-engine.html#settings">판정 엔진 설정</a>).</li>
+          </ul>
+
+          <h2 id="request-order">요청마다 모델이 정해지는 순서</h2>
+          <p>호출마다 모델 고르기 전략(<code>DynamicModelSelectionStrategy</code>)이 아래 순서로 정합니다.</p>
+          <ol>
+            <li><strong>명시한 모델:</strong> <code>ExecutionContext.preferredModel</code>, 없으면 메타데이터 <code>requestedModelId</code> → <code>preferredModel</code> → <code>modelId</code>. 메타데이터 <code>runtimeModelId</code>는 고르기 전에 지워지므로 입력으로 쓰이지 않습니다. 만들 수 없는 모델이면 실패를 기록하고 다음 단계로 내려갑니다.</li>
+            <li><strong>층 모델:</strong> <code>analysisLevel</code> → <code>securityTaskType</code> → <code>tier</code> 순서로 층을 정합니다. 1 이하는 1층, 2 이상은 2층입니다. 그 층의 모델이 비어 있으면 4로 갑니다.</li>
+            <li><strong>백업 모델:</strong> 층 모델을 만들 수 없을 때 그 층의 <code>backup.model</code></li>
+            <li><strong>기본 채팅 모델:</strong> 늘 마지막 후보. 아무 모델도 없으면 <code>null</code>을 돌려주고 호출은 오류로 끝납니다. 고르는 중 예외가 나면 <code>ModelSelectionException</code>입니다.</li>
+          </ol>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>modelSelectionSource</code> 값</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>explicit_model</code></td><td>명시한 모델</td></tr>
+              <tr><td><code>analysis_level:NORMAL</code> 등</td><td><code>analysisLevel</code>로 정한 층 모델</td></tr>
+              <tr><td><code>security_task_type:FORENSIC_ANALYSIS</code> 등</td><td>작업 종류로 정한 층 모델</td></tr>
+              <tr><td><code>tier:2</code> 등</td><td><code>tier</code>로 정한 층 모델</td></tr>
+              <tr><td>위 값 뒤에 <code>:backup</code></td><td>그 층의 백업 모델</td></tr>
+              <tr><td><code>primary_chat_model</code></td><td>기본 채팅 모델</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="check">확인하기</h2>
+          <p>모델을 고르면 그 호출의 <code>ExecutionContext</code> 메타데이터에 결과가 남습니다(<a href="llm-orchestrator.html#check">호출 결과 확인하기</a>에는 호출 시간 · 토큰 수도 있습니다).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>키</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>requestedModelId</code></td><td>명시한 모델 이름(있을 때)</td></tr>
+              <tr><td><code>requestedModelSourceKey</code></td><td>그 이름을 읽은 곳(예: <code>executionContext.preferredModel</code>, <code>executionContext.metadata.modelId</code>)</td></tr>
+              <tr><td><code>selectedModelId</code></td><td>최종으로 고른 모델 ID</td></tr>
+              <tr><td><code>selectedModelProvider</code></td><td>그 모델의 공급자(알 수 있을 때)</td></tr>
+              <tr><td><code>runtimeModelId</code></td><td><code>selectedModelId</code>와 같은 값(이 키를 읽는 쪽을 위한 복사본)</td></tr>
+              <tr><td><code>modelSelectionSource</code></td><td>고른 이유(위 표)</td></tr>
+              <tr><td><code>modelSelectionFallbackUsed</code></td><td>명시한 모델이나 층 모델 대신 아래 후보를 썼으면 <code>true</code></td></tr>
+              <tr><td><code>modelSelectionCandidates</code></td><td>시도한 모델 ID 목록(순서대로)</td></tr>
+              <tr><td><code>modelSelectionFailure</code></td><td>고르지 못한 이유</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>연결 목록 보기:</strong> <code>LlmRuntimeCatalog.getChatBindings()</code>, 등록된 모델은 <code>DynamicModelRegistry.getAllModels()</code> · <code>getModelsByProvider("openai")</code>, 모델 하나의 정보는 <code>DynamicModelSelectionStrategy.getModelCapabilities(name)</code>.</li>
+            <li><strong>로그:</strong> 준비되지 않은 연결은 WARN <code>LLM runtime provider '…' binding '…' is not ready</code>, 쓸 수 없는 명시 모델은 WARN <code>Requested model … not available</code>로 남습니다.</li>
+          </ul>
+
+          <h2 id="embedding">임베딩 모델 고르기</h2>
+          <p>임베딩 모델은 문서를 벡터로 바꿀 때 씁니다(<a href="rag.html">RAG</a>). 벡터 저장소의 차원이 임베딩 모델 하나에 묶이므로, 임베딩은 공급자 하나로 고정합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>contexa.llm.selection.embedding.mode</code></th><th>고르는 방법</th></tr></thead>
+            <tbody>
+              <tr><td><code>fixed</code>(기본)</td><td><code>priority</code>(기본 <code>openai</code>)에 적은 공급자 하나. 둘 이상 적으면 시작하지 않습니다. 그 공급자의 연결이 준비되지 않았으면 다른 임베딩 연결을 씁니다.</td></tr>
+              <tr><td><code>spring-primary</code></td><td><code>@Primary</code> 임베딩 연결(채팅과 같은 규칙)</td></tr>
+              <tr><td><code>dynamic-priority</code></td><td>지원하지 않습니다. 고르면 시작할 때 실패합니다.</td></tr>
+            </tbody>
+          </table></div>
+          <p>차원을 맞추는 방법과 시작할 때의 차원 검사는 <a href="rag.html#prepare">RAG: 준비</a>에 있습니다.</p>
+
+          <h2 id="capabilities">공급자별 기능 설정</h2>
+          <p>모델마다 받는 옵션이 다릅니다. Contexa가 옵션을 맞출 때(<a href="llm-orchestrator.html#provider-options">공급자별 옵션</a>) 쓰는 모델 목록을 바꿀 수 있습니다. 목록은 정규식을 쉼표로 이은 것이고, 모델 ID 전체가 맞아야 합니다.</p>
+          <ul>
+            <li><code>contexa.llm.model-capabilities.openai.max-completion-token-patterns</code>: <code>max_completion_tokens</code>로 출력 길이를 보낼 OpenAI 모델. 기본 <code>gpt-5(?:[.-].*)?,o\d+(?:[.-].*)?</code>.</li>
+            <li><code>contexa.llm.model-capabilities.openai.default-sampling-only-patterns</code>: <code>temperature</code> · <code>topP</code>를 빼고 보낼 OpenAI 모델. 기본은 위와 같은 목록.</li>
+            <li><code>contexa.llm.model-capabilities.anthropic.default-sampling-only-patterns</code>: 샘플링 값을 빼고 보낼 Claude 모델. 기본은 코드에 정해진 Claude 모델 목록입니다.</li>
+            <li><code>contexa.llm.model-capabilities.anthropic.thinking</code>: Claude 모델별로 받는 생각(thinking) · effort 표. 적으면 기본 표를 대신합니다.</li>
+            <li><code>contexa.llm.model-capabilities.anthropic.system-prompt-cache</code>(기본 <code>true</code>): 캐시 설정이 없을 때 시스템 프롬프트를 캐시할지.</li>
+            <li><code>contexa.llm.model-capabilities.ollama.disable-thinking-patterns</code>: 생각을 끄고 보낼 Ollama 모델(기본 없음).</li>
+          </ul>
+          <p>OpenAI · Ollama 목록과 Anthropic 샘플링 목록은 같은 이름의 JVM 시스템 속성이나 환경 변수(예: <code>CONTEXA_LLM_MODEL_CAPABILITIES_OPENAI_MAX_COMPLETION_TOKEN_PATTERNS</code>)가 있으면 그것을 먼저 씁니다.</p>
+
+          <h2 id="settings">자주 바꾸는 설정</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.llm.selection.chat.mode</code></td><td><code>dynamic-priority</code></td><td>기본 채팅 모델 고르는 방법</td><td>한 공급자만 쓰거나(<code>fixed</code>) 앱의 <code>@Primary</code>를 따를 때</td></tr>
+              <tr><td><code>contexa.llm.selection.chat.priority</code></td><td><code>openai,anthropic,ollama</code></td><td>공급자 순서(<code>fixed</code>면 하나)</td><td>기본 채팅 모델의 공급자를 바꿀 때</td></tr>
+              <tr><td><code>contexa.security.tiered.llm.layer1.model</code><br><code>contexa.security.tiered.llm.layer2.model</code></td><td>없음</td><td>층별 모델(비우면 기본 채팅 모델)</td><td>층마다 다른 모델을 쓸 때</td></tr>
+              <tr><td><code>contexa.llm.chat.ollama.base-url</code></td><td>없음</td><td>Contexa 전용 Ollama 연결 주소(넣으면 켜짐)</td><td>Spring AI 스타터 없이 Ollama를 쓸 때</td></tr>
+              <tr><td><code>contexa.llm.selection.embedding.priority</code></td><td><code>openai</code></td><td>임베딩 공급자(하나)</td><td>임베딩을 Ollama로 바꿀 때</td></tr>
+            </tbody>
+          </table></div>
+          <p>모델 연결 설정 전체는 <a href="../../install/configuration/ai.html">AI 모델 연결 설정</a>에 있습니다.</p>
+
+          <h2 id="extension">확장점</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>빈</th><th>직접 두면</th></tr></thead>
+            <tbody>
+              <tr><td><code>ModelSelectionStrategy</code></td><td>호출마다 모델을 고르는 규칙을 바꿉니다(기본 <code>DynamicModelSelectionStrategy</code>).</td></tr>
+              <tr><td><code>primaryChatModel</code>(이름)</td><td>기본 채팅 모델을 앱이 정합니다. Contexa의 기본 채팅 모델 고르기(<code>contexa.llm.selection.chat.mode</code>)는 건너뜁니다.</td></tr>
+              <tr><td><code>LlmRuntimeCatalog</code></td><td>연결 목록을 다른 곳에서 만듭니다(기본 <code>SpringLlmRuntimeCatalog</code>).</td></tr>
+              <tr><td><code>DynamicModelRegistry</code></td><td>모델 등록 · 캐시를 바꿉니다.</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="reference">레퍼런스</h2>
+          <details>
+            <summary><strong><code>LlmRuntimeCatalog</code></strong> — 연결 목록</summary>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>메서드</th><th>하는 일</th></tr></thead>
+              <tbody>
+                <tr><td><code>getChatBindings()</code> · <code>getEmbeddingBindings()</code></td><td>채팅 · 임베딩 연결 전부</td></tr>
+                <tr><td><code>findChatBinding(selector)</code> · <code>findEmbeddingBinding(selector)</code></td><td>런타임 ID · 빈 이름 · 모델 ID · 별칭으로 연결 찾기(<code>Optional</code>)</td></tr>
+                <tr><td><code>resolveChatModel(selector)</code> · <code>resolveEmbeddingModel(selector)</code></td><td>그 연결의 실제 모델 빈. 없으면 <code>IllegalStateException</code></td></tr>
+                <tr><td><code>resolvePrimaryChatModel(priority)</code> · <code>resolvePrimaryEmbeddingModel(priority)</code></td><td>쉼표로 적은 공급자 순서대로 준비된 모델. 목록의 공급자가 없으면 아무 연결이나</td></tr>
+                <tr><td><code>resolveProviderChatModel(provider)</code></td><td>그 공급자의 채팅 모델만(<code>fixed</code> 선택)</td></tr>
+                <tr><td><code>resolveSpringPrimaryChatModel()</code> · <code>resolveSpringPrimaryEmbeddingModel()</code></td><td><code>@Primary</code> 연결. 하나뿐이면 그것, <code>@Primary</code>가 여럿이거나 여럿 중 없으면 예외</td></tr>
+              </tbody>
+            </table></div>
+          </details>
+          <details>
+            <summary><strong><code>LlmRuntimeBinding</code></strong> — 연결 하나(바뀌지 않는 값)</summary>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>값</th><th>뜻</th></tr></thead>
+              <tbody>
+                <tr><td><code>runtimeId</code></td><td><code>contexa.llm.bindings</code>의 키, 설정이 없으면 빈 이름</td></tr>
+                <tr><td><code>beanName</code></td><td>모델 빈의 이름</td></tr>
+                <tr><td><code>provider</code></td><td>공급자(<code>openai</code> · <code>anthropic</code> · <code>ollama</code> 등)</td></tr>
+                <tr><td><code>modelId</code></td><td>설정의 <code>model-id</code>, 없으면 <code>spring.ai.&lt;공급자&gt;.…options.model</code>, 그것도 없으면 빈 이름</td></tr>
+                <tr><td><code>aliases</code></td><td>빈 이름 · 런타임 ID · 모델 ID와 설정의 별칭</td></tr>
+                <tr><td><code>type</code></td><td><code>CHAT</code> 또는 <code>EMBEDDING</code>(<code>LlmRuntimeType</code>)</td></tr>
+                <tr><td><code>primary</code></td><td>Spring <code>@Primary</code> 빈이거나 설정 <code>primary: true</code></td></tr>
+                <tr><td><code>source</code></td><td><code>configured</code>(설정으로 만든 연결) 또는 <code>spring</code></td></tr>
+              </tbody>
+            </table></div>
+            <p><code>canonicalId()</code>는 <code>modelId</code> → <code>runtimeId</code> → <code>beanName</code> 순서로 첫 값을, <code>matches(selector)</code>는 네 이름 가운데 하나가 같은지를 돌려줍니다.</p>
+          </details>
+          <details>
+            <summary><strong><code>ModelDescriptor</code></strong> — 등록된 모델의 설명</summary>
+            <p><code>@Data @Builder</code> 클래스입니다. 설명용 값이며, 호출 옵션을 만들 때는 쓰이지 않습니다.</p>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>값</th><th>뜻 · 기본값</th></tr></thead>
+              <tbody>
+                <tr><td><code>modelId</code> · <code>displayName</code></td><td>모델 ID와 표시 이름(등록할 때는 둘 다 정규 ID)</td></tr>
+                <tr><td><code>provider</code></td><td>공급자</td></tr>
+                <tr><td><code>tier</code></td><td>층 모델로 등록됐으면 1 또는 2, 아니면 <code>null</code></td></tr>
+                <tr><td><code>version</code></td><td>버전 글</td></tr>
+                <tr><td><code>capabilities</code></td><td><code>ModelCapabilities</code>: <code>streaming</code> true, <code>toolCalling</code> · <code>functionCalling</code> · <code>multiModal</code> false, <code>maxTokens</code> · <code>contextWindow</code> · <code>maxOutputTokens</code> 4096</td></tr>
+                <tr><td><code>options</code></td><td><code>ModelOptions</code>: <code>temperature</code> 0.7, <code>topP</code> 0.9, <code>topK</code> null, <code>repetitionPenalty</code> 1.0</td></tr>
+                <tr><td><code>status</code></td><td><code>AVAILABLE</code>(기본) 또는 <code>UNAVAILABLE</code>(<code>ModelStatus</code>)</td></tr>
+              </tbody>
+            </table></div>
+            <p><code>supportsAdvancedFeatures()</code>는 도구 호출 · 함수 호출 · 멀티모달 가운데 하나라도 켜져 있으면 <code>true</code>입니다.</p>
+          </details>
+          <details>
+            <summary><strong><code>DynamicModelRegistry</code></strong> — 모델 등록과 캐시</summary>
+            <p>시작할 때(<code>@PostConstruct</code>) 카탈로그의 채팅 연결을 모두 등록하고, 이어서 층 모델 · 백업 모델 이름을 그 층으로 등록합니다. 연결이 없는 층 모델 이름은 이름에 든 말로 공급자를 짐작해 적습니다(<code>llama</code> · <code>qwen</code> · <code>gemma</code> · <code>mistral</code> · <code>phi</code> · <code>exaone</code> · <code>codellama</code> · <code>deepseek</code> → ollama, <code>claude</code> → anthropic, <code>gpt</code> · <code>o1</code> · <code>davinci</code> → openai, <code>gemini</code> · <code>vertex</code> → gemini, <code>bedrock</code> → bedrock, 그 밖 <code>spring</code>). 생성자로 받는 <code>ApplicationContext</code>는 쓰지 않고, 카탈로그는 없어도 됩니다.</p>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>메서드</th><th>하는 일</th></tr></thead>
+              <tbody>
+                <tr><td><code>getModel(modelId)</code></td><td>이름에 맞는 연결의 모델(만든 것은 캐시). 연결이 없으면 기본 채팅 모델 복사본, 그것도 안 되면 <code>ModelSelectionException</code></td></tr>
+                <tr><td><code>getAllModels()</code></td><td>등록된 설명 전부(복사본)</td></tr>
+                <tr><td><code>getDescriptor(modelId)</code></td><td>모델을 만들지 않고 설명만</td></tr>
+                <tr><td><code>getModelsByProvider(provider)</code></td><td>그 공급자의 <code>AVAILABLE</code> 모델(대소문자 무시)</td></tr>
+                <tr><td><code>registerModel(descriptor)</code></td><td>등록하거나 합칩니다. 이미 있는 층 · 공급자 값은 그대로 두고, 상태는 새 값으로 바꿉니다</td></tr>
+                <tr><td><code>refreshModels()</code></td><td>설명 · 캐시 · 별칭을 지우고 다시 등록</td></tr>
+                <tr><td><code>updateModelStatus(modelId, status)</code></td><td>상태 바꾸기</td></tr>
+                <tr><td><code>shutdown()</code></td><td>종료할 때(<code>@PreDestroy</code>) 모두 지움</td></tr>
+              </tbody>
+            </table></div>
+          </details>
+          <details>
+            <summary><strong><code>ModelSelectionStrategy</code></strong> — 모델 고르기 계약</summary>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>메서드</th><th>하는 일</th></tr></thead>
+              <tbody>
+                <tr><td><code>selectModel(ExecutionContext)</code></td><td>이 호출의 <code>ChatModel</code>. 없으면 <code>null</code></td></tr>
+                <tr><td><code>getSupportedModels()</code></td><td>등록된 모델 ID 집합</td></tr>
+                <tr><td><code>isModelAvailable(modelName)</code></td><td>그 모델을 지금 만들 수 있는지</td></tr>
+              </tbody>
+            </table></div>
+            <p>기본 구현 <code>DynamicModelSelectionStrategy</code>는 레지스트리 · <code>TieredLLMProperties</code> · 기본 채팅 모델 세 가지를 받고, <code>getModelCapabilities(modelName)</code>로 등록된 모델의 정보(<code>modelId</code> · <code>provider</code> · <code>capabilities</code> · <code>contextWindow</code> · <code>maxTokens</code> · <code>streaming</code> · <code>tier</code> · <code>status</code>)를 돌려줍니다. 등록되지 않은 모델이면 빈 맵입니다.</p>
+          </details>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/core/pipeline.html" class="docs-nav-link prev">
+            <a href="llm-orchestrator.html" class="docs-nav-link prev">
               <span class="docs-nav-label">이전</span>
-              <span class="docs-nav-title">AI Pipeline</span>
+              <span class="docs-nav-title">LLM 호출하기</span>
             </a>
-            <a href="../../../docs/reference/core/rag.html" class="docs-nav-link next">
+            <a href="advisor.html" class="docs-nav-link next">
               <span class="docs-nav-label">다음</span>
-              <span class="docs-nav-title">RAG &amp; Vectors</span>
+              <span class="docs-nav-title">어드바이저: LLM 호출 앞뒤에 끼어들기</span>
             </a>
           </div>

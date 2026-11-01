@@ -1,0 +1,181 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Sealed Evidence and Official Verification</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-primary">contexa-iam</span>
+            </div>
+            <h1>Sealed Evidence and Official Verification</h1>
+            <p class="lead">How to look again, later, at exactly which prompt and facts a decision was made from. It covers what is sealed and when, how to confirm nothing changed, how to view evidence in the admin console and run official verification and replay, and retention and settings.</p>
+          </div>
+
+          <h2 id="overview">At a glance</h2>
+          <p>When the AI model makes a decision, Contexa seals <strong>the prompt exactly as sent to the model</strong>, its ingredients (request facts, canonical context, behavioral baseline, past decision records) and the decision result into one package with a hash and a signature. This package is the <strong>sealed evidence</strong>. Sealing never changes the decision and is stored separately after the decision is done.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The life of sealed evidence</strong>Sealing and storing are automatic, inspection runs periodically, and official verification and replay run when an administrator asks.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-model"><span class="dg-node-title">Capture the prompt</span><span class="dg-node-desc">When the decision prompt is built, the text the model will get and its original are kept</span></li>
+              <li class="dg-node"><span class="dg-node-title">Seal</span><span class="dg-node-desc">After the decision, seven sections become one package with a SHA-256 hash. With a signing key it is signed with HMAC-SHA256 and chained to the previous package's hash</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-title">Store</span><span class="dg-node-desc">Inserted (never updated) into the <code>sealed_evidence_package</code> table of the Contexa database (kept 90 days by default)</span></li>
+            </ol>
+            <p class="dg-outcomes-title">What the stored packages are used for</p>
+            <ul class="dg-outcomes">
+              <li class="dg-node"><span class="dg-node-title">Automatic inspection</span><span class="dg-node-desc">New packages compared with facts every 30 s</span></li>
+              <li class="dg-node"><span class="dg-node-title">Official verification</span><span class="dg-node-desc">Rule evaluation with 12 metrics (no model call)</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-title">Replay</span><span class="dg-node-desc">Ask the model again with another prompt bundle</span></li>
+            </ul>
+          </figure>
+
+          <h2 id="contents">What is sealed</h2>
+          <p>One package holds seven sections.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The seven sections of a sealed package</strong>The prompt is kept both as the uncompressed original and as the text the model actually received, each with its hash.</figcaption>
+            <div class="dg-grid">
+              <div class="dg-node dg-request"><span class="dg-node-tag">1</span><span class="dg-node-title">Request facts</span><span class="dg-node-desc">Who did what to which resource</span></div>
+              <div class="dg-node dg-host"><span class="dg-node-tag">2</span><span class="dg-node-title">Authentication state</span><span class="dg-node-desc">Login method, MFA and so on</span></div>
+              <div class="dg-node"><span class="dg-node-tag">3</span><span class="dg-node-title">Canonical context</span><span class="dg-node-desc">Every fact the decision used (JSON)</span></div>
+              <div class="dg-node"><span class="dg-node-tag">4</span><span class="dg-node-title">Behavioral baseline summary</span><span class="dg-node-desc">A summary of usual behavior</span></div>
+              <div class="dg-node dg-store"><span class="dg-node-tag">5</span><span class="dg-node-title">Past decision record search</span><span class="dg-node-desc">Summaries and relevance of the records found</span></div>
+              <div class="dg-node dg-model"><span class="dg-node-tag">6</span><span class="dg-node-title">Prompt</span><span class="dg-node-desc">Original, text the model got, each hash, run information</span></div>
+              <div class="dg-node dg-challenge"><span class="dg-node-tag">7</span><span class="dg-node-title">Decision</span><span class="dg-node-desc">Action, risk score, reason codes, hypotheses, model output, retries</span></div>
+            </div>
+          </figure>
+          <p>Run information longer than 512 characters is kept as its length and hash only.</p>
+
+          <h2 id="when">When it is sealed</h2>
+          <ul>
+            <li><strong>Only decisions made by the AI model are sealed.</strong> A decision made without a model call has no prompt the model received, so nothing is sealed.</li>
+            <li>Requests without a user ID, failed processing and the paths <code>/actuator</code> · <code>/health</code> · <code>/.well-known/</code> · <code>/sse/</code> are not sealed.</li>
+            <li><strong>Sampling:</strong> the first 1,000 decisions after startup and after a prompt bundle change are all sealed, then 1% (<code>contexa.pqa.oss.sealed-evidence.full-capture-after-change</code>, <code>sample-percent</code>). Each server (node) counts on its own.</li>
+            <li>Sealing sits after enforcement (55) and before audit (60) in the decision steps (56), but the package is assembled and stored on a separate thread. If that thread falls behind, the overflowing packages are dropped and the decision is not affected.</li>
+            <li>A captured prompt waits at most 10 minutes (<code>snapshot-ttl</code>) for the decision to finish and be sealed.</li>
+          </ul>
+
+          <h2 id="integrity">Confirming nothing changed</h2>
+          <p>The package hash is SHA-256 over the seven sections, the prompt hashes, the schema number and more. With a signing key the package is schema 3: the tenant, the user, the sealing time and <strong>the previous package's hash</strong> are also hashed, and the hash is signed with HMAC-SHA256.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Result</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>VERIFIED</code></td><td>The recomputed hash matches and, for schema 3, so does the signature.</td></tr>
+              <tr><td><code>MISMATCH</code></td><td>The recomputed hash differs: the content changed after it was stored.</td></tr>
+              <tr><td><code>UNVERIFIABLE</code></td><td>The hash or a prompt hash is empty, or no key can check the signature.</td></tr>
+            </tbody>
+          </table></div>
+          <p>The <code>SEAL_INTEGRITY</code> check of the automatic inspection and official verification perform this check.</p>
+          <h3 id="signing-keys">Adding signing keys</h3>
+          <pre><code class="language-yaml">contexa:
+  security:
+    evidence:
+      signing:
+        keys:
+          k2026: ${CONTEXA_EVIDENCE_KEY}   # Base64, at least 32 bytes
+        active-key-id: k2026               # required with two or more keys</code></pre>
+          <ul>
+            <li>Without a key, a temporary key is made at startup and an ERROR is logged. Signatures made with it cannot be checked after a restart (<code>UNVERIFIABLE</code>).</li>
+            <li>When you rotate keys, keep the retired key in the list so old signatures can still be checked. With two or more keys and no <code>active-key-id</code>, or one not in the list, the application does not start.</li>
+            <li>The decision audit records (<code>audit_log</code>) are chained and signed by the same signer, and the security monitor of the admin console shows the result for each record. The result for sealed packages is shown on the inspection and official verification screens, not on the security monitor.</li>
+            <li>A sealed package holds the previous package's hash, but nothing walks the chain to detect that a previous package was deleted.</li>
+          </ul>
+
+          <h2 id="console">Viewing evidence in the admin console</h2>
+          <p>Use the admin console (administrator role).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Screen · API</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td>Menu "Official Inspection"<br><code>/contexa/admin/prompt-quality/runtime-evidence</code></td><td>Search sealed packages and open one.</td></tr>
+              <tr><td><code>GET /contexa/admin/api/prompt-quality/runtime-evidence/search</code></td><td>Package search (packageId, tenantId, userId, resourceUrl, resourceId, httpMethod, from, to, page, size)</td></tr>
+              <tr><td><code>GET /contexa/admin/api/prompt-quality/runtime-evidence/{packageId}</code></td><td>One package (summary, whether the prompt was captured, preview, sealed content)</td></tr>
+              <tr><td>Menu "Sealed Prompts"<br><code>/contexa/admin/prompt-inspection/packages/{packageId}</code></td><td>One package with its inspection result. It has a "Replay with a bundle" section.</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="official-verification">Official verification</h2>
+          <p>Official verification takes one sealed package and evaluates, with 12 metrics, <strong>whether that decision's prompt carried what the judgment needed</strong>. The evaluation uses rules and does not call the AI model. It first checks the package's integrity, then redraws the context sections of the prompt from the sealed canonical context and compares them with the sealed original (deterministic replay).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Metric</th><th>What it checks</th></tr></thead>
+            <tbody>
+              <tr><td><code>EIR</code></td><td>Do the user, authentication, authority, resource and action of the request link into one security event?</td></tr>
+              <tr><td><code>CCR</code></td><td>Can the information the judgment needs be told apart from what is missing?</td></tr>
+              <tr><td><code>CCSR</code></td><td>Do values with the same meaning in the input never conflict?</td></tr>
+              <tr><td><code>PFR</code></td><td>Does the input carry every material needed to detect an attack?</td></tr>
+              <tr><td><code>MTR</code></td><td>Can the input record, hashes and contract version be traced?</td></tr>
+              <tr><td><code>COR</code></td><td>Do RAG and outside context stay out of the instructions and out-of-scope grounds?</td></tr>
+              <tr><td><code>RAP</code></td><td>Is RAG evidence used only within the authorized scope and placed safely?</td></tr>
+              <tr><td><code>RPI</code></td><td>Does reverification or earlier-round information never contaminate the current judgment?</td></tr>
+              <tr><td><code>BMA</code></td><td>Can the judgment know the baseline's trust level and limits?</td></tr>
+              <tr><td><code>USNS</code></td><td>Can subtle signals that differ from the user's baseline be seen?</td></tr>
+              <tr><td><code>BSR</code></td><td>Can the session flow and behavior change be judged as a normal exception or an attack sign?</td></tr>
+              <tr><td><code>PRE</code></td><td>Is the target an actual protected resource?</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="run-verification">Running official verification</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>API</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>POST /contexa/admin/api/prompt-quality/verification/runtime-runs?packageId=...</code></td><td>Starts official verification.</td></tr>
+              <tr><td><code>GET .../verification/runtime-runs/package/{packageId}/execution-status</code></td><td>Progress</td></tr>
+              <tr><td><code>GET .../verification/runtime-runs/package/{packageId}</code></td><td>Result (sub-paths such as <code>/summary</code> and <code>/failure-details</code>)</td></tr>
+              <tr><td><code>POST .../verification/runtime-runs/package/{packageId}/reverify</code></td><td>Verify again</td></tr>
+            </tbody>
+          </table></div>
+          <p>When a package's verification makes no progress for 15 minutes, the next request marks that run as failed so it can run again (<code>contexa.pqa.official-verification.stale-execution-timeout</code>).</p>
+
+          <h2 id="replay">Replay: asking again with another prompt bundle</h2>
+          <p>Replay asks the same decision again with another prompt bundle, from the sealed inputs (request facts, authentication state, baseline summary, past records, canonical context). Use it to see how decisions on the same events would change before you put a new bundle into use.</p>
+          <ul>
+            <li>On the "Sealed Prompts" detail screen, choose a prompt bundle and Layer 2 models under "Replay with a bundle" and confirm.</li>
+            <li>API: <code>POST /contexa/admin/api/sealed-decisions/{requestId}/replay</code> or <code>POST /contexa/admin/api/sealed-decisions/packages/{packageId}/replay</code>, body <code>{"bundleVersion", "secondPassModels", "userBaseline", "organizationBaseline"}</code>, at most 3 Layer 2 models. The <code>{requestId}</code> in the path is the request (correlation) ID of the sealed decision. The prompt bundles that can run: <code>GET /contexa/admin/api/sealed-decisions/replay-bundles</code>.</li>
+            <li>Layer 1 is asked once; if it answers ESCALATE, Layer 2 is asked for each chosen model. If Layer 1 could not read past records, Layer 2 is not asked.</li>
+            <li><strong>The AI model is really called, so it costs money.</strong> The result is not applied, learned or sealed; only the audit record <code>SEALED_DECISION_REPLAYED</code> is written. The time limit is 3 minutes.</li>
+            <li>No sealed decision for that request ID or package gives 404; a prompt bundle this build does not run, or a bad request, gives 400; no decision pipeline gives 503.</li>
+          </ul>
+
+          <h2 id="retention">Retention</h2>
+          <ul>
+            <li>A package expires 90 days after sealing (<code>contexa.pqa.oss.sealed-evidence.retention.period</code>) and is deleted every day at 03:30.</li>
+            <li>A package whose last inspection result is PASS or NOT_APPLICABLE and that no official verification used is deleted after 30 days (<code>retention.clean-period</code>).</li>
+          </ul>
+
+          <h2 id="settings">Settings</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.evidence.signing.keys</code></td><td>none (temporary key + ERROR log)</td><td>Key ID → Base64 secret (at least 32 bytes)</td><td>Always in production (temporary-key signatures cannot be checked after a restart)</td></tr>
+              <tr><td><code>contexa.security.evidence.signing.active-key-id</code></td><td>none (the only key, if one)</td><td>The key for new signatures</td><td>When rotating keys</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.capture-enabled</code></td><td><code>true</code></td><td>Turns sealing on</td><td>To turn sealing off</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.sample-percent</code></td><td><code>1</code></td><td>Usual sealing rate (1–100)</td><td>To seal more or less (trades storage)</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.full-capture-after-change</code></td><td><code>1000</code></td><td>Decisions all sealed after startup or a prompt bundle change (per node)</td><td>To see more or fewer decisions after a prompt bundle change</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.snapshot-ttl</code></td><td><code>10m</code></td><td>How long a captured prompt waits to be sealed</td><td>When decisions take over 10 minutes</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.max-pending-snapshots</code><br><code>contexa.pqa.oss.sealed-evidence.max-completed-snapshots</code></td><td><code>1000</code> / <code>1000</code></td><td>Upper limit of captures held in memory</td><td>When captures are dropped under load</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.enabled</code></td><td><code>true</code></td><td>Turns retention deletes on</td><td><code>false</code> to keep everything</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.period</code></td><td><code>90d</code></td><td>Retention</td><td>When your retention policy differs</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.clean-period</code></td><td><code>30d</code></td><td>Retention of packages without problems</td><td>When your retention policy differs</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.cleanup-cron</code></td><td><code>0 30 3 * * *</code></td><td>When deletes run</td><td>To move the cleanup time</td></tr>
+              <tr><td><code>contexa.pqa.official-verification.stale-execution-timeout</code></td><td><code>15m</code></td><td>When a stalled official verification may run again</td><td>When official verification runs long</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="requirements">When it is on, and extension points</h2>
+          <ul>
+            <li>Sealing is on by default when <code>contexa-iam</code> is on the classpath and the Contexa database (<code>contexa.datasource.*</code>) is connected.</li>
+            <li>To sign another way (a key management service, an HSM and so on), declare an <code>EvidenceSigner</code> bean. Decision audit records and sealed packages both use that signer.</li>
+            <li>To keep packages elsewhere, declare a <code>SealedEvidencePackageRepository</code> bean; to choose yourself which packages to seal, declare a <code>SealedEvidenceCaptureSampling</code> bean.</li>
+          </ul>
+          <p>The automatic inspection that compares sealed prompts with facts is described in <a href="prompt-inspection.html">Prompt Governance and Inspection</a>.</p>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="prompt-inspection.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Prompt Governance and Inspection</span>
+            </a>
+            <a href="../agent/overview.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Agents as Security Subjects</span>
+            </a>
+          </div>

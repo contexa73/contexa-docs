@@ -1,0 +1,181 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">레퍼런스</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">봉인 증거와 공식 검증</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-primary">contexa-iam</span>
+            </div>
+            <h1>봉인 증거와 공식 검증</h1>
+            <p class="lead">판정이 어떤 프롬프트와 사실로 만들어졌는지를 나중에 그대로 다시 보는 방법을 설명합니다. 무엇을 언제 봉인하는지, 바뀌지 않았음을 어떻게 확인하는지, 관리 화면에서 증거를 보고 공식 검증 · 재생을 돌리는 방법, 보관 기간과 설정을 다룹니다.</p>
+          </div>
+
+          <h2 id="overview">한눈에 보기</h2>
+          <p>AI 모델이 판정을 내리면 Contexa는 <strong>모델에 보낸 그대로의 프롬프트</strong>와 그 재료(요청 사실, 표준 맥락, 행위 기준선, 과거 판정 기록), 그리고 판정 결과를 한 묶음으로 만들어 해시와 서명으로 봉인합니다. 이 묶음(증거 묶음)을 <strong>봉인 증거</strong>라고 합니다. 봉인은 판정을 바꾸지 않고, 판정이 끝난 뒤 따로 저장됩니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>봉인 증거의 일생</strong>봉인 · 저장은 자동이고, 검수는 주기적으로, 공식 검증 · 재생은 관리자가 요청할 때 돕니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-model"><span class="dg-node-title">프롬프트 포착</span><span class="dg-node-desc">판정 프롬프트가 만들어지는 순간 모델이 받을 글과 원본을 잡아 둡니다</span></li>
+              <li class="dg-node"><span class="dg-node-title">봉인</span><span class="dg-node-desc">판정 뒤 일곱 구역을 한 묶음으로 만들고 SHA-256 해시를 계산합니다. 서명 키가 있으면 HMAC-SHA256으로 서명하고 앞 증거 묶음의 해시와 연결합니다</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-title">저장</span><span class="dg-node-desc">Contexa DB의 <code>sealed_evidence_package</code> 표에 넣기만 합니다(기본 90일 보관)</span></li>
+            </ol>
+            <p class="dg-outcomes-title">저장된 증거 묶음으로 하는 일</p>
+            <ul class="dg-outcomes">
+              <li class="dg-node"><span class="dg-node-title">자동 검수</span><span class="dg-node-desc">30초마다 새 증거 묶음을 사실과 대조</span></li>
+              <li class="dg-node"><span class="dg-node-title">공식 검증</span><span class="dg-node-desc">지표 12개로 규칙 평가(모델 호출 없음)</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-title">재생</span><span class="dg-node-desc">다른 프롬프트 묶음으로 모델에 다시 묻기</span></li>
+            </ul>
+          </figure>
+
+          <h2 id="contents">무엇을 봉인하나</h2>
+          <p>증거 묶음 하나에는 일곱 구역이 들어갑니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>증거 묶음의 일곱 구역</strong>프롬프트는 압축 전 원본과 모델이 실제로 받은 글을 함께 담고, 각각의 해시도 남깁니다.</figcaption>
+            <div class="dg-grid">
+              <div class="dg-node dg-request"><span class="dg-node-tag">1</span><span class="dg-node-title">요청 사실</span><span class="dg-node-desc">누가 · 어떤 자원에 · 무엇을 했나</span></div>
+              <div class="dg-node dg-host"><span class="dg-node-tag">2</span><span class="dg-node-title">인증 상태</span><span class="dg-node-desc">로그인 방식, MFA 여부 등</span></div>
+              <div class="dg-node"><span class="dg-node-tag">3</span><span class="dg-node-title">표준 맥락</span><span class="dg-node-desc">판정에 쓰인 사실 전체(JSON)</span></div>
+              <div class="dg-node"><span class="dg-node-tag">4</span><span class="dg-node-title">행위 기준선 요약</span><span class="dg-node-desc">평소 행동의 요약</span></div>
+              <div class="dg-node dg-store"><span class="dg-node-tag">5</span><span class="dg-node-title">과거 판정 기록 검색</span><span class="dg-node-desc">찾은 기록의 요약과 관련도</span></div>
+              <div class="dg-node dg-model"><span class="dg-node-tag">6</span><span class="dg-node-title">프롬프트</span><span class="dg-node-desc">원본 · 모델이 받은 글 · 각 해시, 실행 정보</span></div>
+              <div class="dg-node dg-challenge"><span class="dg-node-tag">7</span><span class="dg-node-title">판정</span><span class="dg-node-desc">대응, 위험 점수, 근거 코드, 가설, 모델 출력, 재시도</span></div>
+            </div>
+          </figure>
+          <p>실행 정보 가운데 512자를 넘는 글은 길이와 해시만 남깁니다.</p>
+
+          <h2 id="when">언제 봉인하나</h2>
+          <ul>
+            <li><strong>AI 모델이 판정한 경우만 봉인합니다.</strong> 모델을 부르지 않은 판정은 모델이 받은 프롬프트가 없으므로 봉인하지 않습니다.</li>
+            <li>사용자 ID가 없는 요청, 실패한 처리, <code>/actuator</code> · <code>/health</code> · <code>/.well-known/</code> · <code>/sse/</code> 경로는 봉인하지 않습니다.</li>
+            <li><strong>표본:</strong> 애플리케이션 시작 직후와 프롬프트 묶음이 바뀐 직후의 판정 1,000건은 모두 봉인하고, 그 뒤에는 1%만 봉인합니다(<code>contexa.pqa.oss.sealed-evidence.full-capture-after-change</code>, <code>sample-percent</code>). 이 수는 서버(노드)마다 따로 셉니다.</li>
+            <li>봉인은 판정 처리 순서에서 집행(55) 다음, 감사(60) 앞(56)에 있지만, 증거 묶음을 조립 · 저장하는 일은 별도 스레드에서 합니다. 그 스레드가 밀리면 넘친 증거 묶음은 버리고, 판정에는 영향을 주지 않습니다.</li>
+            <li>포착한 프롬프트는 판정이 끝나 봉인될 때까지 최대 10분(<code>snapshot-ttl</code>) 기다립니다.</li>
+          </ul>
+
+          <h2 id="integrity">바뀌지 않았음을 확인하기</h2>
+          <p>증거 묶음의 해시는 일곱 구역, 프롬프트 해시들, 판 번호 등을 SHA-256으로 계산한 값입니다. 서명 키를 넣으면 증거 묶음은 판 3이 되어 테넌트 · 사용자 · 봉인 시각 · <strong>앞 증거 묶음의 해시</strong>까지 해시에 들어가고, HMAC-SHA256으로 서명됩니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>확인 결과</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>VERIFIED</code></td><td>다시 계산한 해시가 같고, 판 3이면 서명까지 맞습니다.</td></tr>
+              <tr><td><code>MISMATCH</code></td><td>다시 계산한 해시가 다릅니다. 저장 뒤 내용이 바뀌었습니다.</td></tr>
+              <tr><td><code>UNVERIFIABLE</code></td><td>해시나 프롬프트 해시가 비었거나, 서명을 확인할 키가 없습니다.</td></tr>
+            </tbody>
+          </table></div>
+          <p>자동 검수의 <code>SEAL_INTEGRITY</code> 검사와 공식 검증이 이 확인을 합니다.</p>
+          <h3 id="signing-keys">서명 키 넣기</h3>
+          <pre><code class="language-yaml">contexa:
+  security:
+    evidence:
+      signing:
+        keys:
+          k2026: ${CONTEXA_EVIDENCE_KEY}   # Base64, 32바이트 이상
+        active-key-id: k2026               # 키가 둘 이상이면 필수</code></pre>
+          <ul>
+            <li>키를 넣지 않으면 시작할 때 임시 키를 만들고 ERROR 로그를 남깁니다. 임시 키로 한 서명은 재시작 뒤 확인할 수 없습니다(<code>UNVERIFIABLE</code>).</li>
+            <li>키를 바꿀 때는 물러난 키를 목록에 남겨 두어야 옛 서명을 확인할 수 있습니다. 키가 둘 이상인데 <code>active-key-id</code>가 없거나 목록에 없으면 시작하지 않습니다.</li>
+            <li>판정 감사 기록(<code>audit_log</code>)도 같은 서명기로 연결 · 서명되며, 관리 콘솔의 보안 모니터가 기록마다 확인 결과를 보여 줍니다. 증거 묶음의 확인 결과는 보안 모니터가 아니라 검수 · 공식 검증 화면에서 봅니다.</li>
+            <li>증거 묶음은 앞 증거 묶음의 해시를 담지만, 앞 증거 묶음이 지워졌는지를 사슬을 따라가며 확인하는 기능은 없습니다.</li>
+          </ul>
+
+          <h2 id="console">관리 화면에서 증거 보기</h2>
+          <p>관리 콘솔(관리자 권한)에서 봅니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>화면 · API</th><th>하는 일</th></tr></thead>
+            <tbody>
+              <tr><td>메뉴 "공식검사"<br><code>/contexa/admin/prompt-quality/runtime-evidence</code></td><td>증거 묶음을 찾고 하나를 열어 봅니다.</td></tr>
+              <tr><td><code>GET /contexa/admin/api/prompt-quality/runtime-evidence/search</code></td><td>증거 묶음 검색(packageId, tenantId, userId, resourceUrl, resourceId, httpMethod, from, to, page, size)</td></tr>
+              <tr><td><code>GET /contexa/admin/api/prompt-quality/runtime-evidence/{packageId}</code></td><td>증거 묶음 하나(요약, 프롬프트 수집 여부, 미리보기, 봉인 내용)</td></tr>
+              <tr><td>메뉴 "봉인 프롬프트"<br><code>/contexa/admin/prompt-inspection/packages/{packageId}</code></td><td>증거 묶음 하나와 검수 결과. "번들로 재생" 구역이 있습니다.</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="official-verification">공식 검증</h2>
+          <p>공식 검증은 증거 묶음 하나를 골라 <strong>그 판정의 프롬프트가 판단에 필요한 재료를 제대로 담았는지</strong>를 지표 12개로 평가합니다. 평가는 규칙으로 하며 AI 모델을 부르지 않습니다. 시작할 때 증거 묶음의 무결성을 먼저 확인하고, 봉인된 표준 맥락으로 프롬프트의 맥락 구역을 다시 그려 봉인 원본과 같은지 대조합니다(결정적 재생).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>지표</th><th>무엇을 보나</th></tr></thead>
+            <tbody>
+              <tr><td><code>EIR</code></td><td>현재 요청의 사용자 · 인증 · 권한 · 리소스 · 행위가 하나의 보안 사건으로 연결되는가</td></tr>
+              <tr><td><code>CCR</code></td><td>판단에 필요한 정보와 부족한 정보를 구분할 수 있는가</td></tr>
+              <tr><td><code>CCSR</code></td><td>입력 안에서 같은 뜻의 값이 서로 충돌하지 않는가</td></tr>
+              <tr><td><code>PFR</code></td><td>공격 탐지에 필요한 판단 재료를 빠짐없이 전달하는가</td></tr>
+              <tr><td><code>MTR</code></td><td>입력 기록 · 해시 · 계약 버전을 추적할 수 있는가</td></tr>
+              <tr><td><code>COR</code></td><td>RAG와 외부 맥락이 지시문이나 권한 밖 근거로 섞이지 않는가</td></tr>
+              <tr><td><code>RAP</code></td><td>RAG 근거가 권한 범위 안에서만 쓰이고 안전하게 들어가는가</td></tr>
+              <tr><td><code>RPI</code></td><td>재검증 · 이전 라운드 정보가 현재 판단을 오염시키지 않는가</td></tr>
+              <tr><td><code>BMA</code></td><td>기준선의 신뢰 수준과 한계를 알고 판단할 수 있는가</td></tr>
+              <tr><td><code>USNS</code></td><td>사용자 기준선과 다른 미세한 변화 신호를 볼 수 있는가</td></tr>
+              <tr><td><code>BSR</code></td><td>세션 흐름 · 행동 변화가 정상 예외인지 공격 징후인지 판단할 수 있는가</td></tr>
+              <tr><td><code>PRE</code></td><td>검사 대상이 실제 보호 리소스인가</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="run-verification">공식 검증 돌리기</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>API</th><th>하는 일</th></tr></thead>
+            <tbody>
+              <tr><td><code>POST /contexa/admin/api/prompt-quality/verification/runtime-runs?packageId=...</code></td><td>공식 검증을 시작합니다.</td></tr>
+              <tr><td><code>GET .../verification/runtime-runs/package/{packageId}/execution-status</code></td><td>진행 상태</td></tr>
+              <tr><td><code>GET .../verification/runtime-runs/package/{packageId}</code></td><td>결과(<code>/summary</code>, <code>/failure-details</code> 등 하위 경로 있음)</td></tr>
+              <tr><td><code>POST .../verification/runtime-runs/package/{packageId}/reverify</code></td><td>다시 검증</td></tr>
+            </tbody>
+          </table></div>
+          <p>한 증거 묶음의 검증이 15분 동안 진행되지 않으면 다음 요청이 그 실행을 실패로 처리하고 다시 돌릴 수 있게 합니다(<code>contexa.pqa.official-verification.stale-execution-timeout</code>).</p>
+
+          <h2 id="replay">재생: 다른 프롬프트 묶음으로 다시 묻기</h2>
+          <p>재생은 봉인된 입력(요청 사실, 인증 상태, 기준선 요약, 과거 기록, 표준 맥락)으로 같은 판정을 다른 프롬프트 묶음에 다시 물어 봅니다. 새 프롬프트 묶음을 실제로 쓰기 전에 같은 사건에서 판정이 어떻게 달라지는지 확인할 때 씁니다.</p>
+          <ul>
+            <li>"봉인 프롬프트" 상세 화면의 "번들로 재생"에서 프롬프트 묶음과 2차 분석 모델을 고르고 확인 창을 거쳐 실행합니다.</li>
+            <li>API: <code>POST /contexa/admin/api/sealed-decisions/{requestId}/replay</code> 또는 <code>POST /contexa/admin/api/sealed-decisions/packages/{packageId}/replay</code>. 본문 <code>{"bundleVersion", "secondPassModels", "userBaseline", "organizationBaseline"}</code>, 2차 분석 모델은 최대 3개입니다. 경로의 <code>{requestId}</code>는 봉인된 판정의 요청(상관) ID입니다. 돌릴 수 있는 프롬프트 묶음 목록은 <code>GET /contexa/admin/api/sealed-decisions/replay-bundles</code>입니다.</li>
+            <li>1차 분석을 한 번 묻고, 답이 ESCALATE면 고른 모델마다 2차 분석을 묻습니다. 1차가 과거 기록을 읽지 못한 상태였으면 2차는 묻지 않습니다.</li>
+            <li><strong>AI 모델을 실제로 부르므로 비용이 듭니다.</strong> 결과는 적용 · 학습 · 봉인하지 않고, 감사 기록 <code>SEALED_DECISION_REPLAYED</code>만 남깁니다. 시간 한도는 3분입니다.</li>
+            <li>그 요청 ID · 증거 묶음의 봉인 판정이 없으면 404, 이 빌드가 돌리지 않는 프롬프트 묶음이거나 요청이 잘못되면 400, 판정 파이프라인이 없으면 503입니다.</li>
+          </ul>
+
+          <h2 id="retention">보관</h2>
+          <ul>
+            <li>증거 묶음은 봉인 시각부터 90일(<code>contexa.pqa.oss.sealed-evidence.retention.period</code>) 뒤 만료되고, 매일 03:30에 지웁니다.</li>
+            <li>마지막 검수 결과가 PASS 또는 NOT_APPLICABLE이고 공식 검증에 쓰이지 않은 증거 묶음은 30일(<code>retention.clean-period</code>) 뒤 지웁니다.</li>
+          </ul>
+
+          <h2 id="settings">설정</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.evidence.signing.keys</code></td><td>없음(임시 키 + ERROR 로그)</td><td>키 ID → Base64 비밀값(32바이트 이상)</td><td>운영에서는 반드시(임시 키 서명은 재시작 뒤 확인할 수 없음)</td></tr>
+              <tr><td><code>contexa.security.evidence.signing.active-key-id</code></td><td>없음(키가 하나면 그 키)</td><td>새 서명에 쓸 키</td><td>키를 바꿀 때</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.capture-enabled</code></td><td><code>true</code></td><td>봉인 켜기</td><td>봉인을 끌 때</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.sample-percent</code></td><td><code>1</code></td><td>평소 봉인 비율(1~100)</td><td>평소 봉인을 늘리거나 줄일 때(저장 용량과 맞바꿈)</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.full-capture-after-change</code></td><td><code>1000</code></td><td>시작 · 프롬프트 묶음 변경 뒤 모두 봉인할 판정 수(노드별)</td><td>프롬프트 묶음을 바꾼 뒤 더 많이 · 적게 볼 때</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.snapshot-ttl</code></td><td><code>10m</code></td><td>포착한 프롬프트가 봉인을 기다리는 최대 시간</td><td>판정이 10분 넘게 걸릴 때</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.max-pending-snapshots</code><br><code>contexa.pqa.oss.sealed-evidence.max-completed-snapshots</code></td><td><code>1000</code> / <code>1000</code></td><td>메모리에 잡아 두는 포착 수 상한</td><td>판정이 몰려 포착이 버려질 때</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.enabled</code></td><td><code>true</code></td><td>보관 삭제 켜기</td><td>지우지 않고 모두 보관하려면 <code>false</code></td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.period</code></td><td><code>90d</code></td><td>보관 기간</td><td>보관 정책이 다를 때</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.clean-period</code></td><td><code>30d</code></td><td>문제 없던 증거 묶음의 보관 기간</td><td>보관 정책이 다를 때</td></tr>
+              <tr><td><code>contexa.pqa.oss.sealed-evidence.retention.cleanup-cron</code></td><td><code>0 30 3 * * *</code></td><td>삭제 시각</td><td>지우는 시각을 옮길 때</td></tr>
+              <tr><td><code>contexa.pqa.official-verification.stale-execution-timeout</code></td><td><code>15m</code></td><td>멈춘 공식 검증을 다시 돌릴 수 있게 되는 시간</td><td>공식 검증이 오래 걸리는 환경</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="requirements">켜지는 조건과 확장점</h2>
+          <ul>
+            <li>봉인은 <code>contexa-iam</code>이 클래스패스에 있고 Contexa DB(<code>contexa.datasource.*</code>)가 연결되어 있으면 기본으로 켜집니다.</li>
+            <li>다른 서명 방식(키 관리 서비스, HSM 등)을 쓰려면 <code>EvidenceSigner</code> 빈을 선언합니다. 판정 감사 기록과 증거 묶음이 함께 그 서명기를 씁니다.</li>
+            <li>다른 저장소에 두려면 <code>SealedEvidencePackageRepository</code> 빈을, 봉인할 판정을 직접 고르려면 <code>SealedEvidenceCaptureSampling</code> 빈을 선언합니다.</li>
+          </ul>
+          <p>봉인된 프롬프트를 사실과 대조하는 자동 검수는 <a href="prompt-inspection.html">프롬프트 거버넌스와 검수</a>에서 설명합니다.</p>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="prompt-inspection.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">프롬프트 거버넌스와 검수</span>
+            </a>
+            <a href="../agent/overview.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">에이전트를 보안 주체로</span>
+            </a>
+          </div>

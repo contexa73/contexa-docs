@@ -1,0 +1,210 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Connecting Your Existing Login</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-common</span>
+            </div>
+            <h1>Connecting Your Existing Login (Authentication Bridge)</h1>
+            <p class="lead">How Contexa reads, on every request, the login, authorization and delegation information your application already has, and uses it as facts of a decision. It covers what the application must do, where and in which order Contexa reads, how to tell it about MFA, gateway headers, direct handoff and extension points.</p>
+          </div>
+
+          <h2 id="overview">At a glance</h2>
+          <p>When Contexa is on in its default mode (<code>@EnableAISecurity</code>, the application owns login: <code>HOST_OWNED</code>), your Spring Security keeps handling login. On every request Contexa reads the result through the <strong>authentication bridge</strong> (<code>BridgeResolutionFilter</code>) and makes three <strong>stamps</strong>, which become facts of the decision prompt.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>From login information to decision facts</strong>The bridge only reads. It does not change the application's login, session or response.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">Request</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">Application</span><span class="dg-node-title">Spring Security puts the logged-in user in the <code>SecurityContext</code></span><span class="dg-node-desc">The application's own authentication</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">The authentication bridge makes three stamps</span><span class="dg-node-desc">Authentication, authorization and delegation stamps + a coverage report, kept in the request attributes <code>ctxa.bridge.*</code></span></li>
+              <li class="dg-node dg-model"><span class="dg-node-title">Facts of the decision prompt</span><span class="dg-node-desc">Login method, MFA, authorities, delegated scope, and where each came from</span></li>
+            </ol>
+          </figure>
+
+          <h2 id="host-tasks">What the application must do</h2>
+          <ol>
+            <li><strong>Have Spring Security and your own <code>SecurityFilterChain</code>.</strong> Without your chain, Spring Boot's default security (every request authenticated) applies, and Contexa logs an error at startup to tell you.</li>
+            <li><strong>Put the logged-in user in the <code>SecurityContext</code> as an authenticated <code>Authentication</code>.</strong> The bridge makes stamps only when an authenticated (non-anonymous) <code>Authentication</code> is present. Otherwise it makes nothing, and protected methods (<code>@Protectable</code>) are refused.</li>
+            <li><strong>Tell it about MFA and the login method.</strong> Put a value such as <code>mfaVerified</code> on the <code>Authentication</code>'s details or principal; with OAuth2 or OIDC the token's <code>amr</code> claim is enough (<a href="#mfa">Telling it about MFA</a>).</li>
+            <li><strong>If a session object holds roles or delegation information, just match the key names.</strong> The bridge scans session attributes for the user object (<a href="#session-object">Finding the user in the session or request attributes</a>).</li>
+          </ol>
+          <div class="callout callout-info">
+            <strong>A legacy application without Spring Security.</strong> Add Spring Security, declare a chain that keeps your existing access rules (for example <code>anyRequest().permitAll()</code>), and in a filter of that chain put the user your existing login verified into the <code>SecurityContext</code>. Calling <a href="#handoff">direct handoff</a> alone records evidence for that request only and does not fill the <code>SecurityContext</code>, so it is not enough for <code>@Protectable</code>.
+          </div>
+
+          <h2 id="does-not">What the bridge does not do</h2>
+          <ul>
+            <li>When the application owns login (<code>HOST_OWNED</code>) it does not interfere with the application's authentication, authorization or session. It saves nothing to the session and writes no headers.</li>
+            <li>When your application owns login, the bridge filter is registered as a servlet filter with no order and runs <strong>after your Spring Security chain has finished</strong>. Controllers and <code>@Protectable</code> methods can read the stamps, but URL authorization inside your chain runs before they exist (Spring Boot's filter ordering). When Contexa owns login (<code>CONTEXA_OWNED</code>) it sits in Contexa's chain (after <code>SecurityContextHolderFilter</code> for session flows, after <code>BearerTokenAuthenticationFilter</code> for token flows).</li>
+            <li>The exception: the <a href="#mirror">user mirror</a> writes user rows to the Contexa database even when the application owns login.</li>
+          </ul>
+
+          <h2 id="order">Where and in which order it reads</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Stamp</th><th>Where it reads (order)</th><th>When several places answer</th></tr></thead>
+            <tbody>
+              <tr><td>Authentication stamp<br>(who, and how they logged in)</td><td><code>SecurityContext</code> → session → request attributes → headers</td><td>The <strong>first result</strong> with a user ID is used.</td></tr>
+              <tr><td>Authorization stamp<br>(what they may do)</td><td>All of <code>SecurityContext</code>, session, request attributes and headers</td><td><strong>All are merged.</strong> If allow (ALLOW) and deny (DENY) both appear, it is deny. If none answers, it is derived from the authentication stamp's authorities.</td></tr>
+              <tr><td>Delegation stamp<br>(who delegated what)</td><td>Access token → session → request attributes → headers → the agent's own account</td><td>The <strong>first result</strong> is used.</td></tr>
+            </tbody>
+          </table></div>
+          <p><code>@EnableAISecurity(authObjectLocation = ...)</code> only changes the order in which the authentication stamp tries the session, request attributes and headers (it turns none of them off). Each stamp records its source (<code>SECURITY_CONTEXT</code>, <code>SESSION</code>, <code>REQUEST_ATTRIBUTE</code>, <code>HEADER</code>, <code>EXPLICIT_HANDOFF</code> and so on), so the prompt carries where each fact came from.</p>
+
+          <h2 id="session-object">Finding the user in the session or request attributes</h2>
+          <p>When no user is found in the SecurityContext, the bridge looks for a user object in the session, then in the request attributes, in three steps.</p>
+          <ol>
+            <li><strong>The name you give.</strong> With <code>contexa.bridge.authentication.session.attribute</code> (for request attributes <code>contexa.bridge.authentication.request-attributes.attribute</code>) that attribute is looked at first and used at once when it holds a user ID.</li>
+            <li><strong>Candidate names.</strong> For the session <code>currentUser</code>, <code>authenticatedUser</code>, <code>sessionUser</code>, <code>userSession</code>, <code>principal</code>, <code>user</code>, <code>securityUser</code>, <code>authenticatedPrincipal</code>; for request attributes <code>currentUser</code>, <code>authenticatedUser</code>, <code>requestUser</code>, <code>principal</code>, <code>user</code>, <code>authenticatedPrincipal</code>, <code>authUser</code>.</li>
+            <li><strong>Auto-discovery.</strong> With <code>auto-discover</code> (on by default) every other attribute is scanned too.</li>
+          </ol>
+          <p>In steps 2 and 3 only objects with a user ID (<code>userId</code>, <code>username</code>, <code>id</code>, <code>loginId</code>, <code>email</code>) are candidates, and the one with the highest score below is used. When the session holds several objects that look like users, it is safer to give the name of step 1 or <code>object-type-name</code> (the class's full or simple name).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What the object has</th><th>Score</th></tr></thead>
+            <tbody>
+              <tr><td>A user ID</td><td>10 (without it, not a candidate)</td></tr>
+              <tr><td>The class named by <code>object-type-name</code></td><td>+8</td></tr>
+              <tr><td>Authorities (<code>roles</code>, <code>authorities</code>, <code>permissions</code>, <code>scopes</code>)</td><td>+4</td></tr>
+              <tr><td>A display name, a login method</td><td>+2 each</td></tr>
+              <tr><td>Assurance level, MFA flag, authentication time, extra attributes (<code>department</code>, <code>tenantId</code>, ...)</td><td>+1 each</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="flat-attributes">Putting values into request attributes one by one</h3>
+          <p>Instead of a user object you can put the values one by one into request attributes. The authentication stamp reads these names when no user object is found in the request attributes; the authorization and delegation stamps always read them. Put them in from one of your application's filters.</p>
+<pre><code class="language-java">request.setAttribute("ctxa.auth.principalId", user.getId());
+request.setAttribute("ctxa.auth.authenticated", true);
+request.setAttribute("ctxa.auth.authorities", "ROLE_USER,ROLE_FINANCE");
+request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Stamp</th><th>Request attribute names</th></tr></thead>
+            <tbody>
+              <tr><td>Authentication</td><td><code>ctxa.auth.principalId</code> (required), <code>displayName</code>, <code>authenticated</code>, <code>authorities</code>, <code>tenantId</code>, <code>organizationId</code>, <code>orgId</code>, <code>type</code>, <code>assurance</code>, <code>mfaCompleted</code>, <code>time</code></td></tr>
+              <tr><td>Authorization</td><td><code>ctxa.authz.effect</code>, <code>privileged</code>, <code>policyId</code>, <code>policyVersion</code>, <code>scopeTags</code>, <code>roles</code>, <code>authorities</code></td></tr>
+              <tr><td>Delegation</td><td><code>ctxa.delegation.enabled</code>, <code>agentId</code>, <code>objectiveId</code>, <code>objectiveFamily</code>, <code>objectiveSummary</code>, <code>allowedOperations</code>, <code>allowedResources</code>, <code>approvalRequired</code>, <code>privilegedExportAllowed</code>, <code>containmentOnly</code>, <code>expiresAt</code></td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>When <code>ctxa.auth.authenticated</code> is present and not true, the request has no user.</li>
+            <li>Several values, such as authorities, go in as one comma-separated text.</li>
+            <li>The names can be changed by settings (for example <code>contexa.bridge.authentication.request-attributes.flat-principal-id</code>). All of them are in the <a href="../../install/configuration/index-all.html#contexa-bridge">Settings Index</a>.</li>
+          </ul>
+
+          <h2 id="mfa">Telling it about MFA and the login method</h2>
+          <p>From the <code>SecurityContext</code>'s <code>Authentication</code> the details are read first, then the principal. If the object has a <code>claims</code> or <code>attributes</code> map (JWT claims, OAuth2 user attributes), that map is searched.</p>
+          <ol>
+            <li><strong>A value the application gives comes first.</strong> MFA completion is read from <code>mfa</code> · <code>mfaVerified</code> · <code>mfaCompleted</code> · <code>secondFactorVerified</code>, the login method from <code>authenticationType</code> · <code>authMethod</code> · <code>loginMethod</code> and others.</li>
+            <li><strong>Otherwise it is derived from the <code>amr</code> claim (RFC 8176)</strong>, with the source marked <code>DERIVED_FROM_AMR</code>.</li>
+          </ol>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>amr</code> value</th><th>Login method</th></tr></thead>
+            <tbody>
+              <tr><td><code>pwd</code></td><td>PASSWORD</td></tr>
+              <tr><td><code>otp</code>, <code>sms</code>, <code>tel</code></td><td>ONE_TIME_CODE</td></tr>
+              <tr><td><code>pop</code>, <code>hwk</code>, <code>swk</code></td><td>PASSKEY</td></tr>
+              <tr><td><code>face</code>, <code>fpt</code>, <code>iris</code>, <code>retina</code>, <code>vbm</code></td><td>BIOMETRIC</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>MFA rule:</strong> MFA is complete when <code>amr</code> holds <code>mfa</code> or two or more different methods. Example: <code>["pwd","otp"]</code> → MFA complete, method <code>PASSWORD+ONE_TIME_CODE</code>. <code>["otp","sms"]</code> → one method, so not MFA.</li>
+            <li><strong>Authentication time</strong> is read from <code>authenticationTime</code> · <code>authenticatedAt</code> · <code>loginTime</code> · <code>auth_time</code>. The token issue time (<code>iat</code>) is deliberately not used because it changes when a token is reissued.</li>
+            <li><strong>Assurance level</strong> is used only when <code>authenticationAssurance</code> · <code>authLevel</code> · <code>loa</code> · <code>acr</code> has a value (it is not derived from <code>amr</code>).</li>
+            <li>From the session, request attributes and headers <code>amr</code> is not interpreted; only MFA flags are read (<code>mfaVerified</code>, <code>ctxa.auth.mfaCompleted</code>, <code>X-Contexa-Mfa-Completed</code>).</li>
+          </ul>
+
+          <h2 id="headers">Passing it through gateway headers</h2>
+          <p>If an API gateway attaches user information as <code>X-Contexa-*</code> headers, turn header reading on. To prevent forgery it is <strong>off by default</strong>, and even when on, headers are trusted only when all of the following hold.</p>
+          <ul>
+            <li>The request came from a trusted proxy (<code>contexa.bridge.network.trusted-proxies</code>, IPs and CIDRs). With an empty list, or with the trusted proxy check (<code>contexa.bridge.network.trusted-proxy-validation-enabled</code>) off, headers are always refused.</li>
+            <li>The header's user ID is the user the application authenticated (<code>SecurityContext</code>), and the tenant and organization values match.</li>
+          </ul>
+          <pre><code class="language-yaml">contexa:
+  bridge:
+    network:
+      trusted-proxies: [10.0.0.0/8]
+    authentication:
+      headers:
+        enabled: true      # X-Contexa-Principal-Id, X-Contexa-Mfa-Completed, ...
+    authorization:
+      headers:
+        enabled: true      # X-Contexa-Authz-Effect, X-Contexa-Authz-Roles, ...
+    delegation:
+      headers:
+        enabled: true      # X-Contexa-Delegated, X-Contexa-Agent-Id, ...</code></pre>
+          <p>Contexa only reads these headers; it never writes them to responses.</p>
+
+          <h2 id="handoff">Direct handoff</h2>
+          <p>Your login code can tell Contexa about the user directly.</p>
+          <pre><code class="language-java">ContexaAuthBridge.handoff(request, response,
+        ContexaAuthHandoff.of(user, authorities, Map.of("department", "R&amp;D"))
+                .withAuthenticationType("PASSWORD+ONE_TIME_CODE")
+                .withMfaVerified(true));</code></pre>
+          <ul>
+            <li>It records authentication evidence for that request (source <code>EXPLICIT_HANDOFF</code>). If the bridge filter finds a different user in the same request, a conflict is marked.</li>
+            <li>When the application owns login (<code>HOST_OWNED</code>) it does not fill the <code>SecurityContext</code>. Only when Contexa owns login (<code>CONTEXA_OWNED</code>) does it fill the <code>SecurityContext</code> and save it to the session.</li>
+            <li>Without <code>@EnableAISecurity</code> it throws <code>IllegalStateException</code>; if no user ID can be determined, <code>IllegalArgumentException</code>.</li>
+          </ul>
+
+          <h2 id="coverage">Coverage: how much the bridge knew</h2>
+          <p>For every request the bridge computes how complete its information is and puts it in the prompt (<code>bridge &lt;level&gt;</code>), so the model knows what it does not know.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Level</th><th>Score</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>NONE</code></td><td>0</td><td>No authenticated user found</td></tr>
+              <tr><td><code>AUTHENTICATION_ONLY</code></td><td>40</td><td>Only who the user is</td></tr>
+              <tr><td><code>AUTHORIZATION_CONTEXT</code></td><td>75 (minus for each missing part)</td><td>Authorities and the authorization result too</td></tr>
+              <tr><td><code>DELEGATION_CONTEXT</code></td><td>90</td><td>Delegation information too</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="mirror">User mirror</h2>
+          <p>The bridge keeps a mirror row for an externally logged-in user in the Contexa database's user table, so the admin console and policies can refer to that user. The key is <code>brg_</code> + SHA-256 (authentication source, organization, user ID); the row has a random password and cannot be used to log in directly. When the same user comes again within 60 seconds (<code>contexa.bridge.sync.min-refresh-interval-seconds</code>) and nothing changed, the row is not written again. The email is read from the authentication attributes <code>email</code>, <code>mail</code> or <code>userEmail</code>; without one it is <code>&lt;key&gt;@shadow.contexa.local</code> (<code>contexa.bridge.sync.synthetic-email-domain</code>). To turn it off, set <code>contexa.bridge.sync.enabled=false</code>.</p>
+
+          <h2 id="settings">Settings you will change most</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.bridge.enabled</code></td><td><code>true</code></td><td>Turns the bridge filter on (when off, only direct handoff works)</td><td>To turn the bridge off (fewer decision facts)</td></tr>
+              <tr><td><code>contexa.bridge.ownership</code></td><td><code>HOST_OWNED</code> (<code>CONTEXA_OWNED</code> with <code>mode=FULL</code>)</td><td>Who owns login. When set, it wins over the annotation</td><td><code>CONTEXA_OWNED</code> when Contexa should own sign-in</td></tr>
+              <tr><td><code>contexa.bridge.populate-security-context</code></td><td><code>true</code></td><td>Under <code>CONTEXA_OWNED</code>, fills an empty SecurityContext with the user the bridge found (never under <code>HOST_OWNED</code>)</td><td><code>false</code> when Contexa owns sign-in but your application fills the SecurityContext</td></tr>
+              <tr><td><code>contexa.bridge.authentication.session.object-type-name</code></td><td>None</td><td>The class name of the session's user object (+8 score)</td><td>When the session holds several objects that look like users</td></tr>
+              <tr><td><code>contexa.bridge.authentication.session.auto-discover</code></td><td><code>true</code></td><td>Scan session attributes beyond the candidate names</td><td><code>false</code> to look only at the given and candidate names</td></tr>
+              <tr><td><code>contexa.bridge.authentication.prefer-security-context</code></td><td><code>true</code></td><td>With <code>false</code> the authentication stamp is made from the user object of the session, request attributes or headers instead of the <code>SecurityContext</code></td><td>To read session or header values first</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.mfa-keys</code></td><td><code>mfa, mfaVerified, mfaCompleted, secondFactorVerified</code></td><td>Names to look for the MFA completion flag</td><td>When your app keeps MFA completion under another name</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.amr-keys</code></td><td><code>amr</code></td><td>Name of the RFC 8176 values used to derive MFA and the login method</td><td>When tokens carry <code>amr</code> under another claim</td></tr>
+              <tr><td><code>contexa.bridge.authentication.session.attribute</code></td><td>none</td><td>The session attribute holding the user object (otherwise candidate names, then automatic discovery)</td><td>To name the session's user object</td></tr>
+              <tr><td><code>contexa.bridge.authentication.headers.enabled</code></td><td><code>false</code></td><td>Read gateway headers</td><td>When a gateway passes the user in headers (with trusted proxies)</td></tr>
+              <tr><td><code>contexa.bridge.network.trusted-proxies</code></td><td>none</td><td>Proxies whose headers and <code>X-Forwarded-For</code> are trusted</td><td>Always with headers</td></tr>
+              <tr><td><code>contexa.bridge.network.trusted-proxy-validation-enabled</code></td><td><code>true</code></td><td>The trusted proxy check. When off, header reading is always refused and the client IP is taken the legacy way, trusting <code>X-Forwarded-For</code> from anyone</td><td>Leave it on (turning it off lets clients forge their IP)</td></tr>
+              <tr><td><code>contexa.bridge.sync.synthetic-email-domain</code></td><td><code>shadow.contexa.local</code></td><td>The email domain given to a mirror user without an email</td><td>To match your company's email rules</td></tr>
+              <tr><td><code>contexa.bridge.sync.enabled</code></td><td><code>true</code></td><td>User mirror synchronization</td><td>To turn the user mirror sync off</td></tr>
+            </tbody>
+          </table></div>
+          <p>Every <code>contexa.bridge.*</code> setting (310) is in the <a href="../../install/configuration/index-all.html#contexa-bridge">Settings Index</a>.</p>
+
+          <h2 id="extension">Extension points</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Extension point</th><th>When to use it</th></tr></thead>
+            <tbody>
+              <tr><td><code>AuthBridge</code></td><td>To take the user from the request your own way. Declaring one bean replaces the default session, request attribute and header bridges.</td></tr>
+              <tr><td><code>AuthenticationStampResolver</code> · <code>AuthorizationStampResolver</code> · <code>DelegationStampResolver</code></td><td>To add or replace where stamps are made (order with <code>@Order</code>)</td></tr>
+              <tr><td><code>ContexaAuthBridgeHandler</code></td><td>To replace how direct handoff is handled</td></tr>
+              <tr><td><code>BridgeUserMirrorSyncService</code></td><td>To keep the user mirror differently</td></tr>
+              <tr><td><code>AgentClientDirectory</code></td><td>To tell which clients and accounts are approved agents (<a href="../agent/overview.html">Agent security</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="overview.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Common Contracts: Contexa Types in Your Code</span>
+            </a>
+            <a href="../autoconfigure/overview.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Auto-configuration: What Turns On and How to Turn It Off</span>
+            </a>
+          </div>

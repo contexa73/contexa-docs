@@ -1,157 +1,187 @@
-<!-- Breadcrumb -->
 <nav class="breadcrumb">
-  <a href="../../index.html">Home</a>
-  <span class="breadcrumb-separator">/</span>
-  <a href="../../docs/reference/index.html">Reference</a>
-  <span class="breadcrumb-separator">/</span>
-  <a href="overview.html">Autoconfigure</a>
-  <span class="breadcrumb-separator">/</span>
-  <span class="breadcrumb-current">AI Security Configuration</span>
-</nav>
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="overview.html">Auto-configuration</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Turning Contexa On and Security Modes</span>
+          </nav>
 
-<div class="docs-page-header">
-  <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
-    <span class="badge">contexa-common</span>
-    <span class="badge">contexa-autoconfigure</span>
-    <span class="badge">bootstrap</span>
-  </div>
-  <h1>AI Security Activation &amp; Bootstrapping</h1>
-  <p class="lead">Describes the inner workings of how <code>@EnableAISecurity</code>, <code>SecurityMode</code>, and <code>AiSecurityImportSelector</code> dynamically load and bootstrap the Contexa AI-Native Zero Trust infrastructure in legacy Spring Boot applications.</p>
-</div>
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-common</span>
+              <span class="badge badge-primary">contexa-autoconfigure</span>
+            </div>
+            <h1>Turning Contexa On and Choosing a Security Mode</h1>
+            <p class="lead">How to turn Contexa on with <code>@EnableAISecurity</code>, choose whether your application keeps owning login (<code>SANDBOX</code>) or hands it to Contexa (<code>FULL</code>), and check that it is on.</p>
+          </div>
 
-<section class="docs-section">
-  <h2>The @EnableAISecurity Annotation</h2>
-  <p><code>@EnableAISecurity</code> is the core annotation designed for seamless integration with legacy systems. Placing this annotation on a Spring Boot main configuration class (typically annotated with <code>@SpringBootApplication</code>) activates the entire Contexa AI security infrastructure.</p>
-  
-  <h3>Example Usage</h3>
-  <pre><code class="language-java">@SpringBootApplication
-@EnableAISecurity(
-    mode = SecurityMode.SANDBOX,
-    authObjectLocation = AuthObjectLocation.AUTO
-)
+          <h2 id="overview">At a glance</h2>
+          <p>The security mode decides who owns login. Whether decisions are actually enforced is decided separately by the <a href="#modes">enforcement mode</a>.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The two security modes</strong>The default is <code>SANDBOX</code>. If you set the authentication ownership (<code>contexa.bridge.ownership</code>) yourself, your value wins.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side dg-host"><p class="dg-side-title"><code>SANDBOX</code> → your application owns login (<code>HOST_OWNED</code>)</p><ul><li>Your Spring Security keeps login, sessions and URL access rules</li><li>Contexa builds no security chain</li><li>The authentication bridge reads the login information as decision facts</li><li>Decisions are enforced only on <code>@Protectable</code> methods</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title"><code>FULL</code> → Contexa owns login (<code>CONTEXA_OWNED</code>)</p><ul><li>Contexa builds the security chain (login, MFA, session)</li><li>Request-time filters enforce decisions at the URL level</li><li>The agent request gate, the <code>#ai</code> method security expressions and the Contexa OAuth2 authorization server are on</li><li>The Contexa database can become the application's default DataSource</li></ul></div>
+            </div>
+          </figure>
+
+          <h2 id="prepare">Before you start</h2>
+          <ol>
+            <li><strong>One starter:</strong> <code>ai.ctxa:spring-boot-starter-contexa</code>. It brings Spring Security and the OAuth2 resource server, client and authorization server libraries. It does not bring an AI model provider starter.</li>
+            <li><strong>A dedicated Contexa database:</strong> <code>contexa.datasource.url</code> is required. If it is empty, startup stops with an <code>IllegalStateException</code>. The same URL as the application database is refused by default.</li>
+            <li><strong>AI for the decision engine:</strong> your application adds a Spring AI chat model provider, an embedding model provider and a vector store (PgVector). If one is missing, the startup diagnostics tell you (<a href="../../install/configuration/ai.html">Connecting AI models</a>).</li>
+            <li><strong>Spring Boot 3.x:</strong> the build baseline is 3.5.4. Contexa does not start on 4.x.</li>
+          </ol>
+          <pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+    username: contexa
+    password: contexa</code></pre>
+
+          <h2 id="enable">Turning it on</h2>
+          <pre><code class="language-java">@SpringBootApplication
+@EnableAISecurity                      // mode = SecurityMode.SANDBOX (default)
 public class LegacyApplication {
     public static void main(String[] args) {
         SpringApplication.run(LegacyApplication.class, args);
     }
 }</code></pre>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>What the annotation does</strong>This happens once, while Spring reads the configuration classes. The rest is in <a href="overview.html#overview">Auto-configuration</a>.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">Check <code>contexa.enabled</code></span><span class="dg-node-desc">If <code>false</code>, it does nothing and stops. Contexa stays off.</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title">Check the Spring Boot version</span><span class="dg-node-desc">On 4.x it logs an ERROR and stops startup.</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Put the annotation values as setting keys</span><span class="dg-node-desc">As a property source with the highest precedence in the Spring <code>Environment</code> (not JVM system properties, <a href="#keys">keys it puts</a>). Among them, <code>contexa.ai.security.mode</code> is the "on" marker.</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">Import the default configuration</span><span class="dg-node-desc"><code>AiSecurityConfiguration</code>: the default authentication configuration for the security mode (<code>PlatformConfig</code>, when the application declares none), the authentication bridge and the diagnostic beans</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">Contexa auto-configurations stay</span><span class="dg-node-desc">The auto-configuration filter sees the "on" marker and lets the Contexa auto-configurations through. Without the marker it removes them all.</span></div></li>
+            </ol>
+          </figure>
 
-  <h3>Annotation Attribute Reference</h3>
-  <div class="table-scroll"><table class="api-table">
-    <thead>
-      <tr>
-        <th>Attribute</th>
-        <th>Type</th>
-        <th>Default Value</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td><code>mode</code></td>
-        <td><code>SecurityMode</code></td>
-        <td><code>SecurityMode.SANDBOX</code></td>
-        <td>Determines the operational enforcement mode of the AI security framework. Unless <code>contexa.bridge.ownership</code> is set explicitly, this value also selects the authentication ownership (<code>SANDBOX</code> &rarr; <code>HOST_OWNED</code>, <code>FULL</code> &rarr; <code>CONTEXA_OWNED</code>).</td>
-      </tr>
-      <tr>
-        <td><code>authObjectLocation</code></td>
-        <td><code>AuthObjectLocation</code></td>
-        <td><code>AuthObjectLocation.AUTO</code></td>
-        <td>Provides a hint for extracting legacy authenticated objects.</td>
-      </tr>
-      <tr>
-        <td><code>authObjectAttribute</code></td>
-        <td><code>String</code></td>
-        <td><code>""</code></td>
-        <td>The session or request attribute key used to read the legacy authentication object.</td>
-      </tr>
-      <tr>
-        <td><code>authObjectType</code></td>
-        <td><code>Class&lt;?&gt;</code></td>
-        <td><code>Object.class</code></td>
-        <td>Type hint for reflective extraction of the legacy authentication object.</td>
-      </tr>
-    </tbody>
-  </table></div>
-</section>
+          <h2 id="modes">Three modes with similar names</h2>
+          <p>The three modes decide different things. The security mode and the enforcement mode are both named <code>SecurityMode</code> in code, which makes them easy to confuse (<a href="../common/overview.html#modes">telling the packages apart</a>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Mode</th><th>What it decides</th><th>Where you set it</th><th>Values</th><th>When unset</th></tr></thead>
+            <tbody>
+              <tr><td>Security mode</td><td>The shape of Contexa's default authentication configuration; the defaults of the authentication ownership and of the Contexa-owned application flag</td><td><code>@EnableAISecurity(mode = ...)</code></td><td><code>SANDBOX</code>, <code>FULL</code></td><td><code>SANDBOX</code></td></tr>
+              <tr><td>Authentication ownership</td><td>Whether Contexa builds the login chain (<code>CONTEXA_OWNED</code>) or your application owns it (<code>HOST_OWNED</code>)</td><td><code>contexa.bridge.ownership</code></td><td><code>HOST_OWNED</code>, <code>CONTEXA_OWNED</code></td><td>Follows the security mode (<code>SANDBOX</code> → <code>HOST_OWNED</code>, <code>FULL</code> → <code>CONTEXA_OWNED</code>)</td></tr>
+              <tr><td>Enforcement mode</td><td>Whether decisions are made, and whether they are stored and applied</td><td><code>contexa.security.zerotrust.mode</code>, admin console system settings</td><td><code>DISABLED</code>, <code>OBSERVE</code>, <code>SHADOW</code>, <code>ENFORCE</code></td><td><code>ENFORCE</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>In the enforcement mode, <code>DISABLED</code> and <code>OBSERVE</code> do not analyze, <code>SHADOW</code> makes decisions but neither stores nor applies them, and <code>ENFORCE</code> stores them and applies them from the next request. The order for a first rollout is in <a href="../../install/shadow-mode.html">Starting Safely with Enforcement Modes</a>.</p>
 
-<section class="docs-section">
-  <h2>SecurityMode Operation</h2>
-  <p>To support incremental migration and safe canary deployments, Contexa supports two distinct enforcement modes:</p>
-  <ul>
-    <li><strong><code>SANDBOX</code> (Sandbox Mode)</strong>: The default mode for legacy integration. SANDBOX and FULL decide who owns authentication; whether AI decisions (BLOCK, CHALLENGE, and so on) are enforced or only observed is controlled separately by the Zero Trust mode (<code>SHADOW</code>/<code>ENFORCE</code>). Unless <code>contexa.bridge.ownership</code> is set explicitly, this mode runs as <code>HOST_OWNED</code>: Contexa does not build an authentication <code>SecurityFilterChain</code>, and the host application's own Spring Security configuration owns authentication and authorization (see <a href="#host-owned">HOST_OWNED behavior and requirements</a> below).</li>
-    <li><strong><code>FULL</code> (Full Protection Mode)</strong>: Activates active Zero Trust enforcement. Unless <code>contexa.bridge.ownership</code> is set explicitly, this mode runs as <code>CONTEXA_OWNED</code> and Contexa builds the authentication <code>SecurityFilterChain</code>. <code>AiSecurityConfiguration</code> enforces <code>anyRequest().access(customDynamicAuthorizationManager)</code> for all incoming requests. Any detected anomaly or security violation immediately triggers real-time response actions, such as immediate redirection to blocked status pages or enforcing strong MFA verification step-ups (Step-up MFA) at runtime.</li>
-  </ul>
-  <p>An explicitly configured <code>contexa.bridge.ownership</code> always wins. The SANDBOX chain defined by Contexa (<code>/contexa/admin/login</code> permitted, <code>/contexa/admin/**</code> authenticated, every other request permitted, CSRF, CORS and security headers disabled) is created only when the application explicitly sets <code>contexa.bridge.ownership=CONTEXA_OWNED</code> together with SANDBOX mode.</p>
+          <h2 id="host-owned">If you choose <code>SANDBOX</code> (your application owns login)</h2>
+          <h3 id="host-tasks">What your application does</h3>
+          <ol>
+            <li><strong>Declare your own <code>SecurityFilterChain</code>.</strong> In this mode Contexa builds neither an authentication chain nor a placeholder chain. Without an application chain Spring Boot's default security applies (every request needs authentication), and Contexa reports it with an ERROR log at startup. An application that did not use Spring Security declares a chain that keeps its existing rules (for example <code>anyRequest().permitAll()</code>).</li>
+            <li><strong>Put the signed-in user in the <code>SecurityContext</code> as an authenticated <code>Authentication</code>.</strong> The authentication bridge makes decision facts only when such an <code>Authentication</code> exists, and <code>@Protectable</code> refuses the call without one. An application with its own login puts it there from a filter in its chain (<a href="../common/bridge.html#host-tasks">Connecting Your Existing Login</a>).</li>
+            <li><strong>Protect the admin console <code>/contexa/admin/**</code> in your chain and turn on method security.</strong> In this mode Contexa registers neither URL protection for these paths nor <code>@EnableMethodSecurity</code>. The <code>@PreAuthorize</code> rules on the admin controllers apply only after your application turns method security on.</li>
+          </ol>
+          <h3 id="host-does">What Contexa does and does not do</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Feature</th><th>Under <code>HOST_OWNED</code></th></tr></thead>
+            <tbody>
+              <tr><td>Your login page, sessions and access rules</td><td>Left unchanged.</td></tr>
+              <tr><td>Authentication bridge (login information as decision facts)</td><td>Works. Reads the authenticated <code>Authentication</code> on every request. The bridge filter is registered as a plain servlet filter.</td></tr>
+              <tr><td>Analysis and enforcement on <code>@Protectable</code> methods</td><td>Works. A stored block, step-up or hold is refused on these methods only.</td></tr>
+              <tr><td>Request-time filters (URL-level enforcement)</td><td><strong>None.</strong> These filters run only inside a chain Contexa builds.</td></tr>
+              <tr><td>Agent request gate (call limits, confirmation by the accountable person, ...)</td><td><strong>None</strong> (<a href="../agent/controls.html#ownership">What works under each ownership</a>)</td></tr>
+              <tr><td>Method security <code>@EnableMethodSecurity</code> and the <code>#ai</code> expression handler</td><td><strong>Not registered.</strong> Your application turns them on.</td></tr>
+              <tr><td>URL protection of the admin console</td><td><strong>None.</strong> Protect it in your chain.</td></tr>
+              <tr><td>Contexa OAuth2 authorization server, authentication success and failure handlers</td><td>Not turned on</td></tr>
+              <tr><td>Direct handoff (<code>ContexaAuthBridge.handoff(...)</code>)</td><td>Records the decision facts of that request only and does not fill the <code>SecurityContext</code>. If the same request carries an <code>Authentication</code> of the same user, the handoff result is kept.</td></tr>
+              <tr><td>User mirror</td><td>As an exception, writes mirror rows to the user table of the Contexa database (<a href="../common/bridge.html#mirror">User mirror</a>).</td></tr>
+            </tbody>
+          </table></div>
+          <p><code>contexa.bridge.populate-security-context</code> means something only under <code>CONTEXA_OWNED</code>.</p>
 
-  <h3 id="host-owned">HOST_OWNED Behavior and Requirements</h3>
-  <ul>
-    <li><strong>Host security configuration</strong>: In HOST_OWNED, Contexa registers neither an authentication chain nor a placeholder chain. If the host has no <code>SecurityFilterChain</code> bean, Spring Boot's default security applies: every request requires authentication, and a generated form login and HTTP Basic login are added. An application that did not use Spring Security before adding Contexa must therefore declare its own <code>SecurityFilterChain</code> to keep its existing behavior (see the <a href="../../../docs/install/installation-guide.html#legacy-integration">installation guide example</a>). When only Spring Boot's default chain is present, Contexa reports this situation with an error log at startup.</li>
-    <li><strong>What stays unchanged</strong>: As long as the host declares its own Spring Security configuration, Contexa does not change the host's login pages, session management, or access rules.</li>
-    <li><strong>Bridge evidence</strong>: The bridge resolution filter is registered as a servlet filter and runs after the host's Spring Security filter chain on each request. It resolves evidence only when the current <code>SecurityContext</code> holds an authenticated, non-anonymous <code>Authentication</code>, reading the principal, authorities, and token claims (JWT claims, OAuth2 user attributes) from that <code>Authentication</code>. Requests without such an <code>Authentication</code> produce no bridge evidence.</li>
-    <li><strong>Handoff</strong>: In HOST_OWNED, <code>ContexaAuthBridge.handoff(...)</code> does not populate or persist the Spring <code>SecurityContext</code>. It records the bridge evidence for the current request and synchronizes the bridge user mirror. When the same request also carries a host <code>Authentication</code> for the same principal, the explicit handoff result is kept. <code>contexa.bridge.populate-security-context</code> only has an effect in CONTEXA_OWNED.</li>
-    <li><strong><code>@Protectable</code></strong>: A Spring <code>Authentication</code> is required at invocation time. Without one, or with an anonymous one, the call is rejected and the response is determined by the host's Spring Security exception handling. A host that authenticates users with its own legacy mechanism must place the authenticated user into the Spring <code>SecurityContext</code> (a host responsibility, for example a filter in its own chain), or use <code>CONTEXA_OWNED</code> so that Contexa owns authentication.</li>
-  </ul>
-</section>
+          <h2 id="full">If you choose <code>FULL</code> (Contexa owns login)</h2>
+          <p>When your application declares no <code>PlatformConfig</code> bean, Contexa builds the security chain from this default configuration.</p>
+          <ul>
+            <li><strong>Access rules:</strong> <code>/contexa/css/**</code>, <code>/contexa/js/**</code>, <code>/images/**</code> and <code>/favicon.ico</code> are allowed; every other request is decided by the dynamic authorization manager (<code>CustomDynamicAuthorizationManager</code>, the policies in the admin console) (<a href="../iam/dynamic-authorization.html">Dynamic authorization</a>).</li>
+            <li><strong>Login:</strong> an MFA flow with form login (then <code>/</code>) as the primary step and passkey or one-time token (OTT) as the second factor (one factor required), with session state.</li>
+            <li><strong>Enforcing decisions:</strong> a decision is made after the request finishes and is stored when the enforcement mode is <code>ENFORCE</code>. The request-time filters in the chain apply the stored decision to the next request (<a href="../identity/zero-trust-filters.html">Request-time enforcement</a>).</li>
+            <li><strong>Also turned on:</strong> the agent request gate, <code>@EnableMethodSecurity</code> and the <code>#ai</code> expression handler, the Contexa OAuth2 authorization server, the authentication success and failure handlers.</li>
+          </ul>
+          <div class="callout callout-warning">
+            <strong><code>FULL</code> can change your application's default DataSource.</strong> This mode also puts <code>contexa.datasource.isolation.contexa-owned-application=true</code> (your own value if you set one). Then, if your application does not create a <code>DataSource</code> bean itself, the application's default <code>dataSource</code>, <code>JdbcTemplate</code> and <code>TransactionTemplate</code> point at the Contexa database, and the startup diagnostics default (<code>AUTO</code>) becomes <code>FAIL_FAST</code>, which stops startup when a required capability is missing. Use <code>SANDBOX</code> when you add Contexa to an existing application.
+          </div>
+          <p>To use your own authentication configuration instead of the default, declare a <code>PlatformConfig</code> bean (<a href="../identity/dsl.html">Identity DSL</a>). It becomes a chain only under <code>CONTEXA_OWNED</code>.</p>
+          <h3 id="sandbox-chain">If you keep <code>SANDBOX</code> but switch ownership to <code>CONTEXA_OWNED</code></h3>
+          <p>Only when you set <code>contexa.bridge.ownership=CONTEXA_OWNED</code> yourself under <code>SANDBOX</code> is a chain of the shape below built. It protects the admin console with Contexa login and leaves the other requests as they are.</p>
+          <ul>
+            <li>CSRF, CORS and security headers configuration are turned off.</li>
+            <li><code>/contexa/admin/login</code> is allowed, the zero trust management APIs (<code>/contexa/admin/api/aiam/zero-trust/**</code>, <code>/contexa/admin/api/aiam/sse/zero-trust/**</code>) need only a login, the rest of <code>/contexa/admin/**</code> needs the <strong>ADMIN role</strong>, and every other request is allowed.</li>
+            <li>The form login processing path is a random UUID path that changes on every start; MFA (passkey, OTT) and the session are as in <code>FULL</code>.</li>
+          </ul>
 
-<section class="docs-section">
-  <h2>AiSecurityImportSelector and Dynamic Wiring</h2>
-  <p>Contexa uses <code>AiSecurityImportSelector</code> to bootstrap its configuration dynamically without requiring compile-time classpath coupling.</p>
-  <p>When the Spring application starts, the container parses the <code>@Import(AiSecurityImportSelector.class)</code> metadata on <code>@EnableAISecurity</code>. The selector performs the following steps:</p>
-  <ol>
-    <li>Reads annotation attributes (such as <code>mode</code>, <code>authObjectLocation</code>) from the target configuration class.</li>
-    <li>Publishes these values, as the properties shown in the table below, into the application <code>Environment</code> as its highest-priority property source. They are not set as JVM system properties.</li>
-    <li>Returns the class name of the target configuration in <code>contexa-autoconfigure</code>: <code>io.contexa.autoconfigure.ai.AiSecurityConfiguration</code>, triggering dynamic bean provisioning.</li>
-  </ol>
+          <h2 id="auth-object">Legacy authentication object hints</h2>
+          <p>For applications that keep a user object in the session or a request attribute outside Spring Security. The authentication stamp is made first from the <code>Authentication</code> in the <code>SecurityContext</code>; then the three channels, session, request attributes and headers, are tried in turn. The three attributes below affect only these three channels (<a href="../common/bridge.html#order">Reading order</a>).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Attribute</th><th>Default</th><th>What it changes</th></tr></thead>
+            <tbody>
+              <tr><td><code>authObjectLocation</code></td><td><code>AUTO</code></td><td>Only the order in which the three channels are tried. It turns no channel off.<br><code>AUTO</code>, <code>SESSION</code>: session → request attributes → headers<br><code>REQUEST_ATTRIBUTE</code>: request attributes → session → headers<br><code>HEADER</code>: headers → session → request attributes</td></tr>
+              <tr><td><code>authObjectAttribute</code></td><td><code>""</code></td><td>The name of the attribute holding the user object. Used as the session attribute name when the location is <code>SESSION</code> and as the request attribute name when it is <code>REQUEST_ATTRIBUTE</code>. Not used with <code>AUTO</code> or <code>HEADER</code>.</td></tr>
+              <tr><td><code>authObjectType</code></td><td><code>Object.class</code> (none)</td><td>The class of the user object. Candidates whose class name matches get a higher score (others are not filtered out). Applies to both the session and request attribute channels.</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-java">@SpringBootApplication
+@EnableAISecurity(
+        authObjectLocation = AuthObjectLocation.SESSION,
+        authObjectAttribute = "loginUser",
+        authObjectType = LoginUser.class)     // LoginUser: the user class your application keeps in the session
+public class LegacyApplication { }</code></pre>
+          <p>The header channel reads <code>X-Contexa-*</code> headers and is <strong>off by default</strong> (<code>contexa.bridge.authentication.headers.enabled=false</code>). Even when on, it accepts a request only if it comes from a trusted proxy and the user in the header is the user your application authenticated (<a href="../common/bridge.html#headers">Passing users through gateway headers</a>). The session, request attributes and headers are also where authorization (the authorization stamp) and delegation information are read; the three attributes above do not affect those reads.</p>
 
-  <h3>Published Environment Properties</h3>
-  <div class="table-scroll"><table class="api-table">
-    <thead>
-      <tr>
-        <th>Property Key</th>
-        <th>Source Attribute</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td><code>contexa.ai.security.mode</code></td>
-        <td><code>mode</code></td>
-        <td>Controls the overall enforcement level of the AI security framework.</td>
-      </tr>
-      <tr>
-        <td><code>contexa.ai.security.auth-object.location</code></td>
-        <td><code>authObjectLocation</code></td>
-        <td>Hint identifying where to retrieve the legacy authentication artifact.</td>
-      </tr>
-      <tr>
-        <td><code>contexa.ai.security.auth-object.attribute</code></td>
-        <td><code>authObjectAttribute</code></td>
-        <td>Session or request attribute name used to read the legacy authentication object.</td>
-      </tr>
-      <tr>
-        <td><code>contexa.ai.security.auth-object.type</code></td>
-        <td><code>authObjectType</code></td>
-        <td>Fully qualified class name of the target extraction type.</td>
-      </tr>
-      <tr>
-        <td><code>contexa.bridge.ownership</code></td>
-        <td><code>mode</code></td>
-        <td>Authentication ownership. Published as <code>HOST_OWNED</code> for <code>SANDBOX</code> and as <code>CONTEXA_OWNED</code> for <code>FULL</code>. Not published when the application sets this property explicitly; the configured value always wins.</td>
-      </tr>
-    </tbody>
-  </table></div>
-</section>
+          <h2 id="verify">Checking that it is on</h2>
+          <ul>
+            <li><strong>Startup log</strong>
+              <ul>
+                <li><code>Skipping Contexa-owned authentication chain bootstrap in HOST_OWNED mode</code> (INFO) under <code>HOST_OWNED</code>: Contexa built no chain.</li>
+                <li><code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared by the application ...</code> (ERROR): there is no application chain, so Spring Boot's default security is on. Declare your chain.</li>
+                <li><code>[ContexaCapability] ...</code> (ERROR): the startup diagnostics found a missing bean (<a href="overview.html#diagnostics">Startup diagnostics</a>).</li>
+              </ul>
+            </li>
+            <li><strong>Admin console system settings</strong> (<code>/contexa/admin/system-settings</code>, ADMIN role): see and change the current enforcement mode. A value saved here applies without a restart and takes precedence over the YAML value.</li>
+            <li><strong>Actuator</strong>: if present, the endpoint <code>contexacapabilities</code> shows the startup diagnostics.</li>
+          </ul>
 
-<section class="docs-section">
-  <h2>Authenticated Object Locations (AuthObjectLocation)</h2>
-  <p>The <code>AuthObjectLocation</code> enum tells the framework where to extract legacy session/user contexts from:</p>
-  <ul>
-    <li><strong><code>AUTO</code></strong>: The default setting. The framework sequentially scans the active <code>HttpSession</code> store &rarr; <code>HttpServletRequest</code> attributes &rarr; HTTP headers to locate and extract legacy authentication objects.</li>
-    <li><strong><code>SESSION</code></strong>: Retrieves authentication details from the active <code>HttpSession</code> via the designated attribute key.</li>
-    <li><strong><code>REQUEST_ATTRIBUTE</code></strong>: Retrieves details directly from the <code>HttpServletRequest</code> attributes.</li>
-    <li><strong><code>HEADER</code></strong>: Extracts values from specific incoming HTTP headers.</li>
-  </ul>
-  <div class="callout callout-info">
-    <p><strong>Where authentication evidence comes from</strong> &mdash; Authentication evidence comes from the Spring <code>Authentication</code> first. A legacy user object stored only in the HTTP session or in a request attribute does not by itself become authentication evidence. Session, request attributes, and headers are still read as authorization and delegation evidence. Header evidence is accepted only from configured trusted proxies and only when it matches the host principal.</p>
-  </div>
-</section>
+          <h2 id="settings">Settings you change most</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.datasource.url</code></td><td>None (required)</td><td>The address of the dedicated Contexa database</td><td>Always, the first time you turn it on</td></tr>
+              <tr><td><code>contexa.bridge.ownership</code></td><td>Follows the security mode</td><td>Authentication ownership. When set, it wins over the annotation</td><td>To use only the admin console chain of <code>SANDBOX</code> (<a href="#sandbox-chain">above</a>)</td></tr>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>Enforcement mode</td><td>Watch with <code>SHADOW</code> first, then move to <code>ENFORCE</code></td></tr>
+              <tr><td><code>contexa.bridge.populate-security-context</code></td><td><code>true</code></td><td>Whether the bridge fills the <code>SecurityContext</code> with the authentication it made (only under <code>CONTEXA_OWNED</code>)</td><td>To stop the filling in a Contexa-owned chain</td></tr>
+              <tr><td><code>contexa.enabled</code></td><td><code>true</code></td><td><code>false</code> keeps all of Contexa off, even with the annotation</td><td>To switch Contexa off entirely for a while</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="keys">Reference: the setting keys the annotation puts</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting key</th><th>Annotation attribute</th><th>When it is put</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.ai.security.mode</code></td><td><code>mode</code></td><td>Always</td><td>The shape of the default authentication configuration. With this key, Contexa is "on"</td></tr>
+              <tr><td><code>contexa.ai.security.auth-object.location</code></td><td><code>authObjectLocation</code></td><td>Always</td><td>The order of the three channels</td></tr>
+              <tr><td><code>contexa.ai.security.auth-object.attribute</code></td><td><code>authObjectAttribute</code></td><td>Always</td><td>The user object attribute name</td></tr>
+              <tr><td><code>contexa.ai.security.auth-object.type</code></td><td><code>authObjectType</code></td><td>Always (class name)</td><td>The user object class</td></tr>
+              <tr><td><code>contexa.bridge.ownership</code></td><td><code>mode</code></td><td>When the application has not set this key</td><td><code>SANDBOX</code> → <code>HOST_OWNED</code>, <code>FULL</code> → <code>CONTEXA_OWNED</code></td></tr>
+              <tr><td><code>contexa.datasource.isolation.contexa-owned-application</code></td><td><code>mode</code></td><td>When the application has not set this key</td><td><code>true</code> under <code>FULL</code> (<a href="#full">warning above</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>Do not write the first four keys in YAML.</strong> The annotation puts them with the highest precedence, so YAML values are not used. And if you write <code>contexa.ai.security.mode</code> in YAML, Contexa counts itself on even without the annotation, but the default configuration (<code>AiSecurityConfiguration</code>) is imported only by the annotation, which leaves an unintended half-on state. These keys are not in the configuration metadata either.
+          </div>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="overview.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Auto-configuration: What Turns On and How to Turn It Off</span>
+            </a>
+            <a href="../identity/dsl.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Identity DSL</span>
+            </a>
+          </div>

@@ -3,737 +3,396 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/install/configuration.html">Configuration</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">AI Engine</span>
+            <span class="breadcrumb-current">Connecting AI Models</span>
           </nav>
+
           <div class="docs-page-header">
-            <h1>AI Engine Configuration</h1>
-            <p class="lead">Configuration properties for the Contexa AI engine, including the tiered LLM strategy, RAG, advisor chain, streaming pipeline, and tuning scenarios.</p>
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-secondary">contexa-autoconfigure</span>
+            </div>
+            <h1>Connecting AI Models</h1>
+            <p class="lead">How to connect the chat and embedding models Contexa uses for decisions and for its AI pipeline. You connect the providers, choose the primary chat model and the Layer 1 and Layer 2 models, and set up the embedding model, the vector store and the search over past records.</p>
           </div>
 
-          <!-- Quick Start -->
-          <section class="docs-section">
-            <h2 id="quick-start">Quick Start: Minimal Config</h2>
-            <p>The minimum configuration to run the OSS AI path with the built-in Ollama chat runtime and the tiered security models:</p>
+          <h2 id="overview">At a glance</h2>
+          <p>Contexa does not call a model provider by itself. It gathers the Spring AI chat and embedding model beans of the application, names them, and at startup picks <strong>one primary chat model</strong> and <strong>one embedding model</strong>. A decision call uses the model set for its layer, or the primary chat model when none is set. This page centres on the settings; how a model is resolved is described in detail in the <a href="../../reference/core/model-provider.html">Model Provider</a> reference (<a href="../../reference/core/model-provider.html#request-order">how each request gets its model</a>).</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>How a model is connected</strong>Steps 1 to 3 happen once at startup; step 4 on every decision call.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-model"><span class="dg-node-tag">1 · Provider</span><span class="dg-node-title">Spring AI creates the model beans</span><span class="dg-node-desc">The Spring AI starters in the application and the <code>spring.ai.*</code> keys create the OpenAI, Anthropic and Ollama model beans</span></li>
+              <li class="dg-node"><span class="dg-node-tag">2 · Catalog</span><span class="dg-node-title">Every model bean is named</span><span class="dg-node-desc">Each is listed so it can be found by bean name, provider and model name. <code>contexa.llm.bindings</code> corrects an entry or adds aliases</span></li>
+              <li class="dg-node"><span class="dg-node-tag">3 · Choice</span><span class="dg-node-title">The primary chat model and the embedding model</span><span class="dg-node-desc">The <code>contexa.llm.selection.*</code> rules pick one of each. They do not change while the application runs</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">4 · Decision call</span><span class="dg-node-title">A model for each layer</span><span class="dg-node-desc">The layer's model → the layer's backup model → the primary chat model</span></li>
+            </ol>
+          </figure>
+          <div class="callout callout-info">
+            <strong>The application starts without any model.</strong> With no chat model Contexa starts but cannot make decisions, and users stay at pending analysis. The capability check in the startup log (<code>[ContexaCapability] llm-runtime</code> and <code>embedding-runtime</code>) names the missing model beans.
+          </div>
 
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  llm:
-    chat:
-      ollama:
-        base-url: http://localhost:11434
-        model: qwen2.5:7b
-spring:
+          <h2 id="providers">Connecting a provider</h2>
+          <p>The Contexa starter brings no model provider. Add the Spring AI starter of each provider you use to the application's dependencies, and put the API key and model name in the Spring AI settings (<code>spring.ai.*</code>). Contexa has no provider keys such as <code>contexa.llm.openai.*</code>. Contexa is built with Spring AI 1.1.8.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Provider</th><th>Dependency to add</th><th>Key Contexa reads as the model name</th></tr></thead>
+            <tbody>
+              <tr><td>OpenAI</td><td><code>org.springframework.ai:spring-ai-starter-model-openai</code></td><td>Chat <code>spring.ai.openai.chat.options.model</code>, embedding <code>spring.ai.openai.embedding.options.model</code></td></tr>
+              <tr><td>Anthropic</td><td><code>org.springframework.ai:spring-ai-starter-model-anthropic</code></td><td>Chat <code>spring.ai.anthropic.chat.options.model</code></td></tr>
+              <tr><td>Ollama</td><td><code>org.springframework.ai:spring-ai-starter-model-ollama</code>, or the <a href="#ollama">Contexa connection</a></td><td>Chat <code>spring.ai.ollama.chat.options.model</code>, embedding <code>spring.ai.ollama.embedding.options.model</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>A start with OpenAI alone. <code>contexa.datasource.url</code> is the address of Contexa's own database, always required whatever the model.</p>
+          <pre><code class="language-yaml">spring:
   ai:
-    security:
-      layer1:
-        model: qwen2.5:7b
-      layer2:
-        model: gpt-4o-mini
-    vectorstore:
-      pgvector:
-        index-type: HNSW
-        distance-type: COSINE_DISTANCE
-        dimensions: 1024</code></pre>
-            </div>
-
-            <p>This enables the Ollama chat runtime through <code>contexa.llm.chat.ollama.*</code>, assigns Tier 1 and Tier 2 models, and configures the project-declared pgvector properties. If you want a dedicated embedding runtime, add <code>contexa.llm.embedding.ollama.*</code> as shown below.</p>
-          </section>
-
-          <!-- Configuration Architecture -->
-          <section class="docs-section">
-            <h2 id="architecture">Configuration Architecture</h2>
-            <p>The AI runtime is configured through seven property groups. Contexa owns the runtime selection, advisor, RAG, and streaming properties, while Spring AI owns the provider integrations and pgvector base configuration.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property Prefix</th><th>Bound To</th><th>Configures</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.llm.*</code></td><td><code>ContexaProperties</code></td><td>Chat runtime selection, Ollama endpoints, model priority, dedicated embedding runtime</td></tr>
-                <tr><td><code>spring.ai.security.*</code></td><td><code>TieredLLMProperties</code></td><td>Tier 1 and Tier 2 model selection, backup models, helper timeout accessors</td></tr>
-                <tr><td><code>contexa.security.tiered.*</code></td><td><code>TieredStrategyProperties</code></td><td>Prompt budgets, prompt bundle selection, determinism, truncation, vector cache, trusted proxy validation, RAG thresholds</td></tr>
-                <tr><td><code>contexa.advisor.*</code></td><td><code>ContexaAdvisorProperties</code></td><td>Advisor chain profile, security advisor order, SOAR approval advisor settings</td></tr>
-                <tr><td><code>contexa.rag.*</code></td><td><code>ContexaRagProperties</code></td><td>Default, behavior, risk, AI Lab, and ETL retrieval settings</td></tr>
-                <tr><td><code>contexa.streaming.*</code></td><td><code>StreamingProperties</code></td><td>Protocol markers, retry policy, parser buffers, streaming timeout</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.*</code></td><td><code>PgVectorStoreProperties</code></td><td>Index type, dimensions, search/store limits, document chunking, HNSW/IVFFLAT tuning</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- LLM Model Configuration -->
-          <section class="docs-section">
-            <h2 id="llm-models">LLM Model Configuration</h2>
-            <p>The tiered model system is split between runtime selection in <code>contexa.llm.*</code> and tier assignment in <code>spring.ai.security.*</code>. The OSS core ships with Ollama chat runtime wiring and can also use Spring AI OpenAI or Anthropic providers if those beans are present.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.llm.enabled</code></td><td><code>true</code></td><td>Master flag for Contexa LLM-dependent features</td></tr>
-                <tr><td><code>contexa.llm.advisor-enabled</code></td><td><code>true</code></td><td>Enables the advisor chain registration path</td></tr>
-                <tr><td><code>contexa.llm.selection.chat.mode</code></td><td><code>DYNAMIC_PRIORITY</code></td><td>Chat provider selection strategy: <code>DYNAMIC_PRIORITY</code> walks the priority list, <code>SPRING_PRIMARY</code> uses the Spring <code>@Primary</code> bean</td></tr>
-                <tr><td><code>contexa.llm.selection.chat.priority</code></td><td><code>""</code></td><td>Comma-separated chat provider order (e.g., <code>ollama,anthropic,openai</code>)</td></tr>
-                <tr><td><code>contexa.llm.selection.embedding.mode</code></td><td><code>DYNAMIC_PRIORITY</code></td><td>Embedding provider selection strategy</td></tr>
-                <tr><td><code>contexa.llm.selection.embedding.priority</code></td><td><code>""</code></td><td>Comma-separated embedding provider order (e.g., <code>ollama,openai</code>)</td></tr>
-                <tr><td><code>contexa.llm.chat.ollama.base-url</code></td><td><code>""</code></td><td>Required to enable the built-in Ollama chat runtime</td></tr>
-                <tr><td><code>contexa.llm.chat.ollama.model</code></td><td><code>""</code></td><td>Optional explicit Ollama chat model; if omitted the auto-configuration falls back to <code>qwen2.5:7b</code></td></tr>
-                <tr><td><code>contexa.llm.chat.ollama.keep-alive</code></td><td><code>""</code></td><td>Optional Ollama keep-alive hint passed to chat options</td></tr>
-                <tr><td><code>contexa.llm.embedding.ollama.dedicated-runtime-enabled</code></td><td><code>false</code></td><td>Enables a dedicated Ollama embedding runtime instead of reusing the chat runtime</td></tr>
-                <tr><td><code>contexa.llm.embedding.ollama.base-url</code></td><td><code>""</code></td><td>Required when the dedicated embedding runtime is enabled</td></tr>
-                <tr><td><code>contexa.llm.embedding.ollama.model</code></td><td><code>""</code></td><td>Optional explicit embedding model; if omitted the auto-configuration falls back to <code>mxbai-embed-large</code></td></tr>
-                <tr><td><code>contexa.security.tiered.llm.layer1.model</code></td><td><code>null</code></td><td>Tier 1 model selection</td></tr>
-                <tr><td><code>contexa.security.tiered.llm.layer1.backup.model</code></td><td>&mdash;</td><td>Tier 1 backup model</td></tr>
-                <tr><td><code>contexa.security.tiered.llm.layer2.model</code></td><td><code>gpt-4o-mini</code></td><td>Tier 2 model selection</td></tr>
-                <tr><td><code>contexa.security.tiered.llm.layer2.backup.model</code></td><td>&mdash;</td><td>Tier 2 backup model</td></tr>
-                <tr><td><code>contexa.security.tiered.llm.tiered.layer1.timeout-ms</code></td><td><code>30000</code></td><td>Tier 1 inference timeout used by <code>TieredLLMProperties</code> when the value is unset or invalid</td></tr>
-                <tr><td><code>contexa.security.tiered.layer2.timeout-ms</code></td><td><code>60000</code></td><td>Tier 2 inference timeout used by <code>TieredLLMProperties</code> when the value is unset or invalid</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  llm:
-    selection:
-      chat:
-        mode: DYNAMIC_PRIORITY
-        priority: ollama,anthropic,openai
-      embedding:
-        mode: DYNAMIC_PRIORITY
-        priority: ollama,openai
-    chat:
-      ollama:
-        base-url: http://localhost:11434
-        model: qwen2.5:7b
-    embedding:
-      ollama:
-        dedicated-runtime-enabled: true
-        base-url: http://localhost:11435
-        model: mxbai-embed-large
-spring:
-  ai:
-    security:
-      layer1:
-        model: qwen2.5:7b
-        backup:
-          model: llama3.2:latest
-      layer2:
-        model: gpt-4o-mini
-        backup:
-          model: deepseek-r1:14b
-      tiered:
-        layer1:
-          timeout-ms: 30000
-        layer2:
-          timeout-ms: 60000</code></pre>
-            </div>
-
-            <h3 id="hybrid-selection">Recommended selection (OpenAI + Anthropic with Ollama failover)</h3>
-            <p>The platform can chain managed cloud providers with the local Ollama runtime so that chat calls degrade gracefully when an API key is missing or a cloud endpoint is unreachable. The example below uses <code>OpenAI</code> as the primary chat provider, <code>Anthropic</code> as the second-tier failover, and the local <code>Ollama</code> runtime as the offline / no-key fallback. Embedding always goes through <code>OpenAI</code>.</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  llm:
-    selection:
-      chat:
-        mode: dynamic-priority
-        priority: openai,anthropic,ollama
-      embedding:
-        mode: dynamic-priority
-        priority: openai</code></pre>
-            </div>
-            <h4 id="hybrid-selection-keys">Key meaning</h4>
-            <ul>
-              <li><strong><code>mode: dynamic-priority</code></strong> &mdash; the orchestrator walks the comma-separated <code>priority</code> list in order and selects the first provider whose <code>ChatModel</code> / <code>EmbeddingModel</code> bean is present and reachable. The runtime form <code>dynamic-priority</code> is the kebab-case spelling of the <code>Mode.DYNAMIC_PRIORITY</code> enum; both forms bind to the same value through Spring's relaxed binding.</li>
-              <li><strong><code>priority: openai,anthropic,ollama</code></strong> &mdash; chat calls try <code>OpenAI</code> first; if the OpenAI client is missing the key or returns an unrecoverable error, the orchestrator falls back to <code>Anthropic</code>; if Anthropic is also unavailable, the call lands on the local <code>Ollama</code> runtime. List order is the failover order, so cheaper / more reliable providers should appear earlier.</li>
-              <li><strong><code>priority: openai</code></strong> (embedding) &mdash; <code>Anthropic</code> does not ship an embedding model in Spring AI, and the embedding path is dimension-pinned to <code>1536</code> in the platform's pgvector schema, which matches <code>OpenAI</code>'s <code>text-embedding-3-small</code> / <code>text-embedding-ada-002</code>. Mixing in an Ollama embedding model (typically 768 / 1024 dimensions) would write vectors of an incompatible width into the same column and break similarity search. Keep embeddings on a single 1536-dimension provider.</li>
-            </ul>
-            <h4 id="cloud-only-selection-providers">Pair the selection block with the Spring AI provider properties</h4>
-            <p>The <code>contexa.llm.selection.*</code> block decides <em>which</em> provider is called, but the actual API keys and model names live under the standard Spring AI property tree:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">spring:
-  ai:
-    retry:
-      max-attempts: 1
-    anthropic:
-      api-key: ${ANTHROPIC_API_KEY:disabled}
-      chat:
-        options:
-          model: claude-3-sonnet-20240229
     openai:
-      api-key: ${OPENAI_API_KEY:disabled}
-      base-url: https://api.openai.com
+      api-key: ${OPENAI_API_KEY}
       chat:
         options:
           model: gpt-4o-mini
-          temperature: 0.3</code></pre>
-            </div>
-            <ul>
-              <li><strong>API key placeholders</strong> &mdash; the literal <code>disabled</code> default keeps the auto-configuration from registering a real client when the operator has not supplied an environment variable. Setting <code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code> activates the corresponding provider; leaving them as <code>disabled</code> intentionally skips that branch and lets the next provider in the priority list take over.</li>
-              <li><strong><code>spring.ai.retry.max-attempts: 1</code></strong> &mdash; with two providers chained via <code>dynamic-priority</code>, retrying the same failing provider inside Spring AI is wasted latency. <code>1</code> keeps each call single-shot and lets the CONTEXA fail-over selector pick the next entry.</li>
-              <li><strong>Model identifiers</strong> &mdash; <code>gpt-4o-mini</code> is recommended for Tier 1 (low-latency Layer 1 contextual decisions) and <code>claude-3-sonnet-20240229</code> for Tier 2 (forensic Layer 2 reasoning). Swap with newer SKUs as they become available.</li>
-              <li><strong><code>temperature: 0.3</code></strong> on the OpenAI side is intentional: security-decision prompts benefit from low temperature; raising it widens drift in BLOCK / ESCALATE boundaries.</li>
-            </ul>
 
-            <p>OpenAI and Anthropic provider credentials are configured through Spring AI's own provider properties such as <code>spring.ai.openai.*</code> and <code>spring.ai.anthropic.*</code>; Contexa only selects between the available provider beans.</p>
-            <p>See also: <a href="../../../docs/reference/core/llm-orchestrator.html">LLM &amp; Models Reference</a></p>
-          </section>
+contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+    username: contexa
+    password: ${CONTEXA_DB_PASSWORD}</code></pre>
+          <ul>
+            <li><strong>With several providers</strong> every model is listed, and one primary chat model is picked by the rules of the <a href="#default-chat-model">next section</a>.</li>
+            <li><strong>Choosing the Spring AI model auto-configuration.</strong> When <code>contexa.llm.selection.chat.priority</code> names one provider (<code>openai</code>, <code>anthropic</code> or <code>ollama</code>), Contexa sets the default of <code>spring.ai.model.chat</code> to that provider, so the Spring AI chat auto-configuration of the other providers stays off. It sets <code>spring.ai.model.embedding</code> to the first provider of <code>contexa.llm.selection.embedding.priority</code> as well. When either is set, the image, speech and moderation model auto-configurations are turned off (<code>none</code>). Values the application sets for <code>spring.ai.model.*</code> win.</li>
+            <li><strong>The temperature and seed of a decision call do not come from the Spring AI settings.</strong> A decision call carries <code>contexa.security.tiered.determinism.temperature</code> (0.0 by default) and <code>seed</code> (1 by default) on every call. Change them in <a href="security.html">Enforcement Modes and Decision Tuning</a>.</li>
+            <li><code>contexa.llm.enabled: false</code> turns off the whole Contexa LLM auto-configuration.</li>
+          </ul>
 
-          <!-- RAG Configuration -->
-          <section class="docs-section">
-            <h2 id="rag">RAG Configuration</h2>
-            <p>These properties drive the retrieval path used by the pipeline and AI Lab. The OSS code binds <code>contexa.rag.*</code> to <code>ContexaRagProperties</code>, and binds pgvector settings to <code>contexa.vectorstore.pgvector.*</code>.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.rag.defaults.similarity-threshold</code></td><td><code>0.7</code></td><td>Default similarity threshold for general retrieval</td></tr>
-                <tr><td><code>contexa.rag.defaults.top-k</code></td><td><code>10</code></td><td>Default retrieval size for general retrieval</td></tr>
-                <tr><td><code>contexa.rag.behavior.lookback-days</code></td><td><code>30</code></td><td>Behavioral retrieval lookback window</td></tr>
-                <tr><td><code>contexa.rag.risk.similarity-threshold</code></td><td><code>0.8</code></td><td>Risk-focused retrieval threshold</td></tr>
-                <tr><td><code>contexa.rag.risk.top-k</code></td><td><code>50</code></td><td>Risk-focused retrieval result count</td></tr>
-                <tr><td><code>contexa.rag.lab.batch-size</code></td><td><code>50</code></td><td>AI Lab batch size</td></tr>
-                <tr><td><code>contexa.rag.lab.validation-enabled</code></td><td><code>true</code></td><td>Enables validation before ingestion</td></tr>
-                <tr><td><code>contexa.rag.lab.enrichment-enabled</code></td><td><code>true</code></td><td>Enables metadata enrichment during AI Lab processing</td></tr>
-                <tr><td><code>contexa.rag.lab.top-k</code></td><td><code>100</code></td><td>AI Lab retrieval size</td></tr>
-                <tr><td><code>contexa.rag.lab.similarity-threshold</code></td><td><code>0.75</code></td><td>AI Lab similarity threshold</td></tr>
-                <tr><td><code>contexa.rag.etl.batch-size</code></td><td><code>100</code></td><td>ETL ingestion batch size</td></tr>
-                <tr><td><code>contexa.rag.etl.chunk-size</code></td><td><code>500</code></td><td>Chunk size for document splitting</td></tr>
-                <tr><td><code>contexa.rag.etl.chunk-overlap</code></td><td><code>50</code></td><td>Chunk overlap for document splitting</td></tr>
-                <tr><td><code>contexa.rag.etl.vector-table-name</code></td><td><code>vector_store</code></td><td>Logical target table name used by ETL workflows</td></tr>
-                <tr><td><code>contexa.rag.etl.behavior.retention-days</code></td><td><code>90</code></td><td>Behavioral corpus retention period</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>Vector Store (pgvector)</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.vectorstore.pgvector.index-type</code></td><td><code>HNSW</code></td><td>Index implementation</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.distance-type</code></td><td><code>COSINE_DISTANCE</code></td><td>Distance metric</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.dimensions</code></td><td><code>1024</code></td><td>Embedding dimension bound expected by the store</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.batch-size</code></td><td><code>100</code></td><td>Store write batch size</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.parallel-threads</code></td><td><code>4</code></td><td>Parallel worker count</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.top-k</code></td><td><code>100</code></td><td>Default search result count</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.similarity-threshold</code></td><td><code>0.5</code></td><td>Default search similarity threshold</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.search-timeout-ms</code></td><td><code>10000</code></td><td>Search timeout</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.store-timeout-ms</code></td><td><code>10000</code></td><td>Store timeout</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.hnsw.m</code></td><td><code>16</code></td><td>HNSW graph connectivity</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.hnsw.ef-construction</code></td><td><code>64</code></td><td>HNSW construction effort</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.hnsw.ef-search</code></td><td><code>100</code></td><td>HNSW search effort</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.ivfflat.lists</code></td><td><code>100</code></td><td>IVFFLAT list count</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.ivfflat.probes</code></td><td><code>10</code></td><td>IVFFLAT probe count</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.document.chunk-size</code></td><td><code>1000</code></td><td>Document chunk size</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.document.chunk-overlap</code></td><td><code>200</code></td><td>Document chunk overlap</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.document.enrich-metadata</code></td><td><code>true</code></td><td>Metadata enrichment toggle</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.document.extract-keywords</code></td><td><code>true</code></td><td>Keyword extraction toggle</td></tr>
-                <tr><td><code>contexa.vectorstore.pgvector.document.generate-summary</code></td><td><code>false</code></td><td>Document summary generation toggle</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  rag:
-    defaults:
-      similarity-threshold: 0.7
-      top-k: 10
-    risk:
-      similarity-threshold: 0.8
-      top-k: 50
-    lab:
-      batch-size: 50
-      validation-enabled: true
-      enrichment-enabled: true
-spring:
-  ai:
-    vectorstore:
-      pgvector:
-        dimensions: 1024
-        index-type: HNSW
-        distance-type: COSINE_DISTANCE
-        document:
-          chunk-size: 1000
-          chunk-overlap: 200</code></pre>
-            </div>
-
-            <p>See also: <a href="../../../docs/reference/core/pipeline.html">Pipeline &amp; RAG Reference</a></p>
-          </section>
-
-          <!-- Streaming Configuration -->
-          <section class="docs-section">
-            <h2 id="streaming">Streaming Configuration</h2>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.streaming.final-response-marker</code></td><td><code>###FINAL_RESPONSE###</code></td><td>Marker emitted before the final structured response</td></tr>
-                <tr><td><code>contexa.streaming.streaming-marker</code></td><td><code>###STREAMING###</code></td><td>Marker prefix for streaming chunks</td></tr>
-                <tr><td><code>contexa.streaming.json-start-marker</code></td><td><code>===JSON_START===</code></td><td>Marker indicating JSON output start</td></tr>
-                <tr><td><code>contexa.streaming.json-end-marker</code></td><td><code>===JSON_END===</code></td><td>Marker indicating JSON output end</td></tr>
-                <tr><td><code>contexa.streaming.timeout</code></td><td><code>PT5M</code></td><td>Overall streaming timeout</td></tr>
-                <tr><td><code>contexa.streaming.max-retries</code></td><td><code>3</code></td><td>Retry count for stream recovery</td></tr>
-                <tr><td><code>contexa.streaming.retry-delay</code></td><td><code>PT1S</code></td><td>Initial retry delay</td></tr>
-                <tr><td><code>contexa.streaming.retry-multiplier</code></td><td><code>1.5</code></td><td>Retry backoff multiplier</td></tr>
-                <tr><td><code>contexa.streaming.marker-buffer-size</code></td><td><code>100</code></td><td>Marker parsing buffer size</td></tr>
-                <tr><td><code>contexa.streaming.sentence-buffering-enabled</code></td><td><code>true</code></td><td>Sentence buffering toggle for chunk smoothing</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  streaming:
-    timeout: 5m
-    max-retries: 3
-    retry-delay: 1s
-    retry-multiplier: 1.5
-    marker-buffer-size: 100
-    sentence-buffering-enabled: true</code></pre>
-            </div>
-
-            <p>See also: <a href="../../../docs/reference/core/streaming.html">Streaming Reference</a></p>
-          </section>
-
-          <!-- Advisor Configuration -->
-          <section class="docs-section">
-            <h2 id="advisor">Advisor Configuration</h2>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.advisor.chain-profile</code></td><td><code>STANDARD</code></td><td>Named advisor chain profile</td></tr>
-                <tr><td><code>contexa.advisor.security.enabled</code></td><td><code>true</code></td><td>Enable the security advisor</td></tr>
-                <tr><td><code>contexa.advisor.security.order</code></td><td><code>50</code></td><td>Execution order of the security advisor</td></tr>
-                <tr><td><code>contexa.advisor.security.require-authentication</code></td><td><code>false</code></td><td>Require an authenticated principal before AI processing</td></tr>
-                <tr><td><code>contexa.advisor.soar.approval.enabled</code></td><td><code>true</code></td><td>Enable the SOAR approval advisor</td></tr>
-                <tr><td><code>contexa.advisor.soar.approval.order</code></td><td><code>100</code></td><td>Execution order of the SOAR approval advisor</td></tr>
-                <tr><td><code>contexa.advisor.soar.approval.timeout</code></td><td><code>300</code></td><td>Approval timeout in seconds</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  advisor:
-    chain-profile: STANDARD
-    security:
-      enabled: true
-      order: 50
-      require-authentication: false
-    soar:
-      approval:
-        enabled: true
-        order: 100
-        timeout: 300</code></pre>
-            </div>
-
-            <p>See also: <a href="../../../docs/reference/core/advisor.html">Advisor System Reference</a></p>
-          </section>
-
-          <!-- Prompt Bundles -->
-          <section class="docs-section">
-            <h2 id="prompt-bundles">Prompt Bundles, Minimum Action Rules and Inspection</h2>
-            <p>These properties choose the security decision prompt bundle, set how the decision prompt treats its budget and which determinism it asks the provider for, configure the minimum action rules, and run the prompt inspector. See <a href="../../../docs/reference/architecture/prompt-engineering.html">Security Decision Prompt Pipeline</a> and <a href="../../../docs/reference/architecture/prompt-inspection.html">Prompt Inspection &amp; Bundle Versions</a>.</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  security:
-    tiered:
-      prompt-bundle:
-        selector: configuration   # or registry
-        # active: &lt;bundle version&gt;   (blank runs the build default)
-      prompt-runtime:
-        budget-enforcement: OBSERVE_ONLY
-      determinism:
-        temperature: 0.0
-        seed: 1
-    zerotrust:
-      minimum-action:
-        mode: OBSERVE
-        identity:
-          enabled: true
-          min-deviations: 2
-          min-resource-class: SENSITIVE
-        new-device-export:
-          enabled: true
-        policy-satisfaction:
-          enabled: true
-          action: ESCALATE
-  prompt-inspection:
-    enabled: true
-    sample-percent: 100</code></pre>
-            </div>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.security.tiered.prompt-bundle.active</code></td><td><code>String</code></td><td>(blank)</td><td>Bundle version the configuration selector runs; blank runs the build default bundle</td></tr>
-                <tr><td><code>contexa.security.tiered.prompt-bundle.selector</code></td><td><code>Enum</code></td><td><code>CONFIGURATION</code></td><td><code>CONFIGURATION</code>, or <code>REGISTRY</code> for the release registry's state, scope and canary share</td></tr>
-                <tr><td><code>contexa.security.tiered.prompt-bundle.shadow.sample-percent</code></td><td><code>int</code></td><td><code>0</code></td><td>Share of requests a shadow release runs on, 0 to 100</td></tr>
-                <tr><td><code>contexa.security.tiered.prompt-bundle.shadow.daily-call-cap</code></td><td><code>int</code></td><td><code>100</code></td><td>Shadow runs allowed per UTC day, one model call each</td></tr>
-                <tr><td><code>contexa.security.tiered.prompt-runtime.budget-enforcement</code></td><td><code>Enum</code></td><td><code>OBSERVE_ONLY</code></td><td><code>ENFORCE</code> makes a v20 prompt over its budget take entries out by dictionary priority; required entries stay</td></tr>
-                <tr><td><code>contexa.security.tiered.determinism.temperature</code></td><td><code>Double</code></td><td><code>0.0</code></td><td>Temperature a security decision asks every provider for</td></tr>
-                <tr><td><code>contexa.security.tiered.determinism.seed</code></td><td><code>Integer</code></td><td><code>1</code></td><td>Seed a security decision asks every provider for; settings a provider does not take are recorded on the call</td></tr>
-                <tr><td><code>contexa.security.zerotrust.minimum-action.mode</code></td><td><code>Enum</code></td><td><code>OBSERVE</code></td><td><code>OBSERVE</code> records the rules a request meets; <code>ENFORCE</code> makes the response check treat a weaker answer as a violation</td></tr>
-                <tr><td><code>contexa.security.zerotrust.minimum-action.identity.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Rule P1: identity dimensions that differ without explanation</td></tr>
-                <tr><td><code>contexa.security.zerotrust.minimum-action.identity.min-deviations</code></td><td><code>int</code></td><td><code>2</code></td><td>How many of time, day, network and device P1 needs</td></tr>
-                <tr><td><code>contexa.security.zerotrust.minimum-action.identity.min-resource-class</code></td><td><code>String</code></td><td><code>SENSITIVE</code></td><td>Lowest resource class P1 applies to</td></tr>
-                <tr><td><code>contexa.security.zerotrust.minimum-action.new-device-export.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Rule P2: an export of a sensitive resource from a new device or network</td></tr>
-                <tr><td><code>contexa.security.zerotrust.minimum-action.policy-satisfaction.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Rule P3: no valid record covers what the company policy requires</td></tr>
-                <tr><td><code>contexa.security.zerotrust.minimum-action.policy-satisfaction.action</code></td><td><code>String</code></td><td><code>ESCALATE</code></td><td>Floor of P3: <code>CHALLENGE</code> or <code>ESCALATE</code>; any other value stops the start-up</td></tr>
-                <tr><td><code>contexa.prompt-inspection.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Prompt inspector, automatic round, re-inspection and console (OSS only)</td></tr>
-                <tr><td><code>contexa.prompt-inspection.sample-percent</code></td><td><code>int</code></td><td><code>100</code></td><td>Share of sealed packages inspected, 1 to 100</td></tr>
-                <tr><td><code>contexa.pqa.oss.sealed-evidence.sample-percent</code></td><td><code>int</code></td><td><code>1</code></td><td>Share of requests sealed after the change window, 1 to 100</td></tr>
-                <tr><td><code>contexa.pqa.oss.sealed-evidence.full-capture-after-change</code></td><td><code>int</code></td><td><code>1000</code></td><td>Decisions sealed in full after a start or a bundle change</td></tr>
-              </tbody>
-            </table></div>
-            <p>The remaining inspector, retention and registry settings are listed in <a href="../../../docs/reference/architecture/prompt-inspection.html#configuration">Prompt Inspection &amp; Bundle Versions</a>.</p>
-          </section>
-
-          <!-- Tuning Scenarios -->
-          <section class="docs-section">
-            <h2 id="tuning-scenarios">Tuning Scenarios</h2>
-            <p>Common configuration adjustments for specific situations:</p>
-
-            <h3>Slow Responses</h3>
-            <p>If inference is slow, reduce the model footprint and widen the Layer 1 pipeline budget:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  llm:
-    chat:
-      ollama:
-        model: qwen2.5:7b
-spring:
-  ai:
-    security:
-      layer1:
-        model: qwen2.5:7b
-      tiered:
-        layer1:
-          timeout:
-            total-ms: 5400000
-            llm-ms: 3600000
-            rag-ms: 1200000</code></pre>
-            </div>
-
-            <h3>RAG Results Are Inaccurate</h3>
-            <p>If retrieved context is not relevant enough, tighten the default threshold and reduce the retrieval window:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-              </div>
-              <pre><code class="language-yaml">contexa:
-  rag:
-    defaults:
-      similarity-threshold: 0.85
-      top-k: 3
-spring:
-  ai:
-    security:
-      tiered:
-        layer1:
-          rag:
-            similarity-threshold: 0.7
-          vector-search-limit: 6</code></pre>
-            </div>
-
-            <h3>Token Usage / Cost Optimization</h3>
-            <p>Reduce prompt size by lowering the Layer 1 prompt and truncation budgets:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-              </div>
-              <pre><code class="language-yaml">spring:
-  ai:
-    security:
-      tiered:
-        layer1:
-          prompt:
-            max-rag-documents: 2
-            max-similar-events: 1
-          vector-search-limit: 3
-        truncation:
-          layer1:
-            payload: 100
-            rag-document: 150</code></pre>
-            </div>
-
-            <h3>Production Deployment</h3>
-            <p>Recommended settings for a production deployment with separate chat and embedding runtimes:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">YAML</span>
-              </div>
-              <pre><code class="language-yaml">contexa:
+          <h2 id="default-chat-model">Choosing the primary chat model</h2>
+          <p>At startup Contexa makes one chat model the <strong>primary chat model</strong> (bean name <code>primaryChatModel</code>). Decisions with no layer model and the calls of Contexa's AI pipeline use it. <code>contexa.llm.selection.chat.mode</code> sets how it is picked.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Value</th><th>How it picks</th><th>When startup stops</th></tr></thead>
+            <tbody>
+              <tr><td><code>dynamic-priority</code> (default)</td><td>Goes through the providers of the <code>priority</code> list in order and picks the first model whose bean can be created. When no model of a listed provider exists, it tries the other providers' models in turn.</td><td>Model beans exist but none can be created</td></tr>
+              <tr><td><code>fixed</code></td><td>Uses only the models of the one provider in <code>priority</code>. It never moves to another provider.</td><td><code>priority</code> names more than one provider, or that provider has no model</td></tr>
+              <tr><td><code>spring-primary</code></td><td>The one model marked primary (<code>primary: true</code> in a <a href="#bindings">binding</a>, or a <code>@Primary</code> bean). With a single model, that model.</td><td>More than one primary, or several models and no primary</td></tr>
+            </tbody>
+          </table></div>
+          <p>Among models of the same provider, the one marked primary comes first, then name order.</p>
+          <div class="callout callout-warning">
+            <strong>Write the <code>mode</code> value in lower case with hyphens.</strong> Write <code>dynamic-priority</code>, <code>fixed</code> or <code>spring-primary</code>. Contexa compares this text as written to create the primary chat model bean, so a name with underscores such as <code>DYNAMIC_PRIORITY</code> leaves the primary chat model uncreated, with no error.
+          </div>
+          <ul>
+            <li><strong>The choice is made once, at startup.</strong> When a provider call fails while running, Contexa does not call another model instead. Transient errors such as a dropped connection, 429 or 503 are retried on the same model up to 4 times. What happens to a decision that never gets an answer is in <a href="../../reference/architecture/decision-engine.html#overrides">Decision Engine</a>.</li>
+            <li>The old setting <code>contexa.llm.chat-model-priority</code> is used only when <code>priority</code> is set to an empty value.</li>
+          </ul>
+          <pre><code class="language-yaml"># Anthropic models only (added to your existing settings)
+contexa:
   llm:
     selection:
       chat:
-        mode: DYNAMIC_PRIORITY
-        priority: ollama,anthropic,openai
-      embedding:
-        mode: DYNAMIC_PRIORITY
-        priority: ollama,openai
-    embedding:
-      ollama:
-        dedicated-runtime-enabled: true
-        base-url: http://localhost:11435
-  advisor:
-    security:
-      enabled: true
-      require-authentication: true
+        mode: fixed
+        priority: anthropic</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.llm.enabled</code></td><td><code>true</code></td><td>The whole Contexa LLM auto-configuration</td></tr>
+              <tr><td><code>contexa.llm.selection.chat.mode</code></td><td><code>dynamic-priority</code></td><td>How the primary chat model is picked (table above)</td></tr>
+              <tr><td><code>contexa.llm.selection.chat.priority</code></td><td><code>openai,anthropic,ollama</code></td><td>Provider order. With <code>fixed</code>, name one provider only</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="layer-models">Layer 1 and Layer 2 models</h2>
+          <p>Most decisions end at Layer 1; only requests where Layer 1 answers ESCALATE go to Layer 2 (<a href="../../reference/architecture/decision-engine.html#layers">Decision Engine</a>). Each layer can use its own model, for example a fast and cheap model for Layer 1 and a more careful one for Layer 2.</p>
+          <pre><code class="language-yaml"># When the primary chat model is OpenAI (added to your existing settings)
+contexa:
+  security:
+    tiered:
+      llm:
+        layer1:
+          model: gpt-4o-mini
+        layer2:
+          model: gpt-4o
+          backup:
+            model: gpt-4o-mini</code></pre>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>How one decision call picks its model</strong>It moves on only when the one before cannot be used.</figcaption>
+            <ol class="dg-flow dg-flow-h">
+              <li class="dg-node dg-model"><span class="dg-node-tag">1</span><span class="dg-node-title">The layer's model</span><span class="dg-node-desc"><code>layerN.model</code></span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">2</span><span class="dg-node-title">The layer's backup model</span><span class="dg-node-desc"><code>layerN.backup.model</code></span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">3</span><span class="dg-node-title">The primary chat model</span><span class="dg-node-desc"><code>primaryChatModel</code></span></li>
+            </ol>
+          </figure>
+          <ul>
+            <li><strong>How a model name is resolved.</strong> When the name equals a name of a listed model (bean name, binding key, model name or alias), that model is used.</li>
+            <li><strong>When no model has the name</strong>, the primary chat model is copied with only the model name changed. The copy works only for a model that supports <code>mutate()</code>. In Spring AI 1.1.8 only the OpenAI chat model does; the Anthropic and Ollama chat models do not. To use such models per layer, name them with a <a href="#bindings">binding</a> (for Ollama, <a href="#ollama-layer-models">see below</a>).</li>
+            <li><strong>Startup stops when a layer model cannot be made.</strong> This keeps a mistyped name from silently turning into another model in production. The check runs when there is a primary chat model.</li>
+            <li><strong>A backup model</strong> is used only when the layer model is set, and it is not checked at startup. When the backup cannot be made at call time either, the primary chat model is used.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.llm.layer1.model</code></td><td>none</td><td>Layer 1 model. Empty: the primary chat model</td></tr>
+              <tr><td><code>contexa.security.tiered.llm.layer2.model</code></td><td>none</td><td>Layer 2 model. Empty: the primary chat model</td></tr>
+              <tr><td><code>contexa.security.tiered.llm.layer1.backup.model</code></td><td>none</td><td>Model used when the Layer 1 model cannot be used</td></tr>
+              <tr><td><code>contexa.security.tiered.llm.layer2.backup.model</code></td><td>none</td><td>Model used when the Layer 2 model cannot be used</td></tr>
+              <tr><td><code>contexa.security.tiered.llm.tiered.layer1.timeout-ms</code></td><td>none</td><td>Time limit (ms) of a Layer 1 <strong>streaming</strong> call. Empty: 30000; above 120000: 120000</td></tr>
+              <tr><td><code>contexa.security.tiered.llm.tiered.layer2.timeout-ms</code></td><td>none</td><td>Time limit (ms) of a Layer 2 <strong>streaming</strong> call. Empty: 60000; above 120000: 120000</td></tr>
+            </tbody>
+          </table></div>
+          <p>The last two settings apply to streaming calls only and do not change decision time. The time limits of Layer 1 and Layer 2 and of a single model call are set in <a href="security.html">Enforcement Modes and Decision Tuning</a>.</p>
+
+          <h2 id="bindings">Naming models (bindings)</h2>
+          <p>Contexa lists every chat and embedding model bean of the application by itself. With no setting, a model can be found by its bean name, its provider (inferred from the bean class and name) and its model name (the provider's <code>spring.ai.…options.model</code>, else the bean name). <code>contexa.llm.bindings</code> corrects an entry of this list or adds aliases.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.llm.bindings.chat.&lt;name&gt;.bean-name</code></td><td>none</td><td>The model bean it applies to. Empty: the bean whose name equals <code>&lt;name&gt;</code></td></tr>
+              <tr><td><code>contexa.llm.bindings.chat.&lt;name&gt;.provider</code></td><td>none</td><td>The provider. Empty: inferred from the bean class and name (<code>ollama</code>, <code>anthropic</code>, <code>openai</code>, <code>gemini</code>, <code>mistral</code>, <code>bedrock</code>, <code>huggingface</code>, otherwise <code>spring</code>)</td></tr>
+              <tr><td><code>contexa.llm.bindings.chat.&lt;name&gt;.model-id</code></td><td>none</td><td>The model name. Empty: the key in the provider table above, else the bean name</td></tr>
+              <tr><td><code>contexa.llm.bindings.chat.&lt;name&gt;.aliases</code></td><td><code>[]</code></td><td>More names. A layer model setting can use them</td></tr>
+              <tr><td><code>contexa.llm.bindings.chat.&lt;name&gt;.enabled</code></td><td><code>true</code></td><td><code>false</code>: this setting is not used. The bean stays in the list under its own name</td></tr>
+              <tr><td><code>contexa.llm.bindings.chat.&lt;name&gt;.primary</code></td><td><code>false</code></td><td>Picked first among models of the same provider, and the choice of <code>spring-primary</code> mode</td></tr>
+            </tbody>
+          </table></div>
+          <p>For embedding models, write the same fields under <code>contexa.llm.bindings.embedding.&lt;name&gt;.…</code>. The providers whose embedding model name is read from a key are OpenAI and Ollama only.</p>
+          <ul>
+            <li><strong>Overlapping names stop startup.</strong> No bean name, binding key, model name or alias may belong to two different models. Two model beans of the same provider that both take their model name from the same key can overlap; give them different <code>model-id</code> values.</li>
+            <li><strong>An alias is a name to pick by.</strong> An OpenAI or Anthropic model picked by an alias is still called with the model set on its bean. Only for Ollama does the alias become the model of the call (<a href="#ollama-layer-models">below</a>).</li>
+            <li>When <code>bean-name</code> names a bean that does not exist, a warning is logged and the setting is skipped.</li>
+          </ul>
+          <p>Example: keep OpenAI as the primary chat model and run only Layer 2 on an Anthropic model. <code>anthropicChatModel</code> is the bean name the Spring AI Anthropic starter creates.</p>
+          <pre><code class="language-yaml"># Added to your existing settings
 spring:
   ai:
-    security:
-      layer1:
-        model: qwen2.5:7b
-      layer2:
-        model: gpt-4o-mini
-      tiered:
-        vector-cache:
-          max-size: 50000
-          expire-minutes: 10
-          enabled: true
-          record-stats: true
-        security:
-          trusted-proxy-validation-enabled: true</code></pre>
-            </div>
-          </section>
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY}
 
-          <!-- Complete Property Reference -->
-          <section class="docs-section">
-            <h2 id="complete-reference">Complete Property Reference</h2>
-
-            <details>
-              <summary><strong>TieredStrategyProperties — Layer 1 Settings</strong></summary>
-              <div class="table-scroll"><table class="api-table">
-                <thead>
-                  <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td><code>.rag.similarity-threshold</code></td><td><code>double</code></td><td><code>0.5</code></td><td>Layer 1 RAG similarity threshold</td></tr>
-                  <tr><td><code>.session.max-recent-actions</code></td><td><code>int</code></td><td><code>100</code></td><td>Recent action window</td></tr>
-                  <tr><td><code>.cache.max-size</code></td><td><code>int</code></td><td><code>1000</code></td><td>Layer 1 cache size</td></tr>
-                  <tr><td><code>.cache.ttl-minutes</code></td><td><code>int</code></td><td><code>30</code></td><td>Layer 1 cache TTL</td></tr>
-                  <tr><td><code>.timeout.total-ms</code></td><td><code>long</code></td><td><code>120000</code></td><td>Total Layer 1 budget (ms)</td></tr>
-                  <tr><td><code>.timeout.llm-ms</code></td><td><code>long</code></td><td><code>3200</code></td><td>Layer 1 LLM budget (ms)</td></tr>
-                  <tr><td><code>.timeout.rag-ms</code></td><td><code>long</code></td><td><code>900</code></td><td>Layer 1 RAG budget (ms)</td></tr>
-                  <tr><td><code>.vector-search-limit</code></td><td><code>int</code></td><td><code>12</code></td><td>Vector search result cap</td></tr>
-                  <tr><td><code>.default-budget-profile</code></td><td><code>String</code></td><td><code>CORTEX_L1_INTERACTIVE_STRICT</code></td><td>Named Layer 1 budget profile</td></tr>
-                  <tr><td><code>.prompt.max-similar-events</code></td><td><code>int</code></td><td><code>2</code></td><td>Prompt similar-event cap</td></tr>
-                  <tr><td><code>.prompt.max-rag-documents</code></td><td><code>int</code></td><td><code>12</code></td><td>Prompt RAG document cap</td></tr>
-                  <tr><td><code>.prompt.include-event-id</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include event id in prompt</td></tr>
-                  <tr><td><code>.prompt.include-raw-timestamp</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include raw timestamp in prompt</td></tr>
-                  <tr><td><code>.prompt.include-raw-session-id</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include raw session id in prompt</td></tr>
-                  <tr><td><code>.prompt.include-full-user-agent</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Include full user agent in prompt</td></tr>
-                </tbody>
-              </table></div>
-            </details>
-
-            <details>
-              <summary><strong>TieredStrategyProperties — Layer 2 and Shared Settings</strong></summary>
-              <div class="table-scroll"><table class="api-table">
-                <thead>
-                  <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td><code>.layer2.rag.similarity-threshold</code></td><td><code>double</code></td><td><code>0.5</code></td><td>Layer 2 RAG similarity threshold</td></tr>
-                  <tr><td><code>.layer2.cache.max-size</code></td><td><code>int</code></td><td><code>1000</code></td><td>Layer 2 cache size</td></tr>
-                  <tr><td><code>.layer2.cache.ttl-minutes</code></td><td><code>int</code></td><td><code>30</code></td><td>Layer 2 cache TTL</td></tr>
-                  <tr><td><code>.layer2.timeout-ms</code></td><td><code>long</code></td><td><code>7000</code></td><td>Layer 2 timeout (ms)</td></tr>
-                  <tr><td><code>.layer2.enable-soar</code></td><td><code>boolean</code></td><td><code>false</code></td><td>SOAR activation toggle</td></tr>
-                  <tr><td><code>.layer2.rag-top-k</code></td><td><code>int</code></td><td><code>5</code></td><td>Layer 2 retrieval size</td></tr>
-                  <tr><td><code>.layer2.default-budget-profile</code></td><td><code>String</code></td><td><code>CORTEX_L2_EXPERT_STRICT</code></td><td>Named Layer 2 budget profile</td></tr>
-                  <tr><td><code>.truncation.layer1.user-agent</code></td><td><code>int</code></td><td><code>150</code></td><td>Layer 1 user-agent truncation</td></tr>
-                  <tr><td><code>.truncation.layer1.payload</code></td><td><code>int</code></td><td><code>200</code></td><td>Layer 1 payload truncation</td></tr>
-                  <tr><td><code>.truncation.layer1.rag-document</code></td><td><code>int</code></td><td><code>180</code></td><td>Layer 1 RAG truncation</td></tr>
-                  <tr><td><code>.truncation.layer2.user-agent</code></td><td><code>int</code></td><td><code>150</code></td><td>Layer 2 user-agent truncation</td></tr>
-                  <tr><td><code>.truncation.layer2.payload</code></td><td><code>int</code></td><td><code>1000</code></td><td>Layer 2 payload truncation</td></tr>
-                  <tr><td><code>.truncation.layer2.rag-document</code></td><td><code>int</code></td><td><code>500</code></td><td>Layer 2 RAG truncation</td></tr>
-                  <tr><td><code>.vector-cache.max-size</code></td><td><code>int</code></td><td><code>10000</code></td><td>Vector cache size</td></tr>
-                  <tr><td><code>.vector-cache.expire-minutes</code></td><td><code>int</code></td><td><code>5</code></td><td>Vector cache TTL</td></tr>
-                  <tr><td><code>.vector-cache.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Vector cache toggle</td></tr>
-                  <tr><td><code>.vector-cache.record-stats</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Vector cache metrics toggle</td></tr>
-                  <tr><td><code>.security.trusted-proxies</code></td><td><code>List&lt;String&gt;</code></td><td><code>[]</code></td><td>Trusted proxy list</td></tr>
-                  <tr><td><code>.security.trusted-proxy-validation-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Trusted proxy validation toggle</td></tr>
-                  <tr><td><code>.prompt-runtime.native-structured-output-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enable native structured output</td></tr>
-                  <tr><td><code>.prompt-runtime.native-structured-output-disabled-profiles</code></td><td><code>List&lt;String&gt;</code></td><td><code>[]</code></td><td>Profiles where native structured output is disabled</td></tr>
-                  <tr><td><code>.prompt-runtime.telemetry-enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Enable prompt runtime telemetry</td></tr>
-                  <tr><td><code>.prompt-runtime.budget-enforcement</code></td><td><code>Enum</code></td><td><code>OBSERVE_ONLY</code></td><td>Prompt budget handling: <code>OBSERVE_ONLY</code> or <code>ENFORCE</code></td></tr>
-                  <tr><td><code>.determinism.temperature</code></td><td><code>Double</code></td><td><code>0.0</code></td><td>Security decision temperature</td></tr>
-                  <tr><td><code>.determinism.seed</code></td><td><code>Integer</code></td><td><code>1</code></td><td>Security decision seed</td></tr>
-                  <tr><td><code>.prompt-bundle.active</code></td><td><code>String</code></td><td>(blank)</td><td>Bundle version the configuration selector runs</td></tr>
-                  <tr><td><code>.prompt-bundle.selector</code></td><td><code>Enum</code></td><td><code>CONFIGURATION</code></td><td>Bundle selector: <code>CONFIGURATION</code> or <code>REGISTRY</code></td></tr>
-                  <tr><td><code>.prompt-bundle.shadow.sample-percent</code></td><td><code>int</code></td><td><code>0</code></td><td>Share of requests a shadow release runs on</td></tr>
-                  <tr><td><code>.prompt-bundle.shadow.daily-call-cap</code></td><td><code>int</code></td><td><code>100</code></td><td>Shadow runs allowed per UTC day</td></tr>
-                </tbody>
-              </table></div>
-            </details>
-
-            <details>
-              <summary><strong>SecurityMappingProperties — <code>contexa.security.mapping</code></strong></summary>
-              <div class="table-scroll"><table class="api-table">
-                <thead>
-                  <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td><code>.task-to-tier</code></td><td><code>Map&lt;String, Integer&gt;</code></td><td><code>{}</code></td><td>Direct task name → tier (1/2/3) mapping</td></tr>
-                  <tr><td><code>.task-to-analysis-level</code></td><td><code>Map&lt;String, String&gt;</code></td><td><code>{}</code></td><td>Task name → analysis level (<code>QUICK</code>/<code>NORMAL</code>/<code>DEEP</code>) mapping</td></tr>
-                  <tr><td><code>.task-configs</code></td><td><code>Map&lt;String, TaskConfig&gt;</code></td><td><code>{}</code></td><td>Per-task detailed config (tier, analysisLevel, toolExecutionEnabled, requireFastResponse, preferLocalModel/CloudModel, temperature, timeoutMs, preferredModel, metadata)</td></tr>
-                  <tr><td><code>.defaults.tier1-tasks</code></td><td><code>String[]</code></td><td><code>[THREAT_FILTERING, QUICK_DETECTION]</code></td><td>Default tier-1 task names</td></tr>
-                  <tr><td><code>.defaults.tier2-tasks</code></td><td><code>String[]</code></td><td><code>[CONTEXTUAL_ANALYSIS, BEHAVIOR_ANALYSIS, CORRELATION]</code></td><td>Default tier-2 task names</td></tr>
-                  <tr><td><code>.defaults.tier3-tasks</code></td><td><code>String[]</code></td><td><code>[EXPERT_INVESTIGATION, INCIDENT_RESPONSE, FORENSIC_ANALYSIS, SOAR_AUTOMATION, APPROVAL_WORKFLOW]</code></td><td>Default tier-3 task names</td></tr>
-                  <tr><td><code>.defaults.default-tier</code></td><td><code>Integer</code></td><td><code>2</code></td><td>Default tier for unmapped tasks</td></tr>
-                  <tr><td><code>.defaults.default-analysis-level</code></td><td><code>String</code></td><td><code>NORMAL</code></td><td>Default analysis level for unmapped tasks</td></tr>
-                </tbody>
-              </table></div>
-            </details>
-
-            <details>
-              <summary><strong>ContexaLlmBindingProperties — <code>contexa.llm.bindings</code></strong></summary>
-              <div class="table-scroll"><table class="api-table">
-                <thead>
-                  <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td><code>.chat</code></td><td><code>Map&lt;String, Binding&gt;</code></td><td><code>{}</code></td><td>Chat model bindings (key = logical name)</td></tr>
-                  <tr><td><code>.embedding</code></td><td><code>Map&lt;String, Binding&gt;</code></td><td><code>{}</code></td><td>Embedding model bindings (key = logical name)</td></tr>
-                  <tr><td colspan="4" style="background:var(--bg-secondary);font-weight:var(--weight-semibold);color:var(--text-secondary);font-size:var(--text-sm)"><code>Binding fields</code></td></tr>
-                  <tr><td><code>.bean-name</code></td><td><code>String</code></td><td><code>""</code></td><td>Spring AI bean name to reference</td></tr>
-                  <tr><td><code>.provider</code></td><td><code>String</code></td><td><code>""</code></td><td>Provider identifier (<code>ollama</code>/<code>openai</code>/<code>anthropic</code>, etc.)</td></tr>
-                  <tr><td><code>.model-id</code></td><td><code>String</code></td><td><code>""</code></td><td>Model identifier (e.g., <code>qwen2.5:7b</code>)</td></tr>
-                  <tr><td><code>.aliases</code></td><td><code>List&lt;String&gt;</code></td><td><code>[]</code></td><td>Model aliases</td></tr>
-                  <tr><td><code>.enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Binding enabled flag</td></tr>
-                  <tr><td><code>.primary</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Primary binding for this kind</td></tr>
-                </tbody>
-              </table></div>
-
-              <div class="code-block">
-                <div class="code-block-header">
-                  <span class="code-block-lang">YAML</span>
-                </div>
-                <pre><code class="language-yaml">contexa:
+contexa:
   llm:
     bindings:
       chat:
-        primary-ollama:
-          bean-name: contexaOllamaChatModel
-          provider: ollama
-          model-id: qwen2.5:7b
-          aliases: [default, fast]
-          enabled: true
-          primary: true
+        anthropicChatModel:
+          aliases: [expert]
+  security:
+    tiered:
+      llm:
+        layer2:
+          model: expert</code></pre>
+
+          <h2 id="ollama">Using a local Ollama</h2>
+          <p>Ollama can be connected in two ways. Choose one.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>Two ways to connect Ollama</strong>Both use models pulled into one Ollama server.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side dg-model"><p class="dg-side-title">The Spring AI Ollama starter</p><ul><li>Dependency <code>spring-ai-starter-model-ollama</code></li><li>Address and model in <code>spring.ai.ollama.*</code></li><li>Chat bean <code>ollamaChatModel</code></li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">The Contexa connection</p><ul><li>Dependency <code>spring-ai-ollama</code> (the library only)</li><li>Address and model in <code>contexa.llm.chat.ollama.*</code></li><li>Chat bean <code>contexaOllamaChatModel</code> (<code>qwen3:8b</code> by default), embedding bean <code>contexaSharedOllamaEmbeddingModel</code> (<code>mxbai-embed-large</code> by default)</li></ul></div>
+            </div>
+          </figure>
+          <p>The Contexa connection is on when <code>contexa.llm.chat.ollama.base-url</code> is set (with the Ollama library in the application). Chat and embedding use the same Ollama server. A start with Ollama alone:</p>
+          <pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+    username: contexa
+    password: ${CONTEXA_DB_PASSWORD}
+  llm:
+    chat:
+      ollama:
+        base-url: http://localhost:11434
+        model: qwen3:8b
+        keep-alive: 30m
+    selection:
+      chat:
+        priority: ollama
       embedding:
-        primary-ollama:
-          bean-name: contexaSharedOllamaEmbeddingModel
-          provider: ollama
-          model-id: mxbai-embed-large
-          enabled: true
-          primary: true</code></pre>
-              </div>
-            </details>
+        priority: ollama</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.llm.chat.ollama.base-url</code></td><td>none</td><td>Ollama server address. When set, Contexa creates the Ollama connection and the two beans above</td></tr>
+              <tr><td><code>contexa.llm.chat.ollama.model</code></td><td>none</td><td>Chat model. Empty: <code>qwen3:8b</code></td></tr>
+              <tr><td><code>contexa.llm.chat.ollama.keep-alive</code></td><td>none</td><td>How long the model stays in memory after a call (Ollama <code>keep_alive</code>, for example <code>30m</code>). Empty: the Ollama default</td></tr>
+              <tr><td><code>contexa.llm.embedding.ollama.model</code></td><td>none</td><td>Embedding model. Empty: <code>mxbai-embed-large</code></td></tr>
+              <tr><td><code>contexa.llm.embedding.ollama.dedicated-runtime-enabled</code></td><td><code>false</code></td><td><code>true</code>: embeddings go to another Ollama server (bean <code>contexaDedicatedOllamaEmbeddingModel</code>)</td></tr>
+              <tr><td><code>contexa.llm.embedding.ollama.base-url</code></td><td>none</td><td>Address of the embedding server. Startup stops when the dedicated server is on and this is empty</td></tr>
+              <tr><td><code>contexa.llm.model-capabilities.ollama.disable-thinking-patterns</code></td><td>none</td><td>Patterns of Ollama model names whose thinking is turned off (regular expressions, comma separated). Calls to a matching model turn thinking off</td></tr>
+            </tbody>
+          </table></div>
+          <p>With both the chat server address and the dedicated embedding server there are two embedding beans (shared and dedicated), and by name order the dedicated one is picked first.</p>
+          <h3 id="ollama-layer-models">Different models per layer on one Ollama server</h3>
+          <p>An Ollama chat model cannot be copied, so name the layer models as aliases of the Ollama chat bean. An Ollama call sends the picked name as its model, so another model of the same server is used. Pull that model into the Ollama server first.</p>
+          <pre><code class="language-yaml"># Added to the Ollama example above
+contexa:
+  llm:
+    bindings:
+      chat:
+        contexaOllamaChatModel:
+          aliases: [qwen3:8b, qwen3:14b]
+  security:
+    tiered:
+      llm:
+        layer1:
+          model: qwen3:8b
+        layer2:
+          model: qwen3:14b</code></pre>
 
-            <details>
-              <summary><strong>Contexa RAG, Advisor, Streaming, and PgVector</strong></summary>
-              <div class="table-scroll"><table class="api-table">
-                <thead>
-                  <tr><th>Property</th><th>Default</th><th>Description</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td><code>contexa.rag.behavior.lookback-days</code></td><td><code>30</code></td><td>Behavioral retrieval lookback window</td></tr>
-                  <tr><td><code>contexa.rag.risk.similarity-threshold</code></td><td><code>0.8</code></td><td>Risk retrieval threshold</td></tr>
-                  <tr><td><code>contexa.rag.risk.top-k</code></td><td><code>50</code></td><td>Risk retrieval size</td></tr>
-                  <tr><td><code>contexa.rag.etl.batch-size</code></td><td><code>100</code></td><td>ETL batch size</td></tr>
-                  <tr><td><code>contexa.rag.etl.chunk-size</code></td><td><code>500</code></td><td>ETL chunk size</td></tr>
-                  <tr><td><code>contexa.rag.etl.chunk-overlap</code></td><td><code>50</code></td><td>ETL chunk overlap</td></tr>
-                  <tr><td><code>contexa.rag.etl.behavior.retention-days</code></td><td><code>90</code></td><td>Behavior retention period</td></tr>
-                  <tr><td><code>contexa.advisor.chain-profile</code></td><td><code>STANDARD</code></td><td>Advisor chain profile</td></tr>
-                  <tr><td><code>contexa.advisor.soar.approval.enabled</code></td><td><code>true</code></td><td>SOAR approval advisor toggle</td></tr>
-                  <tr><td><code>contexa.advisor.soar.approval.order</code></td><td><code>100</code></td><td>SOAR approval advisor order</td></tr>
-                  <tr><td><code>contexa.advisor.soar.approval.timeout</code></td><td><code>300</code></td><td>SOAR approval timeout</td></tr>
-                  <tr><td><code>contexa.streaming.timeout</code></td><td><code>PT5M</code></td><td>Streaming timeout</td></tr>
-                  <tr><td><code>contexa.streaming.max-retries</code></td><td><code>3</code></td><td>Streaming retry count</td></tr>
-                  <tr><td><code>contexa.streaming.retry-delay</code></td><td><code>PT1S</code></td><td>Streaming retry delay</td></tr>
-                  <tr><td><code>contexa.streaming.retry-multiplier</code></td><td><code>1.5</code></td><td>Streaming retry multiplier</td></tr>
-                  <tr><td><code>contexa.vectorstore.pgvector.dimensions</code></td><td><code>1024</code></td><td>Embedding dimension</td></tr>
-                  <tr><td><code>contexa.vectorstore.pgvector.parallel-threads</code></td><td><code>4</code></td><td>Parallel worker count</td></tr>
-                  <tr><td><code>contexa.vectorstore.pgvector.search-timeout-ms</code></td><td><code>10000</code></td><td>Search timeout</td></tr>
-                  <tr><td><code>contexa.vectorstore.pgvector.store-timeout-ms</code></td><td><code>10000</code></td><td>Store timeout</td></tr>
-                  <tr><td><code>contexa.vectorstore.pgvector.document.chunk-size</code></td><td><code>1000</code></td><td>Document chunk size</td></tr>
-                  <tr><td><code>contexa.vectorstore.pgvector.document.chunk-overlap</code></td><td><code>200</code></td><td>Document chunk overlap</td></tr>
-                </tbody>
-              </table></div>
-            </details>
-          </section>
+          <h2 id="embedding">Embedding model and vector dimension</h2>
+          <p>The embedding model turns documents such as past decision records into vectors to store and search. The stored vectors must have the model's dimension, so <strong>embedding is fixed to one provider</strong>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.llm.selection.embedding.mode</code></td><td><code>fixed</code></td><td><code>fixed</code>: the model of the <code>priority</code> provider first, else another embedding model. <code>spring-primary</code>: the model marked primary. <code>dynamic-priority</code> cannot be used (startup stops)</td></tr>
+              <tr><td><code>contexa.llm.selection.embedding.priority</code></td><td><code>openai</code></td><td>The one embedding provider. Startup stops when more than one is named</td></tr>
+              <tr><td><code>contexa.llm.embedding.dimensions</code></td><td><code>1024</code></td><td>Embedding dimension. Used to set the dimension only when you set it (step 2 below)</td></tr>
+              <tr><td><code>contexa.llm.embedding.ollama.dimensions</code></td><td><code>1024</code></td><td>Ollama embedding dimension. Used only when you set it (step 3 below)</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="dimensions">How the dimension is decided</h3>
+          <ol>
+            <li>The value of <code>contexa.vectorstore.pgvector.dimensions</code>, when you set it</li>
+            <li>The value of <code>contexa.llm.embedding.dimensions</code>, when you set it</li>
+            <li>The provider's dimension key: <code>spring.ai.openai.embedding.options.dimensions</code> for OpenAI, <code>contexa.llm.embedding.ollama.dimensions</code> (or <code>spring.ai.ollama.embedding.options.dimensions</code>) for Ollama</li>
+            <li>The model's value when Contexa knows the model: 1024 for OpenAI <code>text-embedding-3-small</code>, <code>text-embedding-3-large</code> and the other <code>text-embedding-3</code> models, 1536 for <code>text-embedding-ada-002</code>, 1024 for Ollama <code>mxbai-embed-large</code> and <code>bge-m3</code></li>
+            <li>For an unknown model with none of the values above, startup stops. Set that model's dimension in both <code>contexa.llm.embedding.dimensions</code> and <code>contexa.vectorstore.pgvector.dimensions</code>.</li>
+          </ol>
+          <p>With OpenAI embeddings, Contexa sets the default of <code>spring.ai.openai.embedding.options.model</code> to <code>text-embedding-3-small</code> and of <code>dimensions</code> to the dimension decided above, so 1024-dimension vectors are requested by default.</p>
+          <div class="callout callout-warning">
+            <strong>A changed dimension no longer fits the stored vectors.</strong> At startup Contexa compares the dimension of the embedding model in use, the configured vector store dimension and the dimension of an existing <code>vector_store</code> table, and stops when any differs. To change the dimension, create the table again or embed the documents again. When they match, the startup log shows <code>Embedding vector dimension verified: provider=…, model=…, dimension=…</code>.
+          </div>
 
+          <h2 id="vector-store">Vector store (pgvector)</h2>
+          <p>Vectors are stored in the vector store bean the Spring AI pgvector auto-configuration creates (dependencies in <a href="../installation-guide.html">Installation Guide</a>). Write its settings as <code>contexa.vectorstore.pgvector.*</code>. A value set here is also given to the Spring AI key of the same name (when that Spring AI key is not set itself), so the store uses the same value. The other way round, a value set only under the Spring AI key (<code>spring.ai.vectorstore.pgvector.*</code>) is treated by Contexa as an old key and logs an ERROR at startup, so write the Contexa key.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.vectorstore.pgvector.dimensions</code></td><td><code>1024</code></td><td>Vector dimension (128 to 3072). When not set, decided by the <a href="#dimensions">steps above</a></td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.index-type</code></td><td><code>HNSW</code></td><td>Index type (<code>HNSW</code> or <code>IVFFLAT</code>), used by the Spring AI store when it creates the table</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.distance-type</code></td><td><code>COSINE_DISTANCE</code></td><td>Distance (<code>COSINE_DISTANCE</code>, <code>EUCLIDEAN_DISTANCE</code> or <code>NEGATIVE_INNER_PRODUCT</code>)</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.batch-size</code></td><td><code>100</code></td><td>Documents stored at once</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.parallel-threads</code></td><td><code>16</code></td><td>Threads shared by vector searches and stores (1 to 32)</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.top-k</code></td><td><code>100</code></td><td>Most results of a similarity search that sets no count</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.similarity-threshold</code></td><td><code>0.5</code></td><td>Lowest similarity of a similarity search that sets no count</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.search-timeout-ms</code></td><td><code>15000</code></td><td>Wait for one search (ms)</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.store-timeout-ms</code></td><td><code>15000</code></td><td>Wait for one store (ms)</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.hnsw.ef-search</code></td><td><code>100</code></td><td>HNSW search breadth set on every similarity search (<code>hnsw.ef_search</code>). Larger is more exact and slower</td></tr>
+            </tbody>
+          </table></div>
+          <p><strong>Creating the table at first start.</strong> Contexa sets the default of Spring AI's <code>spring.ai.vectorstore.pgvector.initialize-schema</code> to <code>true</code> (Spring AI's own default is <code>false</code>). So the first start creates the vector extension, the <code>vector_store</code> table, its HNSW index and the metadata index for per-user searches. For a database whose schema is managed by migrations, turn it off and create the table and both indexes yourself.</p>
+          <pre><code class="language-yaml"># Added to your existing settings
+contexa:
+  vectorstore:
+    pgvector:
+      initialize-schema: false</code></pre>
+          <h3 id="vector-retry">Retrying failed stores</h3>
+          <p>A document whose vector store failed waits in an in-memory queue and is stored again in the background, so that an outage of a few minutes does not lose learning records. The queue is lost on restart; when the documents must outlive a restart, the application registers its own <code>FailedDocumentSink</code> bean.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.vectorstore.retry.enabled</code></td><td><code>true</code></td><td><code>false</code>: a failed store is only returned to the caller as an error</td></tr>
+              <tr><td><code>contexa.vectorstore.retry.queue-size</code></td><td><code>2000</code></td><td>Most waiting documents. When full, the oldest waiting document is dropped</td></tr>
+              <tr><td><code>contexa.vectorstore.retry.max-attempts</code></td><td><code>20</code></td><td>Given up after this many tries</td></tr>
+              <tr><td><code>contexa.vectorstore.retry.max-age</code></td><td><code>1h</code></td><td>Given up this long after the first failure</td></tr>
+              <tr><td><code>contexa.vectorstore.retry.initial-delay</code></td><td><code>10s</code></td><td>Wait before the first retry; it doubles with each failure</td></tr>
+              <tr><td><code>contexa.vectorstore.retry.max-delay</code></td><td><code>5m</code></td><td>Longest wait between two retries</td></tr>
+              <tr><td><code>contexa.vectorstore.retry.batch-size</code></td><td><code>20</code></td><td>Documents one retry stores. Halved while retries fail, grows back after they succeed</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="rag">Past records and context search (RAG)</h2>
+          <p><code>contexa.rag.*</code> sets the defaults the AI pipeline and the AI Lab services use when they search the vector store, and how long past decision records are kept. How many past records Layer 1 and Layer 2 of the decision engine look up, and at what similarity, is set in <a href="security.html">Enforcement Modes and Decision Tuning</a>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.rag.enabled</code></td><td><code>true</code></td><td>The whole RAG auto-configuration (vector service, record retention, dimension check)</td></tr>
+              <tr><td><code>contexa.rag.defaults.top-k</code></td><td><code>10</code></td><td>Documents the AI pipeline's context search (<code>ContextRetriever</code>) takes</td></tr>
+              <tr><td><code>contexa.rag.defaults.similarity-threshold</code></td><td><code>0.7</code></td><td>Lowest similarity of that search</td></tr>
+              <tr><td><code>contexa.rag.behavior.shared-advisor-enabled</code></td><td><code>false</code></td><td>Creates an advisor bean (<code>behaviorAnalysisRagAdvisor</code>) that reads every user's behaviour documents. Contexa does not use it. It has no user filter, so turn it on only when the application uses it itself</td></tr>
+              <tr><td><code>contexa.rag.behavior.lookback-days</code></td><td><code>30</code></td><td>Days that advisor looks back</td></tr>
+              <tr><td><code>contexa.rag.risk.top-k</code></td><td><code>50</code></td><td>Search count of the risk assessment advisor bean (<code>riskAssessmentRagAdvisor</code>). Nothing in Contexa uses this bean</td></tr>
+              <tr><td><code>contexa.rag.risk.similarity-threshold</code></td><td><code>0.8</code></td><td>Lowest similarity of that advisor</td></tr>
+              <tr><td><code>contexa.rag.lab.batch-size</code></td><td><code>50</code></td><td>Documents the AI Lab vector services (behaviour analysis, policy generation) store at once</td></tr>
+              <tr><td><code>contexa.rag.lab.top-k</code></td><td><code>100</code></td><td>AI Lab search count (when the request sets none)</td></tr>
+              <tr><td><code>contexa.rag.lab.similarity-threshold</code></td><td><code>0.75</code></td><td>Lowest similarity of an AI Lab search</td></tr>
+              <tr><td><code>contexa.rag.lab.validation-enabled</code></td><td><code>true</code></td><td>Checks an AI Lab document before it is stored</td></tr>
+              <tr><td><code>contexa.rag.lab.enrichment-enabled</code></td><td><code>true</code></td><td>Adds metadata to AI Lab documents</td></tr>
+              <tr><td><code>contexa.rag.etl.behavior.retention-days</code></td><td><code>90</code></td><td>Days past decision records are kept. 0 or less keeps them for good</td></tr>
+              <tr><td><code>contexa.rag.etl.behavior.retention-cleanup-cron</code></td><td><code>0 45 3 * * *</code></td><td>When expired records are deleted (03:45 every day)</td></tr>
+              <tr><td><code>contexa.rag.vocabulary-reindex-on-start</code></td><td><code>true</code></td><td>After startup, moves past records stored under an older classification vocabulary to today's (in the background, 500 at a time)</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="provider-options">Per-provider options of decision calls</h2>
+          <p>Options Layer 1 and Layer 2 attach when they call a model. They apply only when the layer's model is of that provider. For Layer 2, write the same names under <code>layer2</code>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.tiered.layer1.max-output-tokens</code></td><td><code>4096</code></td><td>Most tokens of a Layer 1 answer. A reasoning model's reasoning tokens count too</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.max-output-tokens</code></td><td><code>2560</code></td><td>Most tokens of a Layer 2 answer</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.open-ai-reasoning-effort</code></td><td><code>low</code></td><td>Reasoning effort of an OpenAI reasoning model. Sent only to OpenAI models whose name matches <code>contexa.llm.model-capabilities.openai.max-completion-token-patterns</code></td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.open-ai-verbosity</code></td><td><code>low</code></td><td>Answer length of an OpenAI reasoning model. Same models as above</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.anthropic-thinking</code></td><td><code>PROVIDER_DEFAULT</code></td><td>Thinking of an Anthropic model. <code>PROVIDER_DEFAULT</code>: nothing sent (model and Spring AI default), <code>OFF</code>: off, <code>BUDGET</code>: on with a budget, <code>ADAPTIVE</code>: needs Spring AI 2.0 or later</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.anthropic-thinking-budget-tokens</code></td><td>none</td><td>Thinking budget with <code>BUDGET</code> (1024 or more, required). The answer limit becomes <code>max-output-tokens</code> plus the budget</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.anthropic-thinking-allowance-tokens</code></td><td><code>0</code></td><td>Tokens added to the answer limit for a model that thinks without a budget. 0: thinking and answer share <code>max-output-tokens</code></td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.anthropic-effort</code></td><td>none</td><td>Anthropic effort. Spring AI 1.1 cannot send it, so startup stops when a value is set</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-info">
+            <strong>Anthropic thinking settings are checked at startup.</strong> With the Anthropic library in the application, startup stops and says why when a budget is below 1024, when a value cannot be sent by Spring AI 1.1 (<code>ADAPTIVE</code>, <code>anthropic-effort</code>), or when the layer's Claude model refuses the value. Turning thinking off also changes the model's decisions.
+          </div>
+          <h3 id="model-capabilities">Per-model handling tables</h3>
+          <p>Models take different options, so Contexa adjusts the call options. The default tables are in the code; set these only to fit a new model.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.llm.model-capabilities.openai.max-completion-token-patterns</code></td><td><code>gpt-5(?:[.-].*)?,o\d+(?:[.-].*)?</code></td><td>OpenAI models with these names get <code>max_completion_tokens</code> instead of <code>max_tokens</code>, and the reasoning options</td></tr>
+              <tr><td><code>contexa.llm.model-capabilities.openai.default-sampling-only-patterns</code></td><td><code>gpt-5(?:[.-].*)?,o\d+(?:[.-].*)?</code></td><td>OpenAI models with these names get no temperature or top-p</td></tr>
+              <tr><td><code>contexa.llm.model-capabilities.anthropic.default-sampling-only-patterns</code></td><td>table in the code</td><td>Claude models that refuse any sampling value but the default (Opus 4.7 and later, Sonnet 5, Haiku 5, Fable 5, Mythos 5 families). They get no sampling values</td></tr>
+              <tr><td><code>contexa.llm.model-capabilities.anthropic.thinking</code></td><td>table in the code</td><td>The thinking and effort values each Claude model takes. A list set here replaces the whole table</td></tr>
+              <tr><td><code>contexa.llm.model-capabilities.anthropic.system-prompt-cache</code></td><td><code>true</code></td><td>Marks the system prompt for caching when no cache strategy is configured</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="advisor-streaming">Advisors and streaming</h2>
+          <p>The ChatClient Contexa calls models with carries advisors, and a streamed answer is searched for the marker where the final answer starts. How they work is in the <a href="../../reference/core/advisor.html">Advisor</a> and <a href="../../reference/core/streaming.html">Streaming</a> references.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.advisor.enabled</code></td><td><code>true</code></td><td>The whole advisor auto-configuration</td></tr>
+              <tr><td><code>contexa.advisor.security.enabled</code></td><td><code>true</code></td><td>The security advisor. It attaches user and session information to a call and logs the user and the time taken for each call</td></tr>
+              <tr><td><code>contexa.advisor.security.order</code></td><td><code>50</code></td><td>Advisor order (lower runs first)</td></tr>
+              <tr><td><code>contexa.advisor.security.require-authentication</code></td><td><code>false</code></td><td><code>true</code>: a call with no user ID is refused</td></tr>
+              <tr><td><code>contexa.streaming.final-response-marker</code></td><td><code>###FINAL_RESPONSE###</code></td><td>Marker in the stream where the final answer starts. Do not change it: the code that adds the marker uses the same fixed value, not this setting</td></tr>
+              <tr><td><code>contexa.streaming.marker-buffer-size</code></td><td><code>100</code></td><td>Characters held back to find the marker (added to the marker length)</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="startup-checks">When startup stops</h2>
+          <p>When the model settings do not fit, Contexa stops at startup instead of quietly using another model in production. Match the log message to the table below.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Situation</th><th>Fix</th></tr></thead>
+            <tbody>
+              <tr><td>Chat <code>mode: fixed</code> with more than one provider in <code>priority</code>, or no model of that provider</td><td>Name one provider and add its Spring AI starter</td></tr>
+              <tr><td>Embedding <code>mode: dynamic-priority</code></td><td>Change it to <code>fixed</code></td></tr>
+              <tr><td>More than one provider in the embedding <code>priority</code></td><td>Name one</td></tr>
+              <tr><td>A layer model (<code>layer1.model</code>, <code>layer2.model</code>) cannot be made</td><td>Give that name to a model as a <a href="#bindings">binding</a> alias or model name, or keep OpenAI as the primary chat model</td></tr>
+              <tr><td>A model name or alias belongs to two models</td><td>Make the names different</td></tr>
+              <tr><td><code>spring-primary</code> with more than one primary, or several models and no primary</td><td>Mark one with <code>primary: true</code></td></tr>
+              <tr><td>An unknown embedding model with no dimension set</td><td>Set <code>contexa.llm.embedding.dimensions</code> and <code>contexa.vectorstore.pgvector.dimensions</code> to that model's dimension</td></tr>
+              <tr><td>Dimensions differ (model, settings, existing table)</td><td>Make them equal, and create the table again or embed again</td></tr>
+              <tr><td>The dedicated Ollama embedding server is on with no address</td><td>Set <code>contexa.llm.embedding.ollama.base-url</code></td></tr>
+              <tr><td>Anthropic thinking settings refused</td><td>Fix the setting the message names (<a href="#provider-options">table above</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The other way round, some cases start but produce no decisions: no chat model at all, or a <code>mode</code> value written with underscores so that no primary chat model was created.</p>
+
+          <h2 id="related">Settings not on this page</h2>
+          <ul>
+            <li>Time limits of Layer 1 and Layer 2, how much goes into the prompt, determinism, prompt bundles, the decision engine's past-record search and cache, trusted proxies: <a href="security.html">Enforcement Modes and Decision Tuning</a></li>
+            <li>How a decision is made: <a href="../../reference/architecture/decision-engine.html">Decision Engine</a></li>
+            <li>Moving keys written with an older prefix to today's keys: <a href="../configuration.html">Configuration guide</a></li>
+            <li>Inside LLM calls and model selection: <a href="../../reference/core/llm-orchestrator.html">LLM Orchestrator</a>, <a href="../../reference/core/model-provider.html">Model Provider</a>, <a href="../../reference/core/rag.html">RAG</a></li>
+          </ul>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/install/configuration/security.html" class="docs-nav-link prev">
+            <a href="infrastructure.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Security Configuration</span>
+              <span class="docs-nav-title">First Start and Deployment (Standalone · Distributed)</span>
             </a>
-            <a href="../../../docs/install/configuration/identity.html" class="docs-nav-link next">
+            <a href="security.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Identity Configuration</span>
+              <span class="docs-nav-title">Enforcement Modes and Decision Tuning</span>
             </a>
           </div>

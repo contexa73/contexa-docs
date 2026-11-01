@@ -11,978 +11,384 @@
               <span class="badge badge-info">contexa-identity</span>
             </div>
             <h1>Identity DSL</h1>
-            <p class="lead">Identity DSL is a fluent, type-safe Java API for configuring your entire authentication platform. Define authentication methods, state management, and Spring Security settings in a single <code>PlatformSecurityConfig</code> class.</p>
+            <p class="lead">When Contexa owns login, you write the login methods (form, REST, one-time code, passkey, MFA) and the login state (session, token) in one method, and Contexa builds a Spring Security chain for each flow. This page covers when it is on, building a first chain, splitting requests across chains, settings shared by every chain and settings for one chain, and moving from an existing Spring Security configuration.</p>
           </div>
 
-          <!-- Quick Start -->
-          <section class="docs-section">
-            <h2 id="quick-start">Quick Start</h2>
-            <p>The simplest configuration — form login with session-based state:</p>
+          <div class="callout callout-info">
+            <strong>This is a feature for when Contexa owns login (<code>CONTEXA_OWNED</code>).</strong> With the default <code>HOST_OWNED</code>, your application's Spring Security handles login and the flows written here do not become chains. To keep your application's existing login, see <a href="../common/bridge.html">Connecting Your Existing Login</a>.
+          </div>
 
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Configuration
-@EnableWebSecurity
-public class PlatformSecurityConfig {
+          <h2 id="overview">At a glance</h2>
+          <p>You write <strong>flows</strong> one after another in a single <code>PlatformConfig</code> bean. A flow is a pair of one authentication method and one login state. At startup Contexa registers one <code>SecurityFilterChain</code> bean per flow, and each request is compared with the chains from the lowest <code>order</code>; the first chain that matches handles it.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>From one DSL method to several chains</strong>One flow becomes one chain. The application does not write a <code>@Bean</code> method per chain.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-host"><span class="dg-node-tag">Application</span><span class="dg-node-title">Writes flows in a <code>PlatformConfig</code> bean</span><span class="dg-node-desc">Method then state, like <code>.form(...).session(...)</code> or <code>.rest(...).oauth2(...)</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa · at startup</span><span class="dg-node-title">Applies the configuration to a new <code>HttpSecurity</code> per flow</span><span class="dg-node-desc">Settings shared by every chain (global) → Contexa filters → authentication method → login state</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa · at startup</span><span class="dg-node-title">Registers it as a <code>SecurityFilterChain</code> bean</span><span class="dg-node-desc">Named flow name + <code>SecurityFilterChain</code> + sequence number (for example <code>form_flowSecurityFilterChain1</code>)</span></li>
+              <li class="dg-node dg-request"><span class="dg-node-tag">Every request</span><span class="dg-node-title">Compared from the lowest order</span><span class="dg-node-desc">The first matching chain handles it</span></li>
+            </ol>
+          </figure>
+
+          <h2 id="ownership">When it is on: who owns login</h2>
+          <p>Contexa has an <strong>authentication ownership</strong> setting (<code>contexa.bridge.ownership</code>) that says who handles login. Flows written with the DSL become chains only with <code>CONTEXA_OWNED</code>.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>What changes with authentication ownership</strong>The default is <code>HOST_OWNED</code>: the application owns login.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side dg-host"><p class="dg-side-title">The application owns it (<code>HOST_OWNED</code>, default)</p><ul><li>The application's <code>SecurityFilterChain</code> handles login and authorization</li><li>Contexa builds no chain; flows written with the DSL do not become chains either</li><li>Without an application chain, Spring Boot's default security (every request authenticated) applies, and an error log says so at startup</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Contexa owns it (<code>CONTEXA_OWNED</code>)</p><ul><li>Builds a chain for each DSL flow</li><li>The request-time enforcement filters, MFA and Contexa's authorization server go into the chains</li><li>Keeps one empty chain that matches no request, so that Spring Boot's default chain is not created</li></ul></div>
+            </div>
+          </figure>
+
+          <h3 id="enable">How to turn it on</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Way</th><th>Result</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.bridge.ownership: CONTEXA_OWNED</code></td><td>Gives only login to Contexa. When set, it wins over the annotation's mode.</td></tr>
+              <tr><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code></td><td>Becomes <code>CONTEXA_OWNED</code> when the ownership is not set. This mode means Contexa owns the whole application, so when the application has no <code>DataSource</code> bean, the Contexa database becomes the application's default <code>DataSource</code> (<code>contexa.datasource.isolation.contexa-owned-application</code>).</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+    username: contexa
+    password: contexa
+  bridge:
+    ownership: CONTEXA_OWNED</code></pre>
+          <p>The Identity DSL comes with <code>spring-boot-starter-contexa</code>. The starter brings the identity, iam, core, autoconfigure and common modules and Spring Authorization Server, so no other dependency is needed.</p>
+          <p>To turn off the DSL, the chains and the request-time filters altogether, set <code>contexa.identity.security-core.enabled: false</code>.</p>
+
+          <h3 id="default-config">When you define no <code>PlatformConfig</code></h3>
+          <p>When the application defines no <code>PlatformConfig</code> bean, <code>@EnableAISecurity</code> uses the default configuration below. With your own bean, the default is not used.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Mode</th><th>Shared by every chain</th><th>Flows</th></tr></thead>
+            <tbody>
+              <tr><td><code>FULL</code></td><td>Static paths (<code>/contexa/css/**</code>, <code>/contexa/js/**</code>, <code>/images/**</code>, <code>/favicon.ico</code>) are allowed; every other request goes to Contexa's dynamic authorization (<code>CustomDynamicAuthorizationManager</code>)</td><td>One MFA flow: primary form login + passkey + one-time code, 1 required factor, order 100, session state</td></tr>
+              <tr><td><code>SANDBOX</code> (default mode) with only the ownership set to <code>CONTEXA_OWNED</code></td><td>CSRF, CORS and security headers are off. <code>/contexa/admin/login</code> is allowed, <code>/contexa/admin/**</code> needs the <code>ADMIN</code> role, everything else is allowed</td><td>The same MFA flow. The primary login processing path is a random path</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="quick-start">Building a first chain</h2>
+          <p>The smallest configuration: one form login with session state. Put <code>@Configuration</code> on the configuration class. In Spring Security 6, <code>@EnableWebSecurity</code> does not include <code>@Configuration</code>, so with that alone the <code>PlatformConfig</code> bean is not registered.</p>
+          <pre><code class="language-java">@Configuration
+public class LoginFlowsConfig {
 
     @Bean
-    public PlatformConfig platformDslConfig(
-            IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
+    public PlatformConfig platformDslConfig(IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
         return registry
-            .form(form -&gt; form.loginPage("/login").defaultSuccessUrl("/home"))
-            .session(Customizer.withDefaults())
-            .build();
+                .global(http -&gt; http.authorizeHttpRequests(auth -&gt; auth
+                        .requestMatchers("/css/**", "/js/**").permitAll()
+                        .anyRequest().authenticated()))
+                .form(form -&gt; form.defaultSuccessUrl("/home"))
+                .session(Customizer.withDefaults())
+                .build();
     }
 }</code></pre>
-            </div>
-          </section>
+          <p>What this gives you:</p>
+          <ul>
+            <li>One chain bean, <code>form_flowSecurityFilterChain1</code>. The flow sets no scope, so it takes every request.</li>
+            <li>The login page is Spring's default page at <code>GET /login</code>, and login is processed at <code>POST /login</code> (<code>contexa.auth.urls.single.form-login-processing</code>).</li>
+            <li>Logging in changes the session ID (session fixation protection), and <code>/logout</code> logs out.</li>
+            <li>CSRF stays on, as in Spring's default.</li>
+          </ul>
+          <h3 id="verify">Checking it</h3>
+          <ul>
+            <li>Opening a protected address in a browser goes to <code>/login</code>, and after login to <code>/home</code>.</li>
+            <li>If the startup log shows <code>Skipping Contexa-owned authentication chain bootstrap in HOST_OWNED mode</code>, the ownership is <code>HOST_OWNED</code> and no chain was built.</li>
+            <li>If a flow can never receive a request, the startup log shows a <code>Flow '…' is never reached</code> error (<a href="#multiple-chains">Splitting requests across chains</a>).</li>
+          </ul>
 
-          <!-- Why Contexa DSL? -->
-          <section class="docs-section">
-            <h2 id="why-contexa-dsl">Why Contexa DSL?</h2>
-            <p>Spring Security requires a separate <code>@Bean</code> method for every <code>SecurityFilterChain</code>. Three login pages means three methods with repeated boilerplate. Contexa's Identity DSL eliminates this entirely — one fluent chain, one method, any number of filter chains.</p>
+          <h2 id="flows">Choosing methods and states</h2>
+          <p>After an authentication method you call a state method; the state method applies to the method written just before it.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Authentication method</th><th>Where it fits</th><th>Default order</th><th>Flow name</th></tr></thead>
+            <tbody>
+              <tr><td><code>.form(...)</code></td><td>Server-rendered login page (<a href="authentication.html#form">Form login</a>)</td><td>100</td><td><code>form_flow</code></td></tr>
+              <tr><td><code>.rest(...)</code></td><td>JSON login for SPAs, mobile apps and APIs (<a href="authentication.html#rest">REST login</a>)</td><td>200</td><td><code>rest_flow</code></td></tr>
+              <tr><td><code>.ott(...)</code></td><td>A one-time code received by email (<a href="authentication.html#ott">One-time code</a>)</td><td>300</td><td><code>ott_flow</code></td></tr>
+              <tr><td><code>.passkey(...)</code></td><td>Passkey (<a href="authentication.html#passkey">Passkey</a>)</td><td>400</td><td><code>passkey_flow</code></td></tr>
+              <tr><td><code>.mfa(...)</code></td><td>Primary login + second factors (<a href="mfa.html">Adaptive MFA</a>)</td><td>200</td><td><code>mfa</code></td></tr>
+            </tbody>
+          </table></div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>State</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>.session(...)</code></td><td>Keeps the login in the HTTP session, changes the session ID at login, configures logout (<a href="state-management.html#session">Session state</a>)</td></tr>
+              <tr><td><code>.oauth2(...)</code></td><td>Issues and validates tokens (JWT). By default it configures a resource server and an authorization server together, and <code>contexa.auth.oauth2.client-secret</code> is required (<a href="state-management.html#oauth2">Token state</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>Using the same method more than once names the flows <code>form_flow</code>, <code>form_flow_2</code>, <code>form_flow_3</code> and so on.</li>
+            <li>The same <code>.form()</code> can take a different state in each flow. The five methods and two states combine freely.</li>
+            <li>The lambda passed to <code>.session(...)</code> or <code>.oauth2(...)</code> applies to that state's configurer. For the token state the request scope (<code>requestScope</code>, <code>tokenScopeRequests</code>) is set here.</li>
+            <li>A flow with no state gets only its success and failure handlers from <code>contexa.auth.state-type</code> (default <code>OAUTH2</code>); no session or token configuration is attached. Always give each flow a state.</li>
+          </ul>
 
-            <h3>Spring Security: 3 Filter Chains</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Configuration
-@EnableWebSecurity
-public class SecurityConfig {
-
-    @Bean @Order(1)
-    public SecurityFilterChain adminChain(HttpSecurity http) throws Exception {
-        return http
-            .securityMatcher("/admin/**")
-            .csrf(AbstractHttpConfigurer::disable)
-            .formLogin(form -&gt; form.loginPage("/admin/login").defaultSuccessUrl("/admin"))
-            .sessionManagement(session -&gt; session.sessionFixation().changeSessionId())
-            .authorizeHttpRequests(auth -&gt; auth.anyRequest().authenticated())
-            .build();
-    }
-
-    @Bean @Order(2)
-    public SecurityFilterChain apiChain(HttpSecurity http) throws Exception {
-        return http
-            .securityMatcher("/api/**")
-            .csrf(AbstractHttpConfigurer::disable)
-            .formLogin(form -&gt; form.loginPage("/api/login").defaultSuccessUrl("/api"))
-            .sessionManagement(session -&gt; session.sessionFixation().changeSessionId())
-            .authorizeHttpRequests(auth -&gt; auth.anyRequest().authenticated())
-            .build();
-    }
-
-    @Bean @Order(3)
-    public SecurityFilterChain userChain(HttpSecurity http) throws Exception {
-        return http
-            .csrf(AbstractHttpConfigurer::disable)
-            .formLogin(form -&gt; form.loginPage("/login").defaultSuccessUrl("/home"))
-            .sessionManagement(session -&gt; session.sessionFixation().changeSessionId())
-            .authorizeHttpRequests(auth -&gt; auth.anyRequest().authenticated())
-            .build();
-    }
-}
-// 3 @Bean methods, ~40 lines, repeated boilerplate per chain</code></pre>
-            </div>
-
-            <h3>Contexa Identity DSL: Same Result</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Bean
-public PlatformConfig platformDslConfig(
-        IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
-    return registry
-        .global(http -&gt; {
-            http.csrf(AbstractHttpConfigurer::disable)
-                .sessionManagement(session -&gt; session.sessionFixation().changeSessionId())
-                .authorizeHttpRequests(auth -&gt; auth.anyRequest().authenticated());
-        })
-        .form(f -&gt; f.order(10).loginPage("/admin/login").defaultSuccessUrl("/admin")
-            .rawHttp(http -&gt; http.securityMatcher("/admin/**")))
+          <h2 id="multiple-chains">Splitting requests across chains</h2>
+          <p>Chains are compared from the lowest order. A chain without a scope takes every request, so a chain placed after it never receives one. Contexa then names both flows in a <code>Flow '…' is never reached</code> error at startup. Flows with the same order are compared in the order they are written.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>How a request picks a chain</strong>Put chains with a narrow scope first and the chain without a scope last.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">Request</span><span class="dg-node-desc">For example <code>GET /admin/reports</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">order 10</span><span class="dg-node-title">Admin chain (<code>/admin/**</code>)</span><span class="dg-node-desc">If the path matches, it is handled here</span></li>
+              <li class="dg-node"><span class="dg-node-tag">order 50</span><span class="dg-node-title">Token chain (token requests only)</span><span class="dg-node-desc">Handled here when it carries <code>Authorization: Bearer</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">order 100</span><span class="dg-node-title">User chain (no scope)</span><span class="dg-node-desc">Every remaining request</span></li>
+            </ol>
+          </figure>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>How to set the scope</th><th>Flows</th><th>Effect</th></tr></thead>
+            <tbody>
+              <tr><td><code>rawHttp(http -&gt; http.securityMatcher("/admin/**"))</code></td><td>Form, REST, one-time code, passkey</td><td>Takes only requests under that path</td></tr>
+              <tr><td><code>.mfa(mfa -&gt; mfa.urlPrefix("/admin"))</code></td><td>MFA</td><td>Every MFA address gets the prefix and the chain scope becomes <code>/admin/**</code> (<a href="mfa.html#multiple">Several MFA flows</a>)</td></tr>
+              <tr><td><code>.oauth2(oauth2 -&gt; oauth2.requestScope(OAuth2RequestScope.TOKEN_REQUESTS))</code></td><td>Token state</td><td>Takes only requests carrying a token and the flow's authentication addresses, and passes the rest to the next flow (<a href="state-management.html#request-scope">Request scope</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>When you narrow a form flow's scope, change its login processing path too.</strong> A form flow's login processing path is not <code>loginPage</code> but <code>contexa.auth.urls.single.form-login-processing</code> (default <code>/login</code>). If a chain scoped to <code>/admin/**</code> only gets <code>loginPage("/admin/login")</code>, the login POST (<code>/login</code>) goes to another chain. Two flows sharing one processing path do not stop startup, so take care.
+          </div>
+          <pre><code class="language-java">registry
+        .global(http -&gt; http.authorizeHttpRequests(auth -&gt; auth.anyRequest().authenticated()))
+        // Administrators: only under /admin, with the application's own login page
+        .form(form -&gt; form.order(10)
+                .loginPage("/admin/login")
+                .loginProcessingUrl("/admin/login")
+                .defaultSuccessUrl("/admin")
+                .permitAll()
+                .rawHttp(http -&gt; http.securityMatcher("/admin/**")))
         .session(Customizer.withDefaults())
-        .form(f -&gt; f.order(20).loginPage("/api/login").defaultSuccessUrl("/api")
-            .rawHttp(http -&gt; http.securityMatcher("/api/**")))
+        // API clients: only requests that carry a token
+        .rest(rest -&gt; rest.order(50))
+        .oauth2(oauth2 -&gt; oauth2.requestScope(OAuth2RequestScope.TOKEN_REQUESTS))
+        // Everyone else: every remaining request
+        .form(form -&gt; form.order(100).defaultSuccessUrl("/home"))
         .session(Customizer.withDefaults())
-        .form(f -&gt; f.order(30).loginPage("/login").defaultSuccessUrl("/home"))
-        .session(Customizer.withDefaults())
-        .build();
-}
-// 1 method, ~15 lines, reduced boilerplate, 3 SecurityFilterChain beans registered at runtime</code></pre>
-            </div>
+        .build();</code></pre>
+          <p>A chain's actual order value is <code>Ordered.HIGHEST_PRECEDENCE</code> + the flow's order, so it comes before any <code>SecurityFilterChain</code> bean the application registers on its own.</p>
 
-            <div class="diagram-container">
-              <div class="diagram-grid diagram-grid-3">
-                <div class="diagram-box diagram-highlight">
-                  <div class="diagram-box-name">Fluent Chaining</div>
-                  <div class="diagram-box-desc"><code>.form().session().form().session().build()</code> — one fluent chain creates multiple filter chains automatically</div>
-                </div>
-                <div class="diagram-box diagram-accent">
-                  <div class="diagram-box-name">Dynamic Bean Registration</div>
-                  <div class="diagram-box-desc"><code>SecurityFilterChainRegistrar</code> registers <code>SecurityFilterChain</code> beans at runtime via <code>BeanDefinitionRegistry</code></div>
-                </div>
-                <div class="diagram-box diagram-success">
-                  <div class="diagram-box-name">Auth + State Decoupling</div>
-                  <div class="diagram-box-desc">Any auth method pairs with any state (<code>.session()</code> or <code>.oauth2()</code>). In a plain Spring Security setup, form login and stateless resource-server flows are usually configured as separate chains.</div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- DSL Architecture -->
-          <section class="docs-section">
-            <h2 id="architecture">DSL Architecture</h2>
-            <p>The DSL follows a <strong>two-phase chained builder</strong> pattern. Each <code>.auth().state()</code> pair creates an independent <code>SecurityFilterChain</code>, ordered by priority.</p>
-
-            <h3>Two-Phase Builder Pattern</h3>
-            <div class="diagram-container">
-              <div class="diagram-flow">
-                <div class="diagram-box">
-                  <div class="diagram-box-name">IdentityDslRegistry</div>
-                  <div class="diagram-box-desc">Entry point</div>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box">
-                  <div class="diagram-box-name">.global()</div>
-                  <div class="diagram-box-desc">Shared HttpSecurity settings</div>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-highlight">
-                  <div class="diagram-box-name">Auth Phase</div>
-                  <div class="diagram-box-desc">form / rest / ott / passkey / mfa</div>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-accent">
-                  <div class="diagram-box-name">State Phase</div>
-                  <div class="diagram-box-desc">session / oauth2</div>
-                </div>
-                <div class="diagram-arrow"></div>
-                <div class="diagram-box diagram-success">
-                  <div class="diagram-box-name">.build()</div>
-                  <div class="diagram-box-desc">PlatformConfig</div>
-                </div>
-              </div>
-            </div>
-
-            <h3>Multiple Chains from One Registry</h3>
-            <p>Each <code>.auth().state()</code> pair produces a separate <code>SecurityFilterChain</code>. The registry collects all pairs and <code>SecurityFilterChainRegistrar</code> registers them as Spring beans at runtime.</p>
-
-            <div class="diagram-container">
-              <div class="diagram-flow-vertical">
-                <div class="diagram-box">
-                  <div class="diagram-box-name">IdentityDslRegistry</div>
-                  <div class="diagram-box-desc">.global(http -&gt; { /* shared CSRF, authorization, context */ })</div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-              </div>
-              <div class="diagram-grid diagram-grid-3">
-                <div class="diagram-group">
-                  <div class="diagram-group-title">Chain 1 (order: 20)</div>
-                  <div class="diagram-box diagram-highlight">
-                    <div class="diagram-box-name">.form()</div>
-                    <div class="diagram-box-desc">loginPage("/admin/login")</div>
-                  </div>
-                  <div class="diagram-line-down"></div>
-                  <div class="diagram-box diagram-accent">
-                    <div class="diagram-box-name">.oauth2()</div>
-                  </div>
-                  <div class="diagram-line-down"></div>
-                  <div class="diagram-box diagram-success">
-                    <div class="diagram-box-name">SecurityFilterChain</div>
-                    <div class="diagram-box-desc">/admin/**</div>
-                  </div>
-                </div>
-                <div class="diagram-group">
-                  <div class="diagram-group-title">Chain 2 (order: 50)</div>
-                  <div class="diagram-box diagram-highlight">
-                    <div class="diagram-box-name">.rest()</div>
-                    <div class="diagram-box-desc">loginProcessingUrl("/api/auth")</div>
-                  </div>
-                  <div class="diagram-line-down"></div>
-                  <div class="diagram-box diagram-accent">
-                    <div class="diagram-box-name">.oauth2()</div>
-                  </div>
-                  <div class="diagram-line-down"></div>
-                  <div class="diagram-box diagram-success">
-                    <div class="diagram-box-name">SecurityFilterChain</div>
-                    <div class="diagram-box-desc">/api/**</div>
-                  </div>
-                </div>
-                <div class="diagram-group">
-                  <div class="diagram-group-title">Chain 3 (order: 100)</div>
-                  <div class="diagram-box diagram-highlight">
-                    <div class="diagram-box-name">.mfa()</div>
-                    <div class="diagram-box-desc">formLogin + passkey</div>
-                  </div>
-                  <div class="diagram-line-down"></div>
-                  <div class="diagram-box diagram-accent">
-                    <div class="diagram-box-name">.session()</div>
-                  </div>
-                  <div class="diagram-line-down"></div>
-                  <div class="diagram-box diagram-success">
-                    <div class="diagram-box-name">SecurityFilterChain</div>
-                    <div class="diagram-box-desc">/** (catch-all)</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="callout callout-info">
-              <p>Each chain is isolated with its own filters, authentication strategy, and state management. Requests are routed by <code>order()</code> and <code>securityMatcher</code> — the first matching chain handles the request.</p>
-            </div>
-          </section>
-
-          <!-- How It Works: Dynamic Bean Registration -->
-          <section class="docs-section">
-            <h2 id="dynamic-registration">How It Works: Dynamic Bean Registration</h2>
-            <p>You write <strong>one <code>@Bean</code> method</strong> returning <code>PlatformConfig</code>. Contexa's bootstrap pipeline reads it and registers multiple <code>SecurityFilterChain</code> beans automatically — no extra <code>@Bean</code> annotations needed.</p>
-
-            <!-- Phase 1: What You Write → What Spring Sees -->
-            <h3>What You Write vs. What Spring Sees</h3>
-            <div class="diagram-container">
-              <div class="diagram-flow">
-                <div class="diagram-box diagram-highlight" style="min-width: 200px;">
-                  <div class="diagram-box-name">You Write</div>
-                  <div class="diagram-box-desc">1 <code>@Bean</code> method<br>returns <code>PlatformConfig</code></div>
-                </div>
-                <div class="diagram-arrow">
-                  <span class="diagram-label">bootstrap pipeline</span>
-                </div>
-                <div class="diagram-box diagram-accent" style="min-width: 200px;">
-                  <div class="diagram-box-name">Contexa Generates</div>
-                  <div class="diagram-box-desc">N <code>SecurityFilterChain</code> beans<br>registered at runtime</div>
-                </div>
-                <div class="diagram-arrow">
-                  <span class="diagram-label">Spring sees</span>
-                </div>
-                <div class="diagram-box diagram-success" style="min-width: 200px;">
-                  <div class="diagram-box-name">Spring Context</div>
-                  <div class="diagram-box-desc"><code>formSecurityFilterChain1</code><br><code>restSecurityFilterChain2</code><br><code>ottSecurityFilterChain3</code></div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Phase 2: 4-Step Pipeline as Visual Flow -->
-            <h3>Bootstrap Pipeline</h3>
-            <div class="diagram-container">
-              <div class="diagram-flow-vertical">
-
-                <!-- Step 1 -->
-                <div class="diagram-step">
-                  <div class="diagram-step-number">1</div>
-                  <div class="diagram-step-title">Build PlatformConfig</div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-
-                <!-- Step 1 → 2 visual: PlatformConfig splits into flows -->
-                <div class="diagram-grid diagram-grid-3">
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">FlowConfig #1</div>
-                    <div class="diagram-box-desc">form + session<br>order=10, matcher=/admin/**</div>
-                  </div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">FlowConfig #2</div>
-                    <div class="diagram-box-desc">rest + oauth2<br>order=20, matcher=/api/**</div>
-                  </div>
-                  <div class="diagram-box">
-                    <div class="diagram-box-name">FlowConfig #3</div>
-                    <div class="diagram-box-desc">ott + session<br>order=30, matcher=/**</div>
-                  </div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-
-                <!-- Step 2 -->
-                <div class="diagram-step">
-                  <div class="diagram-step-number">2</div>
-                  <div class="diagram-step-title">Create HttpSecurity per Flow</div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-
-                <!-- Step 2 visual: independent HttpSecurity instances -->
-                <div class="diagram-grid diagram-grid-3">
-                  <div class="diagram-box diagram-highlight">
-                    <div class="diagram-box-name">HttpSecurity #1</div>
-                    <div class="diagram-box-desc">isolated context<br>independent filters</div>
-                  </div>
-                  <div class="diagram-box diagram-highlight">
-                    <div class="diagram-box-name">HttpSecurity #2</div>
-                    <div class="diagram-box-desc">isolated context<br>independent filters</div>
-                  </div>
-                  <div class="diagram-box diagram-highlight">
-                    <div class="diagram-box-name">HttpSecurity #3</div>
-                    <div class="diagram-box-desc">isolated context<br>independent filters</div>
-                  </div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-
-                <!-- Step 3 -->
-                <div class="diagram-step">
-                  <div class="diagram-step-number">3</div>
-                  <div class="diagram-step-title">Apply Configurations</div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-
-                <!-- Step 3 visual: global + flow-specific applied -->
-                <div class="diagram-grid diagram-grid-3">
-                  <div class="diagram-box diagram-accent">
-                    <div class="diagram-box-name">global() + form()</div>
-                    <div class="diagram-box-desc">CSRF, session fixation,<br>login page, filters</div>
-                  </div>
-                  <div class="diagram-box diagram-accent">
-                    <div class="diagram-box-name">global() + rest()</div>
-                    <div class="diagram-box-desc">CSRF, token validation,<br>bearer filters</div>
-                  </div>
-                  <div class="diagram-box diagram-accent">
-                    <div class="diagram-box-name">global() + ott()</div>
-                    <div class="diagram-box-desc">CSRF, OTT generation,<br>magic link filters</div>
-                  </div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-
-                <!-- Step 4 -->
-                <div class="diagram-step diagram-step-active">
-                  <div class="diagram-step-number">4</div>
-                  <div class="diagram-step-title">Register as Spring Beans</div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-
-                <!-- Step 4 visual: final beans in Spring context -->
-                <div class="diagram-grid diagram-grid-3">
-                  <div class="diagram-box diagram-success">
-                    <div class="diagram-box-name">formSecurityFilterChain1</div>
-                    <div class="diagram-box-desc">OrderedSecurityFilterChain<br>order=10</div>
-                  </div>
-                  <div class="diagram-box diagram-success">
-                    <div class="diagram-box-name">restSecurityFilterChain2</div>
-                    <div class="diagram-box-desc">OrderedSecurityFilterChain<br>order=20</div>
-                  </div>
-                  <div class="diagram-box diagram-success">
-                    <div class="diagram-box-name">ottSecurityFilterChain3</div>
-                    <div class="diagram-box-desc">OrderedSecurityFilterChain<br>order=30</div>
-                  </div>
-                </div>
-
-              </div>
-            </div>
-
-            <div class="callout callout-info">
-              <strong>Key insight:</strong> <code>SecurityFilterChainRegistrar</code> accesses Spring's <code>BeanDefinitionRegistry</code> directly. You write one <code>@Bean</code> method returning <code>PlatformConfig</code>, yet Spring sees multiple <code>SecurityFilterChain</code> beans — exactly as if you had written separate <code>@Bean</code> methods for each.
-            </div>
-          </section>
-
-          <!-- Global Configuration -->
-          <section class="docs-section">
-            <h2 id="global-configuration">Global Configuration</h2>
-            <p><code>global()</code> applies shared HTTP security settings to <strong>all</strong> filter chains. Individual authentication method settings override global settings when they conflict (the <code>SecurityConfigurerOrchestrator</code> applies global first, then flow-specific).</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">registry
-    .global(http -&gt; {
-        http
-            .csrf(AbstractHttpConfigurer::disable)
-            .authorizeHttpRequests(authReq -&gt; authReq
-                .requestMatchers("/css/**", "/js/**", "/images/**").permitAll()
-                .anyRequest().access(customAuthorizationManager))
-            .securityContext(sc -&gt;
-                sc.securityContextRepository(customRepository));
-    })
-    // ... authentication methods follow</code></pre>
-            </div>
-
-            <div class="callout callout-warning">
-              <p><strong>Override rule:</strong> Global configurer runs first, then each flow's own configurer runs. If a flow sets <code>disableCsrf()</code> or <code>rawHttp()</code>, it overrides the global CSRF setting for that specific chain only.</p>
-            </div>
-          </section>
-
-          <!-- Filter Chain Order -->
-          <section class="docs-section">
-            <h2 id="filter-chain-order">Filter Chain Order &amp; Request Routing</h2>
-            <p>Each authentication method has a default <code>order()</code> value. Lower order = higher priority = intercepts requests first. When multiple filter chains are registered, Spring Security evaluates them in order and uses the first chain whose <code>securityMatcher</code> matches the request.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Auth Method</th><th>Default Order</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Form Login</td><td>100</td><td>Traditional form-based login</td></tr>
-                <tr><td>MFA</td><td>200</td><td>Multi-factor authentication</td></tr>
-                <tr><td>REST API</td><td>200</td><td>JSON credential submission</td></tr>
-                <tr><td>One-Time Token</td><td>300</td><td>Magic link / OTT</td></tr>
-                <tr><td>Passkey</td><td>400</td><td>WebAuthn / FIDO2</td></tr>
-              </tbody>
-            </table></div>
-
-            <p>Use <code>order()</code> and <code>rawHttp(http -&gt; http.securityMatcher(...))</code> to control which chain handles which requests:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">registry
-    .global(http -&gt; { /* shared settings */ })
-    // Admin pages: Form login, order 20 (highest priority)
-    .form(f -&gt; f.order(20).loginPage("/admin/login")
-        .rawHttp(http -&gt; http.securityMatcher("/admin/**")))
-    .session(Customizer.withDefaults())
-    // API endpoints: REST login, order 50
-    .rest(r -&gt; r.order(50).loginProcessingUrl("/api/auth")
-        .rawHttp(http -&gt; http.securityMatcher("/api/**")))
-    .oauth2(Customizer.withDefaults())
-    // General users: MFA, order 100
-    .mfa(m -&gt; m.order(100)
-        .primaryAuthentication(p -&gt; p.formLogin(form -&gt; form.loginPage("/login")))
-        .passkey(Customizer.withDefaults()))
-    .session(Customizer.withDefaults())
-    .build();</code></pre>
-            </div>
-
-            <div class="callout callout-info">
-              <p>Without <code>securityMatcher</code>, a chain matches <strong>all</strong> requests. Always set <code>securityMatcher</code> via <code>rawHttp()</code> when using multiple chains to avoid overlapping.</p>
-            </div>
-          </section>
-
-          <!-- Authentication + State Combinations -->
-          <section class="docs-section">
-            <h2 id="combinations">Authentication + State Combinations</h2>
-            <p>Every authentication method can be paired with either session or OAuth2 state. You can mix different state strategies across different chains.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Auth Method</th><th>+ Session</th><th>+ OAuth2</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>Form Login</td><td><code>.form(...).session(...)</code></td><td><code>.form(...).oauth2(...)</code></td></tr>
-                <tr><td>REST API</td><td><code>.rest(...).session(...)</code></td><td><code>.rest(...).oauth2(...)</code></td></tr>
-                <tr><td>One-Time Token</td><td><code>.ott(...).session(...)</code></td><td><code>.ott(...).oauth2(...)</code></td></tr>
-                <tr><td>Passkey</td><td><code>.passkey(...).session(...)</code></td><td><code>.passkey(...).oauth2(...)</code></td></tr>
-                <tr><td>MFA</td><td><code>.mfa(...).session(...)</code></td><td><code>.mfa(...).oauth2(...)</code></td></tr>
-              </tbody>
-            </table></div>
-
-            <p><strong>Per-flow state:</strong> The <code>.state()</code> call applies to the <em>most recently registered</em> authentication method. This allows different state strategies per chain:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">registry
-    .form(f -&gt; f.loginPage("/login"))
-    .session(Customizer.withDefaults())      // form -&gt; Session
-    .rest(r -&gt; r.loginProcessingUrl("/api/auth"))
-    .oauth2(Customizer.withDefaults())       // rest -&gt; OAuth2
-    .mfa(m -&gt; m.primaryAuthentication(...).passkey(...))
-    .session(Customizer.withDefaults())      // mfa -&gt; Session
-    .build();</code></pre>
-            </div>
-
-            <p>The same authentication method can be registered multiple times (auto-named <code>form_flow</code>, <code>form_flow_2</code>, etc.).</p>
-
-            <h3>Spring Security: Separate Form and Stateless Chains</h3>
-            <p>Spring Security supports both form login and stateless resource-server flows, but they are typically expressed as separate <code>SecurityFilterChain</code> definitions. Contexa's DSL keeps those pairings in one registry while still producing independent chains.</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Spring Security: form login and stateless API flows are typically modeled as separate chains
-http.formLogin(form -&gt; form.loginPage("/login"));
-// This chain remains session-based unless you build a separate stateless chain.
-
-// A stateless API flow is typically configured as a separate chain:
-@Bean
-public SecurityFilterChain resourceServerChain(HttpSecurity http) throws Exception {
-    return http
-        .securityMatcher("/api/**")
-        .oauth2ResourceServer(oauth2 -&gt; oauth2.jwt(Customizer.withDefaults()))
-        .sessionManagement(s -&gt; s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-        .build();
-}
-// The stateless API flow is still configured as an independent chain.</code></pre>
-            </div>
-
-            <h3>Contexa DSL: Any Auth x Any State</h3>
-            <p>Contexa decouples authentication from state management. The same <code>.form()</code> can use <code>.session()</code> in one chain and <code>.oauth2()</code> in another — in a single method.</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">registry
-    // Admin: form login with OAuth2 token state
-    .form(f -&gt; f.order(20).loginPage("/admin/login")
-        .rawHttp(http -&gt; http.securityMatcher("/admin/**")))
-    .oauth2(Customizer.withDefaults())
-
-    // API: REST login with OAuth2 token state (stateless)
-    .rest(r -&gt; r.order(50).loginProcessingUrl("/api/auth")
-        .rawHttp(http -&gt; http.securityMatcher("/api/**")))
-    .oauth2(Customizer.withDefaults())
-
-    // Users: MFA with session state
-    .mfa(m -&gt; m.order(100)
-        .primaryAuthentication(auth -&gt; auth.formLogin(form -&gt; form.loginPage("/login")))
-        .passkey(Customizer.withDefaults()))
-    .session(Customizer.withDefaults())
-    .build();
-// 5 auth methods x 2 state types = 10 combinations, all in one method</code></pre>
-            </div>
-
-            <div class="callout callout-success">
-              <strong>Any Auth x Any State:</strong> Contexa treats authentication and state as orthogonal concerns. Form login with session, form login with OAuth2, REST with session, MFA with OAuth2 — any combination works. This is architecturally impossible in vanilla Spring Security without duplicating entire configuration classes.
-            </div>
-          </section>
-
-          <!-- rawHttp -->
-          <section class="docs-section">
-            <h2 id="raw-http">rawHttp() — Full Spring Security Access</h2>
-            <p><code>rawHttp()</code> provides a <code>SafeHttpCustomizer&lt;HttpSecurity&gt;</code> hook that exposes the <strong>entire</strong> Spring Security <code>HttpSecurity</code> API. It supports checked exceptions and can be called multiple times (each call accumulates).</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">.form(f -&gt; f.order(20)
-    .rawHttp(http -&gt; http
-        .securityMatcher("/admin/**")
-        .sessionManagement(session -&gt;
-            session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-        .addFilterBefore(customFilter, UsernamePasswordAuthenticationFilter.class))
-    .rawHttp(http -&gt; http
-        .headers(headers -&gt; headers.frameOptions(fo -&gt; fo.deny())))
-)</code></pre>
-            </div>
-
-            <p>Available on every authentication method <strong>and</strong> in <code>global()</code>. For form login, there is also <code>rawFormLogin()</code> to customize <code>HttpSecurity.formLogin()</code> internals directly.</p>
-          </section>
-
-          <!-- SecurityFilterChain Customization -->
-          <section class="docs-section">
-            <h2 id="customization">SecurityFilterChain Customization</h2>
-            <p>The <code>globalHttpCustomizer</code> lambda receives the <code>HttpSecurity</code> builder, giving you full access to Spring Security's configuration API. Below are common customization points.</p>
-
-            <h3>CSRF Configuration</h3>
-            <p>The default configuration disables CSRF. For applications serving HTML forms, consider enabling CSRF with a cookie-based token repository:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Disable CSRF (default - suitable for stateless APIs)
-http.csrf(AbstractHttpConfigurer::disable);
-
-// Enable CSRF with cookie repository (for HTML form applications)
-http.csrf(csrf -&gt; csrf
-    .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
-);</code></pre>
-            </div>
-
-            <h3>Session Management with AISessionSecurityContextRepository</h3>
-            <p><code>AISessionSecurityContextRepository</code> extends Spring's <code>HttpSessionSecurityContextRepository</code> with AI-enhanced session tracking. It feeds behavioral data (session patterns, access frequency, anomaly scores) into the authorization pipeline.</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Wire AI session context into the security filter chain
-http.securityContext(sc -&gt;
-    sc.securityContextRepository(aiSessionSecurityContextRepository)
-);
-
-// For stateless REST APIs, use stateless session management
-// in the form/rest chain configuration:
-registry.form(form -&gt; form
-    .order(20)
-    .loginPage("/admin/login")
-    .defaultSuccessUrl("/admin")
-    .rawHttp(http -&gt; http.sessionManagement(session -&gt;
-        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)))
-);</code></pre>
-            </div>
-
-            <h3>CORS Settings</h3>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">SafeHttpCustomizer&lt;HttpSecurity&gt; globalHttpCustomizer = http -&gt; {
-    http
-        .cors(cors -&gt; cors.configurationSource(request -&gt; {
+          <h2 id="global">Settings for every chain (global)</h2>
+          <p>The <code>global(http -&gt; ...)</code> lambda is applied first to every flow's <code>HttpSecurity</code>. Flow settings are applied after it, so for the same item the flow wins; for example the flow option <code>disableCsrf()</code> turns CSRF off for that chain only. If the global lambda throws, Contexa logs a warning for that flow and carries on.</p>
+          <h3 id="csrf">CSRF</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Flow</th><th>CSRF</th></tr></thead>
+            <tbody>
+              <tr><td>Session state</td><td>On, as in Spring's default.</td></tr>
+              <tr><td>Token state, <code>HEADER</code> or <code>HEADER_COOKIE</code> transport</td><td>In a server mode that includes the authorization server (default <code>COMBINED</code>) it follows <code>contexa.auth.oauth2-csrf</code> (default <code>false</code>), so it is off by default.</td></tr>
+              <tr><td>Token state, <code>COOKIE</code> transport</td><td>Always on, because the browser sends the cookies by itself. Setting <code>contexa.auth.oauth2-csrf: false</code> makes startup fail.</td></tr>
+              <tr><td>Flow option <code>disableCsrf()</code></td><td>Turns it off for that chain only.</td></tr>
+            </tbody>
+          </table></div>
+          <p>To exchange the CSRF token in a cookie, put the Spring setting in global.</p>
+          <pre><code class="language-java">registry
+        .global(http -&gt; http.csrf(csrf -&gt; csrf
+                .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())))
+        // ... flows</code></pre>
+          <h3 id="security-context">Login repository</h3>
+          <p>With <code>@EnableAISecurity</code>, Contexa puts its session login repository (<code>AISessionSecurityContextRepository</code>) into every flow right after global. So even if global sets <code>securityContext(sc -&gt; sc.securityContextRepository(...))</code>, it is replaced by this repository. You do not need to connect it yourself.</p>
+          <p>This repository extends Spring's <code>HttpSessionSecurityContextRepository</code>. When the login is read, an invalidated session is ended and an empty login is returned; otherwise the authorities are adjusted to the stored decision (<a href="zero-trust-filters.html#authorities">How authorities change</a>). When saved, it records the session tracking used for forced logout.</p>
+          <h3 id="cors-filters">CORS and your own filters</h3>
+          <p>CORS settings and your own filters are written the Spring way in global (every chain) or in the flow option <code>rawHttp</code> (one chain). Add your filter with <code>http.addFilterBefore(...)</code> in the same lambda.</p>
+          <pre><code class="language-java">registry
+        .global(http -&gt; http.cors(cors -&gt; cors.configurationSource(request -&gt; {
             CorsConfiguration config = new CorsConfiguration();
             config.setAllowedOrigins(List.of("https://app.example.com"));
-            config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE"));
+            config.setAllowedMethods(List.of("GET", "POST"));
             config.setAllowCredentials(true);
             return config;
-        }))
-        .csrf(AbstractHttpConfigurer::disable)
-        .authorizeHttpRequests(authReq -&gt; authReq
-            .requestMatchers("/css/**", "/js/**", "/images/**").permitAll()
-            .anyRequest().access(customDynamicAuthorizationManager)
-        )
-        .securityContext(sc -&gt;
-            sc.securityContextRepository(aiSessionSecurityContextRepository));
-};</code></pre>
-            </div>
+        })))
+        // ... flows</code></pre>
 
-            <h3>Custom Filters</h3>
-            <p>Add custom filters using the <code>rawHttp</code> method on individual chain configurations, or include them in the global customizer for cross-chain application:</p>
+          <h2 id="flow-options">Changing one chain (flow options)</h2>
+          <p>Options used in an authentication method's lambda. Method-specific options (login page, parameter names and so on) are in <a href="authentication.html">Login Methods</a>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Option</th><th>Methods</th><th>When to use</th></tr></thead>
+            <tbody>
+              <tr><td><code>order(int)</code></td><td>Form, REST, one-time code, passkey</td><td>To change the order chains are compared in. For MFA, <code>.mfa(mfa -&gt; mfa.order(...))</code></td></tr>
+              <tr><td><code>loginProcessingUrl(String)</code></td><td>Form, REST, one-time code, passkey</td><td>To change the login POST path. It has no effect on a single passkey flow</td></tr>
+              <tr><td><code>defaultSuccessUrl(...)</code> · <code>failureUrl(String)</code></td><td>Form, REST</td><td>Where to go after login success or failure</td></tr>
+              <tr><td><code>successHandler(...)</code> · <code>failureHandler(...)</code></td><td>Form, REST, one-time code</td><td>To write the response yourself (<a href="authentication.html#handlers">Success and failure handling</a>). Not used by passkey flows</td></tr>
+              <tr><td><code>securityContextRepository(...)</code></td><td>Every method</td><td>To change where the login is kept. In session state Contexa's session repository takes precedence</td></tr>
+              <tr><td><code>disableCsrf()</code></td><td>Every method</td><td>To turn CSRF off for that chain only</td></tr>
+              <tr><td><code>cors(...)</code> · <code>headers(...)</code> · <code>sessionManagement(...)</code> · <code>logout(...)</code></td><td>Every method</td><td>To change that chain's Spring settings</td></tr>
+              <tr><td><code>authorizeStaticPermitAll(...)</code></td><td>Every method</td><td>To open static paths without authentication</td></tr>
+              <tr><td><code>rawHttp(...)</code></td><td>Every method</td><td>Spring settings not listed above, and the chain scope (<code>securityMatcher</code>). Called several times, all of them apply in order</td></tr>
+              <tr><td><code>asep(...)</code></td><td>Every method</td><td>Has no effect in the current version (<a href="asep.html">ASEP</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>Options are applied after global. The <code>rawHttp</code> lambda is a <code>SafeHttpCustomizer</code>, so it may throw checked exceptions.</li>
+            <li><code>.mfa()</code> has none of these options. An MFA flow's scope is set with <code>urlPrefix</code>, and <code>rawHttp</code> is used inside the primary login's or a factor's options.</li>
+            <li>Global takes an <code>HttpSecurity</code> lambda directly, without options.</li>
+          </ul>
+          <pre><code class="language-java">registry
+        .form(form -&gt; form
+                .rawHttp(http -&gt; http.securityMatcher("/portal/**"))
+                .rawHttp(http -&gt; http.headers(headers -&gt; headers.frameOptions(frame -&gt; frame.sameOrigin()))))
+        .session(Customizer.withDefaults())
+        .build();</code></pre>
 
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Add a custom filter before the authorization filter
-SafeHttpCustomizer&lt;HttpSecurity&gt; globalHttpCustomizer = http -&gt; {
-    http
-        .addFilterBefore(new TenantContextFilter(),
-            AuthorizationFilter.class)
-        .authorizeHttpRequests(authReq -&gt; authReq
-            .anyRequest().access(customDynamicAuthorizationManager)
-        );
-};</code></pre>
-            </div>
-          </section>
-
-          <!-- Common Options -->
-          <section class="docs-section">
-            <h2 id="common-options">Common Options</h2>
-            <p>All authentication methods share these options (from <code>AbstractOptions</code>):</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Option</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>order(int)</code></td><td>Filter chain priority (lower = higher priority)</td></tr>
-                <tr><td><code>loginProcessingUrl(String)</code></td><td>URL that processes login requests</td></tr>
-                <tr><td><code>defaultSuccessUrl(String)</code></td><td>Redirect after successful login</td></tr>
-                <tr><td><code>failureUrl(String)</code></td><td>Redirect after failed login</td></tr>
-                <tr><td><code>successHandler(PlatformAuthenticationSuccessHandler)</code></td><td>Custom success handler</td></tr>
-                <tr><td><code>failureHandler(PlatformAuthenticationFailureHandler)</code></td><td>Custom failure handler</td></tr>
-                <tr><td><code>securityContextRepository(SecurityContextRepository)</code></td><td>Override security context storage</td></tr>
-                <tr><td><code>disableCsrf()</code></td><td>Disable CSRF for this chain</td></tr>
-                <tr><td><code>cors(Customizer)</code></td><td>Configure CORS</td></tr>
-                <tr><td><code>headers(Customizer)</code></td><td>Configure HTTP headers</td></tr>
-                <tr><td><code>sessionManagement(Customizer)</code></td><td>Configure session management</td></tr>
-                <tr><td><code>logout(Customizer)</code></td><td>Configure logout</td></tr>
-                <tr><td><code>rawHttp(SafeHttpCustomizer)</code></td><td>Full Spring Security API access (accumulates)</td></tr>
-                <tr><td><code>authorizeStaticPermitAll(String...)</code></td><td>Permit static resources without auth</td></tr>
-                <tr><td><code>asep(Customizer)</code></td><td>ASEP annotation attributes for this flow</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- Complete Example -->
-          <section class="docs-section">
-            <h2 id="complete-example">Complete Example</h2>
-            <p>A production-ready configuration with admin form login (OAuth2), user MFA (Session), and API REST endpoint (OAuth2):</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Configuration
-@RequiredArgsConstructor
-@EnableWebSecurity
-public class PlatformSecurityConfig {
-
-    private final CustomDynamicAuthorizationManager authorizationManager;
-    private final AISessionSecurityContextRepository securityContextRepository;
+          <h2 id="example">Complete example</h2>
+          <p>API clients use tokens, administrators use MFA under <code>/admin</code>, and everyone else uses form login.</p>
+          <pre><code class="language-java">@Configuration
+public class LoginFlowsConfig {
 
     @Bean
-    public PlatformConfig platformDslConfig(
-            IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
-
+    public PlatformConfig platformDslConfig(IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
         return registry
-            // Global: shared across all chains
-            .global(http -&gt; {
-                http
-                    .csrf(AbstractHttpConfigurer::disable)
-                    .authorizeHttpRequests(authReq -&gt; authReq
-                        .requestMatchers("/css/**", "/js/**", "/images/**").permitAll()
-                        .anyRequest().access(authorizationManager))
-                    .securityContext(sc -&gt;
-                        sc.securityContextRepository(securityContextRepository));
-            })
-            // Admin: form login with OAuth2, highest priority
-            .form(f -&gt; f.order(20).loginPage("/admin/login")
-                .defaultSuccessUrl("/admin/dashboard")
-                .rawHttp(http -&gt; http.securityMatcher("/admin/**")))
-            .oauth2(Customizer.withDefaults())
-            // API: REST login with OAuth2
-            .rest(r -&gt; r.order(50).loginProcessingUrl("/api/auth")
-                .rawHttp(http -&gt; http
-                    .securityMatcher("/api/**")
-                    .sessionManagement(s -&gt;
-                        s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))))
-            .oauth2(Customizer.withDefaults())
-            // Users: MFA with session
-            .mfa(m -&gt; m.order(100)
-                .primaryAuthentication(auth -&gt;
-                    auth.formLogin(form -&gt; form
-                        .loginPage("/login")
-                        .defaultSuccessUrl("/home")))
-                .passkey(Customizer.withDefaults()))
-            .session(Customizer.withDefaults())
-            .build();
+                .global(http -&gt; http.authorizeHttpRequests(auth -&gt; auth
+                        .requestMatchers("/css/**", "/js/**", "/favicon.ico").permitAll()
+                        .anyRequest().authenticated()))
+                // 1. API clients and agents: only requests that carry a token
+                .rest(rest -&gt; rest.order(50))
+                .oauth2(oauth2 -&gt; oauth2.requestScope(OAuth2RequestScope.TOKEN_REQUESTS))
+                // 2. Administrators: MFA under /admin
+                .mfa(mfa -&gt; mfa.urlPrefix("/admin").order(80)
+                        .primaryAuthentication(primary -&gt; primary.formLogin(form -&gt; form.defaultSuccessUrl("/admin")))
+                        .passkey(Customizer.withDefaults())
+                        .ott(Customizer.withDefaults()))
+                .session(Customizer.withDefaults())
+                // 3. Everyone else: form login
+                .form(form -&gt; form.order(100).defaultSuccessUrl("/home"))
+                .session(Customizer.withDefaults())
+                .build();
     }
 }</code></pre>
-            </div>
-          </section>
+          <pre><code class="language-yaml">contexa:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contexa
+    username: contexa
+    password: contexa
+  bridge:
+    ownership: CONTEXA_OWNED
+  auth:
+    oauth2:
+      client-secret: replace-with-a-long-random-secret   # required when there is an .oauth2() flow
 
-          <!-- Migration Guide -->
-          <section class="docs-section">
-            <h2 id="migration">Migration Guide</h2>
-            <p>Migrating from a traditional Spring Security configuration to Contexa's <code>PlatformSecurityConfig</code> involves replacing your <code>SecurityFilterChain</code> bean with the DSL registry pattern and wiring in the dynamic authorization manager.</p>
+spring:
+  mail:
+    host: smtp.example.com   # MFA sends the one-time code by email
+    port: 587</code></pre>
+          <ul>
+            <li>Without a signing key store, tokens are signed with a temporary key that changes at every start. For production, see <a href="state-management.html#oauth2-required">What the token state needs</a>.</li>
+            <li>Without mail settings, issuing a one-time code fails (<a href="authentication.html#ott">One-time code</a>).</li>
+          </ul>
 
-            <h3>Before: Traditional Spring Security</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@EnableWebSecurity
+          <h2 id="how-it-works">How it works</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>How the chains are built at startup</strong>Runs once, after the <code>PlatformConfig</code> bean is created.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">Collect the flows</span><span class="dg-node-desc"><code>build()</code> turns the flow list into an unchangeable <code>PlatformConfig</code></span></div></li>
+              <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title">Check the flows</span><span class="dg-node-desc">Six validators look at the flows. Their result does not stop startup</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Check the ownership</span><span class="dg-node-desc">With <code>HOST_OWNED</code> it stops here</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">An <code>HttpSecurity</code> per flow</span><span class="dg-node-desc">Created and sorted by order</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">Apply the configurers</span><span class="dg-node-desc">Configurers (<code>SecurityConfigurer</code>) are applied to each flow from the smallest order value</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">6</span><div class="dg-node"><span class="dg-node-title">Register the beans</span><span class="dg-node-desc"><code>SecurityFilterChain</code> beans are registered through the <code>BeanDefinitionRegistry</code>, and are seen exactly like chains declared with <code>@Bean</code></span></div></li>
+            </ol>
+          </figure>
+          <p>The validators check duplicate login processing paths, the MFA flow structure, passkey options (<code>rpId</code>), the MFA passkey registration path, that each authentication method has an implementation, and duplicate flow names. Their result does not stop startup, and only some of them log errors (a duplicate login processing path is not even logged).</p>
+          <h3 id="configurer-order">Configurer order</h3>
+          <p>The order value is the turn in which a configurer is applied, not the position of a filter. Filter positions are in <a href="zero-trust-filters.html#position">Where the filters run</a>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Order value</th><th>What the configurer does</th></tr></thead>
+            <tbody>
+              <tr><td><code>HIGHEST_PRECEDENCE</code> + 100</td><td>Applies the global lambda</td></tr>
+              <tr><td><code>HIGHEST_PRECEDENCE</code> + 105</td><td>Connects Contexa's session login repository</td></tr>
+              <tr><td><code>HIGHEST_PRECEDENCE</code> + 110</td><td>Connects the authentication bridge filter</td></tr>
+              <tr><td><code>HIGHEST_PRECEDENCE</code> + 150</td><td>Generates the MFA pages (MFA flows)</td></tr>
+              <tr><td>44 · 45 · 50</td><td>Connects the MFA-in-progress access control, the request-time access control and the challenge filter</td></tr>
+              <tr><td>300</td><td>Applies the authentication method (including flow options)</td></tr>
+              <tr><td>400</td><td>Applies the login state (session or token)</td></tr>
+              <tr><td>500</td><td>Default for a <code>SecurityConfigurer</code> bean the application makes</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="extension">Extension point: adding configuration to every chain</h3>
+          <p>A bean implementing <code>SecurityConfigurer</code> is applied by Contexa to every flow's chain. <code>getOrder()</code> decides its turn in the table above (default 500).</p>
+          <pre><code class="language-java">@Bean
+public SecurityConfigurer chainNameHeaderConfigurer() {
+    return new SecurityConfigurer() {
+        @Override
+        public void init(PlatformContext ctx, PlatformConfig config) {
+        }
+
+        @Override
+        public void configure(FlowContext fc) throws Exception {
+            String flowName = fc.flow().getTypeName();
+            fc.http().headers(headers -&gt; headers.addHeaderWriter(
+                    new StaticHeadersWriter("X-Login-Flow", flowName)));
+        }
+    };
+}</code></pre>
+
+          <h2 id="migration">Moving from an existing Spring Security configuration</h2>
+          <ol>
+            <li><strong>Set the ownership to <code>CONTEXA_OWNED</code></strong> (<a href="#enable">How to turn it on</a>).</li>
+            <li><strong>Move the <code>SecurityFilterChain</code> beans into one <code>PlatformConfig</code>.</strong> One chain is one flow. <code>securityMatcher</code> moves to <code>rawHttp</code> and <code>@Order</code> to <code>order</code>.</li>
+            <li><strong>To hand URL rules to Contexa's dynamic authorization,</strong> use <code>anyRequest().access(customDynamicAuthorizationManager)</code> in global (as the default <code>FULL</code> configuration does). URL decisions then come from the policies in the admin console. The resource scanner only registers endpoints as resources; it does not read <code>hasRole</code> rules to create policies, so create policies for the same rules first (<a href="../iam/resource-scanner.html">Resource scanner</a>, <a href="../iam/policy.html">Policies</a>).</li>
+            <li><strong>A URL that no policy matches is allowed by default</strong> (<code>contexa.policy.no-matching-url-policy-decision</code>, default <code>PERMIT</code>).</li>
+            <li><strong>The enforcement mode does not affect URL policies.</strong> With <code>contexa.security.zerotrust.mode</code> (default <code>ENFORCE</code>) set to <code>SHADOW</code>, only the AI decisions stop being stored and applied; URL policy decisions are still enforced. Check policies in a test environment (<a href="../../install/shadow-mode.html">Enforcement modes</a>).</li>
+          </ol>
+          <pre><code class="language-java">// Before
+@Configuration
+@EnableWebSecurity
 public class SecurityConfig {
 
     @Bean
-    public SecurityFilterChain filterChain(
-            HttpSecurity http) throws Exception {
+    public SecurityFilterChain appChain(HttpSecurity http) throws Exception {
         return http
-            .csrf(AbstractHttpConfigurer::disable)
-            .authorizeHttpRequests(auth -&gt; auth
-                .requestMatchers("/admin/**").hasRole("ADMIN")
-                .requestMatchers("/api/**").hasRole("USER")
-                .anyRequest().authenticated()
-            )
-            .formLogin(form -&gt; form
-                .loginPage("/login")
-                .defaultSuccessUrl("/admin")
-            )
-            .build();
+                .authorizeHttpRequests(auth -&gt; auth
+                        .requestMatchers("/admin/**").hasRole("ADMIN")
+                        .anyRequest().authenticated())
+                .formLogin(Customizer.withDefaults())
+                .build();
     }
 }</code></pre>
-            </div>
-
-            <h3>After: Contexa PlatformSecurityConfig</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@EnableWebSecurity
-@RequiredArgsConstructor
-public class PlatformSecurityConfig {
-
-    private final CustomDynamicAuthorizationManager customDynamicAuthorizationManager;
-    private final AISessionSecurityContextRepository aiSessionSecurityContextRepository;
+          <pre><code class="language-java">// After: create the /admin/** rule as a policy in the admin console
+@Configuration
+public class SecurityConfig {
 
     @Bean
-    public PlatformConfig platformDslConfig(
-            IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
-
-        SafeHttpCustomizer&lt;HttpSecurity&gt; globalHttpCustomizer = http -&gt; {
-            http
-                .csrf(AbstractHttpConfigurer::disable)
-                .authorizeHttpRequests(auth -&gt; auth
-                    .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico")
-                        .permitAll()
-                    .anyRequest()
-                        .access(customDynamicAuthorizationManager)
-                )
-                .securityContext(sc -&gt; sc
-                    .securityContextRepository(aiSessionSecurityContextRepository));
-        };
-
+    public PlatformConfig platformDslConfig(IdentityDslRegistry&lt;HttpSecurity&gt; registry,
+                                            CustomDynamicAuthorizationManager customDynamicAuthorizationManager) throws Exception {
         return registry
-            .global(globalHttpCustomizer)
-            .form(form -&gt; form.order(20)
-                .loginPage("/admin/login")
-                .defaultSuccessUrl("/admin"))
-            .oauth2(Customizer.withDefaults())
-            .build();
+                .global(http -&gt; http.authorizeHttpRequests(auth -&gt; auth
+                        .requestMatchers("/css/**", "/js/**").permitAll()
+                        .anyRequest().access(customDynamicAuthorizationManager)))
+                .form(Customizer.withDefaults())
+                .session(Customizer.withDefaults())
+                .build();
     }
 }</code></pre>
-            </div>
 
-            <h3>Migration Steps</h3>
-            <div class="diagram-container">
-              <div class="diagram-flow-vertical">
-                <div class="diagram-step">
-                  <div class="diagram-step-number">1</div>
-                  <div class="diagram-step-title">Add Contexa Dependencies</div>
-                  <div class="diagram-step-desc">Add <code>spring-boot-starter-contexa</code> to your project. This transitively brings in contexa-iam, contexa-core, and contexa-identity modules.</div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">2</div>
-                  <div class="diagram-step-title">Run Resource Scanner</div>
-                  <div class="diagram-step-desc">Use the <a href="../iam/resource-scanner.html">Resource Scanner</a> to discover all your existing endpoints and create initial XACML policies that match your current <code>hasRole()</code> / <code>hasAuthority()</code> rules.</div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">3</div>
-                  <div class="diagram-step-title">Enable Shadow Mode</div>
-                  <div class="diagram-step-desc">Set <code>security.zerotrust.mode=SHADOW</code> to run dynamic authorization in audit-only mode. Decisions are logged but not enforced, so you can verify policies match expected behavior.</div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">4</div>
-                  <div class="diagram-step-title">Replace SecurityFilterChain</div>
-                  <div class="diagram-step-desc">Replace your existing <code>SecurityFilterChain</code> bean with the <code>PlatformConfig</code> pattern (only when Contexa owns authentication, i.e. <code>CONTEXA_OWNED</code>; in the default <code>HOST_OWNED</code> mode Contexa builds no chain, so removing your chain leaves Spring Boot default security in effect). Move static <code>permitAll()</code> rules to <code>requestMatchers</code> and replace all <code>hasRole()</code> / <code>hasAuthority()</code> with <code>.anyRequest().access(customDynamicAuthorizationManager)</code>.</div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">5</div>
-                  <div class="diagram-step-title">Verify in Shadow Mode</div>
-                  <div class="diagram-step-desc">Run your application and review audit logs to confirm dynamic policies produce the same decisions as your previous static rules. Fix any policy gaps.</div>
-                </div>
-                <div class="diagram-arrow-down"></div>
-                <div class="diagram-step">
-                  <div class="diagram-step-number">6</div>
-                  <div class="diagram-step-title">Switch to Enforce Mode</div>
-                  <div class="diagram-step-desc">Set <code>security.zerotrust.mode=ENFORCE</code> to activate live policy enforcement. Monitor authorization audit logs closely during the transition period.</div>
-                </div>
-              </div>
-            </div>
+          <h2 id="api">API summary</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Method</th><th>Returns</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>global(SafeHttpCustomizer&lt;HttpSecurity&gt;)</code></td><td><code>IdentityAuthDsl</code></td><td>Settings shared by every chain</td></tr>
+              <tr><td><code>form</code> · <code>rest</code> · <code>ott</code> · <code>passkey</code> · <code>mfa</code></td><td><code>IdentityStateDsl</code></td><td>The authentication method of one flow; a state comes next</td></tr>
+              <tr><td><code>session(...)</code> · <code>oauth2(...)</code></td><td><code>IdentityAuthDsl</code></td><td>The state of the flow just before</td></tr>
+              <tr><td><code>build()</code></td><td><code>PlatformConfig</code></td><td>The unchangeable configuration object</td></tr>
+            </tbody>
+          </table></div>
 
-            <h3>Migration Checklist</h3>
-            <table>
-              <thead>
-                <tr><th>Step</th><th>Action</th><th>Verification</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>1</td><td>Add <code>spring-boot-starter-contexa</code> dependency</td><td>Application starts without errors</td></tr>
-                <tr><td>2</td><td>Run Resource Scanner to discover endpoints</td><td>Scanned resources visible in Policy Center resource views</td></tr>
-                <tr><td>3</td><td>Create XACML policies for each endpoint</td><td>Policies visible in Policy Center and related policy detail flows</td></tr>
-                <tr><td>4</td><td>Enable shadow mode (<code>security.zerotrust.mode=SHADOW</code>)</td><td>Audit logs show authorization decisions</td></tr>
-                <tr><td>5</td><td>Replace <code>SecurityFilterChain</code> with <code>PlatformConfig</code></td><td>All filter chains build successfully</td></tr>
-                <tr><td>6</td><td>Remove static <code>hasRole()</code> / <code>hasAuthority()</code> rules</td><td><code>SecurityFilterChain</code> configuration no longer contains legacy <code>hasRole()</code> / <code>hasAuthority()</code> request rules</td></tr>
-                <tr><td>7</td><td>Verify shadow mode audit logs match expected behavior</td><td>Zero unexpected deny/allow decisions</td></tr>
-                <tr><td>8</td><td>Switch to enforce mode (<code>security.zerotrust.mode=ENFORCE</code>)</td><td>Application behaves identically to shadow mode</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-          <!-- DSL API Reference -->
-          <section class="docs-section">
-            <h2 id="api-reference">DSL API Reference</h2>
-
-            <h3>IdentityAuthDsl</h3>
-            <p>Authentication-phase interface. Each method returns <code>IdentityStateDsl</code> for state selection.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>global(SafeHttpCustomizer&lt;HttpSecurity&gt;)</code></td><td><code>IdentityAuthDsl</code></td><td>Shared HTTP security settings for all chains</td></tr>
-                <tr><td><code>form(Customizer&lt;FormConfigurerConfigurer&gt;)</code></td><td><code>IdentityStateDsl</code></td><td>Register form login (default order: 100)</td></tr>
-                <tr><td><code>rest(Customizer&lt;RestConfigurerConfigurer&gt;)</code></td><td><code>IdentityStateDsl</code></td><td>Register REST API login (default order: 200)</td></tr>
-                <tr><td><code>ott(Customizer&lt;OttConfigurerConfigurer&gt;)</code></td><td><code>IdentityStateDsl</code></td><td>Register One-Time Token (default order: 300)</td></tr>
-                <tr><td><code>passkey(Customizer&lt;PasskeyConfigurerConfigurer&gt;)</code></td><td><code>IdentityStateDsl</code></td><td>Register Passkey/WebAuthn (default order: 400)</td></tr>
-                <tr><td><code>mfa(Customizer&lt;MfaDslConfigurer&gt;)</code></td><td><code>IdentityStateDsl</code></td><td>Register multi-factor auth (default order: 200)</td></tr>
-                <tr><td><code>build()</code></td><td><code>PlatformConfig</code></td><td>Finalize and produce immutable config</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>IdentityStateDsl</h3>
-            <p>State-management phase. Returned after registering an authentication method.</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>session(Customizer&lt;SessionStateConfigurer&gt;)</code></td><td><code>IdentityAuthDsl</code></td><td>Session-based state (auto: sessionFixation.changeSessionId)</td></tr>
-                <tr><td><code>oauth2(Customizer&lt;OAuth2StateConfigurer&gt;)</code></td><td><code>IdentityAuthDsl</code></td><td>OAuth2/JWT state (auto: Resource Server + Auth Server)</td></tr>
-              </tbody>
-            </table></div>
-          </section>
-
-          <!-- Configuration Reference -->
-          <section>
-            <div class="callout callout-info">
-              <strong>Configuration Reference</strong><br>
-              For <code>application.yml</code> properties (login/logout URIs, OAuth2 client settings, token endpoints, MFA settings), see <a href="../../../docs/reference/identity/state-management.html">State Management</a> and <a href="../../../docs/install/configuration/identity.html">Identity Configuration</a>.
-            </div>
-          </section>
-
+          <h2 id="settings">Settings you often change</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning · when to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.bridge.ownership</code></td><td><code>HOST_OWNED</code></td><td>Who owns login. For DSL chains, <code>CONTEXA_OWNED</code> (with <code>mode = FULL</code> it is <code>CONTEXA_OWNED</code> without setting it)</td></tr>
+              <tr><td><code>contexa.auth.urls.single.form-login-processing</code></td><td><code>/login</code></td><td>Login processing path of single form flows. Per flow, use <code>loginProcessingUrl</code></td></tr>
+              <tr><td><code>contexa.auth.state-type</code></td><td><code>OAUTH2</code></td><td>Handler basis for a flow with no state</td></tr>
+              <tr><td><code>contexa.auth.oauth2.client-secret</code></td><td>none</td><td>Required when there is an <code>.oauth2()</code> flow</td></tr>
+              <tr><td><code>contexa.identity.security-core.enabled</code></td><td><code>true</code></td><td>Off turns off the DSL, the chains and the request-time filters altogether</td></tr>
+            </tbody>
+          </table></div>
+          <p>All login settings are in <a href="../../install/configuration/identity.html">Settings when Contexa owns login</a>.</p>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="docs-nav-link prev">
+            <a href="../autoconfigure/ai-security.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Zero Trust Flow</span>
+              <span class="docs-nav-title">Turning Contexa On and Choosing a Security Mode</span>
             </a>
-            <a href="../../../docs/reference/identity/authentication.html" class="docs-nav-link next">
+            <a href="authentication.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Authentication</span>
+              <span class="docs-nav-title">Login Methods</span>
             </a>
           </div>

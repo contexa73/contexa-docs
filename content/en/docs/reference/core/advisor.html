@@ -1,371 +1,197 @@
-﻿<nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">Home</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">Reference</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Advisor System</span>
+            <span class="breadcrumb-current">Advisors</span>
           </nav>
 
           <div class="docs-page-header">
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
             </div>
-            <h1>Advisor System</h1>
-            <p class="lead">The Advisor System integrates with Spring AI's <code>CallAdvisor</code> and <code>StreamAdvisor</code> interfaces to intercept and enrich every LLM request and response. The <code>AdvisorRegistry</code> manages advisor lifecycle, domain organization, and enable/disable state. The <code>UnifiedLLMOrchestrator</code> automatically applies all enabled advisors to every <code>ChatClient</code> it creates.</p>
+            <h1>Advisors: Stepping In Before and After an LLM Call</h1>
+            <p class="lead">Advisors run before and after the request every time Contexa calls an AI model. This page explains what the built-in security context advisor does, how to write and register your own advisor, the order and error handling, and how to turn advisors on and off.</p>
           </div>
 
-          <!-- Overview -->
-          <section class="docs-section">
-            <h2 id="overview">Overview</h2>
-            <p>Advisors form a chain-of-responsibility around every LLM call. Each advisor can modify the request before it reaches the LLM, inspect or transform the response after, and add context metadata for downstream advisors. Advisors are organized by domain (e.g., "SECURITY", "AUDIT") and ordered by priority.</p>
-            <p>The system provides:</p>
-            <ul>
-              <li><strong>Domain-based organization</strong> — Advisors are grouped by domain, enabling bulk enable/disable operations.</li>
-              <li><strong>Priority ordering</strong> — Advisors execute in order of their <code>getOrder()</code> value (lower runs first).</li>
-              <li><strong>Hot reload</strong> — Advisors can be registered, unregistered, enabled, and disabled at runtime.</li>
-              <li><strong>Error isolation</strong> — Non-blocking advisor errors skip the advisor and continue the chain; blocking errors halt execution.</li>
-            </ul>
+          <h2 id="overview">At a glance</h2>
+          <p>Advisors are Spring AI <code>CallAdvisor</code> · <code>StreamAdvisor</code> objects. They look at or change the request before it reaches the model, and look at the response that comes back. Contexa advisors extend the base class <code>BaseAdvisor</code>, carry a domain (a group name), a name and an order, and the registry (<code>AdvisorRegistry</code>) keeps the enabled ones in order. The orchestrator attaches this list to every model call (<a href="llm-orchestrator.html#advisors">Calling an LLM</a>).</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The order advisors run in</strong>The smaller order sees the request first; responses come back in reverse. The example adds an advisor of your own with order 60 to the built-in one.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">Model call request</span><span class="dg-node-desc">The orchestrator's <code>execute()</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">Order 50</span><span class="dg-node-title">Security context advisor</span><span class="dg-node-desc">Puts user, session and authentication state into the request context</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Order 60</span><span class="dg-node-title">Your advisor</span><span class="dg-node-desc">Looks at the request or stops it (<code>beforeCall</code>)</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Innermost</span><span class="dg-node-title"><code>ThinkingGenerationAdvisor</code></span><span class="dg-node-desc">Skips thinking blocks before the answer (outside the registry, always attached)</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-title">AI model</span></li>
+              <li class="dg-node"><span class="dg-node-tag">On the way back</span><span class="dg-node-title">Responses in reverse</span><span class="dg-node-desc">Your advisor's <code>afterCall</code> → the security context advisor's <code>afterCall</code> (audit log)</span></li>
+            </ol>
+          </figure>
+          <ul>
+            <li><strong>Automatic registration:</strong> Spring beans that extend <code>BaseAdvisor</code> are registered once, when the registry is created.</li>
+            <li><strong>Not attached automatically:</strong> Spring AI <code>Advisor</code> beans that are not a <code>BaseAdvisor</code> (for example the <a href="rag.html#pipeline">RAG retrieval advisors</a>) do not enter the registry. To attach one, register it with <code>advisorRegistry.register(…)</code> or add it per call with <code>ExecutionContext.addAdvisor(…)</code>.</li>
+            <li>The only registry advisor OSS provides is the security context advisor of the <code>SECURITY</code> domain.</li>
+          </ul>
 
-<svg viewBox="0 0 760 220" width="100%" style="display:block;margin:1.5rem auto;font-family:Inter,system-ui,sans-serif;" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <marker id="av-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,1.5 L8,5 L0,8.5Z" fill="#94A3B8"/>
-    </marker>
-    <marker id="av-arr-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,1.5 L8,5 L0,8.5Z" fill="#EF4444"/>
-    </marker>
-    <marker id="av-arr-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,1.5 L8,5 L0,8.5Z" fill="#10B981"/>
-    </marker>
-  </defs>
-  <style>
-    .av-box{fill:#F8FAFC;stroke:#CBD5E1;stroke-width:1.5;}
-    .av-box-hi{fill:#EFF6FF;stroke:#3B82F6;stroke-width:2;}
-    .av-box-ok{fill:#F0FDF4;stroke:#10B981;stroke-width:1.5;}
-    .av-box-err{fill:#FEF2F2;stroke:#FCA5A5;stroke-width:1.5;}
-    .av-box-llm{fill:#FFF7ED;stroke:#FCD34D;stroke-width:2;}
-    .av-title{fill:#1E293B;font-size:14px;font-weight:700;}
-    .av-sub{fill:#64748B;font-size:12px;}
-    .av-line{stroke:#94A3B8;stroke-width:1.5;fill:none;}
-    .av-line-ok{stroke:#10B981;stroke-width:1.5;fill:none;}
-    .av-line-err{stroke:#EF4444;stroke-width:1.5;fill:none;}
-    .av-label{fill:#64748B;font-size:11px;}
-    .av-label-err{fill:#DC2626;font-size:11px;font-weight:700;}
-    .av-head{fill:#334155;font-size:13px;font-weight:700;}
-  </style>
-  <text x="380" y="18" text-anchor="middle" class="av-head">adviseCall() Synchronous Lifecycle</text>
-  <rect x="10" y="30" width="130" height="48" rx="7" class="av-box-hi"/>
-  <text x="75" y="52" text-anchor="middle" class="av-title">beforeCall()</text>
-  <text x="75" y="68" text-anchor="middle" class="av-sub">Modify · Validate Request</text>
-  <rect x="160" y="30" width="130" height="48" rx="7" class="av-box"/>
-  <text x="225" y="52" text-anchor="middle" class="av-title">enrichContext()</text>
-  <text x="225" y="68" text-anchor="middle" class="av-sub">Add Metadata</text>
-  <rect x="310" y="30" width="140" height="48" rx="7" class="av-box-llm"/>
-  <text x="380" y="52" text-anchor="middle" class="av-title">chain.nextCall()</text>
-  <text x="380" y="68" text-anchor="middle" class="av-sub">LLM Execution</text>
-  <rect x="470" y="30" width="130" height="48" rx="7" class="av-box"/>
-  <text x="535" y="52" text-anchor="middle" class="av-title">afterCall()</text>
-  <text x="535" y="68" text-anchor="middle" class="av-sub">Inspect · Transform Response</text>
-  <rect x="620" y="30" width="130" height="48" rx="7" class="av-box-ok"/>
-  <text x="685" y="52" text-anchor="middle" class="av-title">Done</text>
-  <text x="685" y="68" text-anchor="middle" class="av-sub">AIResponse returned</text>
-  <line x1="140" y1="54" x2="158" y2="54" class="av-line" marker-end="url(#av-arr)"/>
-  <line x1="290" y1="54" x2="308" y2="54" class="av-line" marker-end="url(#av-arr)"/>
-  <line x1="450" y1="54" x2="468" y2="54" class="av-line" marker-end="url(#av-arr)"/>
-  <line x1="600" y1="54" x2="618" y2="54" class="av-line-ok" marker-end="url(#av-arr-g)"/>
-  <path d="M75,78 L75,140 L300,140 L300,110" class="av-line-err" stroke-dasharray="4,3" marker-end="url(#av-arr-r)"/>
-  <text x="160" y="133" text-anchor="middle" class="av-label-err">Blocking Error → Halt</text>
-  <path d="M535,78 L535,170 L640,170 L640,100" class="av-line" stroke-dasharray="4,3" marker-end="url(#av-arr)"/>
-  <text x="590" y="185" text-anchor="middle" class="av-label">Non-blocking → Skip</text>
-  <rect x="210" y="110" width="180" height="34" rx="6" class="av-box-err"/>
-  <text x="300" y="131" text-anchor="middle" class="av-title" style="font-size:13px;">Exception → Execution Halted</text>
-  <rect x="590" y="100" width="120" height="34" rx="6" class="av-box"/>
-  <text x="650" y="121" text-anchor="middle" class="av-sub">Chain continues</text>
-</svg>
-          </section>
+          <h2 id="security-context">Built-in advisor: security context (SecurityContextAdvisor)</h2>
+          <p>It puts "whose call this is" into the request context of every LLM call and writes an audit log line when the response arrives. Its name is <code>SECURITY.security-context</code>; its order is <code>contexa.advisor.security.order</code> (default 50).</p>
+          <ol>
+            <li>The orchestrator passes the <code>ExecutionContext</code>'s <code>userId</code> · <code>sessionId</code> as <code>event.userId</code> · <code>event.sessionId</code> (only on the <code>execute()</code> family, with advisors on).</li>
+            <li>With an <code>event.userId</code>, it looks up that user's authentication in the asynchronous security context provider (<code>AsyncSecurityContextProvider</code>). The provider is Redis when a <code>generalRedisTemplate</code> bean exists (distributed mode), otherwise memory.</li>
+            <li>It puts the keys below into the request context.</li>
+          </ol>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Key</th><th>Value</th></tr></thead>
+            <tbody>
+              <tr><td><code>user.id</code></td><td>The user of the authentication found, otherwise <code>event.userId</code>, otherwise <code>anonymous</code></td></tr>
+              <tr><td><code>session.id</code></td><td>The session of the authentication found, otherwise <code>event.sessionId</code>, otherwise <code>async-&lt;UUID&gt;</code></td></tr>
+              <tr><td><code>authenticated</code></td><td><code>true</code> when an authentication was found or an <code>event.userId</code> is present</td></tr>
+              <tr><td><code>authorities</code></td><td>The authorities of the authentication found (as text). Only when one was found</td></tr>
+              <tr><td><code>principal.type</code></td><td>The principal type of the authentication found (otherwise <code>AsyncPrincipal</code>). Only when one was found</td></tr>
+              <tr><td><code>async.context</code></td><td>Always <code>true</code></td></tr>
+              <tr><td><code>timestamp</code></td><td>The request time (milliseconds)</td></tr>
+            </tbody>
+          </table></div>
+          <p>When the response arrives it writes the INFO line <code>LLM audit - userId: …, sessionId: …, authenticated: …, executionTimeMs: …, hasResponse: …</code>.</p>
+          <div class="callout callout-warning">
+            <strong>Requiring authentication only checks whether a user ID was passed.</strong> With <code>contexa.advisor.security.require-authentication=true</code> (default <code>false</code>), a call with neither a user ID nor an authentication is stopped with a blocking error and the model is not called. It does not check a real login. <code>stream()</code> passes no user ID and a stream skips blocking errors, so streams are not stopped; and a call with <code>advisorEnabled(false)</code> does not go through this advisor.
+          </div>
 
-          <!-- AdvisorRegistry -->
-          <section class="docs-section">
-            <h2 id="advisor-registry">AdvisorRegistry</h2>
-            <p>Central registry for managing advisor lifecycle. Thread-safe with internal caching of the enabled advisor list.</p>
+          <h2 id="custom">Writing your own advisor</h2>
+          <p>Extend <code>BaseAdvisor</code>, fill in the two methods <code>beforeCall</code> · <code>afterCall</code> and make it a Spring bean. The example stops prompts that are too long.</p>
+          <pre><code class="language-java">@Component
+public class PromptSizeAdvisor extends BaseAdvisor {
 
-            <div class="api-signature">
-              <code>public class AdvisorRegistry</code>
-            </div>
+    private static final int MAX_CHARS = 20_000;
 
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">register(Advisor advisor)</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">Registers an advisor. If the advisor extends <code>BaseAdvisor</code>, it is validated and indexed by domain. Invalidates the enabled cache.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">registerAll(Collection&lt;? extends Advisor&gt; advisors)</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">Batch registers multiple advisors.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">unregister(String advisorName)</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">Removes an advisor by name and cleans up domain mappings.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">get(String advisorName)</span>
-                <span class="api-method-return">Optional&lt;Advisor&gt;</span>
-              </div>
-              <div class="api-method-desc">Retrieves a specific advisor by its full name (format: <code>domain.name</code>).</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getEnabled()</span>
-                <span class="api-method-return">List&lt;Advisor&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns all enabled advisors sorted by order. Results are cached until the registry is modified.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getByDomain(String domain)</span>
-                <span class="api-method-return">List&lt;Advisor&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns all advisors in the given domain, sorted by order.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">enableDomain(String domain) / disableDomain(String domain)</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">Bulk enable or disable all advisors in a domain.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">enableAll() / disableAll()</span>
-                <span class="api-method-return">void</span>
-              </div>
-              <div class="api-method-desc">Enable or disable all registered advisors.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getDomains()</span>
-                <span class="api-method-return">Set&lt;String&gt;</span>
-              </div>
-              <div class="api-method-desc">Returns the set of domain names that currently hold at least one <code>BaseAdvisor</code>.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">getStats()</span>
-                <span class="api-method-return">RegistryStats</span>
-              </div>
-              <div class="api-method-desc">Returns statistics. <code>RegistryStats</code> is a static nested class exposing the public fields <code>totalAdvisors</code> (int), <code>totalDomains</code> (int), and <code>advisorsPerDomain</code> (<code>Map&lt;String, Integer&gt;</code>).</div>
-            </div>
-          </section>
-
-          <!-- BaseAdvisor -->
-          <section class="docs-section">
-            <h2 id="base-advisor">BaseAdvisor</h2>
-            <p>Abstract base class implementing both <code>CallAdvisor</code> and <code>StreamAdvisor</code>. Provides the template method pattern with lifecycle hooks, error handling, and context enrichment.</p>
-
-            <div class="api-signature">
-              <code>public abstract class BaseAdvisor implements CallAdvisor, StreamAdvisor</code>
-            </div>
-
-            <h3>Constructor</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">BaseAdvisor(String domain, String name, int order)</span>
-              </div>
-              <div class="api-method-desc">Creates an advisor with the given domain, name, and execution order. The full advisor name is formatted as <code>domain.name</code>.</div>
-            </div>
-
-            <h3>Abstract Methods (Must Implement)</h3>
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">beforeCall(ChatClientRequest request)</span>
-                <span class="api-method-return">ChatClientRequest</span>
-              </div>
-              <div class="api-method-desc">Called before the LLM request. Modify and return the request to enrich it with context.</div>
-            </div>
-
-            <div class="api-method">
-              <div class="api-method-header">
-                <span class="api-method-name">afterCall(ChatClientResponse response, ChatClientRequest request)</span>
-                <span class="api-method-return">ChatClientResponse</span>
-              </div>
-              <div class="api-method-desc">Called after the LLM response. Modify and return the response for post-processing, auditing, or validation.</div>
-            </div>
-
-            <h3>Overridable Hooks</h3>
-            <ul>
-              <li><code>beforeStream(ChatClientRequest request)</code> — Defaults to calling <code>beforeCall(request)</code>. Override for stream-specific pre-processing.</li>
-              <li><code>afterStream(ChatClientResponse response, ChatClientRequest request)</code> — No-op by default. Invoked on every streamed <code>ChatClientResponse</code>. Override for stream-specific post-processing.</li>
-              <li><code>enrichContext(Map&lt;String, Object&gt; context)</code> — Adds <code>advisor.domain</code>, <code>advisor.name</code>, and <code>advisor.timestamp</code> to the request context.</li>
-              <li><code>handleBlockingError(AdvisorException e, ChatClientRequest request)</code> — Sets <code>advisor.error</code>, <code>advisor.error.message</code>, <code>advisor.error.domain</code>, and <code>advisor.blocked.by</code> on the request context and rethrows the exception.</li>
-            </ul>
-
-            <h3>Lifecycle &amp; State</h3>
-            <ul>
-              <li><code>getName()</code> &mdash; Returns the full advisor name formatted as <code>domain.name</code>.</li>
-              <li><code>getOrder()</code> &mdash; Returns the constructor <code>order</code> value. Lower values execute first.</li>
-              <li><code>isEnabled()</code> &mdash; Returns whether the advisor is currently enabled. Override to consult external configuration.</li>
-              <li><code>setEnabled(boolean enabled)</code> &mdash; Toggles the advisor at runtime. Called by <code>AdvisorRegistry.enableDomain(...)</code>, <code>disableDomain(...)</code>, <code>enableAll()</code>, and <code>disableAll()</code>.</li>
-              <li><code>validate()</code> &mdash; Invoked by the registry during <code>register(...)</code>. Returns <code>false</code> when <code>domain</code> or <code>name</code> is empty, causing registration to be rolled back.</li>
-            </ul>
-
-            <h3>Error Handling</h3>
-            <p><code>AdvisorException</code> is created through two static factory methods and supports two modes:</p>
-            <ul>
-              <li><code>AdvisorException.blocking(domain, advisorName, message)</code> &mdash; Halts the advisor chain and prevents the LLM call. Used for security enforcement.</li>
-              <li><code>AdvisorException.nonBlocking(domain, advisorName, message)</code> &mdash; Logs the error and continues the chain with <code>chain.nextCall(request)</code>. Used for optional enrichment.</li>
-            </ul>
-            <p>Any other <code>Exception</code> thrown from <code>beforeCall</code>/<code>afterCall</code> is treated as non-blocking: the failure is recorded as <code>{advisorName}.error</code> on the request context and the chain continues.</p>
-          </section>
-
-          <!-- SecurityContextAdvisor -->
-          <section class="docs-section">
-            <h2 id="security-context-advisor">SecurityContextAdvisor</h2>
-            <p>Injects security context (user identity, session, authentication state, authorities) into every LLM request. Supports async security context recovery through AsyncSecurityContextProvider implementations, including Redis-backed providers in distributed deployments.</p>
-
-            <div class="api-signature">
-              <code>public class SecurityContextAdvisor extends BaseAdvisor</code>
-            </div>
-
-            <h3>Injected Context Keys</h3>
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>Key</th><th>Description</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>user.id</code></td><td>Authenticated user identifier.</td></tr>
-                <tr><td><code>session.id</code></td><td>Session identifier.</td></tr>
-                <tr><td><code>authenticated</code></td><td>Boolean authentication status.</td></tr>
-                <tr><td><code>authorities</code></td><td>String representation of granted authorities.</td></tr>
-                <tr><td><code>principal.type</code></td><td>Type of the authentication principal.</td></tr>
-                <tr><td><code>async.context</code></td><td>Always <code>true</code>, indicating async context mode.</td></tr>
-                <tr><td><code>timestamp</code></td><td>Request timestamp in milliseconds.</td></tr>
-              </tbody>
-            </table></div>
-
-            <div class="callout callout-warning">
-              <p><strong>Authentication Enforcement:</strong> When <code>contexa.advisor.security.require-authentication</code> is <code>true</code>, unauthenticated requests throw a blocking <code>AdvisorException</code> that prevents the LLM call.</p>
-            </div>
-          </section>
-
-          <!-- Code Examples -->
-          <section class="docs-section">
-            <h2 id="examples">Code Examples</h2>
-
-            <h3>Implementing a Custom Advisor</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Component
-public class RateLimitAdvisor extends BaseAdvisor {
-
-    private final RateLimiter rateLimiter;
-
-    public RateLimitAdvisor(RateLimiter rateLimiter) {
-        super("INFRASTRUCTURE", "rate-limit", 10);
-        this.rateLimiter = rateLimiter;
+    public PromptSizeAdvisor() {
+        super("APP", "prompt-size", 60);   // domain, name, order (above 50: after the security context advisor)
     }
 
     @Override
-    protected ChatClientRequest beforeCall(
-            ChatClientRequest request) {
-        String userId = (String) request.context()
-                .get("user.id");
-
-        if (!rateLimiter.tryAcquire(userId)) {
-            throw AdvisorException.blocking(
-                    getDomain(), getName(),
-                    "Rate limit exceeded for user: " + userId);
+    protected ChatClientRequest beforeCall(ChatClientRequest request) {
+        String text = request.prompt().getContents();
+        if (text != null &amp;&amp; text.length() &gt; MAX_CHARS) {
+            throw AdvisorException.blocking(getDomain(), getName(),
+                    "Prompt too long for user " + request.context().get("user.id"));
         }
-
         return request;
     }
 
     @Override
-    protected ChatClientResponse afterCall(
-            ChatClientResponse response,
-            ChatClientRequest request) {
+    protected ChatClientResponse afterCall(ChatClientResponse response, ChatClientRequest request) {
         return response;
     }
 }</code></pre>
-            </div>
+          <ul>
+            <li><strong>Order:</strong> to read the <code>user.id</code> the security context advisor puts in, use an order above 50. Below that it is not there yet (read <code>event.userId</code> instead).</li>
+            <li><strong>Name:</strong> the full name is <code>domain.name</code> (for example <code>APP.prompt-size</code>). An empty domain or name fails registration with <code>IllegalArgumentException</code>.</li>
+            <li><strong>Streams:</strong> <code>beforeStream</code> calls <code>beforeCall</code> by default, and <code>afterStream</code> does nothing by default (it is called for each streamed piece). Override them to behave differently for streams.</li>
+            <li><strong>Context keys:</strong> after <code>beforeCall</code>, <code>advisor.domain</code> · <code>advisor.name</code> · <code>advisor.timestamp</code> are put into the request context (<code>enrichContext</code>).</li>
+            <li>To switch an advisor from a setting, override <code>isEnabled()</code>. It decides only whether the advisor is in the registry's list; whether an attached advisor actually acts is the value <code>setEnabled(…)</code> changes.</li>
+          </ul>
 
-            <h3>Managing Advisors at Runtime</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">// Disable all security advisors during maintenance
+          <h2 id="order-errors">Order and error handling</h2>
+          <p>The registry lists advisors by the smallest <code>getOrder()</code> first. Requests pass in this order and responses in reverse. An error is handled by when it happened and how the model was called.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Case</th><th>Blocking call (<code>execute()</code> family)</th><th>Stream (<code>stream()</code>)</th></tr></thead>
+            <tbody>
+              <tr><td>Blocking error (<code>AdvisorException.blocking(…)</code>) before the model call (<code>beforeCall</code>)</td><td>The model is not called and the call ends with that error. <code>advisor.error</code> · <code>advisor.error.message</code> · <code>advisor.error.domain</code> · <code>advisor.blocked.by</code> are left in the request context.</td><td>Only this advisor is skipped and the model is called (not stopped).</td></tr>
+              <tr><td>Non-blocking error (<code>AdvisorException.nonBlocking(…)</code>) before the model call</td><td>Only this advisor is skipped and the call goes on.</td><td>The same</td></tr>
+              <tr><td>Any other exception before the model call</td><td>The message is left in the request context as <code>&lt;domain.name&gt;.error</code> and the call goes on.</td><td>Skipped; the call goes on.</td></tr>
+              <tr><td>An error after the model call (<code>afterCall</code>) or further in</td><td>Whatever its kind, the call ends with the error (a blocking error also leaves the context keys above).</td><td>The stream ends with the error.</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="enable">Turning advisors on and off</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Scope</th><th>How</th><th>Result</th></tr></thead>
+            <tbody>
+              <tr><td>One advisor</td><td><code>setEnabled(false)</code> · <code>setEnabled(true)</code></td><td>When off, it does nothing and passes on</td></tr>
+              <tr><td>One domain</td><td><code>advisorRegistry.disableDomain("SECURITY")</code> · <code>enableDomain(…)</code></td><td>Every advisor of that domain off or on</td></tr>
+              <tr><td>All</td><td><code>disableAll()</code> · <code>enableAll()</code></td><td>Every registered <code>BaseAdvisor</code> off or on</td></tr>
+              <tr><td>One call</td><td><code>ExecutionContext.builder().advisorEnabled(false)</code></td><td>The global advisors are left out; <code>ThinkingGenerationAdvisor</code> and that call's advisors stay</td></tr>
+              <tr><td>Security context advisor</td><td><code>contexa.advisor.security.enabled=false</code></td><td>Left out of the registry's list</td></tr>
+            </tbody>
+          </table></div>
+          <p>A change to the registry applies from the orchestrator's next call (each call compares the enabled list and rebuilds the ChatClient when it changed). The <code>primaryChatClient</code> bean, however, is built from the list at start and does not change.</p>
+          <pre><code class="language-java">// During maintenance, turn off every advisor of the SECURITY domain
 advisorRegistry.disableDomain("SECURITY");
 
-// Re-enable after maintenance
+// Turn them on again afterwards
 advisorRegistry.enableDomain("SECURITY");
 
-// Check registry health
-AdvisorRegistry.RegistryStats stats =
-        advisorRegistry.getStats();
-// stats.totalAdvisors, stats.totalDomains,
-// stats.advisorsPerDomain</code></pre>
-            </div>
-          </section>
+// See what is registered
+AdvisorRegistry.RegistryStats stats = advisorRegistry.getStats();
+// stats.totalAdvisors, stats.totalDomains, stats.advisorsPerDomain</code></pre>
+          <p>Do not turn off <code>contexa.advisor.enabled</code> (default <code>true</code>). Without it there is no registry bean, and the orchestrator is created only when that bean exists.</p>
 
-          <!-- Related -->
-          <section class="docs-section">
-            <h2 id="related">Related</h2>
-            <div class="related-links">
-              <div class="related-links-grid">
-                <a href="../../../docs/reference/core/llm-orchestrator.html" class="related-link-card">
-                  <h3>LLM Orchestrator</h3>
-                  <p>Automatically applies all enabled advisors via the AdvisorRegistry.</p>
-                </a>
-                <a href="../../../docs/reference/architecture/zero-trust-flow.html" class="related-link-card">
-                  <h3>Zero Trust</h3>
-                  <p>SecurityContextAdvisor propagates zero trust context to LLM calls.</p>
-                </a>
-              </div>
-            </div>
-          </section>
+          <h2 id="check">Checking</h2>
+          <ul>
+            <li><strong>The list attached now:</strong> <code>advisorRegistry.getEnabled()</code> (in order). One advisor with <code>advisorRegistry.get("SECURITY.security-context")</code>, domains with <code>getDomains()</code>, counts with <code>getStats()</code>.</li>
+            <li><strong>Logs:</strong> the security context advisor's INFO <code>LLM audit - …</code>, and an advisor error's ERROR <code>[&lt;name&gt;] Advisor error after …ms: …</code>.</li>
+            <li><strong>Request context:</strong> later advisors and <code>afterCall</code> can read <code>user.id</code> and the <code>advisor.*</code> keys.</li>
+          </ul>
 
-          <!-- Configuration Reference -->
-          <section>
-            <div class="callout callout-info">
-              <strong>Configuration Reference</strong><br>
-              For advisor <code>application.yml</code> properties (enabled advisors, ordering, security context propagation), see <a href="../../../docs/install/configuration/ai.html">AI Configuration</a> — covers <code>ContexaAdvisorProperties</code>.
-            </div>
-          </section>
+          <h2 id="settings">Settings</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.advisor.enabled</code></td><td><code>true</code></td><td>Auto-configuration of the advisor registry</td><td>Leave it (the orchestrator needs it)</td></tr>
+              <tr><td><code>contexa.advisor.security.enabled</code></td><td><code>true</code></td><td>Whether the security context advisor is attached</td><td>When you need neither the user context nor the audit log</td></tr>
+              <tr><td><code>contexa.advisor.security.order</code></td><td><code>50</code></td><td>The order of the security context advisor</td><td>To run it before or after your advisors</td></tr>
+              <tr><td><code>contexa.advisor.security.require-authentication</code></td><td><code>false</code></td><td>Whether calls without a user ID are stopped (see the note above)</td><td>To make every blocking LLM call carry a user ID</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-info">
+            <strong>Settings nothing reads.</strong> <code>contexa.advisor.chain-profile</code> (default <code>STANDARD</code>), <code>contexa.advisor.soar.approval.enabled</code> · <code>order</code> · <code>timeout</code> and <code>contexa.llm.advisor-enabled</code> are bound but no code uses them; changing them does nothing. OSS has no SOAR approval advisor (for SOAR, see <a href="../soar/index.html">SOAR extension points</a>).
+          </div>
 
+          <h2 id="registry-api">Reference</h2>
+          <details>
+            <summary><strong><code>AdvisorRegistry</code></strong> — the advisor list (thread-safe)</summary>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>Method</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr><td><code>register(advisor)</code></td><td>Registers. A <code>BaseAdvisor</code> goes through <code>validate()</code> and is grouped by domain; on failure the registration is undone with <code>IllegalArgumentException</code>. Clears the enabled-list cache</td></tr>
+                <tr><td><code>registerAll(advisors)</code></td><td>Registers several</td></tr>
+                <tr><td><code>unregister(name)</code></td><td>Removes by full name and tidies the domain group</td></tr>
+                <tr><td><code>get(name)</code></td><td>Finds by full name (<code>domain.name</code>) (<code>Optional</code>)</td></tr>
+                <tr><td><code>getEnabled()</code></td><td>The enabled advisors in order; cached until the registry changes</td></tr>
+                <tr><td><code>getByDomain(domain)</code></td><td>That domain's advisors in order</td></tr>
+                <tr><td><code>enableDomain(domain)</code> · <code>disableDomain(domain)</code></td><td>On or off by domain</td></tr>
+                <tr><td><code>enableAll()</code> · <code>disableAll()</code></td><td>All on or off</td></tr>
+                <tr><td><code>getDomains()</code></td><td>Names of domains with at least one <code>BaseAdvisor</code></td></tr>
+                <tr><td><code>getStats()</code></td><td><code>RegistryStats</code>: <code>totalAdvisors</code> (int), <code>totalDomains</code> (int), <code>advisorsPerDomain</code> (<code>Map&lt;String, Integer&gt;</code>)</td></tr>
+              </tbody>
+            </table></div>
+          </details>
+          <details>
+            <summary><strong><code>BaseAdvisor</code></strong> — the base class implementing <code>CallAdvisor</code> · <code>StreamAdvisor</code></summary>
+            <div class="table-scroll"><table class="api-table prose-table">
+              <thead><tr><th>Member</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><code>BaseAdvisor(domain, name, order)</code></td><td>Protected constructor; the full name is <code>domain.name</code></td></tr>
+                <tr><td><code>beforeCall(request)</code></td><td>Required. Before the model call; returns the request</td></tr>
+                <tr><td><code>afterCall(response, request)</code></td><td>Required. After the model call; returns the response</td></tr>
+                <tr><td><code>beforeStream(request)</code> · <code>afterStream(response, request)</code></td><td>For streams. By default: calls <code>beforeCall</code> · does nothing</td></tr>
+                <tr><td><code>enrichContext(context)</code></td><td>Puts <code>advisor.domain</code> · <code>advisor.name</code> · <code>advisor.timestamp</code></td></tr>
+                <tr><td><code>handleBlockingError(e, request)</code></td><td>Leaves the four context keys of a blocking error and rethrows</td></tr>
+                <tr><td><code>getName()</code> · <code>getOrder()</code></td><td>The full name; the constructor's order (the security context advisor returns the setting)</td></tr>
+                <tr><td><code>isEnabled()</code> · <code>setEnabled(enabled)</code></td><td>On or off. The registry's switches call <code>setEnabled</code></td></tr>
+                <tr><td><code>validate()</code></td><td><code>false</code> when the domain or name is empty</td></tr>
+              </tbody>
+            </table></div>
+            <p>Errors are made with <code>AdvisorException.blocking(domain, advisorName, message)</code> (stops) and <code>AdvisorException.nonBlocking(domain, advisorName, message)</code> (skips).</p>
+          </details>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/core/streaming.html" class="docs-nav-link prev">
+            <a href="model-provider.html" class="docs-nav-link prev">
               <span class="docs-nav-label">Previous</span>
-              <span class="docs-nav-title">Streaming</span>
+              <span class="docs-nav-title">Connecting and Choosing Models</span>
             </a>
-            <a href="../../../docs/reference/core/strategy.html" class="docs-nav-link next">
+            <a href="rag.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">AI Strategy</span>
+              <span class="docs-nav-title">RAG: Storing and Searching Documents</span>
             </a>
           </div>

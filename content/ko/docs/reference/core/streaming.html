@@ -1,4 +1,4 @@
-﻿<nav class="breadcrumb">
+<nav class="breadcrumb">
             <a href="../../../index.html">홈</a>
             <span class="breadcrumb-separator">/</span>
             <a href="../../../docs/reference/index.html">레퍼런스</a>
@@ -10,498 +10,313 @@
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
             </div>
-            <h1>스트리밍</h1>
-            <p class="lead">Contexa는 AI 응답에 대해 실시간 Server-Sent Events(SSE) 스트리밍을 제공합니다. 스트리밍 서브시스템은 원시 LLM 청크를 처리하고, 프로토콜 마커를 감지하며, 구조화된 JSON 페이로드를 추출하여 두 가지 실행 경로 — Strategy/Lab 경로와 직접 Pipeline 경로 — 를 통해 클라이언트에 전달합니다.</p>
+            <h1>스트리밍: AI 답을 화면에 실시간으로</h1>
+            <p class="lead">AI 모델이 쓰는 글을 SSE(Server-Sent Events)로 브라우저에 문장 단위로 보내고, 마지막에 구조화된 JSON 결과를 보내는 방법을 설명합니다. 서버 코드, 실제로 오는 이벤트, 클라이언트 코드, 시간 제한, 문제 해결을 다룹니다.</p>
           </div>
 
-          <!-- Overview: Two Streaming Paths -->
-          <section class="docs-section">
-            <h2 id="overview">개요: 두 가지 스트리밍 경로</h2>
-            <p>스트리밍은 두 가지 실행 경로를 지원하며, 둘 다 <code>Flux&lt;ServerSentEvent&lt;String&gt;&gt;</code>을 생성합니다:</p>
+          <div class="callout callout-info">
+            <strong>보안 판정과는 관계가 없습니다.</strong> 스트리밍은 앱 기능이 부르는 범용 AI 엔진의 응답 방식입니다. 보안 판정(1차 · 2차 분석)은 스트리밍하지 않으며 <a href="../architecture/decision-engine.html">판정 엔진</a>이 따로 만듭니다.
+          </div>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>경로</th><th>진입점</th><th>사용 시점</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><strong>Strategy/Lab</strong></td>
-                  <td><code>streamingService.stream(request, aiProcessor)</code></td>
-                  <td>라우팅, 감사, 분산 잠금이 포함된 전체 AI 진단 프로세스</td>
-                </tr>
-                <tr>
-                  <td><strong>Direct Pipeline</strong></td>
-                  <td><code>streamingService.stream(request, pipelineOrchestrator)</code></td>
-                  <td>strategy 라우팅 없이 간단한 LLM 호출 또는 커스텀 프롬프트</td>
-                </tr>
-              </tbody>
-            </table></div>
-
-            <p>두 경로 모두 동일한 스트리밍 프로토콜, 마커 감지, 클라이언트 측 처리를 공유합니다.</p>
-          </section>
-
-          <!-- Streaming Architecture -->
-          <section class="docs-section">
-            <h2 id="architecture">스트리밍 아키텍처</h2>
-            <p>LLM에서 클라이언트 브라우저까지의 데이터 흐름:</p>
-
-<svg viewBox="0 0 650 90" width="100%" style="display:block;margin:1.5rem auto;font-family:Inter,system-ui,sans-serif;" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <marker id="sm-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,1.5 L8,5 L0,8.5Z" fill="#94A3B8"/>
-    </marker>
-  </defs>
-  <style>
-    .sm-box{fill:#F8FAFC;stroke:#CBD5E1;stroke-width:1.5;}
-    .sm-box-hi{fill:#EFF6FF;stroke:#3B82F6;stroke-width:2;}
-    .sm-text{fill:#1E293B;font-size:13px;font-weight:700;}
-    .sm-line{stroke:#94A3B8;stroke-width:1.5;fill:none;}
-  </style>
-  <rect x="5" y="20" width="130" height="46" rx="7" class="sm-box"/>
-  <text x="70" y="41" text-anchor="middle" class="sm-text">LLM / Pipeline</text>
-  <text x="70" y="57" text-anchor="middle" class="sm-text">청크</text>
-  <rect x="153" y="20" width="120" height="46" rx="7" class="sm-box"/>
-  <text x="213" y="48" text-anchor="middle" class="sm-text">StreamingContext</text>
-  <rect x="291" y="20" width="160" height="46" rx="7" class="sm-box"/>
-  <text x="371" y="41" text-anchor="middle" class="sm-text">SentenceBuffer</text>
-  <text x="371" y="57" text-anchor="middle" class="sm-text">+ 마커 상태</text>
-  <rect x="469" y="20" width="90" height="46" rx="7" class="sm-box-hi"/>
-  <text x="514" y="48" text-anchor="middle" class="sm-text">SSE 이벤트</text>
-  <rect x="577" y="20" width="68" height="46" rx="7" class="sm-box"/>
-  <text x="611" y="41" text-anchor="middle" class="sm-text">클라이언트</text>
-  <text x="611" y="57" text-anchor="middle" class="sm-text">브라우저</text>
-  <line x1="135" y1="43" x2="151" y2="43" class="sm-line" marker-end="url(#sm-arr)"/>
-  <line x1="273" y1="43" x2="289" y2="43" class="sm-line" marker-end="url(#sm-arr)"/>
-  <line x1="451" y1="43" x2="467" y2="43" class="sm-line" marker-end="url(#sm-arr)"/>
-  <line x1="559" y1="43" x2="575" y2="43" class="sm-line" marker-end="url(#sm-arr)"/>
-</svg>
-
-            <p><code>DefaultStandardStreamingService</code>가 SSE 경로를 오케스트레이션합니다:</p>
-            <ol>
-              <li><code>AICoreOperations.processStream()</code> 또는 <code>PipelineOrchestrator.executeStream()</code>을 호출하여 원시 청크와 프로토콜 마커의 <code>Flux&lt;String&gt;</code>을 가져옵니다.</li>
-              <li>청크를 <code>StreamingContext</code>에 추가하여 최종 응답 마커와 문장 버퍼링 상태를 추적합니다.</li>
-              <li>서술형 텍스트는 <code>SentenceBuffer</code>를 통해 점진적으로 방출됩니다.</li>
-              <li>업스트림이 <code>###GENERATING_RESULT###</code>를 방출하면, 서비스는 이를 즉시 SSE 클라이언트로 전달합니다.</li>
-              <li>누적된 데이터에 <code>###FINAL_RESPONSE###</code>가 포함되면, 서비스는 그 구조화된 꼬리를 추출하여 최종 SSE 페이로드로 방출합니다.</li>
-              <li>각 출력 항목은 전달을 위해 <code>ServerSentEvent</code>로 래핑됩니다.</li>
+          <h2 id="overview">무엇을 얻나</h2>
+          <p>모델이 분석하는 동안 문장이 하나씩 화면에 나타나고, 분석이 끝나면 결과 JSON이 한 번에 옵니다. 서버는 <code>StandardStreamingService</code>가 돌려주는 <code>Flux&lt;ServerSentEvent&lt;String&gt;&gt;</code>를 컨트롤러에서 그대로 돌려주기만 하면 됩니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>브라우저가 받는 이벤트 순서</strong>문장 이벤트는 여러 번 오고, 나머지는 한 번씩 옵니다.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor dg-request">브라우저</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-host">내 컨트롤러</span><span class="dg-msg-text">POST 요청(<code>Accept: text/event-stream</code>)</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">브라우저</span><span class="dg-msg-text">분석 문장(표지 없는 글), 문장마다 이벤트 하나</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">브라우저</span><span class="dg-msg-text"><code>###GENERATING_RESULT###</code>: 이제 결과 JSON을 만드는 중</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">브라우저</span><span class="dg-msg-text"><code>###FINAL_RESPONSE###{…}</code>: 최종 JSON</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">브라우저</span><span class="dg-msg-text"><code>[DONE]</code>: 끝</span></li>
             </ol>
+          </figure>
 
-            <div class="callout callout-info">
-              <strong>프로세서 분리</strong><br>
-              <code>JsonStreamingProcessor</code>는 OSS 코어에 계속 존재하며, <code>UnifiedLLMOrchestrator.stream()</code>이 직접 호출될 때 <code>DefaultStreamingHandler</code>가 사용합니다. 반면 이 페이지의 SSE 서비스 경로는 <code>StreamingContext</code>와 <code>SentenceBuffer</code>를 사용해 이미 스트리밍 중인 청크 흐름을 브라우저 친화적 이벤트로 패키징합니다.
-            </div>
-          </section>
+          <h2 id="paths">두 가지 길과 켜는 조건</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>길</th><th>부르는 메서드</th><th>필요한 것</th><th>잠금 · 감사 로그</th></tr></thead>
+            <tbody>
+              <tr><td>Strategy 경로</td><td><code>streamingService.stream(request, aiProcessor)</code></td><td>Strategy와 Lab 둘 다 <code>supportsStreaming()</code>이 <code>true</code>, Lab의 <code>doProcessStream()</code>이 스트리밍 구성으로 파이프라인을 부름, 스트리밍 템플릿</td><td>있음(같은 요청의 동시 스트림 거절, 시작 로그 한 줄)</td></tr>
+              <tr><td>직접 파이프라인</td><td><code>streamingService.stream(request, pipelineOrchestrator)</code></td><td>스트리밍 템플릿(요청의 템플릿 타입 이름과 같은 빈). Strategy · Lab은 필요 없음</td><td>없음</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>두 길 모두 <code>StandardStreamingService</code> 빈(<code>contexa.streaming.enabled</code>, 기본 켜짐)과 Spring AI 채팅 모델이 있어야 합니다.</li>
+            <li>두 길은 같은 스트리밍 파이프라인(검색 → 전처리 → 프롬프트 → 모델 호출)과 같은 이벤트 형식을 씁니다.</li>
+            <li>Lab의 <code>processStream()</code>이나 <code>PipelineOrchestrator.executeStream()</code>을 직접 부르면 SSE로 묶이지 않은 조각 흐름(<code>Flux&lt;String&gt;</code>)을 받습니다. 문장 묶기 · <code>[DONE]</code> · 5분 제한은 <code>StandardStreamingService</code>가 하는 일입니다.</li>
+          </ul>
 
-          <!-- Streaming Protocol & Markers -->
-          <section class="docs-section">
-            <h2 id="streaming-protocol">스트리밍 프로토콜 및 마커</h2>
-            <p>스트리밍 파이프라인은 LLM 출력 내에서 마커 기반 프로토콜을 사용하여 서술 텍스트와 구조화된 JSON을 분리합니다:</p>
-
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>상수</th><th>값</th><th>설명</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>STREAMING_MARKER</code></td><td><code>###STREAMING###</code></td><td>점진적 클라이언트 표시를 위한 서술 텍스트 청크의 접두사.</td></tr>
-                <tr><td><code>GENERATING_RESULT_MARKER</code></td><td><code>###GENERATING_RESULT###</code></td><td>JSON_START 감지 시 전송. 분석 텍스트가 완료되고 결과 생성이 시작됨을 알립니다.</td></tr>
-                <tr><td><code>JSON_START_MARKER</code></td><td><code>===JSON_START===</code></td><td>스트림 내 JSON 페이로드 시작 신호.</td></tr>
-                <tr><td><code>JSON_END_MARKER</code></td><td><code>===JSON_END===</code></td><td>스트림 내 JSON 페이로드 종료 신호.</td></tr>
-                <tr><td><code>FINAL_RESPONSE_MARKER</code></td><td><code>###FINAL_RESPONSE###</code></td><td>추출 후 최종 완전한 JSON 응답의 접두사.</td></tr>
-              </tbody>
-            </table></div>
-
-            <h3>스트리밍 출력 시퀀스</h3>
-            <p>일반적 스트리밍 세션은 다음 순서로 이벤트를 생성합니다:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">SSE Events</span>
-              </div>
-              <pre><code>###STREAMING###Based on the user's preferences for...
-###STREAMING###lightweight and portable devices, I recommend...
-###STREAMING###the following products:
-###GENERATING_RESULT###
-###FINAL_RESPONSE###{"recommendations":[...],"confidence":0.88,"reasoning":"..."}</code></pre>
-            </div>
-          </section>
-
-          <!-- Server-Side Implementation -->
-          <section class="docs-section">
-            <h2 id="server-side">서버 측 구현</h2>
-
-            <h3>Strategy/Lab 경로 (전체 AI 진단 프로세스)</h3>
-            <p>라우팅, 분산 잠금, 감사 로깅에 <code>AINativeProcessor</code>를 사용합니다:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@RestController
-public class MyAiController {
-
-    private final StandardStreamingService streamingService;
-    private final AINativeProcessor&lt;MyContext&gt; aiProcessor;
-
-    // Standard (non-streaming) response
-    @PostMapping("/api/analyze")
-    public Mono&lt;MyResponse&gt; analyze(@RequestBody AnalysisInput body) {
-        AIRequest&lt;MyContext&gt; request = buildRequest(body,
-            "MY_TEMPLATE");
-        return streamingService.process(
-            request, aiProcessor, MyResponse.class);
-    }
-
-    // SSE streaming response
-    @PostMapping(value = "/api/analyze/stream",
-        produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux&lt;ServerSentEvent&lt;String&gt;&gt; analyzeStream(
-            @RequestBody AnalysisInput body) {
-        AIRequest&lt;MyContext&gt; request = buildRequest(body,
-            "MY_TEMPLATE_STREAMING");
-        return streamingService.stream(request, aiProcessor);
-    }
+          <h2 id="server-side">서버 코드</h2>
+          <h3 id="server-controller">컨트롤러(Strategy 경로)</h3>
+          <p>요청을 만들 때 스트리밍 템플릿의 이름을 템플릿 타입으로 씁니다. 전체 예(문맥 · 응답 타입 · 템플릿 · Lab · Strategy)는 <a href="strategy.html">커스텀 AI 기능 만들기</a>에 있습니다.</p>
+          <pre><code class="language-java">@PostMapping(value = "/api/recommend/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+public Flux&lt;ServerSentEvent&lt;String&gt;&gt; recommendStream(@RequestBody RecommendInput body) {
+    AIRequest&lt;ProductContext&gt; request = new AIRequest&lt;&gt;(
+            new ProductContext(body.productId(), body.category(), body.preferences()),
+            new TemplateType("PRODUCT_RECOMMENDATION_STREAMING"),
+            new DiagnosisType("PRODUCT_RECOMMENDATION"));
+    return streamingService.stream(request, aiProcessor);   // aiProcessor: AICoreOperations&lt;ProductContext&gt;
 }</code></pre>
-            </div>
 
-            <h3>Direct Pipeline 경로 (간단한 LLM 호출)</h3>
-            <p>더 간단한 사용 사례를 위해 Strategy/Lab 계층을 우회합니다:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@PostMapping(value = "/api/chat/stream",
-    produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-public Flux&lt;ServerSentEvent&lt;String&gt;&gt; chatStream(
-        @RequestBody ChatInput body) {
-    AIRequest&lt;ChatContext&gt; request = buildChatRequest(body);
-    return streamingService.stream(
-        request, pipelineOrchestrator);
+          <h3 id="server-direct">직접 파이프라인</h3>
+          <p>Strategy · Lab 없이 템플릿 하나로 끝나는 기능입니다. 기본 스트리밍 구성(4단계)으로 돕니다. 진단 타입은 쓰이지 않지만 <code>AIRequest</code>가 <code>null</code>을 받지 않으므로 아무 이름이나 넣습니다.</p>
+          <pre><code class="language-java">@PostMapping(value = "/api/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+public Flux&lt;ServerSentEvent&lt;String&gt;&gt; chatStream(@RequestBody ChatInput body) {
+    AIRequest&lt;ChatContext&gt; request = new AIRequest&lt;&gt;(
+            new ChatContext(body.message()),
+            new TemplateType("CHAT_STREAMING"),   // 이 이름의 스트리밍 템플릿 빈이 있어야 합니다
+            new DiagnosisType("CHAT"));           // 쓰이지 않지만 null이면 안 됩니다
+    request.withParameter("naturalLanguageQuery", body.message());
+    return streamingService.stream(request, pipelineOrchestrator);
 }</code></pre>
-            </div>
 
-            <h3>Lab 스트리밍 구현</h3>
-            <p>Lab의 <code>doProcessStream()</code>에서 스트리밍용으로 pipeline을 구성하고 <code>orchestrator.executeStream()</code>을 호출합니다:</p>
-
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">@Override
-protected Flux&lt;String&gt; doProcessStream(MyRequest request) {
-    AIRequest&lt;MyContext&gt; aiRequest =
-        buildAIRequest(request, "MY_TEMPLATE_STREAMING");
-
-    PipelineConfiguration config = PipelineConfiguration.builder()
-        .addStep(PipelineConfiguration.PipelineStep.CONTEXT_RETRIEVAL)
-        .addStep(PipelineConfiguration.PipelineStep.PREPROCESSING)
-        .addStep(PipelineConfiguration.PipelineStep.PROMPT_GENERATION)
-        .addStep(PipelineConfiguration.PipelineStep.LLM_EXECUTION)
-        .enableStreaming(true)
-        .timeoutSeconds(120)
-        .build();
-
-    return orchestrator.executeStream(aiRequest, config);
-}</code></pre>
-            </div>
-
-            <h3>오류 스트리밍</h3>
-            <p><code>StandardStreamingService</code>는 검증 실패에 대한 오류 스트림을 제공합니다:</p>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">Java</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-java">if (body.getQuery() == null || body.getQuery().isBlank()) {
-    return streamingService.errorStream(
-        "VALIDATION_ERROR", "Query is required");
-}</code></pre>
-            </div>
-          </section>
-
-          <!-- Client-Side Integration -->
-          <section class="docs-section">
-            <h2 id="client-side">클라이언트 측 통합</h2>
-            <p>클라이언트는 SSE 이벤트를 수신하며 스트리밍 프로토콜 마커를 처리해야 합니다. 다음은 <code>fetch</code>와 <code>ReadableStream</code>을 사용하는 완전한 JavaScript 구현입니다:</p>
-
-            <h3>스트리밍 클라이언트</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">JavaScript</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-javascript">function streamRequest(url, requestData, callbacks) {
-    fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestData)
-    }).then(function(response) {
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-
-        var reader = response.body.getReader();
-        var decoder = new TextDecoder();
-        var buffer = '';
-
-        function processStream() {
-            reader.read().then(function(result) {
-                if (result.done) {
-                    if (callbacks.onComplete) callbacks.onComplete();
-                    return;
-                }
-
-                buffer += decoder.decode(result.value, { stream: true });
-                var lines = buffer.split('\n');
-                buffer = lines.pop(); // Keep incomplete line
-
-                lines.forEach(function(line) {
-                    if (!line.startsWith('data:')) return;
-                    var data = line.substring(5).trim();
-                    if (!data || data === '') return;
-
-                    handleStreamEvent(data, callbacks);
-                });
-
-                processStream(); // Continue reading
-            });
-        }
-
-        processStream();
-    }).catch(function(err) {
-        if (callbacks.onError) callbacks.onError(err.message);
-    });
+          <h3 id="server-lab">Lab의 스트리밍</h3>
+          <p>Strategy 경로에서는 Lab이 스트리밍을 켜고 스트리밍 구성으로 파이프라인을 불러야 합니다. <code>supportsStreaming()</code>을 재정의하지 않으면 <code>processStream()</code>이 바로 오류를 냅니다.</p>
+          <pre><code class="language-java">@Override
+public boolean supportsStreaming() {
+    return true;
 }
 
-function handleStreamEvent(data, callbacks) {
-    if (data.startsWith('###STREAMING###')) {
-        // Progressive text chunk - display immediately
-        var text = data.substring('###STREAMING###'.length);
-        if (callbacks.onChunk) callbacks.onChunk(text);
-
-    } else if (data.startsWith('###GENERATING_RESULT###')) {
-        // Analysis complete, generating structured result
-        if (callbacks.onGenerating) callbacks.onGenerating();
-
-    } else if (data.startsWith('###FINAL_RESPONSE###')) {
-        // Final structured JSON response
-        var json = data.substring('###FINAL_RESPONSE###'.length);
-        if (callbacks.onFinalResponse) callbacks.onFinalResponse(json);
-
-    } else if (data === '[DONE]') {
-        // Stream complete
-        if (callbacks.onComplete) callbacks.onComplete();
-
-    } else if (data.startsWith('ERROR:')) {
-        // Error event
-        if (callbacks.onError) callbacks.onError(data);
-    }
+@Override
+protected Flux&lt;String&gt; doProcessStream(AIRequest&lt;ProductContext&gt; request) {
+    return orchestrator.executeStream(request, PipelineConfiguration.createStreamPipelineConfig());
 }</code></pre>
-            </div>
+          <p>Strategy에서도 <code>supportsStreaming()</code>을 <code>true</code>로, <code>processLabExecutionStream()</code>이 Lab의 <code>processStream()</code>을 부르도록 재정의합니다(<a href="strategy.html#step-4">Strategy 만들기</a>).</p>
 
-            <h3>사용 예제</h3>
-            <div class="code-block">
-              <div class="code-block-header">
-                <span class="code-block-lang">JavaScript</span>
-                <button class="code-copy-btn" type="button" aria-label="Copy code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                  <span>Copy</span>
-                </button>
-              </div>
-              <pre><code class="language-javascript">var outputEl = document.getElementById('output');
-var fullText = '';
+          <h3 id="server-error">입력 오류를 바로 알리기</h3>
+          <p>파이프라인을 부르기 전에 입력이 틀렸으면 오류 이벤트 하나로 된 스트림을 돌려줄 수 있습니다.</p>
+          <pre><code class="language-java">if (body.category() == null) {
+    return streamingService.errorStream("VALIDATION_ERROR", "category is required");
+}</code></pre>
+          <p>브라우저는 <code>ERROR: {"error":{"code":"VALIDATION_ERROR","message":"category is required"}}</code> 이벤트 하나를 받고, 뒤에 <code>[DONE]</code>은 오지 않습니다.</p>
 
-streamRequest('/api/analyze/stream', { query: 'Analyze this...' }, {
-    onChunk: function(text) {
-        // Append text progressively
-        fullText += text;
-        outputEl.textContent = fullText;
-    },
-    onGenerating: function() {
-        // Show "generating result..." indicator
-        outputEl.textContent += '\n\nGenerating structured result...';
-    },
-    onFinalResponse: function(json) {
-        // Parse and display structured result
-        try {
-            var result = JSON.parse(json);
-            displayResult(result);
-        } catch (e) {
-            outputEl.textContent = fullText; // Keep streamed text
-        }
-    },
-    onComplete: function() {
-        // Re-enable UI controls
-        setButtonsEnabled(true);
-    },
-    onError: function(err) {
-        outputEl.textContent = 'Error: ' + err;
-        setButtonsEnabled(true);
+          <h2 id="streaming-protocol">실제로 오는 이벤트</h2>
+          <p>상품 추천 예의 스트림을 그대로 받으면 이렇게 옵니다(이벤트 사이에 빈 줄).</p>
+          <pre><code class="language-text">data:사용자는 가볍고 배터리가 오래가는 노트북을 찾고 있습니다.
+
+data:무게와 배터리 시간을 기준으로 노트북 후보를 비교했습니다.
+
+data:###GENERATING_RESULT###
+
+data:###FINAL_RESPONSE###{ "recommendations": [ { "productName": "…", "reason": "…", "score": 0.92 } ], "confidence": 0.88, "reasoning": "…" }
+
+data:[DONE]</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>데이터</th><th>뜻</th><th>클라이언트가 할 일</th></tr></thead>
+            <tbody>
+              <tr><td>표지 없는 글</td><td>모델의 분석 서술. 문장 단위로 묶여 옵니다</td><td>화면에 이어 붙입니다</td></tr>
+              <tr><td><code>###GENERATING_RESULT###</code></td><td>서술이 끝나고 모델이 결과 JSON을 쓰기 시작함</td><td>"결과 만드는 중" 표시</td></tr>
+              <tr><td><code>###FINAL_RESPONSE###</code> + JSON</td><td>최종 결과. 모델 스트림이 끝난 뒤 한 번에 옵니다</td><td>표지를 떼고 JSON으로 읽습니다</td></tr>
+              <tr><td><code>[DONE]</code></td><td>정상 끝</td><td>화면을 마무리합니다</td></tr>
+              <tr><td><code>ERROR:</code>로 시작</td><td>오류(형식은 <a href="#troubleshooting">문제 해결</a>)</td><td>오류를 보여 주고 멈춥니다</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>데이터 안의 줄바꿈은 공백으로 바뀝니다.</strong> 그래서 이벤트 하나는 늘 <code>data:</code> 한 줄입니다. 최종 JSON의 줄바꿈도 공백이 되지만 JSON으로 읽는 데 문제는 없습니다.</li>
+            <li><strong>서술은 한국어입니다.</strong> 스트리밍 템플릿이 모델에게 서술을 한국어로만 쓰라고 시킵니다(<a href="strategy.html#streaming-template">스트리밍 템플릿</a>).</li>
+            <li><strong>모델이 <code>===JSON_END===</code> 없이 끝나면</strong> 모인 JSON의 괄호를 맞춰 고친 뒤 최종 결과로 보냅니다.</li>
+            <li><strong>최종 결과 표지가 나온 뒤의 글은 보내지 않습니다.</strong> 버퍼에 남은 서술도 함께 버려집니다.</li>
+          </ul>
+
+          <h3 id="markers">표지(marker) 다섯 개</h3>
+          <p>표지는 <code>StreamingProtocol</code>의 상수입니다. 셋은 서버 안에서만 쓰이고 브라우저에는 가지 않습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>상수</th><th>값</th><th>쓰이는 곳</th><th>브라우저에</th></tr></thead>
+            <tbody>
+              <tr><td><code>JSON_START_MARKER</code></td><td><code>===JSON_START===</code></td><td>모델이 결과 JSON 앞에 씁니다(템플릿이 시킴)</td><td>가지 않음</td></tr>
+              <tr><td><code>JSON_END_MARKER</code></td><td><code>===JSON_END===</code></td><td>모델이 결과 JSON 뒤에 씁니다</td><td>가지 않음</td></tr>
+              <tr><td><code>STREAMING_MARKER</code></td><td><code>###STREAMING###</code></td><td>서버 안에서 서술 조각에 붙였다가 보내기 전에 떼어 냅니다</td><td>가지 않음</td></tr>
+              <tr><td><code>GENERATING_RESULT_MARKER</code></td><td><code>###GENERATING_RESULT###</code></td><td>모델 글에서 <code>===JSON_START===</code>를 찾으면 냅니다</td><td>감</td></tr>
+              <tr><td><code>FINAL_RESPONSE_MARKER</code></td><td><code>###FINAL_RESPONSE###</code></td><td>최종 JSON 앞에 붙습니다</td><td>감</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="client-side">클라이언트 코드</h2>
+          <p>POST로 스트림을 받으려면 브라우저의 <code>fetch</code>로 응답 본문을 읽습니다. <strong>표지 없는 데이터가 본문 문장</strong>이라는 점이 핵심입니다. 판별 순서는 <code>[DONE]</code> → <code>ERROR:</code> → 최종 결과 → 결과 생성 알림 → 문장입니다.</p>
+          <h3 id="client-code">스트림 읽기</h3>
+          <pre><code class="language-javascript">const FINAL = '###FINAL_RESPONSE###';
+const GENERATING = '###GENERATING_RESULT###';
+
+async function streamRequest(url, body, callbacks) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    callbacks.onError?.('HTTP ' + response.status);
+    return;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();                      // 마지막 줄은 아직 덜 왔을 수 있습니다
+    for (const line of lines) {
+      if (!line.startsWith('data:')) continue;
+      const data = line.substring(5).trim();
+      if (data &amp;&amp; handleEvent(data, callbacks)) return;   // [DONE]이나 오류면 끝
     }
-});</code></pre>
-            </div>
+  }
+  callbacks.onComplete?.();
+}
 
-            <div class="callout callout-info">
-              <strong>OSS 클라이언트 범위</strong><br>
-              OSS 코어는 스트리밍 프로토콜과 서버 측 계약을 문서화하지만, <code>contexa-streaming.js</code> 같은 번들 브라우저 클라이언트는 제공하지 않습니다. 자체 프론트엔드에서 SSE 클라이언트를 구현하거나 위에 표시된 프로토콜 마커를 재사용하세요.
-            </div>
-          </section>
+// 스트림이 끝났으면 true를 돌려줍니다
+function handleEvent(data, callbacks) {
+  if (data === '[DONE]') {
+    callbacks.onComplete?.();
+    return true;
+  }
+  if (data.startsWith('ERROR:')) {
+    callbacks.onError?.(data.substring(6).trim());
+    return true;
+  }
+  if (data.startsWith(FINAL)) {
+    callbacks.onFinalResponse?.(data.substring(FINAL.length));
+    return false;
+  }
+  if (data === GENERATING) {
+    callbacks.onGenerating?.();
+    return false;
+  }
+  callbacks.onChunk?.(data);                   // 표지 없는 데이터 = 본문 문장
+  return false;
+}</code></pre>
+          <h3 id="client-usage">화면에 붙이기</h3>
+          <pre><code class="language-javascript">const output = document.getElementById('output');
+let text = '';
 
-          <!-- Configuration -->
-          <section class="docs-section">
-            <h2 id="configuration">설정</h2>
+streamRequest('/api/recommend/stream',
+  { productId: 'P-100', category: 'laptop', preferences: ['light', 'long battery'] },
+  {
+    onChunk: (sentence) =&gt; { text += sentence + ' '; output.textContent = text; },
+    onGenerating: () =&gt; { output.textContent = text + '\n결과를 만드는 중…'; },
+    onFinalResponse: (json) =&gt; {
+      try { renderResult(JSON.parse(json)); }    // renderResult는 화면 코드(예시)
+      catch (e) { output.textContent = text; }   // JSON이 깨졌으면 서술만 남깁니다
+    },
+    onComplete: () =&gt; setBusy(false),           // setBusy는 화면 코드(예시)
+    onError: (message) =&gt; { output.textContent = '오류: ' + message; setBusy(false); }
+  });</code></pre>
+          <div class="callout callout-info">
+            <strong>OSS 코어는 브라우저용 스트리밍 클라이언트를 주지 않습니다.</strong> 위 코드처럼 앱 화면에서 직접 읽습니다. Contexa IAM 관리 화면에는 자기 화면용 클라이언트(contexa-llm.bundle.js)가 들어 있지만 공개 API가 아닙니다. 이 클라이언트도 표지 없는 데이터를 본문으로 처리합니다.
+          </div>
 
-            <div class="table-scroll"><table class="api-table">
-              <thead>
-                <tr><th>속성</th><th>설명</th><th>기본값</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>contexa.streaming.final-response-marker</code></td><td>집계 스트림에서 최종 구조화 페이로드를 찾기 위한 마커</td><td><code>###FINAL_RESPONSE###</code></td></tr>
-                <tr><td><code>contexa.streaming.streaming-marker</code></td><td>점진적 서술 텍스트 청크에 사용되는 접두사</td><td><code>###STREAMING###</code></td></tr>
-                <tr><td><code>contexa.streaming.json-start-marker</code></td><td>원시 모델 출력이 구조화 페이로드를 시작할 때 JSON 청크 프로세서가 사용하는 마커</td><td><code>===JSON_START===</code></td></tr>
-                <tr><td><code>contexa.streaming.json-end-marker</code></td><td>원시 모델 출력이 구조화 페이로드를 종료할 때 JSON 청크 프로세서가 사용하는 마커</td><td><code>===JSON_END===</code></td></tr>
-                <tr><td><code>contexa.streaming.timeout</code></td><td>타임아웃 처리가 적용되기 전 스트리밍 세션의 최대 지속 시간</td><td><code>PT5M</code></td></tr>
-                <tr><td><code>contexa.streaming.max-retries</code></td><td><code>StreamingProperties</code>에 노출된 최대 재시도 횟수</td><td>3</td></tr>
-                <tr><td><code>contexa.streaming.retry-delay</code></td><td><code>StreamingProperties</code>에 노출된 초기 재시도 지연</td><td><code>PT1S</code></td></tr>
-                <tr><td><code>contexa.streaming.retry-multiplier</code></td><td><code>StreamingProperties</code>에 노출된 재시도 백오프 배율</td><td>1.5</td></tr>
-                <tr><td><code>contexa.streaming.marker-buffer-size</code></td><td>최종 응답 마커를 스캔하는 동안 유지되는 추가 꼬리 버퍼</td><td>100</td></tr>
-                <tr><td><code>contexa.streaming.sentence-buffering-enabled</code></td><td>부분 청크 방출 전 문장 수준 버퍼링 제어</td><td>true</td></tr>
-              </tbody>
-            </table></div>
+          <h2 id="architecture">안쪽 흐름</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>모델의 글이 브라우저 이벤트가 되기까지</strong>위에서 아래로 흐릅니다. 클라이언트가 연결을 끊으면 파이프라인 구독도 취소됩니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-model"><span class="dg-node-tag">AI 모델</span><span class="dg-node-title">서술 → JSON</span><span class="dg-node-desc">한국어 서술을 쓰고 <code>===JSON_START===</code> … <code>===JSON_END===</code> 사이에 JSON을 씁니다</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">JSON 스트리밍 처리기 (<code>JsonStreamingProcessor</code>)</span><span class="dg-node-desc">서술 조각에 <code>###STREAMING###</code>을 붙이고, JSON 시작을 보면 <code>###GENERATING_RESULT###</code>, JSON을 다 모으면 <code>###FINAL_RESPONSE###{json}</code>을 냅니다</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">스트리밍 모델 호출 단계 (<code>StreamingLLMExecutionStep</code>)</span><span class="dg-node-desc"><code>###STREAMING###</code> 표지를 떼고 조각을 스트리밍 실행기로 넘깁니다</span></li>
+              <li class="dg-node"><span class="dg-node-tag">Contexa</span><span class="dg-node-title">스트리밍 서비스 (<code>StandardStreamingService</code>)</span><span class="dg-node-desc">서술을 문장으로 묶고, 최종 JSON은 스트림이 끝난 뒤 한 번에 보내고, 줄바꿈을 공백으로 바꾸고, 끝에 <code>[DONE]</code>을 붙입니다</span></li>
+              <li class="dg-node dg-request"><span class="dg-node-tag">브라우저</span><span class="dg-node-title">SSE 이벤트</span></li>
+            </ol>
+          </figure>
+          <p>모델 호출에는 등록된 어드바이저(<code>BaseAdvisor</code> 빈)가 붙습니다. 스트리밍에서는 어드바이저가 모델 호출 전에 차단 오류를 내도 막지 못하고 그 어드바이저만 건너뜁니다(<a href="advisor.html#order-errors">어드바이저 오류 처리</a>).</p>
+          <p>문장 묶기(<code>SentenceBuffer</code>)의 규칙입니다.</p>
+          <ul>
+            <li>줄 끝이 마침표 · 느낌표 · 물음표나 한국어 어미(<code>습니다.</code> · <code>입니다.</code> · <code>다.</code> · <code>요.</code> 등)면 한 문장으로 보냅니다.</li>
+            <li>문장 끝을 못 찾은 채 200자를 넘으면 그때까지를 보냅니다. 스트림 끝에 남은 글도 보냅니다.</li>
+            <li>JSON처럼 보이는 조각(<code>```json</code>, <code>===JSON</code>이 들어 있거나 <code>{"</code>로 시작)은 보내지 않습니다.</li>
+            <li><code>#</code> 기호(마크다운 제목)와 제어 문자는 지우고, 3자보다 짧거나 문장부호만 있는 조각은 버립니다.</li>
+          </ul>
 
-            <div class="callout callout-info">
-              <strong>전체 설정 레퍼런스</strong><br>
-              모든 스트리밍 속성은 <a href="../../../docs/install/configuration/ai.html">AI 설정</a>을 참조하세요.
-            </div>
-          </section>
+          <h2 id="timeouts">시간 제한</h2>
+          <ul>
+            <li><strong>이벤트 사이 5분:</strong> <code>StandardStreamingService</code>는 브라우저로 나가는 이벤트가 앞 이벤트(첫 이벤트는 시작) 뒤 5분 안에 오지 않으면 스트림을 끝내고 <code>ERROR: {"error":{"code":"TIMEOUT","message":"Request timed out"}}</code>를 보냅니다. 서술이 끝난 뒤 결과 JSON을 다 쓰는 데 5분이 넘어도 걸립니다.</li>
+            <li><strong>설정으로 바꿀 수 없습니다.</strong> 이 5분은 코드에 정해진 상수입니다(<code>contexa.streaming.timeout</code>은 읽히지 않음).</li>
+            <li><strong>모델 스트림 자체에는 제한과 재시도가 없습니다.</strong> 표준 호출의 호출 한 번 60초 제한과 최대 4번 재시도(<a href="llm-orchestrator.html#retry">재시도</a>)는 스트리밍에 쓰이지 않습니다. 직접 <code>executeStream()</code>을 부르면 5분 제한도 없습니다.</li>
+          </ul>
 
-          <!-- API Reference (collapsible) -->
-          <section class="docs-section">
-            <h2 id="api-reference">API 레퍼런스</h2>
+          <h2 id="configuration">설정</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.streaming.enabled</code></td><td><code>true</code></td><td><code>StandardStreamingService</code> 빈을 만듭니다</td><td>SSE를 전부 직접 만들 때만 끕니다</td></tr>
+              <tr><td><code>contexa.streaming.final-response-marker</code></td><td><code>###FINAL_RESPONSE###</code></td><td>스트리밍 서비스가 최종 JSON을 찾는 표지</td><td>바꾸지 마세요. JSON 처리기는 상수 표지를 내므로 바꾸면 최종 결과 이벤트가 나오지 않습니다</td></tr>
+              <tr><td><code>contexa.streaming.marker-buffer-size</code></td><td><code>100</code></td><td>조각 사이에 나뉜 최종 표지를 찾으려고 더 붙잡아 두는 글자 수</td><td>보통 바꿀 일이 없습니다</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout callout-warning">
+            <strong>자동 완성에 보여도 효과가 없는 설정이 있습니다.</strong> <code>contexa.streaming.timeout</code> · <code>contexa.streaming.streaming-marker</code> · <code>contexa.streaming.json-start-marker</code> · <code>contexa.streaming.json-end-marker</code> · <code>contexa.streaming.max-retries</code> · <code>contexa.streaming.retry-delay</code> · <code>contexa.streaming.retry-multiplier</code> · <code>contexa.streaming.sentence-buffering-enabled</code>는 설정 클래스에만 있고 읽는 코드가 없습니다. 시간 제한은 5분 고정, 표지는 상수, 문장 묶기는 늘 켜짐, 스트리밍은 다시 보내지 않습니다.
+          </div>
 
-            <details>
-              <summary><strong>StandardStreamingService</strong></summary>
-              <div class="api-signature">
-                <code>public interface StandardStreamingService</code>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">stream(AIRequest&lt;C&gt; request, AICoreOperations&lt;C&gt; aiProcessor)</span>
-                  <span class="api-method-return">Flux&lt;ServerSentEvent&lt;String&gt;&gt;</span>
-                </div>
-                <div class="api-method-desc"><code>AICoreOperations.processStream()</code>을 통한 Strategy/Lab 스트리밍 경로.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">stream(AIRequest&lt;C&gt; request, PipelineOrchestrator pipelineOrchestrator)</span>
-                  <span class="api-method-return">Flux&lt;ServerSentEvent&lt;String&gt;&gt;</span>
-                </div>
-                <div class="api-method-desc">직접 pipeline 스트리밍 경로.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">process(AIRequest&lt;C&gt; request, AICoreOperations&lt;C&gt; aiProcessor, Class&lt;R&gt; responseType)</span>
-                  <span class="api-method-return">Mono&lt;R&gt;</span>
-                </div>
-                <div class="api-method-desc">Strategy/Lab 경로를 통한 비스트리밍 단일 응답.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">process(AIRequest&lt;C&gt; request, PipelineOrchestrator orchestrator, Class&lt;R&gt; responseType)</span>
-                  <span class="api-method-return">Mono&lt;R&gt;</span>
-                </div>
-                <div class="api-method-desc">Pipeline 경로를 통한 비스트리밍 단일 응답.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">errorStream(String errorCode, String message)</span>
-                  <span class="api-method-return">Flux&lt;ServerSentEvent&lt;String&gt;&gt;</span>
-                </div>
-                <div class="api-method-desc">JSON 오류 페이로드가 포함된 SSE 오류 스트림을 생성합니다.</div>
-              </div>
-            </details>
+          <p>모델 연결 등 다른 AI 설정은 <a href="../../install/configuration/ai.html">AI 모델 연결 설정</a>에 있습니다.</p>
 
-            <details>
-              <summary><strong>StreamingProtocol 상수</strong></summary>
-              <div class="api-signature">
-                <code>public final class StreamingProtocol</code>
-              </div>
-              <div class="table-scroll"><table class="api-table">
-                <thead>
-                  <tr><th>상수</th><th>값</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td><code>STREAMING_MARKER</code></td><td><code>###STREAMING###</code></td></tr>
-                  <tr><td><code>FINAL_RESPONSE_MARKER</code></td><td><code>###FINAL_RESPONSE###</code></td></tr>
-                  <tr><td><code>JSON_START_MARKER</code></td><td><code>===JSON_START===</code></td></tr>
-                  <tr><td><code>JSON_END_MARKER</code></td><td><code>===JSON_END===</code></td></tr>
-                  <tr><td><code>GENERATING_RESULT_MARKER</code></td><td><code>###GENERATING_RESULT###</code></td></tr>
-                </tbody>
-              </table></div>
-            </details>
+          <h2 id="troubleshooting">확인과 문제 해결</h2>
+          <p>버퍼링 없이 이벤트를 보려면 <code>curl -N</code>을 씁니다(주소는 앱에 맞게).</p>
+          <pre><code class="language-text">curl -N -X POST http://localhost:8080/api/recommend/stream \
+  -H "Content-Type: application/json" \
+  -d '{"productId":"P-100","category":"laptop","preferences":["light","long battery"]}'</code></pre>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>보이는 것</th><th>원인</th><th>할 일</th></tr></thead>
+            <tbody>
+              <tr><td><code>ERROR: {"error":{"code":"AI_OPERATION_ERROR","message":"Streaming strategic operation failed: …"}}</code>, <code>[DONE]</code> 없음</td><td>Strategy 경로에서 파이프라인 밖의 오류: Strategy를 못 찾음, Strategy · Lab의 <code>supportsStreaming()</code>이 <code>false</code>, 입력 검사 실패 등</td><td>서버 로그에서 원인을 봅니다</td></tr>
+              <tr><td><code>ERROR: {"error":{"code":"AI_OPERATION_ERROR","message":"Strategic streaming operation conflict: …"}}</code></td><td>똑같은 요청이 이미 스트리밍 중(Strategy 경로의 잠금)</td><td>문맥에 사용자 · 세션을 채우거나, 앞 스트림이 끝난 뒤 다시 보냅니다</td></tr>
+              <tr><td><code>ERROR: Template matching failed</code> 뒤에 <code>[DONE]</code></td><td>파이프라인 안의 오류는 <code>ERROR: 원인</code> 글로 오고 <code>[DONE]</code>이 뒤따릅니다. 이 예는 템플릿 타입 이름과 같은 스트리밍 템플릿 빈이 없다는 뜻</td><td>템플릿의 <code>getSupportedType()</code> 이름을 맞춥니다</td></tr>
+              <tr><td><code>ERROR: {"error":{"code":"TIMEOUT","message":"Request timed out"}}</code></td><td>이벤트 사이가 5분을 넘음</td><td>모델 속도 · 결과 JSON 크기를 줄입니다</td></tr>
+              <tr><td>문장만 오고 최종 결과가 없음</td><td>모델이 JSON 표지를 쓰지 않음</td><td>스트리밍 템플릿의 JSON 예와 모델을 확인합니다</td></tr>
+              <tr><td>요청에 넣은 모델 · 온도가 적용되지 않음</td><td>스트리밍은 요청 파라미터를 쓰지 않고 기본 채팅 모델을 씁니다</td><td>모델을 골라야 하면 표준 호출을 씁니다</td></tr>
+            </tbody>
+          </table></div>
+          <p>오류 코드는 원인 예외로 정해집니다: <code>AI_OPERATION_ERROR</code>(AI 처리 오류), <code>TIMEOUT</code>(시간 초과), <code>INVALID_REQUEST</code>(잘못된 인자), 그 밖은 <code>INTERNAL_ERROR</code>(메시지 "An unexpected error occurred"). 브라우저가 연결을 끊으면 서버의 파이프라인 구독도 취소됩니다.</p>
 
-            <details>
-              <summary><strong>ChunkProcessor 인터페이스</strong></summary>
-              <div class="api-signature">
-                <code>public interface ChunkProcessor</code>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">process(Flux&lt;String&gt; upstream)</span>
-                  <span class="api-method-return">Flux&lt;String&gt;</span>
-                </div>
-                <div class="api-method-desc">원시 청크의 업스트림 flux를 처리하고 변환된 출력을 반환합니다.</div>
-              </div>
-              <div class="api-method">
-                <div class="api-method-header">
-                  <span class="api-method-name">getProcessorType()</span>
-                  <span class="api-method-return">String</span>
-                </div>
-                <div class="api-method-desc">이 프로세서의 문자열 식별자를 반환합니다.</div>
-              </div>
-              <p>내장: <code>JsonStreamingProcessor</code>는 프로토콜 마커를 사용한 JSON 추출과 불완전한 LLM 출력을 위한 JSON 복구 로직을 처리합니다.</p>
-            </details>
-          </section>
+          <h2 id="customization">직접 바꾸기</h2>
+          <ul>
+            <li><strong>스트리밍 서비스 바꾸기:</strong> <code>StandardStreamingService</code> 빈을 직접 두면 기본 구현 대신 쓰입니다.</li>
+            <li><strong>자기 SSE 만들기:</strong> 주입받은 <code>StreamingProperties</code>로 <code>StreamingContext</code>를 만들고, 조각을 <code>appendChunk()</code>로 모으며, <code>isFinalResponseStarted()</code> · <code>getSentenceBuffer()</code> · <code>extractJsonPart()</code>를 써서 기본 서비스와 같은 처리를 직접 할 수 있습니다.</li>
+          </ul>
 
-          <!-- Related -->
-          <section class="docs-section">
-            <h2 id="related">관련 문서</h2>
-            <div class="related-links">
-              <div class="related-links-grid">
-                <a href="../../../docs/reference/core/strategy.html" class="related-link-card">
-                  <h3>커스텀 AI 만들기</h3>
-                  <p>스트리밍 Lab 및 Controller 구현을 포함하는 엔드투엔드 가이드.</p>
-                </a>
-                <a href="../../../docs/reference/core/pipeline.html" class="related-link-card">
-                  <h3>Pipeline 및 RAG</h3>
-                  <p>표준 vs 스트리밍 pipeline 구성과 스트리밍 경로로 사용되는 PipelineOrchestrator.</p>
-                </a>
-              </div>
-            </div>
-          </section>
+          <h2 id="api-reference">API 요약</h2>
+          <h3 id="api-service">StandardStreamingService</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>메서드</th><th>설명</th></tr></thead>
+            <tbody>
+              <tr><td><code>stream(AIRequest&lt;C&gt; request, AICoreOperations&lt;C&gt; aiProcessor)</code></td><td>Strategy 경로 스트리밍(<code>processStream()</code>) → SSE</td></tr>
+              <tr><td><code>stream(AIRequest&lt;C&gt; request, PipelineOrchestrator pipelineOrchestrator)</code></td><td>직접 파이프라인 스트리밍(기본 스트리밍 구성) → SSE</td></tr>
+              <tr><td><code>process(request, aiProcessor, responseType)</code></td><td>Strategy 경로 표준 호출(<code>Mono&lt;R&gt;</code>)</td></tr>
+              <tr><td><code>process(request, pipelineOrchestrator, responseType)</code></td><td>직접 파이프라인 표준 호출(기본 표준 구성)</td></tr>
+              <tr><td><code>errorStream(String errorCode, String message)</code></td><td>오류 이벤트 하나로 된 스트림(<code>ERROR: {"error":{…}}</code>)</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="api-chunk">ChunkProcessor · JsonStreamingProcessor</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>메서드</th><th>설명</th></tr></thead>
+            <tbody>
+              <tr><td><code>Flux&lt;String&gt; process(Flux&lt;String&gt; upstream)</code></td><td>원시 조각 흐름을 받아 바꾼 흐름을 돌려줍니다</td></tr>
+              <tr><td><code>String getProcessorType()</code></td><td>처리기 이름(<code>JsonStreamingProcessor</code>는 <code>json</code>)</td></tr>
+            </tbody>
+          </table></div>
+          <p>내장 구현 <code>JsonStreamingProcessor</code>는 표지로 서술과 JSON을 나누고, <code>===JSON_END===</code> 없이 끝난 JSON의 괄호를 맞춰 고칩니다. 기본 스트리밍 처리기(<code>DefaultStreamingHandler</code>)가 모델 호출마다 씁니다.</p>
+          <h3 id="api-context">StreamingContext</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>메서드</th><th>설명</th></tr></thead>
+            <tbody>
+              <tr><td><code>StreamingContext(StreamingProperties properties)</code></td><td>생성자. 문장 버퍼를 하나 만듭니다</td></tr>
+              <tr><td><code>appendChunk(String chunk)</code></td><td>조각을 모으고 최종 표지가 나왔는지 봅니다</td></tr>
+              <tr><td><code>isFinalResponseStarted()</code> · <code>extractJsonPart()</code></td><td>최종 표지가 나왔는지 · 최종 표지부터 끝까지의 글(없으면 <code>null</code>)</td></tr>
+              <tr><td><code>getSentenceBuffer()</code></td><td>문장 묶기(<code>processChunk()</code> · <code>flush()</code>)</td></tr>
+            </tbody>
+          </table></div>
 
+          <h2 id="related">다음에 읽을 곳</h2>
+          <ul>
+            <li><a href="strategy.html">커스텀 AI 기능 만들기</a>: 스트리밍 템플릿 · Lab · Strategy 전체 예.</li>
+            <li><a href="pipeline.html">파이프라인과 RAG</a>: 스트리밍 구성과 실행기.</li>
+            <li><a href="overview.html">AI 엔진 개요</a></li>
+          </ul>
+          <!-- Navigation Footer -->
           <div class="docs-nav-footer">
-            <a href="../../../docs/reference/core/rag.html" class="docs-nav-link prev">
+            <a href="pipeline.html" class="docs-nav-link prev">
               <span class="docs-nav-label">이전</span>
-              <span class="docs-nav-title">RAG 및 벡터</span>
+              <span class="docs-nav-title">파이프라인과 RAG</span>
             </a>
-            <a href="../../../docs/reference/core/advisor.html" class="docs-nav-link next">
+            <a href="llm-orchestrator.html" class="docs-nav-link next">
               <span class="docs-nav-label">다음</span>
-              <span class="docs-nav-title">Advisor 시스템</span>
+              <span class="docs-nav-title">LLM 호출하기</span>
             </a>
           </div>

@@ -1,0 +1,280 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Stop, Confirm, Limit</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-secondary">Agent security</span>
+            </div>
+            <h1>Stop, Confirm, Limit</h1>
+            <p class="lead">How Contexa stops an agent, asks the accountable person to confirm its request, and limits its pace and scope, according to the decision and the settings. It also covers the answers an agent receives and how to handle them, how administrators release a stop, and the console screens.</p>
+          </div>
+
+          <h2 id="overview">At a glance</h2>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The agent request gate</strong>The gate checks from the top down and answers at the first check that applies. A person's request does not go through it.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-title">Agent request</span></li>
+              <li class="dg-node"><span class="dg-node-tag">①</span><span class="dg-node-title">Call limits</span><span class="dg-node-desc">Past the calls allowed per minute: <code>429 AGENT_CALL_LIMIT</code></span></li>
+              <li class="dg-node"><span class="dg-node-tag">②</span><span class="dg-node-title">Ended delegation</span><span class="dg-node-desc">Revoked: <code>403 DELEGATION_REVOKED</code>; expired or not started: a confirmation is asked for</span></li>
+              <li class="dg-node"><span class="dg-node-tag">③</span><span class="dg-node-title">CHALLENGE decision</span><span class="dg-node-desc">A confirmation is asked for (<code>403 AGENT_CONFIRMATION_REQUIRED</code>); an approved confirmation lets it through once</span></li>
+              <li class="dg-node"><span class="dg-node-tag">④</span><span class="dg-node-title">Narrowed scope</span><span class="dg-node-desc">While only reading is allowed after a risky decision, other operations get <code>403 AGENT_SCOPE_NARROWED</code></span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">⑤</span><span class="dg-node-title">Before a <code>@Protectable</code> method</span><span class="dg-node-desc">Decided in place when there is no decision; an ALLOW in force is reused for a few requests only</span></li>
+              <li class="dg-node dg-allow"><span class="dg-node-title">Runs</span></li>
+            </ol>
+          </figure>
+
+          <h2 id="ownership">What works under each ownership</h2>
+          <p>The gate (① to ④) runs only inside the security chain Contexa builds. By default (<code>HOST_OWNED</code>) Contexa builds no chain, so there is no gate; only the <code>@Protectable</code> methods (⑤) and the handling after a decision work.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Control</th><th><code>CONTEXA_OWNED</code><br>(<code>@EnableAISecurity(mode = SecurityMode.FULL)</code>)</th><th><code>HOST_OWNED</code> (default)</th></tr></thead>
+            <tbody>
+              <tr><td>Enforcing stored decisions (BLOCK, CHALLENGE, ESCALATE)</td><td>At the URL and at <code>@Protectable</code></td><td>At <code>@Protectable</code> methods only</td></tr>
+              <tr><td>Deciding an agent request with no decision in place, limiting ALLOW reuse, decision merging</td><td>Works</td><td>Works (<code>@Protectable</code>)</td></tr>
+              <tr><td>Stopping after a BLOCK (delegation revoked, tokens revoked, notice)</td><td>Works</td><td>Works. Tokens are revoked only with an <code>AgentTokenRevoker</code></td></tr>
+              <tr><td>Confirmation by the accountable person (CHALLENGE, ended delegation)</td><td>Works</td><td><strong>None.</strong> An agent's CHALLENGE ends with the plain CHALLENGE answer (<code>401</code>)</td></tr>
+              <tr><td>Refusing revoked delegations, call limits and denial alarm, refusing outside a narrowed scope</td><td>Works</td><td><strong>None</strong> (the narrowing is only recorded)</td></tr>
+              <tr><td>Policy expression <code>agentRequestConfirmed()</code></td><td>Works</td><td>Always <code>false</code></td></tr>
+              <tr><td>Refusing a suspended agent's token</td><td>Contexa resource server and authorization server</td><td>Up to your resource server</td></tr>
+              <tr><td>Evaluating again as the delegator</td><td>URL and method policies</td><td>Method policies</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="responses">Answers an agent receives</h2>
+          <p>The agent (or its framework adapter) must understand and handle these answers. The body is JSON; the fields below come with <code>error</code>, <code>message</code> and <code>path</code>.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Status, <code>error</code></th><th>When</th><th>What the agent does</th></tr></thead>
+            <tbody>
+              <tr><td><code>429</code> <code>AGENT_CALL_LIMIT</code></td><td>Past a call limit. Body <code>scope</code> (<code>DELEGATION</code> or <code>AGENT</code>), <code>limit</code>, <code>retryAfterSeconds</code></td><td>Sends again after <code>Retry-After</code> seconds</td></tr>
+              <tr><td><code>403</code> <code>DELEGATION_REVOKED</code></td><td>The request runs under a revoked delegation. Body <code>delegationId</code></td><td>Stops. The person must delegate again</td></tr>
+              <tr><td><code>403</code> <code>AGENT_CONFIRMATION_REQUIRED</code></td><td>The decision is a CHALLENGE, or the delegation expired or has not started</td><td>Polls <code>statusUrl</code> and sends the same request again once it is <code>APPROVED</code> (<a href="#confirm">confirmation</a>)</td></tr>
+              <tr><td><code>403</code> <code>AGENT_SCOPE_NARROWED</code></td><td>An operation outside the narrowed scope. Body <code>allowed</code>, <code>until</code>, <code>operation</code></td><td>Does only the allowed operations until <code>until</code>, or gets the request confirmed</td></tr>
+              <tr><td><code>413</code> <code>AGENT_CONFIRMATION_UNBINDABLE</code></td><td>A confirmation is needed but the body is larger than a confirmation can be bound to (1 MB by default)</td><td>Sends it in smaller parts</td></tr>
+              <tr><td><code>429</code> <code>ZERO_TRUST_ANALYSIS_BUSY</code></td><td><a href="#flight">Decision merging</a> is on and every analysis place and queue slot is taken</td><td>Sends again after <code>Retry-After</code> seconds</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="confirm">Confirmation by the accountable person</h2>
+          <p>On a CHALLENGE decision a person is asked to step up (MFA), but an agent cannot do MFA. So Contexa asks <strong>the person accountable for that agent</strong> to confirm that request.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The confirmation exchange</strong>An approval is used by that one request, once.</figcaption>
+            <ol class="dg-msgs">
+              <li class="dg-msg"><span class="dg-actor dg-request">Agent</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-host">App</span><span class="dg-msg-text">Request</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">Agent</span><span class="dg-msg-text"><code>403 AGENT_CONFIRMATION_REQUIRED</code> with the confirmation ID, status URL and expiry</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-host">Person</span><span class="dg-msg-text">A notice (mail, else the console) with a link to the confirmation page</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-host">Person</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text">Approve, refuse or report</span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">Agent</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>GET statusUrl</code> → <code>APPROVED</code></span></li>
+              <li class="dg-msg"><span class="dg-actor dg-request">Agent</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-host">App</span><span class="dg-msg-text">Sends the same request again → runs once (<code>USED</code>)</span></li>
+            </ol>
+          </figure>
+          <pre><code class="language-json">{
+  "status": "PENDING",
+  "error": "AGENT_CONFIRMATION_REQUIRED",
+  "trigger": "DECISION_CHALLENGE",
+  "confirmationId": "6f1c2a90-…",
+  "statusUrl": "/contexa/api/agent-confirmations/6f1c2a90-…",
+  "expiresAt": "2026-11-02T06:15:00Z",
+  "confirmationHeader": "Contexa-Agent-Confirmation",
+  "message": "The person accountable for this agent must confirm this request; …",
+  "path": "/api/reports/export"
+}</code></pre>
+          <ul>
+            <li><strong>Who confirms:</strong> the delegator for a delegated agent, the sponsor for an autonomous agent. Without an accountable person no confirmation is made and the request is refused (the body has no <code>confirmationId</code>).</li>
+            <li><strong>A confirmation is bound to its request:</strong> tenant, user, agent, method, path, query string and the body's SHA-256. It is used only by that same request and becomes <code>USED</code> once used. The agent may name the confirmation ID in the <code>Contexa-Agent-Confirmation</code> header when sending again.</li>
+            <li><strong>Time:</strong> the person's answer is awaited for <code>confirmation-timeout</code> (15 minutes by default), and an approval must be used within the same time. Past it the confirmation is <code>EXPIRED</code> (refused); expired ones are swept every minute.</li>
+            <li><strong>Report:</strong> when the person reports the request, it is refused and the agent is stopped at once (as in <a href="#stop">stopping</a>, with a BLOCK stored right away).</li>
+            <li><strong>An approval is kept as a verifiable record.</strong> With Contexa's authorization server it is an OAuth2 authorization, without it a signature with the evidence signing key, verified again when used. What was confirmed also goes into the decision context (the v21 <code>Confirmation</code> line).</li>
+            <li>On the confirmation page only the person the confirmation is for decides, in their own session. A request from an agent is refused there even with that person's token.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Confirmation status</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>PENDING</code></td><td>Waiting for the person</td></tr>
+              <tr><td><code>APPROVED</code></td><td>Approved, not used yet</td></tr>
+              <tr><td><code>USED</code></td><td>Approved and used by its request</td></tr>
+              <tr><td><code>REJECTED</code>, <code>EXPIRED</code>, <code>REPORTED</code></td><td>Refused, timed out, reported (all final refusals; <code>refused</code> is <code>true</code> in the status)</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="confirm-request">An agent asking for confirmation first</h3>
+          <p>With the policy <code>!delegationRequiresApproval() or agentRequestConfirmed()</code> on work whose delegation requires approval, the agent can ask for a confirmation itself before it runs (trigger <code>REQUESTED</code>).</p>
+          <pre><code class="language-http">POST /contexa/api/agent-confirmations
+Content-Type: application/json
+
+{ "method": "POST", "target": "/api/reports/export?month=2026-10",
+  "bodySha256": "9f86d081…", "reason": "Monthly report export" }</code></pre>
+          <p>It returns <code>202</code> with the confirmation's status (<code>409</code> without an accountable person, <code>403</code> when the caller is not an agent). <code>target</code> is the path with the query, starting with <code>/</code>; <code>bodySha256</code> is the SHA-256 (hexadecimal) of the body it will send. Poll the status at <code>GET /contexa/api/agent-confirmations/{id}</code>. This too needs the gate that consumes confirmations, so it works only under <code>CONTEXA_OWNED</code>.</p>
+          <p>The start of the confirmation link in notices is set with <code>confirmation-link-base-url</code> (for example <code>https://app.example.com</code>). Left empty, the link is relative, with the application's path only. The Host header the agent sent is never used in the link.</p>
+
+          <h2 id="stop">Stopping and releasing</h2>
+          <p>When a BLOCK is decided on an agent's request, <strong>that agent only</strong> is stopped. It is not added to the people's block list, and the person's own work goes on.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>What happens after a BLOCK</strong>Each step is kept in the decision record, in order.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side dg-request"><p class="dg-side-title">A delegated agent is blocked</p><ul><li>The decision is stored under the agent's key (<code>&lt;user&gt;::agent::&lt;agent&gt;</code>)</li><li>The delegation is revoked</li><li>The tokens it holds for that person are revoked</li><li>The delegator is told</li></ul></div>
+              <div class="dg-side dg-block"><p class="dg-side-title">An autonomous agent is blocked</p><ul><li>Its registration is suspended (<code>SUSPENDED</code>): every token issued to it is refused</li><li>Its tokens are revoked</li><li>Its sponsor is told</li></ul></div>
+            </div>
+          </figure>
+          <p>A report by the accountable person and a call limit set to <code>STOP</code> stop the agent the same way. A stop is released through the admin API or console, or on the accountable person's confirmation page (a kill switch stop by administrators only).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>action</code></th><th>Fields</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>RELEASE_DELEGATION</code></td><td><code>userId</code>, <code>agentId</code></td><td>Clears the agent's decisions for that person so its next request is decided again. The revoked delegation stays revoked; the person delegates again</td></tr>
+              <tr><td><code>RELEASE_AGENT</code></td><td><code>agentId</code> (<code>tenantId</code> optional)</td><td>Puts the registration back in service and clears the agent's decisions</td></tr>
+              <tr><td><code>KILL_SWITCH</code></td><td><code>agentType</code>, <code>tenantId</code> (optional)</td><td>Stops every agent in service of that type (all types when empty) at once</td></tr>
+              <tr><td><code>KILL_SWITCH_RELEASE</code></td><td>The same</td><td>Puts back only the agents the kill switch stopped; agents stopped for other reasons stay stopped</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-http">POST /contexa/admin/api/agents/stops
+Content-Type: application/json
+
+{ "action": "KILL_SWITCH", "agentType": "AGENT", "reason": "Prompt injection incident" }</code></pre>
+          <p><code>reason</code> is required and the <code>ADMIN</code> role is needed. <code>GET</code> shows the stopped agents and delegations. With the autonomous security plane off (<code>contexa.autonomous.enabled</code>) it answers <code>503</code>. A scope a BLOCK narrowed stays narrowed after the release until its period ends.</p>
+
+          <h2 id="narrow">Scope narrowing</h2>
+          <p>After a risky decision on an agent's request, the agent's next requests may <strong>only read</strong> for a while.</p>
+          <ul>
+            <li><strong>When:</strong> after a CHALLENGE, ESCALATE or BLOCK, or an ALLOW whose risk reaches <code>risk-threshold</code> (0.7 by default).</li>
+            <li><strong>How long:</strong> <code>duration</code> (1 hour by default). A scope is only narrowed, never widened.</li>
+            <li><strong>The operation</strong> is read from the method and the words of the path (<code>READ</code>, <code>WRITE</code>, <code>EXPORT</code>, <code>DELETE</code>, <code>ADMIN</code>, <code>EXECUTE</code>). A <code>GET /api/exports</code>, for example, is an export (<code>EXPORT</code>).</li>
+            <li>A request outside the scope gets <code>403 AGENT_SCOPE_NARROWED</code>; it passes once its accountable person confirms it. A person's request is never narrowed.</li>
+          </ul>
+
+          <h2 id="limits">Call limits and the denial alarm</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Limit</th><th>Default</th><th>Counted for</th></tr></thead>
+            <tbody>
+              <tr><td>One delegation</td><td>120 per minute</td><td>One person's work (the agent's decision key)</td></tr>
+              <tr><td>The whole agent</td><td>600 per minute</td><td>Everyone the agent acts for</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>Past a limit, <code>on-exceed</code> decides: <code>THROTTLE</code> (default, <code>429</code> with <code>Retry-After</code>) or <code>STOP</code> (the agent is stopped; the request's own answer is still <code>429</code>).</li>
+            <li><strong>Denial alarm:</strong> when at least 10 requests in 5 minutes were refused at a rate of 50% or more, an audit record is written and the accountable person is told (once per window).</li>
+            <li>When the enforcement mode is not <code>ENFORCE</code> (SHADOW and so on), a request past a limit goes on and is only recorded. The counts are per instance.</li>
+          </ul>
+
+          <h2 id="unrecorded">Requests with no decision, and ALLOW reuse</h2>
+          <ul>
+            <li><strong>No decision yet:</strong> a person's request goes on and is analysed afterwards, but an agent's request is <strong>decided in the request</strong>, even at an asynchronous <code>@Protectable</code> method (<code>protectable.unrecorded-agent-request: DECIDE_IN_PLACE</code>, default). With <code>PROCEED</code> it goes on as a person's does.</li>
+            <li><strong>An ALLOW in force:</strong> for a person it answers later requests for its validity, but for an agent only the same operation, 3 distinct resources and 10 requests; for a sensitive resource (<code>SENSITIVE</code> or <code>CRITICAL</code>) only 1 resource. Past that the request is decided again in place, so an agent that reads a customer list one record at a time cannot read it all on its first ALLOW.</li>
+          </ul>
+
+          <h2 id="flight">Decision merging (off by default)</h2>
+          <p>When one agent sends many requests at once, the model is not called for each: <strong>the same question is analysed once</strong>. While the first request is analysed, the others wait for its verdict and are answered by it.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting (<code>contexa.security.zerotrust.agent.flight.*</code>)</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>enabled</code></td><td><code>false</code></td><td>Turns it on</td><td>When one agent sends bursts of the same request and model calls pile up</td></tr>
+              <tr><td><code>max-in-flight-analyses</code></td><td><code>3</code></td><td>Analyses one agent may have running at once</td><td>To match model throughput</td></tr>
+              <tr><td><code>queue-capacity</code></td><td><code>20</code></td><td>Requests that may wait for a place</td><td>When <code>429</code> answers are frequent</td></tr>
+              <tr><td><code>wait</code></td><td><code>40s</code></td><td>The longest wait. Past it: <code>429 ZERO_TRUST_ANALYSIS_BUSY</code></td><td>With slower models (Layer 2 included)</td></tr>
+              <tr><td><code>pass-budget</code></td><td><code>3</code></td><td>Requests that may pass before the first verdict (<code>0</code> for none)</td><td><code>0</code> to let nothing pass before the first decision</td></tr>
+              <tr><td><code>pass-families</code></td><td><code>[READ]</code></td><td>Operations that may pass first; only for resources your application declared non-sensitive</td><td>To change which operations may pass first</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>No request is let through for lack of a verdict; <code>pass-budget</code> above is the only exception.</li>
+            <li>A restriction (BLOCK, ESCALATE, CHALLENGE) stored for the agent while requests wait answers them at once.</li>
+            <li>A failure of decision merging itself is not a decision: each request is then analysed on its own. The state is kept in memory per instance.</li>
+          </ul>
+
+          <h2 id="shadow">In modes that do not enforce (SHADOW and so on)</h2>
+          <p>When the enforcement mode is not <code>ENFORCE</code> (SHADOW, OBSERVE, DISABLED, or <code>contexa.security.zerotrust.enabled=false</code>), the gate records ended delegations, narrowed scopes and call limits and lets the request on. The re-evaluation as the delegator is only recorded too. A CHALLENGE in force still waits for its confirmation, as a person's does for the step-up.</p>
+
+          <h2 id="expressions">Policy expressions</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Expression</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>agentRequestConfirmed()</code></td><td>Whether the accountable person confirmed this very request (<code>true</code> only for an agent's request)</td></tr>
+              <tr><td><code>agentCallsInLastMinuteAtMost(n)</code></td><td>Whether this delegation made at most n requests in the last minute, this one included; <code>true</code> for a person and when nothing counted them</td></tr>
+            </tbody>
+          </table></div>
+          <p>The delegation expressions are in <a href="delegation.html#expressions">Delegation and Objective Contracts</a>.</p>
+
+          <h2 id="record">Decision records and tamper checks</h2>
+          <p>Each decision leaves one decision record in the audit log (<code>audit_log</code>, category <code>SECURITY_DECISION</code>). For a person's request the agent and delegation fields are empty.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Field</th><th>Content</th></tr></thead>
+            <tbody>
+              <tr><td>Subject</td><td>The subject kind, the agent, the delegator, the delegation id</td></tr>
+              <tr><td>Operation asked for</td><td>The request's action family</td></tr>
+              <tr><td>Risk facts</td><td>The reason codes the decision cited, with their fact IDs</td></tr>
+              <tr><td>Enforcement</td><td>The response enforced and why. The outcome is <code>APPLIED</code>, <code>KEPT_STRICTER</code> (a stricter response already in force was kept), <code>OBSERVED_ONLY</code> (recorded only, in a mode that does not enforce) or <code>DISCARDED</code> (the processing lost ownership and the result was dropped)</td></tr>
+              <tr><td>Request context hash</td><td>The SHA-256 of the time, tenant, user, agent, delegation, operation, method, path, target, requested items and argument summary</td></tr>
+            </tbody>
+          </table></div>
+          <p>With a signer (the signing key of <a href="../architecture/evidence.html#integrity">sealed evidence</a>), decision records are chained in the order they are saved: each record's fields and the previous record's hash are hashed together with SHA-256 and signed. The admin console's real-time monitor shows the check result of each record.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Result</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>VERIFIED</code></td><td>As sealed</td></tr>
+              <tr><td><code>MISMATCH</code></td><td>A field changed, the hash was computed again so the signature fails, or a record in the middle of the chain was removed</td></tr>
+              <tr><td><code>UNVERIFIABLE</code></td><td>Written before records were sealed, or signed with a key no longer held (for example a temporary key before a restart)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The oldest records removed by the audit log retention (default 90 days, <a href="../iam/admin.html#system-settings">System Settings</a>) do not count as <code>MISMATCH</code>.</p>
+
+          <h2 id="console">Console screens and APIs</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Screen or API</th><th>Path</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td>Agent list, detail, registration</td><td><code>/contexa/admin/agents</code> (<code>/detail</code>, <code>/new</code>)</td><td>Registry, status, delegations, decision records</td></tr>
+              <tr><td>Agent stops tab</td><td><code>/contexa/admin/blacklist/agents</code></td><td>Stopped agents and delegations, release, kill switch</td></tr>
+              <tr><td>Confirmation page</td><td><code>/contexa/agent-confirmations</code></td><td>My confirmations and notices; approve, refuse, report; release my stopped agents (reason required)</td></tr>
+              <tr><td>Learning control API</td><td><code>/contexa/admin/api/agents/learning</code></td><td><code>QUARANTINE</code> (kept but never read, nothing more learned), <code>RELEASE</code> or <code>REMOVE</code> the learning of an agent or of one delegation. Other agents' and people's learning is never touched</td></tr>
+            </tbody>
+          </table></div>
+          <p>Stops, releases, confirmations and delegation records are all kept in the audit log (<code>AGENT_*</code> categories).</p>
+
+          <h2 id="settings">Settings</h2>
+          <p>All under <code>contexa.security.zerotrust.agent.</code> (except the last row).</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
+            <tbody>
+              <tr><td><code>confirmation-timeout</code></td><td><code>15m</code></td><td>How long a confirmation is awaited, and how long an approval may be used</td><td>When accountable people need longer to answer, or waits should be shorter</td></tr>
+              <tr><td><code>confirmation-sweep-interval</code></td><td><code>1m</code></td><td>How often expired confirmations are swept</td><td>Rarely</td></tr>
+              <tr><td><code>confirmation-link-base-url</code></td><td>None</td><td>The absolute start of the link in notices</td><td>When notice links must be absolute (opened from mail)</td></tr>
+              <tr><td><code>confirmation-max-body-bytes</code></td><td><code>1048576</code></td><td>The largest body a confirmation is bound to</td><td>When requests that need confirmation carry bodies over 1 MB</td></tr>
+              <tr><td><code>scope-narrowing.enabled</code> / <code>.duration</code> / <code>.risk-threshold</code></td><td><code>true</code> / <code>1h</code> / <code>0.7</code></td><td>Scope narrowing</td><td>To fit the period or risk threshold to your work, or to turn it off</td></tr>
+              <tr><td><code>call-limit.enabled</code> / <code>.per-delegation-per-minute</code> / <code>.per-agent-per-minute</code> / <code>.on-exceed</code></td><td><code>true</code> / <code>120</code> / <code>600</code> / <code>THROTTLE</code></td><td>Call limits</td><td>When normal traffic nears the limits, or past them the agent should be stopped (STOP)</td></tr>
+              <tr><td><code>denial-alarm.enabled</code> / <code>.window</code> / <code>.min-requests</code> / <code>.rate</code></td><td><code>true</code> / <code>5m</code> / <code>10</code> / <code>0.5</code></td><td>Denial alarm</td><td>When alarms are too frequent or too rare</td></tr>
+              <tr><td><code>allow-reuse.max-requests</code> / <code>.max-distinct-resources</code> / <code>.sensitive-max-distinct-resources</code></td><td><code>10</code> / <code>3</code> / <code>1</code></td><td>How far an ALLOW is reused</td><td>To widen or narrow what one ALLOW answers (wider: fewer decisions, more risk)</td></tr>
+              <tr><td><code>flight.*</code></td><td>The table above</td><td>Decision merging</td><td>The table above</td></tr>
+              <tr><td><code>contexa.security.zerotrust.protectable.unrecorded-agent-request</code></td><td><code>DECIDE_IN_PLACE</code></td><td>An agent request with no decision (<code>PROCEED</code>: as a person's)</td><td>When agent requests should go on while analysed, as a person's do (<code>PROCEED</code>)</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="extension">Extension points</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Bean</th><th>When you need it</th><th>Default</th></tr></thead>
+            <tbody>
+              <tr><td><code>AgentNoticeChannel</code></td><td>To notify through chat, push or tickets instead of mail</td><td>Mail when a mail sender exists (the person's account needs an address), else kept in the console only</td></tr>
+              <tr><td><code>AgentTokenRevoker</code></td><td>To revoke an external authorization server's tokens on a stop</td><td>With Contexa's authorization server it revokes there; otherwise nothing is revoked (stop and BLOCK are relied on)</td></tr>
+              <tr><td><code>AgentConfirmationAuthorizer</code></td><td>To keep approvals in your authorization server</td><td>A Contexa authorization server grant, else a signature with the evidence signing key</td></tr>
+              <tr><td><code>AgentScopeNarrower</code> / <code>AgentScopeStore</code></td><td>To narrow differently or store elsewhere</td><td>Read only for 1 hour / JDBC or memory</td></tr>
+              <tr><td><code>AgentConfirmationStore</code> / <code>AgentNoticeStore</code></td><td>To change the store</td><td>JDBC (<code>agent_confirmation</code> and <code>agent_notice</code> tables) or memory</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="operations">Operations notes</h2>
+          <ul>
+            <li><strong>Several instances:</strong> call limit counts and decision merging state are in memory per instance. In-memory registries and stores are lost on restart, so use the Contexa database in production.</li>
+            <li><strong>With the autonomous security plane off</strong> (<code>contexa.autonomous.enabled: false</code>) there is no stop after a BLOCK and no narrowing, and the stop API answers <code>503</code>.</li>
+            <li>An agent's decision is the model's; the engine only computes facts (<a href="../architecture/decision-engine.html">Decision Engine</a>).</li>
+          </ul>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="delegation.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Delegation and Objective Contracts</span>
+            </a>
+            <a href="../common/overview.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Common Contracts: Contexa Types in Your Code</span>
+            </a>
+          </div>
