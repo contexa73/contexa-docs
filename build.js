@@ -267,7 +267,18 @@ function build() {
           // A docs page takes its <title> and description from its own heading and lead paragraph, so the
           // browser tab and search results match the page in its language (template titles can go stale).
           const pagePath = relPath.replace(/\\/g, '/');
-          if (pagePath.startsWith('docs/')
+          if (pagePath === 'index.html') {
+            // The home page's title and description are its own headline and lead, in each language.
+            const plain = (s) => s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().replace(/"/g, '&quot;');
+            const h1 = contentHtml.match(/<h1[^>]*>([\s\S]*?)<\/h1>/);
+            const lead = contentHtml.match(/<p class="lead[^"]*">([\s\S]*?)<\/p>/);
+            if (h1) html = html.replace(/<title>[^<]*<\/title>/, `<title>Contexa — ${plain(h1[1])}</title>`);
+            if (lead) {
+              const desc = plain(lead[1]);
+              html = html.replace(/<meta\s+name="description"\s+content="[^"]*">/,
+                `<meta name="description" content="${desc.length > 200 ? desc.slice(0, 197) + '…' : desc}">`);
+            }
+          } else if (pagePath.startsWith('docs/')
               || (lang !== 'en' && ['get-started.html', 'community.html'].includes(pagePath))) {
             // Tags are dropped and entities kept as they are, so the text stays valid in <title> and in an attribute.
             const plain = (s) => s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().replace(/"/g, '&quot;');
@@ -305,7 +316,7 @@ function build() {
         const titleMatch = html.match(/<title>([^<]*)<\/title>/);
         const pageTitle = titleMatch ? titleMatch[1] : 'Contexa';
         const descMatch = html.match(/<meta\s+name="description"\s+content="([^"]*)"/);
-        const pageDesc = descMatch ? descMatch[1] : 'Contexa: AI-Native Post-Authentication Runtime Security & Zero Trust for Spring Security. Real-time protection for Authenticated User Behavior Security and AI Agent threats.';
+        const pageDesc = descMatch ? descMatch[1] : 'Open-source AI security for Spring Security that stops the attacks that look like normal work after sign-in.';
 
         const headTags = [
           `<!-- Canonical -->`,
@@ -395,8 +406,8 @@ function build() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Contexa — Post-Auth Security & AI Agent Runtime Security (Zero Trust for Spring Security)</title>
-  <meta name="description" content="Contexa is an open-source Post-Auth Security and AI Agent Runtime Security platform. Fuses Zero Trust with Spring Security for Authenticated User Behavior Security.">
+  <title>Contexa — After sign-in, stop the attacks that look like normal work</title>
+  <meta name="description" content="Open-source AI security for Spring Security. Contexa's AI judges each protected request by people and AI agents against usual behavior and company records, then allows it, asks for more authentication, or blocks it.">
   <link rel="canonical" href="${DOCS_BASE_URL}/en/index.html">
   <link rel="alternate" hreflang="en" href="${DOCS_BASE_URL}/en/index.html">
   <link rel="alternate" hreflang="ko" href="${DOCS_BASE_URL}/ko/index.html">
@@ -411,8 +422,8 @@ function build() {
   </script>
 </head>
 <body>
-  <h1>Contexa — AI-Native Post-Authentication Runtime Security for Spring</h1>
-  <p>AI-Native Zero Trust security platform for Spring Boot applications.</p>
+  <h1>Contexa — After sign-in, stop the attacks that look like normal work</h1>
+  <p>Open-source AI security for Spring Security.</p>
   <p><a href="/en/index.html">View in English</a> | <a href="/ko/index.html">한국어로 보기</a></p>
 </body>
 </html>`;
