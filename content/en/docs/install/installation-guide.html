@@ -29,49 +29,48 @@
         <p>Order: <a href="#cli">install with the CLI</a> or <a href="#manual-install">install by hand</a> → <a href="#legacy-integration">connect your existing sign-in</a> (when your application owns sign-in) → <a href="#verify">check that it is on</a>.</p>
 
         <h2 id="cli">Install with the CLI</h2>
-        <p>The Contexa CLI puts the dependencies, the annotation and the settings into your application project. Prebuilt binaries exist for Linux x64, macOS Apple Silicon (arm64) and Windows x64.</p>
+        <p>The Contexa CLI adds Contexa to a Spring Boot 3 application and gets it running: it prepares a local database and AI model, changes the project, checks that the dependencies download, and offers to start the application. Prebuilt binaries exist for Linux x64, macOS Apple Silicon (arm64) and Windows x64.</p>
 
         <h3 id="cli-install">Install the CLI</h3>
-        <pre><code class="language-bash"># Linux, macOS, Git Bash, WSL
+        <pre><code class="language-bash"># Linux, macOS
 curl -fsSL https://install.ctxa.ai | sh</code></pre>
         <pre><code class="language-powershell"># Windows PowerShell
 irm https://install.ctxa.ai/install.ps1 | iex</code></pre>
-        <p>The installer verifies the download against the SHA-256 digest published next to the binary. Instead of the script you can download the binary (for example contexa-win-x64.exe for Windows) from the <a href="https://github.com/contexa-security/contexa-cli/releases">contexa-cli releases page</a> and put it on your <code>PATH</code>.</p>
+        <p>The installer checks the signed release and the binary's SHA-256 before it replaces anything, and prints the next step. When the current terminal cannot see the new command yet, it also prints the one line that makes it available; new terminals find it on their own.</p>
 
         <h3 id="cli-init">What <code>contexa init</code> does</h3>
         <pre><code class="language-bash">cd your-spring-project
-contexa init --check   # only checks the environment and exits (Java 17+, Docker)
 contexa init</code></pre>
+        <p>No project yet? Run <code>contexa init</code> in an empty folder: it creates a small Spring Boot 3.5 application with Contexa and sample sign-in accounts (start.spring.io only creates Spring Boot 4 projects, which Contexa does not support yet).</p>
         <ol>
-          <li><strong>Questions:</strong> choose Quick Start (default) or Advanced Setup. Quick Start uses OpenAI and Anthropic as providers, the <code>SHADOW</code> enforcement mode and no infrastructure, and asks once more whether to use Ollama. Advanced Setup asks for the security mode, enforcement mode, providers and distributed infrastructure one by one.</li>
-          <li><strong>Build file:</strong> adds the starter, the Spring AI BOM with the chosen provider starters, and the PgVector starter. Provider starters you did not choose are removed.</li>
-          <li><strong>Main class:</strong> puts <code>@EnableAISecurity</code> without attributes on the class annotated with <code>@SpringBootApplication</code> (the default way, where your application owns sign-in).</li>
-          <li><strong><code>application.yml</code>:</strong> writes the dedicated Contexa database (<code>contexa.datasource.*</code>, default address <code>jdbc:postgresql://localhost:5432/contexa</code>, overridable with the environment variables <code>CONTEXA_DB_URL</code>, <code>CONTEXA_DB_USERNAME</code>, <code>CONTEXA_DB_PASSWORD</code>), the enforcement mode, the model selection (<code>contexa.llm.selection.*</code>) and the chosen providers' <code>spring.ai.*</code> (keys from the environment variables <code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>).</li>
-          <li><strong>Backup:</strong> keeps the original files under <code>contexa/bak/</code> in the project before changing them.</li>
-          <li><strong>Infrastructure (optional):</strong> with <code>--distributed</code> or <code>--simulate</code> it writes a Docker Compose file outside the project (in an OS-specific Contexa folder) and starts PostgreSQL (pgvector), Redis, Zookeeper, Kafka and, when chosen, Ollama. The images are <code>pgvector/pgvector:pg16</code>, <code>redis:7.2-alpine</code>, <code>confluentinc/cp-zookeeper:7.4.0</code>, <code>confluentinc/cp-kafka:7.4.0</code> and <code>ollama/ollama:latest</code>; the ports are 5432, 6379, 2181, 9092 and 11434, opened on <code>127.0.0.1</code> only (changed with the environment variables <code>CONTEXA_*_PORT</code> and <code>COMPOSE_BIND_HOST</code>). When Ollama was started it pulls the chat model (default <code>qwen2.5:7b</code>, environment variable <code>OLLAMA_CHAT_MODEL</code>) and the embedding model (<code>mxbai-embed-large</code>, <code>OLLAMA_EMBEDDING_MODEL</code>). Without these options it does not touch infrastructure, so you prepare PostgreSQL yourself (<a href="#step-database">Create the dedicated database</a>).</li>
+          <li><strong>Checks before any change:</strong> Spring Boot 3.5.x (on 3.4 and older, and on 4.x, it stops and changes nothing), Java 17 or later, the <code>@SpringBootApplication</code> class, and Docker or Ollama for the local services. Anything missing is explained with the fix.</li>
+          <li><strong>One question:</strong> the AI model provider, Ollama (runs on your computer, no API key; the default), OpenAI or Anthropic. The CLI then shows everything it will change and asks to go ahead.</li>
+          <li><strong>Local services, shared by your projects:</strong> PostgreSQL with pgvector in Docker (container <code>contexa-local-postgres</code>, on a free port such as 55432, bound to <code>127.0.0.1</code>) with a database of its own for each project; the Ollama already running on your computer, or one started in Docker, with the models <code>qwen3:8b</code> and <code>mxbai-embed-large</code> downloaded once; and, when Contexa provides the sign-in, a local mail inbox (Mailpit) that receives the one-time sign-in codes. Your existing PostgreSQL or Ollama on the default ports is left alone.</li>
+          <li><strong>Build file:</strong> adds the starter, the Spring AI BOM (1.1.8), the model starter and the PgVector starter (Maven, Gradle Groovy or Kotlin DSL, also in multi-module builds). Dependencies already in the file are kept.</li>
+          <li><strong>Main class:</strong> when your application declares a <code>SecurityFilterChain</code>, adds <code>@EnableAISecurity</code> without attributes (your application keeps sign-in; do the four things in <a href="#legacy-integration">Connect your existing sign-in</a>; when it signs in with Spring Boot's default user, that user <code>user</code> is kept with a password made once and kept outside the project, see <a href="troubleshooting.html#boot-default-user">Default user</a>). Otherwise it adds <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>, so Contexa provides the sign-in and the admin console.</li>
+          <li><strong>Settings:</strong> writes the Contexa settings to <code>src/main/resources/config/application.yml</code>. Spring Boot reads that location by itself, so your own <code>application.yml</code> and <code>application.properties</code> stay unchanged, and keys you already set are not written. It contains the dedicated database (<code>contexa.datasource.*</code>, each value overridable with <code>CONTEXA_DB_URL</code>, <code>CONTEXA_DB_USERNAME</code>, <code>CONTEXA_DB_PASSWORD</code>), <code>contexa.datasource.isolation.contexa-owned-application</code> set to <code>true</code> only when your application has no database of its own, the <code>SHADOW</code> enforcement mode and the model selection (<code>contexa.llm.*</code>). When the application already keeps its own file in that folder, the settings go to <code>application-contexa.yml</code> and that file gets one <code>spring.config.import</code> line.</li>
+          <li><strong>Dependency check:</strong> resolves the dependencies with the project's own Gradle or Maven wrapper. If they cannot be downloaded, every project change is rolled back and the reason is shown.</li>
+          <li><strong>Start and confirm:</strong> offers to start the application and reports the address once it is up, or the reason when it stops.</li>
         </ol>
+        <p>When Contexa provides the sign-in (and the application is not the example application), <code>contexa init</code> makes a password for the admin-console account <code>admin</code>, keeps it in <code>~/.contexa/credentials.properties</code> outside the project and shows it at the end. Contexa creates the account when the application first starts (<a href="configuration/iam.html#seed">First start</a>).</p>
+        <p>API keys for OpenAI and Anthropic come from <code>OPENAI_API_KEY</code> and <code>ANTHROPIC_API_KEY</code>, or are asked for and kept in <code>~/.contexa/credentials.properties</code>, outside the project. Running <code>contexa init</code> again is safe: it checks what is in place and adds only what is missing.</p>
         <div class="table-scroll"><table class="api-table prose-table">
           <thead><tr><th><code>init</code> option</th><th>Meaning</th></tr></thead>
           <tbody>
-            <tr><td><code>--yes</code></td><td>No questions, use the defaults (Quick Start). Also skips the Java and Docker checks</td></tr>
-            <tr><td><code>--force</code></td><td>Configure again even if the project is already set up</td></tr>
+            <tr><td><code>--provider ollama|openai|anthropic</code></td><td>The AI model provider without the question (default <code>ollama</code>)</td></tr>
+            <tr><td><code>--yes</code></td><td>No questions, use the defaults (scripts and CI)</td></tr>
             <tr><td><code>--dir &lt;path&gt;</code></td><td>Project folder (default: the current folder)</td></tr>
-            <tr><td><code>--include-ollama</code></td><td>Add Ollama to the providers (off by default)</td></tr>
-            <tr><td><code>--distributed</code></td><td>Create the distributed infrastructure (PostgreSQL, Redis, Zookeeper, Kafka), set <code>contexa.infrastructure.mode</code> to distributed, and add the Redis, Redisson and Kafka dependencies</td></tr>
-            <tr><td><code>--no-docker</code></td><td>Write the Compose file but do not start containers</td></tr>
-            <tr><td><code>--simulate</code></td><td>An isolated practice environment. Turns on the distributed infrastructure and Ollama, names containers <code>ctxa-sim-</code> and moves ports by +20000 (for example 5432 → 25432). Writes the <code>ENFORCE</code> enforcement mode</td></tr>
-            <tr><td><code>--merge</code> / <code>--standalone</code>, <code>--standalone-dir</code></td><td>Write into your build file and settings (default), or into a separate folder (default <code>&lt;project&gt;/contexa</code>)</td></tr>
-            <tr><td><code>--infra-dir &lt;path&gt;</code></td><td>Folder for the Compose file</td></tr>
-            <tr><td><code>--check</code></td><td>Only check the environment and exit (exit code 1 on failure)</td></tr>
-            <tr><td><code>--lang en|ko</code></td><td>CLI language (works with every command)</td></tr>
+            <tr><td><code>--db-url &lt;jdbc-url&gt;</code></td><td>Use your own PostgreSQL with pgvector instead of the local one; the password comes from <code>CONTEXA_DB_PASSWORD</code></td></tr>
+            <tr><td><code>--db-username &lt;name&gt;</code></td><td>User for <code>--db-url</code> (default <code>contexa</code>)</td></tr>
+            <tr><td><code>--lang en|ko</code></td><td>CLI language (works with every command; also <code>CONTEXA_LANG</code>)</td></tr>
           </tbody>
         </table></div>
         <div class="callout callout-warning">
-          <p><strong>Check these in the settings the CLI wrote.</strong></p>
+          <p><strong>Before a deployment</strong></p>
           <ul>
-            <li><strong>For an existing application, remove the line <code>contexa.datasource.isolation.contexa-owned-application: true</code>.</strong> The CLI always writes it. With this value your application's default database connection can become the Contexa database (when your application declares no DataSource bean of its own), and the capability check becomes strict, so the startup stops when a model or the vector store is missing (<a href="#capability">Capability check</a>).</li>
-            <li><strong>Move the database password to an environment variable.</strong> The default password the CLI writes is for local trials. <code>contexa scan</code> warns about it.</li>
-            <li><strong>When your application owns sign-in, it still has work to do.</strong> The <code>@EnableAISecurity</code> the CLI adds uses the default way, so do the four things in <a href="#legacy-integration">Connect your existing sign-in</a>. When you choose SANDBOX in Advanced Setup, the CLI prints example code at the end; that example has an attribute <code>@EnableAISecurity</code> does not have, so use the examples on this page.</li>
+            <li>The local database and its password <code>contexa</code> are for your computer. Set <code>CONTEXA_DB_URL</code>, <code>CONTEXA_DB_USERNAME</code> and <code>CONTEXA_DB_PASSWORD</code> for a real database.</li>
+            <li>The sample accounts exist only in the sample application created in an empty folder (<code>contexa.iam.seed.accounts.enabled=true</code>). Never turn that on for a deployment. The admin-console password lives only in <code>~/.contexa/credentials.properties</code> on your computer, so a deployment does not get that account.</li>
+            <li>Contexa starts in <code>SHADOW</code>: it records decisions but blocks nothing. Switch to <code>ENFORCE</code> after reviewing them (<a href="shadow-mode.html#change-mode">Changing the mode</a>).</li>
           </ul>
         </div>
 
@@ -79,19 +78,14 @@ contexa init</code></pre>
         <div class="table-scroll"><table class="api-table prose-table">
           <thead><tr><th>Command</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td><code>contexa status</code></td><td>Shows whether it is a Spring project, whether the starter is present, Spring Security, the enforcement mode and the chat provider order. The mode shows <code>SHADOW</code> for anything other than <code>ENFORCE</code>.</td></tr>
-            <tr><td><code>contexa scan</code></td><td>Checks the setup: the starter, the pairing of <code>@EnableAISecurity</code> with the AI and PgVector starters, <code>application.properties</code> next to <code>application.yml</code>, the default database password, plaintext API keys, unused and deprecated keys, duplicate top-level <code>contexa:</code>. Exit code 1 when it finds a problem</td></tr>
-            <tr><td><code>contexa doctor</code></td><td>Checks Java 17+, the Docker CLI and daemon, whether ports 5432 and 25432 are in use, and the Ollama answer and chat model (<code>OLLAMA_CHAT_MODEL</code>, default <code>qwen2.5:7b</code>). When Ollama does not answer it reports a failure even if you use only cloud providers.</td></tr>
-            <tr><td><code>contexa mode --shadow</code> / <code>--enforce</code></td><td>Changes <code>contexa.security.zerotrust.mode</code> in <code>application.yml</code> (keeping <code>application.yml.bak</code> first). If a mode was ever saved in the admin console, that value wins over YAML and this has no effect (<a href="shadow-mode.html#change-mode">Changing the mode</a>).</td></tr>
-            <tr><td><code>contexa reset</code></td><td><code>-c</code> (code), <code>-i</code> (project infrastructure), <code>-s</code> (simulation), <code>-a</code> (all). Resetting the code overwrites files with the originals in <code>contexa/bak/</code> and removes the Contexa settings (<code>contexa:</code>, <code>spring.ai</code>) and <code>@EnableAISecurity</code> from Java files; changes you made after <code>init</code> are lost too. Resetting the infrastructure removes the containers and volumes.</td></tr>
-            <tr><td><code>contexa simulate up|down|reset|ps|logs</code></td><td>Starts and stops the <code>ctxa-sim</code> environment made with <code>--simulate</code>, deletes its volumes and starts it again (<code>reset</code>), and shows status and logs.</td></tr>
-            <tr><td><code>contexa ollama pull</code></td><td>Pulls the chat and embedding models (<code>--chat-model</code>, <code>--embed-model</code>; environment variables win over the options).</td></tr>
+            <tr><td><code>contexa doctor</code></td><td>Checks the Spring Boot and Java versions, the starter and <code>@EnableAISecurity</code>, that the Contexa settings are loaded, that the Contexa database answers, Ollama and its models, and the API key. Each problem comes with the fix; exit code 1 when one is found.</td></tr>
+            <tr><td><code>contexa reset</code></td><td>Restores exactly the files <code>contexa init</code> changed, from the backups it took. Changes you made after <code>init</code> are kept; where they overlap, the file is left as it is and reported. The local services stay for your other projects; when no project uses them any more it offers to remove them (<code>--services</code> does that without asking, <code>--yes</code> skips the questions).</td></tr>
           </tbody>
         </table></div>
 
         <h2 id="prerequisites">Prerequisites</h2>
         <ul>
-          <li>Java 17 or later, Spring Boot 3.x (built and tested with 3.5.4; 4.x is refused at startup)</li>
+          <li>Java 17 or later, Spring Boot 3.5.x (built and tested with 3.5.4; on 3.4 and older the application does not start, 4.x is refused at startup)</li>
           <li>PostgreSQL with the <code>vector</code> extension (pgvector). For example the Docker image <code>pgvector/pgvector:pg16</code></li>
           <li>A chat model and an embedding model: OpenAI, or Anthropic (chat) with OpenAI or Ollama (embeddings), or Ollama</li>
         </ul>

@@ -17,54 +17,56 @@
 </div>
 
 <h2 id="first-look">Look here first</h2>
-<p>Contexa works when the JDK, the dedicated database, the AI models and (optionally) Docker all fit together. When something goes wrong, look at two places first.</p>
+<p>Contexa works when the JDK, the dedicated database and the AI models all fit together. When something goes wrong, look at two places first.</p>
 <ul>
+  <li><strong>The CLI check:</strong> <code>contexa doctor</code> checks the Spring Boot and Java versions, the starter and <code>@EnableAISecurity</code>, that the Contexa settings are loaded, that the Contexa database answers, Ollama and its models, and the API key, and prints the fix next to each problem.</li>
   <li><strong>The application's startup log:</strong> the lines Contexa writes and what they mean are in <a href="installation-guide.html#verify">Check that it is on</a>. Look especially for the ERROR-level <code>[ContexaCapability]</code> and <code>[Contexa]</code> lines.</li>
-  <li><strong>Connection refused:</strong> when PostgreSQL or Ollama cannot be reached, check with <code>docker ps</code> that the containers are up and check the ports (PostgreSQL 5432, Ollama 11434), and read the Ollama log with <code>docker logs contexa-ollama</code>.</li>
-  <li><strong>The CLI checks:</strong> <code>contexa init --check</code> checks only Java 17+ and Docker without changing the project, then exits. <code>contexa doctor</code> also checks the PostgreSQL port and the Ollama model.</li>
 </ul>
 <pre><code class="language-bash">contexa doctor</code></pre>
 
 <h2 id="error-catalog">CLI install and init errors</h2>
+<p>Every <code>contexa init</code> error says what to do, and nothing in the project is changed (or every change is rolled back). After fixing the cause, run <code>contexa init</code> again.</p>
 
 <h3 id="cli-not-found">The <code>contexa</code> command is not found</h3>
-<p><strong>Fix:</strong> open a new terminal, check that the folder the installer named at the end is on your <code>PATH</code>, then run <code>contexa --version</code>. Instead of the script you can download the binary for your OS from the <a href="https://github.com/contexa-security/contexa-cli/releases">releases page</a> and put it on your <code>PATH</code>.</p>
+<p><strong>Fix:</strong> run the <code>export PATH=...</code> line the installer printed at the end, or open a new terminal (on Windows, reopen terminals that were open before the installation), then run <code>contexa --version</code>.</p>
 
-<h3 id="docker-not-running">Docker is missing or not running</h3>
-<div class="callout callout-warning">
-  <p><strong>Messages</strong>: <code>x Docker CLI is not installed.</code>, <code>x Docker daemon is not running.</code>, <code>Docker is installed but the daemon is not running.</code></p>
-</div>
-<p><strong>When:</strong> in the pre-check of <code>contexa init</code> (without <code>--yes</code>) and when creating infrastructure (<code>--distributed</code>, <code>--simulate</code>). The default <code>init</code>, which creates no infrastructure, only shows the pre-check result as a warning and goes on.</p>
-<p><strong>Fix:</strong> on Windows and macOS start Docker Desktop and wait until it is ready; on Linux run <code>sudo systemctl start docker</code>. To go on without Docker, run <code>init</code> without the infrastructure options and prepare PostgreSQL yourself (<a href="installation-guide.html#step-database">Create the dedicated database</a>). <code>--no-docker</code> writes the Compose file without starting containers.</p>
+<h3 id="spring-boot-unsupported">Spring Boot 4 or 3.4 and older (<code>SPRING_BOOT_UNSUPPORTED</code>, <code>SPRING_BOOT_TOO_OLD</code>)</h3>
+<p><strong>Cause:</strong> Contexa 0.1.0 needs Spring Boot 3.5.x. Projects created on start.spring.io now use Spring Boot 4, and on 3.4 and older Contexa's task executor clashes with the one Spring Boot names <code>taskExecutor</code>, so the application does not start.</p>
+<p><strong>Fix:</strong> change the Spring Boot version in the build file to 3.5.x, or run <code>contexa init</code> in an empty folder to get a ready Spring Boot 3.5 sample application with Contexa.</p>
+
+<h3 id="docker-not-running">Docker is missing or not running (<code>DOCKER_MISSING</code>, <code>DOCKER_STOPPED</code>)</h3>
+<p><strong>When:</strong> <code>contexa init</code> runs the local PostgreSQL (and, without a running Ollama, Ollama) in Docker.</p>
+<p><strong>Fix:</strong> on Windows and macOS start Docker Desktop and wait until it is ready; on Linux run <code>sudo systemctl start docker</code>. Interactive <code>init</code> offers to check again. To use a PostgreSQL with pgvector you already have instead, choose it in the question or run <code>contexa init --db-url jdbc:postgresql://host:5432/db</code> with the password in <code>CONTEXA_DB_PASSWORD</code>.</p>
 
 <h3 id="port-in-use">A port is already in use</h3>
-<div class="callout callout-warning">
-  <p><strong>Message</strong>: <code>Port 5432 (PostgreSQL) is already in use on 127.0.0.1.</code> followed by <code>Local service PostgreSQL is already running on host. Contexa will skip starting this docker container and reuse the host service.</code></p>
-</div>
-<p><strong>Cause:</strong> when creating infrastructure, the CLI checks PostgreSQL 5432, (with Ollama) 11434, and (distributed) Redis 6379, Zookeeper 2181 and Kafka 9092. For a port in use it does not create the container and reuses the existing service. When a container with the same name already exists, it is reused instead of created again (<code>Existing infrastructure detected (...); reusing it.</code>). If that container's configuration has drifted, remove it with <code>docker rm -f &lt;container name&gt;</code> and run <code>contexa init</code> again.</p>
-<p><strong>Fix:</strong> check that the service on the port is the PostgreSQL or Ollama you meant to use, and match its connection details in <code>contexa.datasource.*</code> and the other settings. To practice apart from existing services, use the isolated environment: container names become <code>ctxa-sim-</code> and ports move by +20000 (5432 → 25432, 11434 → 31434 and so on).</p>
-<pre><code class="language-bash">contexa init --simulate</code></pre>
+<p>Nothing to do: the local services take free ports (PostgreSQL from 55432, Ollama 11434 or from 51434, the mail inbox from 51025 and 58025) and leave services already on the default ports alone. An Ollama already running on 11434 is used as it is.</p>
 
-<h3 id="ollama-model-missing">An Ollama model is missing</h3>
-<div class="callout callout-warning">
-  <p><strong>Message</strong> (<code>contexa doctor</code>): <code>Ollama Model 'qwen2.5:7b' is missing.</code></p>
-</div>
-<p><strong>Fix:</strong> pull the model, and the embedding model with it.</p>
-<pre><code class="language-bash">docker exec -it contexa-ollama ollama pull qwen2.5:7b
-docker exec -it contexa-ollama ollama pull mxbai-embed-large</code></pre>
+<h3 id="ollama-model-missing">Ollama is not available or a model is missing (<code>OLLAMA_MISSING</code>)</h3>
+<p><strong>Fix:</strong> install Ollama from <a href="https://ollama.com/download">ollama.com/download</a> (or start Docker so Contexa can start one), or choose OpenAI with <code>--provider openai</code>. <code>contexa init</code> downloads only the models that are missing (<code>qwen3:8b</code> and <code>mxbai-embed-large</code>); when a download stops, running it again continues.</p>
 <ul>
-  <li><strong>The model you pull must be the model the application uses.</strong> The application's chat model is <code>contexa.llm.chat.ollama.model</code> (empty means <code>qwen3:8b</code>); in the settings the CLI writes, it is overridden by the environment variable <code>CONTEXA_CHAT_OLLAMA_MODEL</code> (default <code>qwen2.5:7b</code>). The model the CLI pulls and checks is another environment variable, <code>OLLAMA_CHAT_MODEL</code> (default <code>qwen2.5:7b</code>).</li>
-  <li>To use a lighter model on a small machine (for example <code>qwen2.5:3b</code>), set both to the same model. You can also pull it with <code>contexa ollama pull --chat-model qwen2.5:3b</code> (the environment variable wins when set).</li>
+  <li>A lighter chat model for a small machine: set <code>CONTEXA_OLLAMA_CHAT_MODEL</code> (for example <code>qwen2.5:3b</code>) before <code>contexa init</code>; it downloads that model and writes it into the settings.</li>
 </ul>
+
+<h3 id="starter-unavailable">The Contexa starter cannot be downloaded (<code>STARTER_UNAVAILABLE</code>)</h3>
+<p><strong>Cause:</strong> the project's build could not resolve <code>ai.ctxa:spring-boot-starter-contexa</code> through its repositories. <code>contexa init</code> rolled every change back.</p>
+<p><strong>Fix:</strong> check that the build reaches Maven Central (network, proxy, or a company repository that mirrors it), then run <code>contexa init</code> again (<a href="#dependency-not-found">below</a>).</p>
+
+<h3 id="boot-default-user">Spring Boot's default user no longer signs in</h3>
+<p><strong>Cause:</strong> Spring Boot creates its default user <code>user</code> (and logs <code>Using generated security password</code>) only while no OAuth2 classes are on the classpath. The Contexa starter brings them, so an application that signed in with that user has no user after Contexa is added. Contexa also registers a delegating password encoder, which cannot check a password without a prefix such as <code>{noop}</code>, so naming the user alone is not enough.</p>
+<p><strong>Fix:</strong> set <code>spring.security.user.name: user</code> and <code>spring.security.user.password: "{noop}your-password"</code>. When the application keeps its own sign-in and has no users, OAuth2 or <code>spring.security.user.*</code> of its own, <code>contexa init</code> does this for you: it makes the password once, keeps it in <code>~/.contexa/credentials.properties</code> outside the project and shows it at the end.</p>
+
+<h3 id="admin-account">The admin-console account and its password</h3>
+<p><strong>Cause:</strong> When Contexa provides the sign-in, <code>contexa init</code> makes a password for the account <code>admin</code>, keeps it in <code>~/.contexa/credentials.properties</code> and shows it at the end; Contexa creates the account from <code>contexa.iam.seed.admin.password</code> when the application starts. The example application created in an empty folder uses the sample accounts (<code>admin</code> / <code>1111</code>) instead.</p>
+<p><strong>Fix:</strong> read the password on the last screen of <code>contexa init</code> or in the line <code>contexa.iam.seed.admin.password</code> of that file. A password changed in the admin console stays, because an existing account is never created again. If there is no account, start the application as the same user on the same computer and look for <code>[IamSeedData] Administrator 'admin' created</code> in its log. The one-time code of the second step arrives in the local inbox <code>contexa init</code> named.</p>
 
 <h3 id="reset-scope">What <code>contexa reset</code> reverts</h3>
-<p><code>reset</code> keeps no install record; it reverts with the backups <code>init</code> made before changing files (<code>contexa/bak/</code>) and with fixed rules.</p>
+<p><code>reset</code> restores exactly the files <code>contexa init</code> changed, using the installation record and the backups in the project's <code>contexa/</code> folder (ignored by git).</p>
 <ul>
-  <li><strong>Code (<code>-c</code>):</strong> overwrites files with the originals from the backup, so changes you made after <code>init</code> are lost too. For build files and settings without a backup it removes the Contexa lines (all of <code>contexa:</code>, all of <code>spring.ai</code> and more), and removes <code>@EnableAISecurity</code> and its import from every Java file (even ones you added yourself). It deletes the <code>&lt;project&gt;/contexa</code> folder.</li>
-  <li><strong>Infrastructure (<code>-i</code>):</strong> takes the project's Compose stack down and removes its containers and volumes.</li>
-  <li><strong>Simulation (<code>-s</code>):</strong> removes the <code>ctxa-sim</code> stack and its volumes and reverts the code too. <code>-a</code> does everything.</li>
+  <li><strong>Files:</strong> files <code>init</code> created are removed and changed files are put back. Changes you made after <code>init</code> are kept; where they overlap with Contexa's changes the file is left as it is and listed.</li>
+  <li><strong>Local services:</strong> they stay for your other projects. When no project uses them any more, <code>reset</code> offers to remove them with their data; <code>contexa reset --services</code> does that without asking.</li>
+  <li><strong>Data:</strong> the project's Contexa data stays in its database until the local services are removed.</li>
 </ul>
-<p>Keep a copy of files you changed yourself before resetting.</p>
+<p>Installations made by CLI 0.1.x are reverted the same way; their old Docker stack is removed when its ownership can be verified, and left alone otherwise.</p>
 
 <h2 id="startup-errors">Application startup errors</h2>
 
@@ -105,7 +107,7 @@ docker exec -it contexa-ollama ollama pull mxbai-embed-large</code></pre>
 <div class="callout callout-warning">
   <p><strong>Messages</strong>: <code>Contexa does not support Spring Boot 4.x. Current version: ...</code> (ERROR log), <code>Spring Boot 4.x is not supported by Contexa. Current version: ...</code> (<code>IllegalStateException</code>)</p>
 </div>
-<p><strong>Fix:</strong> use Spring Boot 3.x. Contexa is built and tested with 3.5.4.</p>
+<p><strong>Fix:</strong> use Spring Boot 3.5.x. Contexa is built and tested with 3.5.4.</p>
 
 <h3 id="host-chain-missing">Every request asks for sign-in · <code>HOST_OWNED mode: no SecurityFilterChain is declared</code></h3>
 <p><strong>Cause:</strong> the starter brings Spring Security, so an application without its own <code>SecurityFilterChain</code> gets Spring Boot's default security. This happens with the starter alone too (without <code>@EnableAISecurity</code>). In the default way with <code>@EnableAISecurity</code> on (<code>HOST_OWNED</code>), Contexa logs <code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared by the application ...</code> as an ERROR at startup.</p>
