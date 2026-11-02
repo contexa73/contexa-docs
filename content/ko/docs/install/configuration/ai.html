@@ -229,6 +229,36 @@ contexa:
         layer2:
           model: qwen3:14b</code></pre>
 
+          <h2 id="model-server-gate">모델 서버가 한 번에 받는 호출 수</h2>
+          <p>Contexa가 모델 서버로 보내는 모든 호출은 서버(공급자와 주소)마다 하나인 관문을 지납니다. 두 층의 판정, AI 파이프라인, 벡터 저장소의 임베딩이 모두 그렇습니다. 호출은 서버에 쌓이는 대신 관문에서 줄을 섭니다.</p>
+          <ul>
+            <li>자체 호스팅 서버(Ollama, 또는 이 컴퓨터나 사설망의 주소)는 한 번에 2개, 한 번에 한 모델만 받습니다. 다른 모델 호출(판정 중의 임베딩 같은)은 진행 중인 호출이 끝나면 들어갑니다. 원격 공급자는 한 번에 16개를 받습니다.</li>
+            <li>임베딩은 기다리는 판정 호출보다 먼저 들어갑니다. 들어간 호출은 끊지 않습니다.</li>
+            <li>모델 호출과 벡터 저장 · 검색의 시간 제한은 호출이 관문을 지난 때부터 셉니다. 줄 선 시간은 사건 예산(<code>contexa.security.plane.agent.event-timeout-ms</code>) 안으로 제한되고, 그 안에 차례가 오지 않은 호출은 <code>MODEL_SERVER_BUSY</code>로 끝납니다.</li>
+            <li>분당 한도(429), 과부하(529), 잠시 쓸 수 없음(503) 응답을 받으면 그 서버를 2초 쉬게 하고, 같은 응답이 이어지면 4 · 8 · 12초로 늘립니다. 호출은 차례가 오면 다시 보냅니다.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.llm.gate.enabled</code></td><td><code>true</code></td><td>모델 호출이 서버별 관문을 지나는지</td></tr>
+              <tr><td><code>contexa.llm.gate.self-hosted-max-concurrent</code></td><td><code>2</code></td><td>자체 호스팅 서버가 한 번에 받는 호출 수. 서버가 동시에 처리하는 요청 수에 맞춥니다(Ollama: <code>OLLAMA_NUM_PARALLEL</code>). <code>0</code>: 제한 없음</td></tr>
+              <tr><td><code>contexa.llm.gate.remote-max-concurrent</code></td><td><code>16</code></td><td>원격 공급자가 한 번에 받는 호출 수. <code>0</code>: 제한 없음</td></tr>
+              <tr><td><code>contexa.llm.gate.first-back-off-ms</code></td><td><code>2000</code></td><td>분당 한도 · 과부하 뒤 처음 쉬는 시간. 같은 응답이 이어지면 두 배씩, 이 값의 여섯 배까지 늘어납니다</td></tr>
+              <tr><td><code>contexa.llm.gate.servers.&lt;이름&gt;.base-url</code></td><td>없음</td><td>서버 하나의 주소(공급자 설정에 쓴 그대로)</td></tr>
+              <tr><td><code>contexa.llm.gate.servers.&lt;이름&gt;.max-concurrent</code></td><td>없음</td><td>그 서버가 한 번에 받는 호출 수</td></tr>
+              <tr><td><code>contexa.llm.gate.servers.&lt;이름&gt;.one-model-at-a-time</code></td><td>없음</td><td>채팅 모델과 임베딩 모델을 함께 올려 두는 서버는 <code>false</code>. 비우면 자체 호스팅 서버는 <code>true</code></td></tr>
+            </tbody>
+          </table></div>
+          <p>두 모델을 함께 올릴 메모리가 있고 요청 4개를 동시에 처리하는 GPU 서버의 예:</p>
+          <pre><code class="language-yaml">contexa:
+  llm:
+    gate:
+      servers:
+        gpu:
+          base-url: http://gpu-box:11434
+          max-concurrent: 4
+          one-model-at-a-time: false</code></pre>
+
           <h2 id="embedding">임베딩 모델과 벡터 차원</h2>
           <p>임베딩 모델은 과거 판정 기록 같은 문서를 벡터로 바꿔 저장 · 검색할 때 씁니다. 저장된 벡터의 차원이 모델과 같아야 하므로 <strong>임베딩은 공급자 하나로 고정</strong>합니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">

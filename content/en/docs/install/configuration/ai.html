@@ -229,6 +229,36 @@ contexa:
         layer2:
           model: qwen3:14b</code></pre>
 
+          <h2 id="model-server-gate">How many calls a model server takes</h2>
+          <p>Every call Contexa makes to a model server passes one gate per server (provider and address): the decisions of both layers, the AI pipelines and the embeddings of the vector store. A call waits in line at the gate instead of piling up at the server.</p>
+          <ul>
+            <li>A self-hosted server (Ollama, or an address on this host or a private network) runs 2 calls at once and one model at a time: a call for another model, such as an embedding while decisions run, goes in when the running calls are done. A remote provider runs 16 calls at once.</li>
+            <li>Embeddings go in before waiting decision calls. A call that is in is never cut.</li>
+            <li>The time limits of model calls and of vector store writes and searches count from the moment the call goes in. The wait in line is bounded by the event's budget (<code>contexa.security.plane.agent.event-timeout-ms</code>); a call that gets no turn within it ends as <code>MODEL_SERVER_BUSY</code>.</li>
+            <li>After a rate limit (429), an overload (529) or a server that is unavailable for a while (503), the server is left alone for 2 s, then 4, 8 and 12 s while it keeps answering so, and the call is sent again when its turn comes.</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.llm.gate.enabled</code></td><td><code>true</code></td><td>Whether model calls pass a gate per server</td></tr>
+              <tr><td><code>contexa.llm.gate.self-hosted-max-concurrent</code></td><td><code>2</code></td><td>Calls at once on a self-hosted server. Match the requests the server runs in parallel (Ollama: <code>OLLAMA_NUM_PARALLEL</code>). <code>0</code>: no limit</td></tr>
+              <tr><td><code>contexa.llm.gate.remote-max-concurrent</code></td><td><code>16</code></td><td>Calls at once on a remote provider. <code>0</code>: no limit</td></tr>
+              <tr><td><code>contexa.llm.gate.first-back-off-ms</code></td><td><code>2000</code></td><td>The first pause after a rate limit or an overload. It doubles while the server keeps answering so, up to six times this</td></tr>
+              <tr><td><code>contexa.llm.gate.servers.&lt;name&gt;.base-url</code></td><td>none</td><td>The address of one server, as the provider is configured with it</td></tr>
+              <tr><td><code>contexa.llm.gate.servers.&lt;name&gt;.max-concurrent</code></td><td>none</td><td>Calls at once on that server</td></tr>
+              <tr><td><code>contexa.llm.gate.servers.&lt;name&gt;.one-model-at-a-time</code></td><td>none</td><td><code>false</code> for a server that keeps the chat and the embedding model loaded together. Empty: <code>true</code> for a self-hosted server</td></tr>
+            </tbody>
+          </table></div>
+          <p>A GPU server with enough memory for both models and four parallel requests:</p>
+          <pre><code class="language-yaml">contexa:
+  llm:
+    gate:
+      servers:
+        gpu:
+          base-url: http://gpu-box:11434
+          max-concurrent: 4
+          one-model-at-a-time: false</code></pre>
+
           <h2 id="embedding">Embedding model and vector dimension</h2>
           <p>The embedding model turns documents such as past decision records into vectors to store and search. The stored vectors must have the model's dimension, so <strong>embedding is fixed to one provider</strong>.</p>
           <div class="table-scroll"><table class="api-table prose-table">
