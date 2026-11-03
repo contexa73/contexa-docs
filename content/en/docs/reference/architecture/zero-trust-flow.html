@@ -23,7 +23,7 @@
             <ol class="dg-flow">
               <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node dg-request"><span class="dg-node-title">Request arrives</span><span class="dg-node-desc">from a signed-in user or agent</span></div></li>
               <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node dg-store"><span class="dg-node-title">Read the stored decision</span><span class="dg-node-desc">this user's decision (pending analysis when there is none or its lifetime is over)</span></div></li>
-              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Enforce</span><span class="dg-node-desc">stops here on block, step-up or hold (<code>CONTEXA_OWNED</code>: filters and protected methods; <code>HOST_OWNED</code>: protected methods only)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">Enforce</span><span class="dg-node-desc">stops here on block, step-up or hold (filters and protected methods in both ownership modes; under <code>HOST_OWNED</code> the filters run right after the application's chain)</span></div></li>
               <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node dg-host"><span class="dg-node-title">Run</span><span class="dg-node-desc">application logic and protected methods (<code>@Protectable</code>)</span></div></li>
               <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">Publish an analysis event</span><span class="dg-node-desc">after the protected method has finished (<code>finally</code>), with its outcome</span></div></li>
               <li class="dg-step"><span class="dg-step-no">6</span><div class="dg-node dg-model"><span class="dg-node-title">Decide</span><span class="dg-node-desc">the AI model runs Layer 1, and Layer 2 when needed</span></div></li>
@@ -34,7 +34,7 @@
           <figure class="dg">
             <figcaption class="dg-caption"><strong>Step 3 depends on the ownership mode</strong>The default is <code>HOST_OWNED</code>. The full comparison is in the overview.</figcaption>
             <div class="dg-compare">
-              <div class="dg-side dg-host"><p class="dg-side-title">The application keeps sign-in (<code>HOST_OWNED</code>, default)</p><ul><li>no Contexa filter on any chain</li><li>authorities are not changed</li><li>stored decisions are enforced only in front of <code>@Protectable</code> methods</li></ul></div>
+              <div class="dg-side dg-host"><p class="dg-side-title">The application keeps sign-in (<code>HOST_OWNED</code>, default)</p><ul><li>the same filters run as servlet filters right after the application's chain, on every path</li><li>authorities are not changed</li><li>a step-up goes to Contexa's verification-only step-up (<code>/contexa/step-up</code>)</li><li>enforced once more in front of <code>@Protectable</code> methods</li></ul></div>
               <div class="dg-side"><p class="dg-side-title">Contexa owns sign-in (<code>CONTEXA_OWNED</code>)</p><ul><li>authorities are changed to match the decision when the security context is read</li><li>two filters return the step-up, block and hold responses</li><li>enforced once more in front of <code>@Protectable</code> methods</li></ul></div>
             </div>
           </figure>
@@ -64,12 +64,12 @@
           <p>The authentication object is replaced only when the set of authorities actually changes. The session chain uses a <code>ZeroTrustAuthenticationToken</code> that carries the decision and the scores; the token chain uses a new <code>JwtAuthenticationToken</code> with only the authorities changed. Opaque tokens get no authority change; only the two filters' reads of the decision remain.</p>
 
           <h2 id="responses">Request time ②: what users get for each decision</h2>
-          <p>Under <code>CONTEXA_OWNED</code>, two filters (the challenge filter for step-up, the access control filter for block and hold) read the decision from the store, not from the authorities, and answer. A browser request is sent to a notice page; an API or AJAX request gets a JSON error.</p>
+          <p>In both ownership modes, two filters (the challenge filter for step-up, the access control filter for block and hold) read the decision from the store, not from the authorities, and answer; under <code>HOST_OWNED</code> they run right after the application's chain and send a step-up to Contexa's step-up (<a href="../identity/zero-trust-filters.html#host-step-up">The step-up under HOST_OWNED</a>). A browser request is sent to a notice page; an API or AJAX request gets a JSON error.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Decision</th><th>Browser</th><th>API</th><th>How it ends</th></tr></thead>
             <tbody>
               <tr><td>Allow</td><td colspan="2">goes on</td><td>—</td></tr>
-              <tr><td>Step-up authentication</td><td>sent to <code>/contexa/zero-trust/challenge-required?mfaUrl=…</code></td><td><code>401</code> <code>MFA_CHALLENGE_REQUIRED</code> (body <code>mfaUrl</code>). The MFA is started once per user under a lock (default lease 30 s); while another request is starting it, <code>503</code> <code>MFA_BUSY_RETRY</code> + <code>Retry-After: 3</code>. If the application has no MFA flow, <code>401</code> <code>ZERO_TRUST_CHALLENGE</code></td><td>becomes allow after passing the MFA this decision started (a sign-in MFA does not release it), or after 1,800 s</td></tr>
+              <tr><td>Step-up authentication</td><td>sent to <code>/contexa/zero-trust/challenge-required?mfaUrl=…</code></td><td><code>401</code> <code>MFA_CHALLENGE_REQUIRED</code> (body <code>mfaUrl</code>). The MFA is started once per user under a lock (default lease 30 s); while another request is starting it, <code>503</code> <code>MFA_BUSY_RETRY</code> + <code>Retry-After: 3</code>. If the application has no MFA flow, <code>401</code> <code>ZERO_TRUST_CHALLENGE</code>. Under <code>HOST_OWNED</code> no MFA is started: <code>mfaUrl</code> is <code>/contexa/step-up</code></td><td>becomes allow after passing the MFA this decision started (a sign-in MFA does not release it; under <code>HOST_OWNED</code>, the step-up or the application's own re-authentication after the decision), or after 1,800 s</td></tr>
               <tr><td>Block</td><td>sent to <code>/contexa/zero-trust/blocked</code></td><td><code>403</code> <code>ACCOUNT_BLOCKED</code>. After the unblock MFA has started, <code>401</code> <code>BLOCK_MFA_REQUIRED</code></td><td>an administrator's approval (<a href="#block">How a block spreads and is released</a>)</td></tr>
               <tr><td>Held for review</td><td>sent to <code>/contexa/zero-trust/analysis-pending?returnUrl=…</code></td><td><code>423</code> <code>SECURITY_REVIEW_IN_PROGRESS</code> + <code>Retry-After: 30</code></td><td>an administrator's approval. MFA does not release it. When both the analysis decision (300 s) and 5 minutes from the first hold response have passed, the next request turns it into a block</td></tr>
               <tr><td>Pending analysis</td><td colspan="2">goes on. The response is wrapped and cut if a block signal arrives while it is being written</td><td>changes when a decision is stored</td></tr>
@@ -101,12 +101,12 @@
             <li>If the application declares a resource certification gate (<code>ProtectableResourceCertificationGate</code>) bean, a method with <code>@Protectable(verificationRequired)</code> (default <code>true</code>) on an uncertified resource is refused with <code>423</code>. OSS has no implementation of this bean.</li>
             <li>Whether an agent request with no decision on record is decided on the spot is set by <code>contexa.security.zerotrust.protectable.unrecorded-agent-request</code> (default <code>DECIDE_IN_PLACE</code>; <code>PROCEED</code> lets it through like a person).</li>
           </ul>
-          <p>A refusal becomes one of the responses below. The body has <code>status</code> · <code>code</code> (<code>ZERO_TRUST_&lt;decision&gt;</code>) · <code>message</code> · <code>action</code> · <code>resourceId</code> · <code>riskScore</code> · <code>analysisTimeout</code> · <code>timestamp</code>.</p>
+          <p>A refusal becomes one of the responses below. The body has <code>status</code> · <code>code</code> (<code>ZERO_TRUST_&lt;decision&gt;</code>) · <code>message</code> · <code>action</code> · <code>resourceId</code> · <code>riskScore</code> · <code>analysisTimeout</code> · <code>timestamp</code>. For a block, a started step-up or a hold, a browser page request (<code>Accept</code> with <code>text/html</code>) is sent instead to the same notice page as in <a href="#responses">Request time ②</a>.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>HTTP status</th><th>When</th></tr></thead>
             <tbody>
               <tr><td><code>403</code></td><td>block</td></tr>
-              <tr><td><code>401</code></td><td>step-up. The step-up MFA starts on the spot and the body carries <code>mfaUrl</code>. An agent's step-up is answered with a confirmation request to the accountable person under <code>CONTEXA_OWNED</code> (<a href="../agent/controls.html#confirm">Confirmation</a>)</td></tr>
+              <tr><td><code>401</code></td><td>step-up. The step-up MFA starts on the spot and the body carries <code>mfaUrl</code> (under <code>HOST_OWNED</code>, the step-up address <code>/contexa/step-up</code>). An agent's step-up is answered with a confirmation request to the accountable person (<a href="../agent/controls.html#confirm">Confirmation</a>)</td></tr>
               <tr><td><code>423</code></td><td>held for review</td></tr>
               <tr><td><code>503</code></td><td>analysis is needed (an immediate-decision method during rapid re-entry and the like)</td></tr>
               <tr><td><code>408</code></td><td>the immediate decision's analysis timed out</td></tr>
@@ -169,8 +169,8 @@
             <tbody>
               <tr><td>Decision key</td><td>a delegated agent is stored separately under <code>&lt;user&gt;::agent::&lt;agent&gt;</code>. A block of the delegator counts as its block too</td><td>both</td></tr>
               <tr><td>No decision on record</td><td>not let through; decided on the spot (default)</td><td>both (<code>@Protectable</code>)</td></tr>
-              <tr><td>Block response</td><td><code>403</code> <code>AGENT_BLOCKED</code>, not released by MFA</td><td><code>CONTEXA_OWNED</code> (filter)</td></tr>
-              <tr><td>Agent request gate</td><td>call limits, ended delegations, confirmation by the accountable person, narrowed scope</td><td><code>CONTEXA_OWNED</code> only</td></tr>
+              <tr><td>Block response</td><td><code>403</code> <code>AGENT_BLOCKED</code>, not released by MFA</td><td>both (filter)</td></tr>
+              <tr><td>Agent request gate</td><td>call limits, ended delegations, confirmation by the accountable person, narrowed scope</td><td>both</td></tr>
             </tbody>
           </table></div>
           <p>Details are in <a href="../agent/overview.html">Agents as Security Subjects</a> and <a href="../agent/controls.html">Stop, Confirm, Limit</a>.</p>
@@ -185,7 +185,7 @@
             </tbody>
           </table></div>
           <ul>
-            <li><strong>The request-time filters do not read the enforcement mode.</strong> Even after switching to <code>SHADOW</code> or turning off <code>contexa.security.zerotrust.enabled</code>, the filters keep enforcing the block (no expiry), step-up and hold already stored (<code>CONTEXA_OWNED</code>).</li>
+            <li><strong>The request-time filters follow the enforcement mode.</strong> After switching to <code>SHADOW</code> or turning off <code>contexa.security.zerotrust.enabled</code>, nothing is stopped in either ownership mode; the block (no expiry), step-up and hold already stored stay and apply again under <code>ENFORCE</code>.</li>
             <li><strong>An event carries the mode it was published under.</strong> The decision of an event published under <code>SHADOW</code> is not stored or applied, even if the mode has meanwhile become <code>ENFORCE</code>.</li>
             <li><strong>Decision results go to the observation and audit records.</strong> The observation table is <code>ai_security_decision_observation</code>; the decision records are shown in the admin console's "Real-time Monitor" (<code>/contexa/admin/security-monitor</code>).</li>
           </ul>

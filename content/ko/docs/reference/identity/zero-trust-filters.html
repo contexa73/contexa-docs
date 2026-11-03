@@ -15,7 +15,7 @@
           </div>
 
           <div class="callout callout-warning">
-            <strong>이 필터들은 Contexa가 로그인을 맡을 때(<code>CONTEXA_OWNED</code>)만 동작합니다.</strong> 필터의 서블릿 자동 등록은 꺼져 있고, Contexa가 만든 보안 체인에만 들어갑니다. 기본값 <code>HOST_OWNED</code>에서는 Contexa가 체인을 만들지 않으므로 URL 단계의 집행이 없고, <code>@Protectable</code> 메서드 앞에서만 저장된 BLOCK · CHALLENGE · ESCALATE를 거부합니다(<a href="../iam/protectable.html">보호 메서드</a>). 앱의 기존 로그인을 쓰는 방법은 <a href="../common/bridge.html">기존 로그인과 연결하기</a>에 있습니다.
+            <strong>이 필터들은 두 소유 방식 모두에서 같은 응답으로 동작합니다.</strong> Contexa가 로그인을 맡을 때(<code>CONTEXA_OWNED</code>)는 서블릿 등록을 끈 채 Contexa가 만든 보안 체인에 들어갑니다. 기본값 <code>HOST_OWNED</code>에서는 Contexa가 체인을 만들지 않고, 같은 필터가 앱의 Spring Security 체인 바로 뒤에서 서블릿 필터로 돕니다(<a href="#position-host">HOST_OWNED에서</a>). 그래서 앱 체인이 먼저 사용자를 정하고 앱 규칙을 적용한 뒤, 모든 경로에서 집행합니다. 이때 CHALLENGE는 Contexa MFA 대신 Contexa의 추가 확인으로 갑니다(<a href="#host-step-up">HOST_OWNED의 추가 확인</a>). 저장된 BLOCK · CHALLENGE · ESCALATE는 <code>@Protectable</code> 메서드 앞에서도 거부합니다(<a href="../iam/protectable.html">보호 메서드</a>). 앱의 기존 로그인을 쓰는 방법은 <a href="../common/bridge.html">기존 로그인과 연결하기</a>에 있습니다.
           </div>
 
           <h2 id="overview">한눈에 보기</h2>
@@ -31,7 +31,7 @@
             <p class="dg-outcomes-title">판정에 따라</p>
             <ul class="dg-outcomes">
               <li class="dg-node dg-allow"><span class="dg-node-title">ALLOW</span><span class="dg-node-desc">그대로 진행</span></li>
-              <li class="dg-node dg-challenge"><span class="dg-node-title">CHALLENGE</span><span class="dg-node-desc">MFA로 본인 확인</span></li>
+              <li class="dg-node dg-challenge"><span class="dg-node-title">CHALLENGE</span><span class="dg-node-desc">MFA로 본인 확인(<code>HOST_OWNED</code>: Contexa 추가 확인)</span></li>
               <li class="dg-node dg-block"><span class="dg-node-title">BLOCK</span><span class="dg-node-desc">차단, 관리자 해제</span></li>
               <li class="dg-node dg-escalate"><span class="dg-node-title">ESCALATE</span><span class="dg-node-desc">423, 30초 뒤 다시</span></li>
               <li class="dg-node dg-pending"><span class="dg-node-title">PENDING_ANALYSIS</span><span class="dg-node-desc">통과, 응답을 지켜봄</span></li>
@@ -55,7 +55,7 @@
             <thead><tr><th>판정</th><th>브라우저</th><th>API · AJAX</th><th>권한</th><th>푸는 방법</th></tr></thead>
             <tbody>
               <tr><td>ALLOW</td><td>그대로 진행</td><td>그대로 진행</td><td>원래 권한</td><td>—</td></tr>
-              <tr><td>CHALLENGE</td><td><code>/contexa/zero-trust/challenge-required?mfaUrl=…</code>로 이동</td><td>401 <code>MFA_CHALLENGE_REQUIRED</code>: <code>mfaUrl</code>, <code>challengeNoticeUrl</code>, <code>sessionId</code>, <code>currentState</code>, <code>currentFactor</code></td><td><code>ROLE_MFA_REQUIRED</code> 하나만</td><td>이 챌린지로 시작한 MFA가 성공하면 판정이 ALLOW로 바뀜. 또는 1800초가 지남. 로그인 때의 MFA는 챌린지를 풀지 않습니다</td></tr>
+              <tr><td>CHALLENGE</td><td><code>/contexa/zero-trust/challenge-required?mfaUrl=…</code>로 이동(<code>HOST_OWNED</code>에서는 <code>mfaUrl</code>이 <code>/contexa/step-up</code>)</td><td>401 <code>MFA_CHALLENGE_REQUIRED</code>: <code>mfaUrl</code>, <code>challengeNoticeUrl</code>, <code>sessionId</code>, <code>currentState</code>, <code>currentFactor</code>. <code>HOST_OWNED</code>에서는 MFA 흐름을 시작하지 않으므로 <code>mfaUrl</code>, <code>challengeNoticeUrl</code>만</td><td><code>ROLE_MFA_REQUIRED</code> 하나만</td><td>이 챌린지로 시작한 MFA가 성공하면(<code>HOST_OWNED</code>에서는 추가 확인을 통과하면) 판정이 ALLOW로 바뀜. 또는 1800초가 지남. 로그인 때의 MFA는 챌린지를 풀지 않습니다</td></tr>
               <tr><td>BLOCK</td><td><code>/contexa/zero-trust/blocked</code>로 이동</td><td>403 <code>ACCOUNT_BLOCKED</code>: <code>adminReviewRequired</code>(<code>true</code>), <code>redirectUrl</code></td><td><code>ROLE_BLOCKED</code> 하나만</td><td>관리자 승인(<a href="#unblock">차단 해제</a>)</td></tr>
               <tr><td>ESCALATE</td><td><code>/contexa/zero-trust/analysis-pending?returnUrl=…</code>로 이동</td><td>423 <code>SECURITY_REVIEW_IN_PROGRESS</code> + <code>Retry-After: 30</code>: <code>retryAfterSeconds</code>, <code>redirectUrl</code></td><td><code>ROLE_REVIEW_REQUIRED</code> 하나만</td><td>관리자의 승인. MFA로는 풀리지 않습니다. 오래 풀리지 않으면 BLOCK이 됨(<a href="#escalate">검토 보류가 차단이 되는 때</a>)</td></tr>
               <tr><td>PENDING_ANALYSIS</td><td>통과</td><td>통과</td><td>원래 권한 + <code>ROLE_PENDING_ANALYSIS</code></td><td>분석 결과가 저장되면 다음 요청부터 그 판정</td></tr>
@@ -72,7 +72,26 @@
               <tr><td>에이전트 요청</td><td>사람의 MFA 대신 책임자 확인(<a href="#agents">에이전트 요청</a>)</td></tr>
             </tbody>
           </table></div>
-          <p>MFA 시작은 사용자마다 잠금(<code>mfa:challenge:init:&lt;사용자&gt;</code>)으로 한 번만 하며, 잠금 대기 · 임대 시간 · 재시도 안내 초는 설정으로 바꿉니다(<a href="#settings">설정</a>).</p>
+          <p>MFA 시작은 사용자마다 잠금(<code>mfa:challenge:init:&lt;사용자&gt;</code>)으로 한 번만 하며, 잠금 대기 · 임대 시간 · 재시도 안내 초는 설정으로 바꿉니다(<a href="#settings">설정</a>). <code>HOST_OWNED</code>에서는 위 표의 앞 네 줄이 생기지 않습니다. Contexa MFA를 시작하지 않고, 사람에게는 아래 추가 확인으로 답합니다.</p>
+          <h3 id="host-step-up">HOST_OWNED의 추가 확인</h3>
+          <p>앱이 로그인을 맡을 때 Contexa는 자기 MFA 흐름을 시작하지 않고, 앱의 로그인 · 세션 · 쿠키도 바꾸지 않습니다. CHALLENGE면 사용자를 챌린지 안내 화면을 거쳐 확인 전용 추가 확인 <code>/contexa/step-up</code>으로 보냅니다. 추가 확인 화면은 앱 체인을 거쳐 들어오므로 사용자는 앱이 로그인시킨 그 사람이고, 화면의 POST 요청에는 앱의 CSRF 보호가 그대로 걸립니다. 통과하면 Contexa MFA를 마친 것과 같은 방식으로 기록되어 CHALLENGE가 ALLOW가 됩니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>요인</th><th>이럴 때 보여 줌</th></tr></thead>
+            <tbody>
+              <tr><td>패스키</td><td>이 사용자의 패스키가 Contexa에 등록되어 있을 때. 첫 패스키는 같은 화면에서 등록할 수 있지만, 판정 제한(CHALLENGE · BLOCK · ESCALATE)이 걸려 있지 않을 때만 됩니다. 신뢰 당사자 설정 <code>contexa.auth.urls.factors.passkey.*</code>을 씁니다</td></tr>
+              <tr><td>메일 일회용 코드</td><td>Contexa에 있는 이 사용자 사본에 실제 이메일 주소가 있고(<code>contexa.bridge.sync.synthetic-email-domain</code>의 주소가 아님) 메일이 설정되어 있을 때(<code>spring.mail.*</code>)</td></tr>
+              <tr><td>앱 자체 재인증</td><td>앱이 자기 MFA나 신원 공급자로 사용자를 다시 인증한 경우. 인증 도장에 CHALLENGE보다 늦은 인증 시각의 MFA 완료가 보이면, 챌린지 필터가 그 요청에서 스스로 CHALLENGE를 풉니다. <code>contexa.bridge.step-up.reauthentication-url</code>을 설정하면 화면에 그 주소로 가는 링크가 나옵니다</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>사용자는 브리지가 관리하는 앱 사용자 사본만 씁니다. 그래서 앱 사용자가 이름이 같은 Contexa 계정과 섞이지 않습니다.</li>
+            <li>관리자가 MFA로 해제하도록 허용한 BLOCK도 같은 화면(<code>?purpose=block</code>)으로 갑니다(<a href="#unblock">차단 해제</a>).</li>
+            <li>에이전트 요청은 요인에 답하지 않고, 책임자 확인으로 갑니다(<a href="#agents">에이전트 요청</a>).</li>
+            <li>화면이 내준 값(패스키 옵션)은 세션이 아니라 사용자의 판정 키 아래에 둡니다. 메모리에, <code>contexa.infrastructure.mode: distributed</code>면 Redis에 둡니다.</li>
+            <li>확인 코드는 사용자마다 30초에 한 통만 메일로 보냅니다. 그 안에 다시 요청하면 보내지 않고(응답이 기다리라고 알려 줍니다), 그래서 추가 확인 중인 세션이 사용자의 편지함을 채울 수 없습니다. 코드는 한 번만 쓸 수 있어, 다시 쓰거나 여러 요청이 동시에 쓰면 첫 요청만 통과합니다.</li>
+            <li>Contexa 화면의 스크립트 · 스타일 · 이미지(<code>/contexa/js/</code>, <code>/contexa/css/</code>, <code>/contexa/img/</code>)는 판정이 막지 않습니다. 그래서 차단 화면이 뜨고 해제 요청을 보낼 수 있습니다.</li>
+            <li><code>/contexa/step-up</code> 아래 화면, <code>/contexa/zero-trust/</code> 아래 판정 화면, 에이전트 위임 · 확인 화면은 로그인한 사용자에게만 답합니다. 앱 규칙이 무엇을 허용하든 익명 요청은 401 <code>AUTHENTICATION_REQUIRED</code>를 받습니다.</li>
+          </ul>
           <h3 id="pending">PENDING_ANALYSIS: 응답 지켜보기</h3>
           <p>판정이 아직 없으면 요청을 통과시키되, 응답을 감싸서 지켜봅니다. 응답이 나가는 동안 이 사용자에게 BLOCK 신호가 오면 응답을 끊습니다. 아직 아무것도 보내지 않았으면 쓰던 내용을 버리고 403과 표식 <code>__CONTEXA_RESPONSE_BLOCKED__:BLOCK</code>을 보내고, 이미 보내기 시작했으면 표식을 쓰고 끊습니다. 자바스크립트 SDK는 이 표식을 보면 차단 화면으로 이동합니다(<a href="mfa.html#step-up">로그인 뒤 추가 인증</a>).</p>
           <h3 id="authorities">권한이 바뀌는 방식</h3>
@@ -81,10 +100,11 @@
             <li><strong>토큰 흐름:</strong> 토큰 검증(<code>BearerTokenAuthenticationFilter</code>) 바로 뒤의 <code>AIOAuth2ZeroTrustFilter</code>가 JWT 요청에 판정을 적용하고, 바뀐 권한으로 새 <code>JwtAuthenticationToken</code>을 넣습니다. 무효화된 토큰이면 401입니다.</li>
             <li>권한 바꾸기에 쓰는 판정은 5초 동안 캐시합니다. 두 필터는 캐시 없이 저장소를 직접 읽으므로, 새 BLOCK의 응답 차단은 늦지 않습니다.</li>
             <li>판정은 권한을 더하지 않습니다. ALLOW는 원래 권한, CHALLENGE · BLOCK · ESCALATE는 판정 표시 권한 하나만 남깁니다. 그래서 URL 정책과 <code>@PreAuthorize</code> 같은 권한 검사에서도 제한이 걸립니다.</li>
+            <li><code>HOST_OWNED</code>에서는 권한을 바꾸지 않습니다. Contexa는 앱의 <code>SecurityContext</code>를 건드리지 않고, 두 필터가 저장된 판정을 보고 바로 답합니다.</li>
           </ul>
 
           <h2 id="position">필터가 도는 곳</h2>
-          <p>필터 세 개(MFA 진행 중 접근 제어, 접근 제어, 챌린지)는 <code>FilterRegistrationBean</code>으로 서블릿 자동 등록이 꺼져 있고, Contexa 구성자가 흐름마다 체인 안에 넣습니다. 위치는 고정 번호가 아니라 Spring 필터를 기준으로 한 상대 위치입니다. 구성자의 순서 값 44 · 45 · 50은 구성자를 적용하는 차례이지 필터의 위치가 아닙니다.</p>
+          <p><code>CONTEXA_OWNED</code>에서는 필터 세 개(MFA 진행 중 접근 제어, 접근 제어, 챌린지)의 서블릿 등록을 <code>FilterRegistrationBean</code>으로 꺼 두고, Contexa 구성자가 흐름마다 체인 안에 넣습니다. 위치는 고정 번호가 아니라 Spring 필터를 기준으로 한 상대 위치입니다. 구성자의 순서 값 44 · 45 · 50은 구성자를 적용하는 차례이지 필터의 위치가 아닙니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>체인</th><th>필터</th><th>위치</th></tr></thead>
             <tbody>
@@ -110,8 +130,20 @@
               <li class="dg-node dg-host"><span class="dg-node-title"><code>AuthorizationFilter</code></span><span class="dg-node-desc">URL 정책</span></li>
             </ol>
           </figure>
+          <h3 id="position-host">HOST_OWNED에서</h3>
+          <p>Contexa가 체인을 만들지 않으므로, 필터를 Spring Security 필터 체인의 순서(<code>spring.security.filter.order</code>, 기본 -100) 뒤에 오는 서블릿 필터로 등록합니다. 앱 체인이 먼저 돌고, MFA 진행 중 접근 제어와 권한 바꾸기는 쓰지 않습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>순서</th><th>필터</th><th>하는 일</th></tr></thead>
+            <tbody>
+              <tr><td>체인 + 1</td><td>인증 브리지(<code>BridgeResolutionFilter</code>)</td><td>앱 체인이 정한 로그인을 읽어 도장을 만듦</td></tr>
+              <tr><td>체인 + 2</td><td>챌린지(<code>ZeroTrustChallengeFilter</code>)</td><td>CHALLENGE를 추가 확인으로 보냄, 에이전트 관문</td></tr>
+              <tr><td>체인 + 3</td><td>접근 제어(<code>ZeroTrustAccessControlFilter</code>)</td><td>BLOCK · ESCALATE, PENDING_ANALYSIS 응답 지켜보기</td></tr>
+              <tr><td>체인 + 4</td><td>사용자 경로 보호(<code>HostOwnedUserPathGuard</code>)</td><td>Contexa의 사용자용 화면은 로그인한 사용자에게만 답함</td></tr>
+            </tbody>
+          </table></div>
+          <p>필터는 앱이 Spring Security 필터에서 사용자를 정해야 그 사용자를 봅니다. 사용자를 더 늦게(MVC 인터셉터나 컨트롤러에서) 정하면 그런 요청은 <code>@Protectable</code> 메서드에서만 집행되고, Contexa가 <code>[Contexa] HOST_OWNED: the application sets the signed-in user after Spring Security's filters ...</code>(WARN)를 한 번 남깁니다.</p>
           <div class="callout callout-info">
-            <strong>두 필터는 집행 모드 설정을 보지 않습니다.</strong> 새 판정을 저장하고 적용하는 일은 <code>contexa.security.zerotrust.enabled</code>가 켜져 있고 <code>contexa.security.zerotrust.mode</code>가 <code>ENFORCE</code>일 때만 합니다. 그러나 접근 제어 · 챌린지 필터는 이 두 설정을 읽지 않으므로, <code>SHADOW</code>로 바꾸거나 꺼도 이미 저장된 BLOCK · CHALLENGE · ESCALATE는 계속 집행됩니다. <code>enabled: false</code>면 로그인 정보를 꺼낼 때의 권한 바꾸기와 세션 추적만 멈춥니다.
+            <strong>두 필터는 집행 모드를 따릅니다.</strong> 새 판정을 저장하고 적용하는 일은 <code>contexa.security.zerotrust.enabled</code>가 켜져 있고 <code>contexa.security.zerotrust.mode</code>가 <code>ENFORCE</code>일 때만 하고, 접근 제어 · 챌린지 필터도 두 소유 방식 모두에서 그때만 요청을 막습니다. <code>SHADOW</code> · <code>OBSERVE</code> · <code>DISABLED</code>이거나 <code>enabled: false</code>면 아무것도 막지 않습니다. 앞서 저장된 BLOCK · CHALLENGE · ESCALATE는 남아 있다가, 만료되거나 해제되지 않았다면 모드가 <code>ENFORCE</code>로 돌아올 때 다시 적용됩니다. 그동안 에이전트 관문은 기록만 하고 에이전트를 통과시킵니다. <code>enabled: false</code>면 로그인 정보를 꺼낼 때의 권한 바꾸기와 세션 추적도 멈춥니다.
           </div>
 
           <h2 id="mfa-pending">MFA 진행 중 접근 제어</h2>
@@ -132,6 +164,7 @@
           <ul>
             <li><strong>시도 한도:</strong> 해제 MFA 시작 API와 접근 제어 필터는 <code>contexa.security.zerotrust.max-block-mfa-attempts</code>(기본 2)를 봅니다. 다만 해제 MFA 실패를 세는 처리기는 이 설정 대신 상수 2를 씁니다. 실패한 MFA 세션 하나가 한 번이며, 두 번이면 대기 표식을 지우고 이후 차단 응답만 줍니다. 실패할 때마다 403 <code>BLOCK_MFA_FAILED</code>와 차단 화면 주소를 돌려주고, 실패 횟수는 24시간 유지됩니다.</li>
             <li><strong>세션은 그대로입니다.</strong> 차단할 때 필터는 응답만 쓰고, 세션을 무효화하거나 로그아웃시키지 않습니다.</li>
+            <li><strong><code>HOST_OWNED</code>에서는</strong> 해제 MFA를 Contexa 추가 확인에서 합니다. 관리자가 MFA로 해제하도록 허용한 BLOCK이면 접근 제어 필터가 브라우저는 <code>/contexa/step-up?purpose=block</code>으로 보내고, API에는 401 <code>BLOCK_MFA_REQUIRED</code>와 <code>mfaUrl</code>로 답합니다. 통과하면 위 해제 MFA와 같은 확인 표시가 남습니다. BLOCK을 푸는 것은 여전히 관리자 승인입니다.</li>
             <li><strong>에이전트의 BLOCK</strong>은 403 <code>AGENT_BLOCKED</code>이고 MFA로 풀지 않습니다. 해제는 <a href="../agent/controls.html#stop">정지와 해제</a>를 보세요.</li>
           </ul>
 
@@ -142,8 +175,8 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>필터</th><th>건너뛰는 주소(이 경로로 시작)</th></tr></thead>
             <tbody>
-              <tr><td>접근 제어</td><td><code>/logout</code>, <code>/contexa/zero-trust</code>, <code>/contexa/api/aiam/zero-trust</code>, <code>/contexa/api/aiam/sse/zero-trust</code>, <code>/contexa/admin/api/aiam/zero-trust</code>, <code>/contexa/admin/api/aiam/sse/zero-trust</code>, <code>/.well-known/</code>. 해제 MFA를 기다리는 사용자에게는 MFA 주소도 통과시킵니다</td></tr>
-              <tr><td>챌린지</td><td><code>/logout</code>, 모든 MFA 흐름에 등록된 주소, <code>/mfa/challenge/</code>, <code>/api/mfa/</code>, <code>/contexa/admin/api/mfa/</code>, <code>/webauthn/</code>, <code>/login/webauthn</code>, <code>/contexa/zero-trust</code>, <code>/contexa/api/agent-confirmations</code>, <code>/.well-known/</code></td></tr>
+              <tr><td>접근 제어</td><td><code>/logout</code>, <code>/contexa/zero-trust</code>, <code>/contexa/step-up</code>, <code>/contexa/api/aiam/zero-trust</code>, <code>/contexa/api/aiam/sse/zero-trust</code>, <code>/contexa/admin/api/aiam/zero-trust</code>, <code>/contexa/admin/api/aiam/sse/zero-trust</code>, <code>/.well-known/</code>. 해제 MFA를 기다리는 사용자에게는 MFA 주소도 통과시킵니다</td></tr>
+              <tr><td>챌린지</td><td><code>/logout</code>, 모든 MFA 흐름에 등록된 주소, <code>/mfa/challenge/</code>, <code>/api/mfa/</code>, <code>/contexa/admin/api/mfa/</code>, <code>/webauthn/</code>, <code>/login/webauthn</code>, <code>/contexa/zero-trust</code>, <code>/contexa/step-up</code>, <code>/contexa/api/agent-confirmations</code>, <code>/.well-known/</code></td></tr>
             </tbody>
           </table></div>
 
@@ -153,7 +186,7 @@
             <li>관문이 없으면(에이전트 확인 서비스 빈이 없을 때) CHALLENGE에 403 <code>AGENT_CONFIRMATION_REQUIRED</code>로 답합니다.</li>
             <li>사람 대신 일하는 에이전트의 판정은 <code>&lt;사용자&gt;::agent::&lt;에이전트&gt;</code> 키로 읽고, 위임한 사람의 BLOCK도 함께 받습니다.</li>
             <li>에이전트의 BLOCK은 403 <code>AGENT_BLOCKED</code>입니다.</li>
-            <li>관문은 이 체인 안에만 있으므로 <code>HOST_OWNED</code>에서는 돌지 않습니다. 또 <code>HOST_OWNED</code>에서는 인증 브리지가 순서를 정하지 않은 서블릿 필터로 등록되어 앱의 보안 체인이 끝난 뒤에 돌므로, 앱 체인의 URL 인가 단계에서는 위임 도장이 아직 없습니다.</li>
+            <li>관문은 두 소유 방식 모두에서 돕니다. <code>HOST_OWNED</code>에서는 챌린지 필터가 인증 브리지 다음에 돌므로(<a href="#position-host">HOST_OWNED에서</a>) 관문이 위임 도장을 봅니다. 다만 앱 체인 안의 URL 인가 단계는 브리지보다 먼저 돌므로, 그때는 위임 도장이 아직 없습니다.</li>
           </ul>
 
           <h2 id="components">쓰이는 구성 요소</h2>
@@ -163,9 +196,11 @@
               <tr><td><code>ZeroTrustActionRepository</code></td><td>판정 저장소. <code>getCurrentAction(사용자, 컨텍스트 해시)</code>로 판정을 읽음. 메모리 또는 Redis(<code>contexa.infrastructure.mode</code>)</td></tr>
               <tr><td><code>AISessionSecurityContextRepository</code></td><td>세션 로그인 정보를 꺼낼 때 판정 적용 · 무효화된 세션 처리, 저장할 때 세션 추적</td></tr>
               <tr><td><code>AIOAuth2ZeroTrustFilter</code></td><td>JWT 요청에 판정 적용</td></tr>
-              <tr><td><code>ZeroTrustChallengeFilter</code> · <code>ChallengeMfaInitializer</code></td><td>CHALLENGE면 MFA를 시작하거나 이어 감</td></tr>
+              <tr><td><code>ZeroTrustChallengeFilter</code> · <code>ChallengeMfaInitializer</code></td><td>CHALLENGE면 MFA를 시작하거나 이어 감(<code>HOST_OWNED</code>에서는 추가 확인으로 보냄)</td></tr>
               <tr><td><code>ZeroTrustAccessControlFilter</code></td><td>BLOCK · ESCALATE를 막고, PENDING_ANALYSIS 응답을 지켜봄, ESCALATE를 BLOCK으로 올림</td></tr>
               <tr><td><code>MfaPendingAccessControlFilter</code></td><td>MFA를 끝내지 않은 세션을 제한</td></tr>
+              <tr><td><code>HostOwnedStepUpController</code> · <code>HostOwnedStepUpService</code></td><td><code>HOST_OWNED</code>의 추가 확인: <code>/contexa/step-up</code> 아래 화면, 요인, 결과를 판정으로 기록</td></tr>
+              <tr><td><code>HostOwnedUserPathGuard</code></td><td><code>HOST_OWNED</code>에서 Contexa의 사용자용 화면에 로그인한 사용자만 들이기</td></tr>
               <tr><td><code>MfaSessionRepository</code></td><td>MFA 세션 저장</td></tr>
               <tr><td><code>MfaFlowUrlRegistry</code> · <code>AuthUrlProvider</code></td><td>MFA 주소(건너뛸 주소와 MFA 화면 주소 계산)</td></tr>
             </tbody>
@@ -180,6 +215,7 @@
               <tr><td><code>contexa.security.zerotrust.challenge.lock-wait-time</code></td><td><code>0</code></td><td>챌린지 MFA 시작 잠금을 기다리는 시간(0이면 바로 503)</td></tr>
               <tr><td><code>contexa.security.zerotrust.challenge.lock-lease-time</code></td><td><code>30s</code></td><td>그 잠금의 임대 시간</td></tr>
               <tr><td><code>contexa.security.zerotrust.challenge.busy-retry-after-seconds</code></td><td><code>3</code></td><td>잠금을 못 잡았을 때 503의 <code>Retry-After</code></td></tr>
+              <tr><td><code>contexa.bridge.step-up.reauthentication-url</code></td><td>없음</td><td><code>HOST_OWNED</code>에서 추가 확인이 앱 자체 재인증을 위해 사용자를 보내는 주소(<a href="../common/bridge.html#settings">기존 로그인과 연결하기</a>)</td></tr>
               <tr><td><code>contexa.identity.security-core.enabled</code></td><td><code>true</code></td><td>끄면 이 필터들의 자동 구성이 꺼짐</td></tr>
             </tbody>
           </table></div>

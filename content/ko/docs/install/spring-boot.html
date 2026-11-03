@@ -26,7 +26,7 @@
           <figure class="dg">
             <figcaption class="dg-caption"><strong>소유 방식에 따른 요청 경로</strong>각 줄의 괄호는 그 단계에서 무엇이 결정하는지입니다.</figcaption>
             <div class="dg-compare">
-              <div class="dg-side dg-host"><p class="dg-side-title">앱이 로그인을 맡음(<code>HOST_OWNED</code>, 기본)</p><ul><li>앱의 보안 체인이 로그인 · 접근을 검사(앱의 규칙)</li><li>인증 브리지가 로그인 결과를 읽음(읽기만)</li><li><code>@Protectable</code> 메서드 앞에서 저장된 판정을 집행(Contexa)</li><li>응답 뒤 AI 판정(판정 엔진)</li></ul></div>
+              <div class="dg-side dg-host"><p class="dg-side-title">앱이 로그인을 맡음(<code>HOST_OWNED</code>, 기본)</p><ul><li>앱의 보안 체인이 로그인 · 접근을 검사(앱의 규칙)</li><li>인증 브리지가 로그인 결과를 읽음(읽기만)</li><li>앱 체인 바로 뒤의 요청 시점 필터가 저장된 판정을 모든 경로에서 집행하고, <code>@Protectable</code> 메서드 앞에서 한 번 더 확인(Contexa)</li><li>응답 뒤 AI 판정(판정 엔진)</li></ul></div>
               <div class="dg-side"><p class="dg-side-title">Contexa가 로그인을 맡음(<code>CONTEXA_OWNED</code>)</p><ul><li>Contexa 보안 체인이 로그인 · MFA · 세션(Contexa)</li><li>요청 시점 필터가 저장된 판정을 URL 단계에서 집행(Contexa)</li><li>에이전트 관문, <code>@Protectable</code> 메서드 앞 집행(Contexa)</li><li>응답 뒤 AI 판정(판정 엔진)</li></ul></div>
             </div>
           </figure>
@@ -41,8 +41,9 @@
             </tbody>
           </table></div>
           <ul>
-            <li><strong>이미 로그인이 있고 그대로 두고 싶으면</strong> 기본(<code>HOST_OWNED</code>)을 고릅니다. 앱이 할 일이 몇 가지 남습니다(<a href="#host-owned">아래</a>).</li>
-            <li><strong>로그인 · MFA · 요청 시점 집행 · 에이전트 관문까지 Contexa에 맡기려면</strong> <code>FULL</code>을 고릅니다. 이때 Contexa 체인이 요청을 먼저 받으므로 앱의 기존 체인은 쓰이지 않을 수 있습니다(<a href="#contexa-owned">아래</a>).</li>
+            <li><strong>이미 로그인이 있고 그대로 두고 싶으면</strong> 기본(<code>HOST_OWNED</code>)을 고릅니다. 판정과 모든 경로의 집행은 이때도 Contexa가 하고, 앱이 할 일은 두 가지 남습니다(<a href="#host-owned">아래</a>).</li>
+            <li><strong>로그인 · MFA · 세션까지 Contexa에 맡기려면</strong> <code>FULL</code>을 고릅니다. 이때 Contexa 체인이 요청을 먼저 받으므로 앱의 기존 체인은 쓰이지 않을 수 있습니다(<a href="#contexa-owned">아래</a>).</li>
+            <li><strong>CLI를 쓰면</strong> <code>contexa init</code>이 대신 고릅니다. 앱에 <code>SecurityFilterChain</code>이 있으면 <code>HOST_OWNED</code>, 없으면 <code>CONTEXA_OWNED</code>이고, <code>--ownership host|contexa</code>로 직접 정할 수도 있습니다(<a href="installation-guide.html#cli-ownership">CLI가 고르는 방법</a>).</li>
           </ul>
 
           <h2 id="ownership">소유 방식에 따라 동작하는 것</h2>
@@ -50,29 +51,30 @@
             <thead><tr><th>무엇</th><th><code>HOST_OWNED</code>(기본)</th><th><code>CONTEXA_OWNED</code></th></tr></thead>
             <tbody>
               <tr><td>로그인 · 세션</td><td>앱의 Spring Security</td><td>Contexa 체인(폼 · 패스키 · 일회용 토큰 MFA, 세션)</td></tr>
-              <tr><td>Contexa가 보안 체인을 만드나</td><td>아니오</td><td>예</td></tr>
+              <tr><td>Contexa가 보안 체인을 만드나</td><td>앱 요청을 받는 로그인 체인은 만들지 않음. 관리 화면 <code>/contexa/admin/**</code>만 맡는 자기 체인 하나만 만듦</td><td>예</td></tr>
               <tr><td>앱 체인이 없을 때</td><td>Spring Boot 기본 보안(모든 요청 로그인) + Contexa ERROR 로그</td><td>Contexa 체인이 받음</td></tr>
-              <tr><td>관리 화면 <code>/contexa/admin/**</code> URL 보호</td><td><strong>앱 체인이 해야 함</strong></td><td>Contexa 체인(<code>SANDBOX</code> 모양: ADMIN 역할, <code>FULL</code> 모양: 동적 인가 정책)</td></tr>
-              <tr><td>메서드 보안(<code>@EnableMethodSecurity</code>), 관리 화면의 <code>@PreAuthorize</code></td><td><strong>앱이 켜야 함</strong></td><td>Contexa가 켬</td></tr>
+              <tr><td>관리 화면 <code>/contexa/admin/**</code> URL 보호</td><td>Contexa의 관리 화면 체인: Contexa 관리자 로그인(<code>/contexa/admin/login</code>)과 ADMIN 역할. 앱 체인이 막을 필요 없음</td><td>Contexa 체인(<code>SANDBOX</code> 모양: ADMIN 역할, <code>FULL</code> 모양: 동적 인가 정책)</td></tr>
+              <tr><td>메서드 보안(<code>@EnableMethodSecurity</code>), 관리 화면의 <code>@PreAuthorize</code></td><td>선택: 앱이 켜면 관리 화면의 <code>@PreAuthorize</code> 검사가 한 겹 더해짐</td><td>Contexa가 켬</td></tr>
               <tr><td>AI 보안 식(<code>#ai</code>)이 든 메서드 정책</td><td>없음</td><td>있음</td></tr>
-              <tr><td>저장된 판정(BLOCK · CHALLENGE · ESCALATE) 집행</td><td><code>@Protectable</code> 메서드 앞에서만</td><td>URL 단계 필터(요청 시점)와 <code>@Protectable</code> 메서드 앞</td></tr>
-              <tr><td>에이전트 관문(호출 상한 · 책임자 확인 · 좁혀진 범위)</td><td>없음</td><td>있음(<a href="../reference/agent/controls.html#ownership">에이전트 통제</a>)</td></tr>
+              <tr><td>저장된 판정(BLOCK · CHALLENGE · ESCALATE) 집행</td><td>같은 필터가 앱 체인 바로 뒤의 서블릿 필터로 모든 경로에서, 그리고 <code>@Protectable</code> 메서드 앞에서. 응답은 <code>CONTEXA_OWNED</code>와 같음</td><td>URL 단계 필터(요청 시점)와 <code>@Protectable</code> 메서드 앞</td></tr>
+              <tr><td>CHALLENGE에 답하는 방법</td><td>Contexa의 확인 전용 추가 확인 <code>/contexa/step-up</code>(패스키, 메일 일회용 코드, 앱 자체 재인증). 앱의 로그인 · 세션 · 쿠키는 그대로</td><td>Contexa MFA 흐름</td></tr>
+              <tr><td>에이전트 관문(호출 상한 · 책임자 확인 · 좁혀진 범위)</td><td>있음(<a href="../reference/agent/controls.html#ownership">에이전트 통제</a>)</td><td>있음(<a href="../reference/agent/controls.html#ownership">에이전트 통제</a>)</td></tr>
+              <tr><td>앱 화면의 언어, 앱의 메시지 파일(<code>messages.properties</code>)</td><td>그대로: 앱 화면은 앱이 정하는 언어(<code>Accept-Language</code>, 앱의 <code>LocaleResolver</code>)를 유지합니다. Contexa의 언어 해석기(기본 한국어)와 <code>?lang=</code> 전환은 <code>/contexa/</code> 아래 Contexa 화면에만 씁니다. 앱의 메시지 소스는 앱의 문구를 먼저 보고, Contexa 문구는 그 뒤에 둡니다</td><td>Contexa가 앱 전체의 언어를 정합니다(기본 한국어, <code>?lang=</code>)</td></tr>
               <tr><td>앱 로그인 정보 읽기(인증 브리지)</td><td>있음(읽기만)</td><td>있음</td></tr>
-              <tr><td>Contexa 사용자 조회 · 인증 제공자</td><td>등록하지 않음</td><td>등록. 앱이 <code>UserDetailsService</code>를 두면 그것을 씀</td></tr>
+              <tr><td>Contexa 사용자 조회 · 인증 제공자</td><td>앱 요청에는 등록하지 않음(관리 화면 체인만 Contexa 관리자용으로 따로 가짐)</td><td>등록. 앱이 <code>UserDetailsService</code>를 두면 그것을 씀</td></tr>
               <tr><td>Contexa 인가 서버(OAuth2) 자동 설정</td><td>없음</td><td>있음</td></tr>
               <tr><td>응답 뒤 AI 판정, 판정 기록 · 감사 기록</td><td>있음</td><td>있음</td></tr>
             </tbody>
           </table></div>
 
           <h2 id="host-owned">앱이 로그인을 맡을 때(기본)</h2>
-          <p>Contexa는 앱의 <code>SecurityFilterChain</code> · <code>UserDetailsService</code> · 인증 제공자 · <code>spring.security.*</code> 설정을 바꾸지 않고, 자기 보안 체인과 요청 시점 필터 · AI 세션 저장소를 앱의 요청 경로에 붙이지 않습니다. 대신 앱이 아래 네 가지를 해야 합니다. 예시 코드는 <a href="installation-guide.html#legacy-integration">설치 가이드의 기존 로그인과 연결하기</a>에 있습니다.</p>
+          <p>Contexa는 앱의 <code>SecurityFilterChain</code> · <code>UserDetailsService</code> · 인증 제공자 · <code>spring.security.*</code> 설정과 세션 · 쿠키를 바꾸지 않고, 로그인 체인이나 AI 세션 저장소를 앱의 요청 경로에 붙이지 않습니다. Contexa가 더하는 것은 앱 체인 뒤에서 돕니다. 요청 시점 필터, <code>/contexa/step-up</code> 아래의 추가 확인 화면, 관리 화면 <code>/contexa/admin/**</code>만 맡는 자기 체인입니다. 앱이 할 일은 아래 두 가지입니다. 예시 코드는 <a href="installation-guide.html#legacy-integration">설치 가이드의 기존 로그인과 연결하기</a>에 있습니다.</p>
           <ol>
             <li>자기 <code>SecurityFilterChain</code>을 둡니다.</li>
-            <li>앱 체인에서 <code>/contexa/admin/**</code>를 ADMIN 역할로 보호합니다.</li>
-            <li><code>@EnableMethodSecurity</code>로 메서드 보안을 켭니다.</li>
-            <li>로그인한 사용자를 <code>SecurityContext</code>에 인증된 <code>Authentication</code>으로 넣습니다.</li>
+            <li>로그인한 사용자를 앱 체인의 Spring Security 필터에서 <code>SecurityContext</code>에 인증된 <code>Authentication</code>으로 넣습니다.</li>
           </ol>
-          <p>판정은 <code>@Protectable</code> 메서드에서 집행됩니다. 메서드를 실행하기 전에 그 사용자의 저장된 판정을 확인해 BLOCK · CHALLENGE · ESCALATE면 실행하지 않고, 컨트롤러에서 던져진 거부는 Contexa의 예외 처리기가 판정에 맞는 상태 코드로 답합니다(<a href="#responses">판정과 응답</a>). URL 단계 필터는 Contexa 체인 안에만 들어가므로 이 방식에서는 동작하지 않습니다.</p>
+          <p>판정은 모든 경로에서 집행됩니다. Contexa가 자기 체인에 넣는 것과 같은 필터가 앱의 Spring Security 체인 바로 뒤에서 서블릿 필터로 돌기 때문에, 앱 체인이 먼저 사용자를 정하고 앱 규칙을 적용한 다음 저장된 BLOCK · CHALLENGE · ESCALATE에 <code>CONTEXA_OWNED</code>와 같은 응답을 냅니다(<a href="#responses">판정과 응답</a>). <code>@Protectable</code> 메서드를 실행하기 전에도 저장된 판정을 한 번 더 확인합니다. CHALLENGE면 사용자를 Contexa의 확인 전용 추가 확인으로 보냅니다(<a href="../reference/identity/zero-trust-filters.html#host-step-up"><code>HOST_OWNED</code>의 추가 확인</a>).</p>
+          <p>앱이 로그인한 사용자를 MVC 인터셉터나 컨트롤러에서 늦게 정하면 필터는 사용자를 보지 못합니다. 그런 요청은 <code>@Protectable</code> 메서드에서만 집행되고, 기동 뒤 처음 한 번 WARN 로그로 알려 줍니다. 사람이 앱의 폼 로그인이나 OAuth2 로그인으로 로그인하면 Contexa는 자기 로그인 때처럼 그 로그인을 분석에 보냅니다.</p>
 
           <h2 id="contexa-owned">Contexa가 로그인을 맡을 때</h2>
           <h3 id="default-chain">기본 체인 모양</h3>
@@ -136,8 +138,8 @@
             </ul>
           </figure>
           <ul>
-            <li><strong><code>@Protectable</code> 메서드(두 방식 모두):</strong> BLOCK · CHALLENGE · ESCALATE면 메서드를 실행하지 않고, 컨트롤러에서 던져진 거부는 Contexa 예외 처리기가 위 상태 코드로 답합니다.</li>
-            <li><strong>URL 단계(<code>CONTEXA_OWNED</code>만):</strong> 요청 시점 필터가 BLOCK(사람이면 차단 해제 MFA를 먼저 시도) · ESCALATE · CHALLENGE를 처리하고, 판정이 없으면 응답을 감싸 두었다가 분석 중 차단 판정이 나오면 끊을 수 있게 합니다. 자세한 것은 <a href="../reference/identity/zero-trust-filters.html">요청 시점 집행</a>에 있습니다.</li>
+            <li><strong><code>@Protectable</code> 메서드(두 방식 모두):</strong> BLOCK · CHALLENGE · ESCALATE면 메서드를 실행하지 않고, 컨트롤러에서 던져진 거부는 Contexa 예외 처리기가 답합니다. 브라우저의 화면 요청(<code>Accept</code>에 <code>text/html</code>)은 URL 단계와 같은 화면으로 보내고, 그 밖의 클라이언트에는 위 상태 코드와 JSON 본문으로 답합니다.</li>
+            <li><strong>URL 단계(두 방식 모두):</strong> 요청 시점 필터가 BLOCK(사람이면 차단 해제 MFA를 먼저 시도) · ESCALATE · CHALLENGE를 처리하고, 판정이 없으면 응답을 감싸 두었다가 분석 중 차단 판정이 나오면 끊을 수 있게 합니다. <code>CONTEXA_OWNED</code>에서는 Contexa 체인 안에서, <code>HOST_OWNED</code>에서는 앱 체인 바로 뒤에서 돌고, CHALLENGE는 각각 Contexa MFA와 추가 확인으로 이어집니다. 자세한 것은 <a href="../reference/identity/zero-trust-filters.html">요청 시점 집행</a>에 있습니다.</li>
           </ul>
 
           <h2 id="custom-chain">체인 직접 짜기(<code>CONTEXA_OWNED</code>)</h2>

@@ -40,7 +40,7 @@
           <h2 id="does-not">브리지가 하지 않는 일</h2>
           <ul>
             <li>앱이 로그인을 소유할 때(<code>HOST_OWNED</code>) 앱의 인증 · 인가 · 세션에 끼어들지 않습니다. 세션에 저장하지 않고, 헤더를 쓰지 않습니다.</li>
-            <li>앱이 로그인을 소유할 때 브리지 필터는 순서를 정하지 않은 서블릿 필터로 등록되어 <strong>앱의 Spring Security 체인이 끝난 뒤</strong>에 돕니다. 그래서 컨트롤러 · <code>@Protectable</code> 메서드에서는 도장을 읽을 수 있지만, 앱 체인 안의 URL 인가 단계에서는 아직 도장이 없습니다(Spring Boot 필터 순서에 따른 동작). 로그인을 Contexa가 소유할 때(<code>CONTEXA_OWNED</code>)는 Contexa 체인 안(세션 흐름은 <code>SecurityContextHolderFilter</code> 다음, 토큰 흐름은 <code>BearerTokenAuthenticationFilter</code> 다음)에 들어갑니다.</li>
+            <li>앱이 로그인을 소유할 때 브리지 필터는 앱의 Spring Security 체인 바로 뒤(체인 순서 + 1, Contexa 집행 필터보다 앞)의 서블릿 필터로 등록되어 <strong>앱의 Spring Security 체인이 끝난 뒤</strong>에 돕니다. 그래서 Contexa 집행 필터 · 컨트롤러 · <code>@Protectable</code> 메서드에서는 도장을 읽을 수 있지만, 앱 체인 안의 URL 인가 단계에서는 아직 도장이 없습니다(Spring Boot 필터 순서에 따른 동작). 로그인을 Contexa가 소유할 때(<code>CONTEXA_OWNED</code>)는 Contexa 체인 안(세션 흐름은 <code>SecurityContextHolderFilter</code> 다음, 토큰 흐름은 <code>BearerTokenAuthenticationFilter</code> 다음)에 들어갑니다.</li>
             <li>예외: <a href="#mirror">사용자 거울</a>은 앱이 소유할 때도 Contexa DB에 사용자 행을 씁니다.</li>
           </ul>
 
@@ -163,6 +163,7 @@ request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
 
           <h2 id="mirror">사용자 거울</h2>
           <p>브리지는 외부에서 로그인한 사용자를 Contexa DB의 사용자 표에 거울 행으로 남깁니다(관리 콘솔 · 정책에서 그 사용자를 다루기 위해). 키는 <code>brg_</code> + SHA-256(인증 출처 · 조직 · 사용자 ID)이고, 무작위 비밀번호로 만들어져 직접 로그인에 쓸 수 없습니다. 같은 사용자가 60초(<code>contexa.bridge.sync.min-refresh-interval-seconds</code>) 안에 다시 오고 정보가 바뀌지 않았으면 다시 쓰지 않습니다. 이메일은 인증 속성의 <code>email</code> · <code>mail</code> · <code>userEmail</code>에서 읽고, 없으면 <code>&lt;키&gt;@shadow.contexa.local</code>(<code>contexa.bridge.sync.synthetic-email-domain</code>)을 씁니다. 끄려면 <code>contexa.bridge.sync.enabled=false</code>.</p>
+          <p>앱에서 온 값이 열 길이보다 길면(긴 조직 경로 형태의 부서, 내선이 붙은 전화번호, 긴 프로필 이미지 주소) 열 길이로 잘라 담으므로, 값 하나가 길다고 거울이 실패하지 않습니다. 255자를 넘는 이메일은 만든 주소로 대신합니다. 255자를 넘는 사용자 ID는 거울 행을 만들지 않고(경고 한 번), 그 사용자도 판정과 집행은 받지만 추가 확인에 쓸 자기 요인은 없습니다.</p>
 
           <h2 id="settings">자주 바꾸는 설정</h2>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -180,11 +181,12 @@ request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
               <tr><td><code>contexa.bridge.authentication.headers.enabled</code></td><td><code>false</code></td><td>게이트웨이 헤더 읽기</td><td>게이트웨이가 헤더로 사용자를 넘길 때(신뢰 프록시와 함께)</td></tr>
               <tr><td><code>contexa.bridge.network.trusted-proxies</code></td><td>없음</td><td>헤더 · <code>X-Forwarded-For</code>를 믿을 프록시</td><td>헤더를 켤 때 반드시</td></tr>
               <tr><td><code>contexa.bridge.network.trusted-proxy-validation-enabled</code></td><td><code>true</code></td><td>신뢰 프록시 검사. 끄면 헤더 읽기는 늘 거부되고, 클라이언트 IP는 누가 보냈든 <code>X-Forwarded-For</code>를 믿는 옛 방식으로 정해짐</td><td>바꾸지 않습니다(끄면 IP를 위조할 수 있음)</td></tr>
+              <tr><td><code>contexa.bridge.step-up.reauthentication-url</code></td><td>없음</td><td><code>HOST_OWNED</code>에서 추가 확인 화면이 사용자를 앱 자체 MFA나 신원 공급자의 재인증으로 보내는 주소(예: <code>prompt=login</code>이나 <code>max_age=0</code>을 붙인 OIDC 인가 요청). 비어 있으면 이 방법을 보여 주지 않습니다. 그 뒤 인증 도장에 CHALLENGE보다 새로운 MFA 완료가 보이면 CHALLENGE가 풀립니다</td><td>앱이 사용자를 직접 다시 인증할 수 있을 때(<a href="../identity/zero-trust-filters.html#host-step-up">HOST_OWNED의 추가 확인</a>)</td></tr>
               <tr><td><code>contexa.bridge.sync.synthetic-email-domain</code></td><td><code>shadow.contexa.local</code></td><td>이메일이 없는 거울 사용자에게 붙이는 이메일 도메인</td><td>회사 이메일 규칙에 맞출 때</td></tr>
               <tr><td><code>contexa.bridge.sync.enabled</code></td><td><code>true</code></td><td>사용자 거울 동기화</td><td>사용자 거울 동기화를 끌 때</td></tr>
             </tbody>
           </table></div>
-          <p><code>contexa.bridge.*</code> 설정 전체(310개)는 <a href="../../install/configuration/index-all.html#contexa-bridge">설정 색인</a>에 있습니다.</p>
+          <p><code>contexa.bridge.*</code> 설정 전체(311개)는 <a href="../../install/configuration/index-all.html#contexa-bridge">설정 색인</a>에 있습니다.</p>
 
           <h2 id="extension">확장점</h2>
           <div class="table-scroll"><table class="api-table prose-table">

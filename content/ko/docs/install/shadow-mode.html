@@ -27,11 +27,11 @@
               <tr><td><code>ENFORCE</code>(기본)</td><td>함</td><td>남김</td><td>함: 판정을 저장해 다음 요청부터 적용</td><td>실제로 적용된 ALLOW만</td></tr>
             </tbody>
           </table></div>
-          <p>Contexa MFA 로그인 성공 사건(Contexa가 로그인을 맡을 때)은 발행할 때 집행 모드를 보지 않습니다. 판정 엔진은 집행 단계에서만 모드를 보므로, 이 사건은 <code>DISABLED</code> · <code>OBSERVE</code>에서도 분석 · 기록되고 집행만 되지 않습니다. 분석을 모두 멈추려면 <code>contexa.security.zerotrust.enabled: false</code>를 씁니다.</p>
+          <p>로그인 성공 사건(Contexa가 로그인을 맡으면 Contexa MFA 로그인, 앱이 로그인을 맡으면 앱의 폼 · OAuth2 상호작용 로그인)은 발행할 때 집행 모드를 보지 않습니다. 판정 엔진은 집행 단계에서만 모드를 보므로, 이 사건은 <code>DISABLED</code> · <code>OBSERVE</code>에서도 분석 · 기록되고 집행만 되지 않습니다. 분석을 모두 멈추려면 <code>contexa.security.zerotrust.enabled: false</code>를 씁니다.</p>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>판정 하나가 지나가는 길</strong>판정 기록까지는 <code>SHADOW</code>와 <code>ENFORCE</code>가 같고, 그 뒤는 <code>ENFORCE</code>에서만 일어납니다.</figcaption>
             <ol class="dg-flow">
-              <li class="dg-node dg-request"><span class="dg-node-tag">요청</span><span class="dg-node-title"><code>@Protectable</code> 메서드 호출</span><span class="dg-node-desc">또는 Contexa MFA 로그인 성공</span></li>
+              <li class="dg-node dg-request"><span class="dg-node-tag">요청</span><span class="dg-node-title"><code>@Protectable</code> 메서드 호출</span><span class="dg-node-desc">또는 로그인 성공</span></li>
               <li class="dg-node dg-model"><span class="dg-node-tag">판정 엔진</span><span class="dg-node-title">AI 모델이 판정</span><span class="dg-node-desc">기본은 응답이 나간 뒤</span></li>
               <li class="dg-node dg-store"><span class="dg-node-tag">기록</span><span class="dg-node-title">판정 기록 · 감사 기록</span><span class="dg-node-desc"><code>ai_security_decision_observation</code>, <code>audit_log</code></span></li>
               <li class="dg-node"><span class="dg-node-tag"><code>ENFORCE</code>만</span><span class="dg-node-title">사용자 판정 저장</span><span class="dg-node-desc">BLOCK이면 진행 중인 응답을 끊는 신호와 차단 사용자 기록</span></li>
@@ -61,14 +61,15 @@
 
           <h2 id="shadow-behavior"><code>SHADOW</code>에서 실제로 일어나는 일</h2>
           <ul>
-            <li><strong>분석 대상:</strong> 모든 요청이 아니라 <code>@Protectable</code> 메서드 호출과 Contexa MFA 로그인 성공(Contexa가 로그인을 맡을 때)이 분석됩니다.</li>
+            <li><strong>분석 대상:</strong> 모든 요청이 아니라 <code>@Protectable</code> 메서드 호출과 로그인 성공이 분석됩니다. Contexa가 로그인을 맡으면 Contexa MFA 로그인, 앱이 맡으면 앱의 상호작용 로그인(폼 로그인 · OAuth2 로그인)입니다.</li>
             <li><strong>남는 것:</strong> 판정 기록 표(<code>ai_security_decision_observation</code>)와 감사 기록(<code>audit_log</code>)에 판정이 남습니다. 로그에만 남는 것이 아닙니다.</li>
             <li><strong>하지 않는 것:</strong> 사용자 판정 저장, 진행 중인 응답을 끊는 차단 신호, 차단 사용자 기록, 위험 신호 보내기, 학습. 그래서 <code>SHADOW</code> 기간에는 행위 기준선이 쌓이지 않습니다.</li>
             <li><strong><code>@Protectable</code> 메서드:</strong> 이미 저장된 BLOCK · CHALLENGE · ESCALATE가 있어도 로그만 남기고 실행합니다. <code>sync = true</code> 메서드는 그 요청 안에서 분석하고, 판정이 BLOCK이어도, 분석이 실패해도 실행합니다.</li>
+            <li><strong>요청 시점 필터(두 소유 방식 모두):</strong> 아무것도 막지 않습니다. 앞서 저장된 BLOCK · CHALLENGE · ESCALATE(<code>ENFORCE</code> 기간의 판정, 관리자 차단)는 <code>SHADOW</code> 동안 집행하지 않고, <code>ENFORCE</code>로 돌아오면 만료되지 않은 것이 다시 적용됩니다.</li>
             <li><strong>지연:</strong> 기본 비동기 메서드는 응답이 나간 뒤 분석하므로 늘어나지 않습니다. <code>sync = true</code> 메서드와 판정이 없는 에이전트 요청은 그 요청 안에서 분석하므로 늘어납니다.</li>
             <li><strong>모드와 상관없이 그대로인 것:</strong> 인증이 없는 <code>@Protectable</code> 호출의 거부, 정책(XACML) 판정의 거부. 위임 에이전트의 위임자 권한 재평가는 집행이 꺼져 있으면(<code>ENFORCE</code>가 아닌 모드, 또는 <code>enabled: false</code>) 기록만 합니다.</li>
             <li><strong>판정 API(AuthZEN):</strong> <code>SHADOW</code>에서는 분석하되 답의 <code>decision</code>은 늘 <code>true</code>입니다. <code>DISABLED</code> · <code>OBSERVE</code>에서는 분석 없이 <code>true</code>입니다.</li>
-            <li><strong>에이전트 관문</strong>(<code>CONTEXA_OWNED</code>): 집행이 꺼져 있으면(<code>ENFORCE</code>가 아닌 모드) 끝난 위임 · 좁혀진 범위 · 호출 상한을 기록하고 통과시킵니다(<a href="../reference/agent/controls.html#shadow">에이전트 통제의 SHADOW</a>).</li>
+            <li><strong>에이전트 관문</strong>(두 소유 방식 모두): 집행이 꺼져 있으면(<code>ENFORCE</code>가 아닌 모드) 끝난 위임 · 좁혀진 범위 · 호출 상한을 기록하고 통과시킵니다(<a href="../reference/agent/controls.html#shadow">에이전트 통제의 SHADOW</a>).</li>
           </ul>
 
           <h2 id="where-to-look">결과 보는 곳</h2>
@@ -81,7 +82,7 @@
               <tr><td>Contexa DB</td><td>판정 기록 <code>ai_security_decision_observation</code>, 감사 기록 <code>audit_log</code></td></tr>
             </tbody>
           </table></div>
-          <p>관리 화면 경로를 앱이 보호해야 하는 경우(로그인을 앱이 맡을 때)는 <a href="installation-guide.html#legacy-integration">설치 가이드</a>를 보세요.</p>
+          <p>관리 화면은 두 소유 방식 모두 Contexa가 보호합니다. 로그인을 앱이 맡으면 관리 화면에는 앱 계정이 아닌 Contexa 관리자 계정으로 로그인합니다(<a href="installation-guide.html#admin-console">설치 가이드</a>).</p>
 
           <h2 id="go-enforce"><code>ENFORCE</code>로 넘기기</h2>
           <p>넘기기 전에 확인할 것:</p>
@@ -101,10 +102,10 @@
             <thead><tr><th>판정</th><th>응답</th><th>어디서 집행하나</th></tr></thead>
             <tbody>
               <tr><td>ALLOW</td><td>그대로 진행</td><td>—</td></tr>
-              <tr><td>CHALLENGE</td><td><code>401</code>, 추가 인증(MFA) 요구</td><td><code>@Protectable</code> 메서드 앞, <code>CONTEXA_OWNED</code>면 요청 시점 필터</td></tr>
+              <tr><td>CHALLENGE</td><td><code>401</code>, 추가 인증(MFA) 요구(<code>HOST_OWNED</code>면 Contexa 추가 확인 <code>/contexa/step-up</code>)</td><td>두 소유 방식 모두 요청 시점 필터와 <code>@Protectable</code> 메서드 앞</td></tr>
               <tr><td>BLOCK</td><td><code>403</code>. 요청 시점 필터는 사람에게 차단 해제 MFA를 먼저 제안합니다. 차단 사용자 기록에는 사람만 남습니다.</td><td>같음</td></tr>
               <tr><td>ESCALATE</td><td><code>423</code>, 검토 보류</td><td>같음</td></tr>
-              <tr><td>판정 없음(<code>PENDING_ANALYSIS</code>)</td><td>통과하고 분석 시작. 요청 시점 필터는 응답을 감싸 두었다가 분석 중 차단 판정이 나오면 끊을 수 있게 합니다.</td><td>필터는 <code>CONTEXA_OWNED</code>만</td></tr>
+              <tr><td>판정 없음(<code>PENDING_ANALYSIS</code>)</td><td>통과하고 분석 시작. 요청 시점 필터는 응답을 감싸 두었다가 분석 중 차단 판정이 나오면 끊을 수 있게 합니다.</td><td>두 소유 방식 모두 요청 시점 필터</td></tr>
             </tbody>
           </table></div>
 
@@ -119,7 +120,7 @@
             </tbody>
           </table></div>
           <div class="callout callout-warning">
-            <p><strong>이미 저장된 판정은 남습니다.</strong> Contexa가 로그인을 맡을 때(<code>CONTEXA_OWNED</code>) 요청 시점 필터는 집행 모드와 <code>contexa.security.zerotrust.enabled</code>를 보지 않습니다. 그래서 <code>SHADOW</code>로 바꾸거나 끈 뒤에도, 바꾸기 전에 저장된 BLOCK · CHALLENGE · ESCALATE는 유효 시간이 지나거나 관리자가 풀 때까지 계속 집행됩니다. <code>@Protectable</code> 메서드 앞의 확인은 모드를 따르므로 <code>SHADOW</code>에서는 기록만 합니다.</p>
+            <p><strong>이미 저장된 판정은 남지만, 되돌린 동안에는 집행되지 않습니다.</strong> 두 소유 방식 모두 요청 시점 필터와 <code>@Protectable</code> 메서드 앞의 확인이 집행 모드와 <code>contexa.security.zerotrust.enabled</code>를 따릅니다. 그래서 <code>SHADOW</code>로 바꾸거나 끄면 아무것도 막지 않습니다(<code>@Protectable</code> 메서드 앞의 확인은 기록만 함). 바꾸기 전에 저장된 BLOCK · CHALLENGE · ESCALATE는 관리자 차단까지 포함해 남아 있다가, <code>ENFORCE</code>로 돌아오면 유효 시간이 지나거나 관리자가 풀기 전까지 다시 적용됩니다.</p>
           </div>
           <p>학습 상태는 모드를 바꿔도 지워지지 않습니다. 다만 <code>standalone</code>에서는 메모리에 있으므로 재시작하면 사라집니다. 관리 화면으로 바꾸면 재시작이 필요 없습니다.</p>
 
@@ -171,7 +172,7 @@
               </a>
               <a href="spring-boot.html" class="related-link-card">
                 <h3>기존 Spring Security 앱에 붙이기</h3>
-                <p>로그인 소유 방식에 따라 집행 위치가 달라집니다.</p>
+                <p>로그인을 누가 맡는지, 그리고 소유 방식마다 판정이 어떻게 집행되는지.</p>
               </a>
               <a href="configuration.html" class="related-link-card">
                 <h3>설정 길잡이</h3>

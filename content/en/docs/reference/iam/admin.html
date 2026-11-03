@@ -16,7 +16,7 @@
           </div>
 
           <div class="callout callout-warning">
-            <strong>In the default <code>HOST_OWNED</code> mode Contexa does not protect the admin console.</strong> In this mode Contexa builds no security chain, so there is no URL rule for <code>/contexa/admin/**</code>, and it does not turn on method security (<code>@EnableMethodSecurity</code>), so the <code>@PreAuthorize("hasRole('ADMIN')")</code> on its controllers does not apply either. Restrict <code>/contexa/admin/**</code> to administrators in the application's security chain and turn on method security in the application (<a href="#protect-host-owned">Protecting it in HOST_OWNED mode</a>). If the application's chain leaves every request at <code>permitAll</code>, the admin screens and APIs are open.
+            <strong>Contexa protects the admin console in both ownership modes, and it needs a Contexa administrator account.</strong> In the default <code>HOST_OWNED</code> mode a chain of Contexa's own takes only <code>/contexa/admin/**</code> and signs Contexa's administrators in at <code>/contexa/admin/login</code>. The application's users cannot enter it, and the application does not need to restrict these paths, even when its own chain leaves every request at <code>permitAll</code> (<a href="#protect-host-owned">Protecting it in HOST_OWNED mode</a>).
           </div>
 
           <h2 id="access">Entering and protecting the console</h2>
@@ -26,36 +26,26 @@
             <tbody>
               <tr><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code> (<code>CONTEXA_OWNED</code>)</td><td>The Contexa chain sends every request to the dynamic authorization manager, and the seed policies protect it: <code>/contexa/admin/login</code> is public (priority 10), the unblock-request and pending-analysis paths need a signed-in user (20), and the rest of <code>/contexa/admin/**</code> needs <code>hasRole('ADMIN')</code> (100)</td><td>Applies (Contexa turns on method security)</td><td>Contexa login <code>/contexa/admin/login</code></td></tr>
               <tr><td>SANDBOX mode with <code>contexa.bridge.ownership: CONTEXA_OWNED</code> set explicitly</td><td>URL rules of the Contexa chain: login screen public, unblock-request and pending-analysis paths for signed-in users, the rest of <code>/contexa/admin/**</code> ADMIN, every other request allowed</td><td>Applies</td><td>Contexa login</td></tr>
-              <tr><td><code>HOST_OWNED</code> (default, SANDBOX)</td><td><strong>None.</strong> The application's chain must protect it</td><td>Applies only if the application turns on method security</td><td>The application's login. Contexa builds no login handling and uses the application's authentication as it is</td></tr>
+              <tr><td><code>HOST_OWNED</code> (default, SANDBOX)</td><td>Contexa's console chain, which takes only <code>/contexa/admin/**</code>: <code>/contexa/admin/login</code> is public and every other path needs an administrator signed in to the console (<code>hasRole('ADMIN')</code>). An anonymous call to <code>/contexa/admin/api/**</code> gets 401; a screen goes to the console login</td><td>Applies only if the application turns on method security (an optional extra check)</td><td>Contexa's administrator login <code>/contexa/admin/login</code>, with Contexa's user store. The application's login and users are not used for the console</td></tr>
             </tbody>
           </table></div>
-          <p>The unblock-request and pending-analysis paths are <code>/contexa/admin/api/aiam/zero-trust/**</code> and <code>/contexa/admin/api/aiam/sse/zero-trust/**</code>. Blocked users use them to ask for their own release, so they are open to any signed-in user, not only administrators. The admin controllers carry <code>@PreAuthorize("hasRole('ADMIN')")</code>, so with method security on they need the <code>ROLE_ADMIN</code> authority.</p>
+          <p>The unblock-request and pending-analysis paths are <code>/contexa/admin/api/aiam/zero-trust/**</code> and <code>/contexa/admin/api/aiam/sse/zero-trust/**</code>. In the Contexa chain (the first two rows) blocked users use them to ask for their own release, so they are open to any signed-in user, not only administrators. The admin controllers carry <code>@PreAuthorize("hasRole('ADMIN')")</code>, so with method security on they need the <code>ROLE_ADMIN</code> authority.</p>
 
           <h3 id="protect-host-owned">Protecting it in HOST_OWNED mode</h3>
-          <p>In the application's security configuration, restrict the console the same way Contexa does in <code>CONTEXA_OWNED</code> mode, and turn on method security.</p>
-          <pre><code class="language-java">import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.security.config.Customizer;
-import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.web.SecurityFilterChain;
-
-@Configuration
-@EnableMethodSecurity
-public class AppSecurityConfig {
-
-    @Bean
-    SecurityFilterChain appSecurityFilterChain(HttpSecurity http) throws Exception {
-        http.authorizeHttpRequests(auth -&gt; auth
-                        .requestMatchers("/contexa/admin/api/aiam/zero-trust/**",
-                                "/contexa/admin/api/aiam/sse/zero-trust/**").authenticated()
-                        .requestMatchers("/contexa/admin/**").hasRole("ADMIN")
-                        .anyRequest().authenticated())
-                .formLogin(Customizer.withDefaults());
-        return http.build();
-    }
-}</code></pre>
-          <p>If the rest of the application's chain is handed to Contexa policies with <code>.anyRequest().access(customDynamicAuthorizationManager)</code>, the seed policies protect <code>/contexa/admin/**</code> the same way as the FULL row above (as long as the seed is on and those policies are not deleted). The connection is described in <a href="end-to-end-workflow.html#prepare">End-to-End Dynamic Authorization</a>.</p>
+          <p>Nothing is needed in the application's security configuration. Contexa registers a chain of its own (<code>contexaAdminConsoleSecurityFilterChain</code>, order <code>Ordered.HIGHEST_PRECEDENCE + 10</code>) that takes only <code>/contexa/admin</code> and <code>/contexa/admin/**</code>. It is registered after Spring Boot's security auto-configuration, so an application without a chain of its own still gets Spring Boot's default chain. It signs administrators in with Contexa's user store (users in the Contexa database with the ADMIN role) at <code>/contexa/admin/login</code>; the form posts to the same address. The console sign-in, its CSRF token and the saved request are kept under session keys apart from the application's, so an administrator and an application user in one browser do not overwrite each other.</p>
+          <p>The console needs a Contexa administrator account; the application's user accounts cannot enter it. Contexa creates the first administrator at the first start from the settings below. Without the password it creates none, and a user with the same username or e-mail is never changed (<a href="../../install/configuration/iam.html#seed">First start</a>).</p>
+          <pre><code class="language-yaml">contexa:
+  iam:
+    seed:
+      admin:
+        username: admin                       # default admin
+        email: admin@example.com              # default admin@localhost
+        password: ${CONTEXA_ADMIN_PASSWORD}   # example: CONTEXA_ADMIN_PASSWORD=Change-Me-2026</code></pre>
+          <p>The value <code>Change-Me-2026</code> is only an example. Put the real password in an environment variable (or a secret store) and never in a file you commit.</p>
+          <p>The sign-out button in the console header posts to <code>/contexa/admin/logout</code>. It ends only the console sign-in and keeps the session, so the application's sign-in in the same browser stays.</p>
+          <p>Sign-ins to the console count against the administrator account as they do under <code>CONTEXA_OWNED</code>: failed attempts, the lock and the address throttle follow the password policy. The application's own sign-ins never count against Contexa's accounts.</p>
+          <p>Two groups of paths under <code>/contexa/admin/api/aiam/</code> belong to the application's signed-in user, not to the administrator: the release request of a blocked user (<code>zero-trust/initiate-block-mfa</code>, <code>zero-trust/unblock-request</code>) and the updates of the pending-analysis screen (<code>sse/zero-trust/**</code>). The console chain leaves them out, and they answer only a signed-in user, like the other user pages.</p>
+          <p>Method security is optional: when the application turns it on (<code>@EnableMethodSecurity</code>), the <code>@PreAuthorize("hasRole('ADMIN')")</code> on the console's controllers adds a second check. Because the console's chain takes <code>/contexa/admin/**</code>, the application's chain, and URL policies connected to it, do not see these paths.</p>
           <p>IP Management rules can add a second layer. They apply to <code>/contexa/*</code> paths only in <code>HOST_OWNED</code> mode and to every path in <code>CONTEXA_OWNED</code> mode (<a href="#ip-session">IP and sessions</a>). They do not replace authentication.</p>
 
           <h2 id="menu">Menus</h2>

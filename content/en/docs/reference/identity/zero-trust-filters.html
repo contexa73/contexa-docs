@@ -15,7 +15,7 @@
           </div>
 
           <div class="callout callout-warning">
-            <strong>These filters work only when Contexa owns login (<code>CONTEXA_OWNED</code>).</strong> Their servlet auto-registration is turned off, and they go only into the security chains Contexa builds. With the default <code>HOST_OWNED</code>, Contexa builds no chain, so there is no URL-level enforcement; stored BLOCK, CHALLENGE and ESCALATE are refused only in front of <code>@Protectable</code> methods (<a href="../iam/protectable.html">Protected methods</a>). How to keep your application's existing login is in <a href="../common/bridge.html">Connecting Your Existing Login</a>.
+            <strong>These filters work in both ownership modes, with the same answers.</strong> When Contexa owns login (<code>CONTEXA_OWNED</code>) their servlet registration stays off and they go into the security chains Contexa builds. With the default <code>HOST_OWNED</code> Contexa builds no chain; the same filters run as servlet filters right after the application's Spring Security chain (<a href="#position-host">Under HOST_OWNED</a>), so the application's chain sets the user and applies its own rules first, and every path is enforced. A CHALLENGE then goes to Contexa's step-up instead of Contexa's MFA (<a href="#host-step-up">The step-up under HOST_OWNED</a>). Stored BLOCK, CHALLENGE and ESCALATE are also refused in front of <code>@Protectable</code> methods (<a href="../iam/protectable.html">Protected methods</a>). How to keep your application's existing login is in <a href="../common/bridge.html">Connecting Your Existing Login</a>.
           </div>
 
           <h2 id="overview">At a glance</h2>
@@ -31,7 +31,7 @@
             <p class="dg-outcomes-title">Depending on the decision</p>
             <ul class="dg-outcomes">
               <li class="dg-node dg-allow"><span class="dg-node-title">ALLOW</span><span class="dg-node-desc">Goes on as is</span></li>
-              <li class="dg-node dg-challenge"><span class="dg-node-title">CHALLENGE</span><span class="dg-node-desc">Identity check with MFA</span></li>
+              <li class="dg-node dg-challenge"><span class="dg-node-title">CHALLENGE</span><span class="dg-node-desc">Identity check with MFA (<code>HOST_OWNED</code>: Contexa's step-up)</span></li>
               <li class="dg-node dg-block"><span class="dg-node-title">BLOCK</span><span class="dg-node-desc">Blocked, released by an administrator</span></li>
               <li class="dg-node dg-escalate"><span class="dg-node-title">ESCALATE</span><span class="dg-node-desc">423, retry in 30 seconds</span></li>
               <li class="dg-node dg-pending"><span class="dg-node-title">PENDING_ANALYSIS</span><span class="dg-node-desc">Passes, the response is watched</span></li>
@@ -55,7 +55,7 @@
             <thead><tr><th>Decision</th><th>Browser</th><th>API · AJAX</th><th>Authorities</th><th>How it is released</th></tr></thead>
             <tbody>
               <tr><td>ALLOW</td><td>Goes on</td><td>Goes on</td><td>Original authorities</td><td>—</td></tr>
-              <tr><td>CHALLENGE</td><td>Moves to <code>/contexa/zero-trust/challenge-required?mfaUrl=…</code></td><td>401 <code>MFA_CHALLENGE_REQUIRED</code>: <code>mfaUrl</code>, <code>challengeNoticeUrl</code>, <code>sessionId</code>, <code>currentState</code>, <code>currentFactor</code></td><td>Only <code>ROLE_MFA_REQUIRED</code></td><td>When the MFA this challenge started succeeds, the decision changes to ALLOW. Or 1800 seconds pass. A login MFA does not release the challenge</td></tr>
+              <tr><td>CHALLENGE</td><td>Moves to <code>/contexa/zero-trust/challenge-required?mfaUrl=…</code> (under <code>HOST_OWNED</code> the <code>mfaUrl</code> is <code>/contexa/step-up</code>)</td><td>401 <code>MFA_CHALLENGE_REQUIRED</code>: <code>mfaUrl</code>, <code>challengeNoticeUrl</code>, <code>sessionId</code>, <code>currentState</code>, <code>currentFactor</code>. Under <code>HOST_OWNED</code> only <code>mfaUrl</code> and <code>challengeNoticeUrl</code>, since no MFA flow is started</td><td>Only <code>ROLE_MFA_REQUIRED</code></td><td>When the MFA this challenge started succeeds (under <code>HOST_OWNED</code>, when the step-up passes), the decision changes to ALLOW. Or 1800 seconds pass. A login MFA does not release the challenge</td></tr>
               <tr><td>BLOCK</td><td>Moves to <code>/contexa/zero-trust/blocked</code></td><td>403 <code>ACCOUNT_BLOCKED</code>: <code>adminReviewRequired</code> (<code>true</code>), <code>redirectUrl</code></td><td>Only <code>ROLE_BLOCKED</code></td><td>An administrator's approval (<a href="#unblock">Releasing a block</a>)</td></tr>
               <tr><td>ESCALATE</td><td>Moves to <code>/contexa/zero-trust/analysis-pending?returnUrl=…</code></td><td>423 <code>SECURITY_REVIEW_IN_PROGRESS</code> + <code>Retry-After: 30</code>: <code>retryAfterSeconds</code>, <code>redirectUrl</code></td><td>Only <code>ROLE_REVIEW_REQUIRED</code></td><td>An administrator's approval. MFA does not release it. If it stays unresolved it becomes BLOCK (<a href="#escalate">When held for review becomes a block</a>)</td></tr>
               <tr><td>PENDING_ANALYSIS</td><td>Passes</td><td>Passes</td><td>Original authorities + <code>ROLE_PENDING_ANALYSIS</code></td><td>From the next request after an analysis result is stored, that decision</td></tr>
@@ -72,7 +72,26 @@
               <tr><td>Agent request</td><td>Confirmation by the accountable person instead of a person's MFA (<a href="#agents">Agent requests</a>)</td></tr>
             </tbody>
           </table></div>
-          <p>MFA is started only once per user, under a lock (<code>mfa:challenge:init:&lt;user&gt;</code>); the lock wait, lease time and retry seconds are settings (<a href="#settings">Settings</a>).</p>
+          <p>MFA is started only once per user, under a lock (<code>mfa:challenge:init:&lt;user&gt;</code>); the lock wait, lease time and retry seconds are settings (<a href="#settings">Settings</a>). Under <code>HOST_OWNED</code> the first four rows do not occur: no Contexa MFA is started, and a person is answered with the step-up below.</p>
+          <h3 id="host-step-up">The step-up under HOST_OWNED</h3>
+          <p>When the application owns login, Contexa starts no MFA flow of its own and changes nothing of the application's login, session or cookies. A CHALLENGE sends the user, through the challenge notice page, to a verification-only step-up at <code>/contexa/step-up</code>. The step-up is reached through the application's own chain, so the user is the one the application signed in, and the application's CSRF protection applies to its posts. When the user passes, the result is recorded the same way as a completed Contexa MFA: the CHALLENGE becomes ALLOW.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Factor</th><th>When it is offered</th></tr></thead>
+            <tbody>
+              <tr><td>Passkey</td><td>A passkey is registered in Contexa for the user. A first passkey can be registered on the same page, but only while no restriction (CHALLENGE, BLOCK, ESCALATE) is in force. It uses the relying party settings <code>contexa.auth.urls.factors.passkey.*</code></td></tr>
+              <tr><td>One-time code by mail</td><td>The user's copy in Contexa has a real e-mail address (not one in <code>contexa.bridge.sync.synthetic-email-domain</code>) and mail is configured (<code>spring.mail.*</code>)</td></tr>
+              <tr><td>The application's own re-authentication</td><td>The application re-authenticates the user with its own MFA or identity provider. When the authentication stamp shows a completed MFA with an authentication time later than the CHALLENGE, the challenge filter releases it on that request by itself. The page links to <code>contexa.bridge.step-up.reauthentication-url</code> when it is set</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>The user is the bridge's copy of the application's user (bridge-managed users only), so an application user never meets a Contexa account of the same name.</li>
+            <li>A BLOCK an administrator lets the user release by MFA goes to the same page with <code>?purpose=block</code> (<a href="#unblock">Releasing a block</a>).</li>
+            <li>An agent's request answers no factor; it meets its accountable person's confirmation (<a href="#agents">Agent requests</a>).</li>
+            <li>What the page hands out (passkey options) is kept under the user's decision key, not in the session: in memory, or in Redis with <code>contexa.infrastructure.mode: distributed</code>.</li>
+            <li>One code is mailed per user every 30 seconds. Another request within that time sends nothing (the answer says to wait), so a session under a CHALLENGE cannot fill the user's mailbox. A code can be used once: used again, or by several requests at once, it passes only the first.</li>
+            <li>The scripts, styles and images of Contexa's screens (<code>/contexa/js/</code>, <code>/contexa/css/</code>, <code>/contexa/img/</code>) are never stopped by a decision, so the block screen can load and send its release request.</li>
+            <li>The pages under <code>/contexa/step-up</code>, the decision screens under <code>/contexa/zero-trust/</code> and the agent delegation and confirmation pages answer only a signed-in user. An anonymous request gets 401 <code>AUTHENTICATION_REQUIRED</code>, whatever the application's own rules allow.</li>
+          </ul>
           <h3 id="pending">PENDING_ANALYSIS: watching the response</h3>
           <p>With no decision yet the request passes, but its response is wrapped and watched. If a BLOCK signal arrives for this user while the response is going out, the response is cut. If nothing has been sent yet, what was written is discarded and 403 is sent with the marker <code>__CONTEXA_RESPONSE_BLOCKED__:BLOCK</code>; if sending has started, the marker is written and the response ends. The JavaScript SDK moves to the blocked page when it sees this marker (<a href="mfa.html#step-up">Extra verification after login</a>).</p>
           <h3 id="authorities">How authorities change</h3>
@@ -81,10 +100,11 @@
             <li><strong>Token flows:</strong> <code>AIOAuth2ZeroTrustFilter</code>, right after token validation (<code>BearerTokenAuthenticationFilter</code>), applies the decision to JWT requests and puts in a new <code>JwtAuthenticationToken</code> with the adjusted authorities. An invalidated token gets 401.</li>
             <li>The decision used to adjust authorities is cached for 5 seconds. The two filters read the store directly without a cache, so blocking the response on a new BLOCK is not delayed.</li>
             <li>A decision never adds authorities. ALLOW keeps the original ones; CHALLENGE, BLOCK and ESCALATE leave only the decision's marker authority. So the restriction also applies to authority checks such as URL policies and <code>@PreAuthorize</code>.</li>
+            <li>Under <code>HOST_OWNED</code> authorities are not changed: Contexa does not touch the application's <code>SecurityContext</code>, and the two filters answer from the stored decision.</li>
           </ul>
 
           <h2 id="position">Where the filters run</h2>
-          <p>The three filters (MFA-in-progress access control, access control, challenge) have their servlet auto-registration turned off with <code>FilterRegistrationBean</code>, and Contexa's configurers put them into the chain of each flow. Their positions are not fixed numbers but positions relative to Spring filters. The configurer order values 44, 45 and 50 are the turns in which the configurers are applied, not filter positions.</p>
+          <p>Under <code>CONTEXA_OWNED</code> the three filters (MFA-in-progress access control, access control, challenge) have their servlet registration turned off with <code>FilterRegistrationBean</code>, and Contexa's configurers put them into the chain of each flow. Their positions are not fixed numbers but positions relative to Spring filters. The configurer order values 44, 45 and 50 are the turns in which the configurers are applied, not filter positions.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Chain</th><th>Filter</th><th>Position</th></tr></thead>
             <tbody>
@@ -110,8 +130,20 @@
               <li class="dg-node dg-host"><span class="dg-node-title"><code>AuthorizationFilter</code></span><span class="dg-node-desc">URL policies</span></li>
             </ol>
           </figure>
+          <h3 id="position-host">Under HOST_OWNED</h3>
+          <p>Contexa builds no chain, so the filters are registered as servlet filters ordered after the Spring Security filter chain (<code>spring.security.filter.order</code>, -100 by default). The application's chain runs first; the MFA-in-progress filter and the authority adjustment are not used.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Order</th><th>Filter</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td>Chain + 1</td><td>Authentication bridge (<code>BridgeResolutionFilter</code>)</td><td>Reads the sign-in the application's chain established and makes the stamps</td></tr>
+              <tr><td>Chain + 2</td><td>Challenge (<code>ZeroTrustChallengeFilter</code>)</td><td>CHALLENGE to the step-up; the agent request gate</td></tr>
+              <tr><td>Chain + 3</td><td>Access control (<code>ZeroTrustAccessControlFilter</code>)</td><td>BLOCK, ESCALATE, watching PENDING_ANALYSIS responses</td></tr>
+              <tr><td>Chain + 4</td><td>User path guard (<code>HostOwnedUserPathGuard</code>)</td><td>Contexa's user pages answer only a signed-in user</td></tr>
+            </tbody>
+          </table></div>
+          <p>The filters see the user only when the application sets it in a Spring Security filter. If it sets the user later (in an MVC interceptor or a controller), those requests are enforced only at <code>@Protectable</code> methods, and Contexa logs once <code>[Contexa] HOST_OWNED: the application sets the signed-in user after Spring Security's filters ...</code> (WARN).</p>
           <div class="callout callout-info">
-            <strong>The two filters do not look at the enforcement mode settings.</strong> New decisions are stored and applied only while <code>contexa.security.zerotrust.enabled</code> is on and <code>contexa.security.zerotrust.mode</code> is <code>ENFORCE</code>. But the access control and challenge filters read neither setting, so after switching to <code>SHADOW</code> or turning it off, BLOCK, CHALLENGE and ESCALATE already stored are still enforced. With <code>enabled: false</code> only the authority adjustment when the login is read and the session tracking stop.
+            <strong>The two filters follow the enforcement mode.</strong> New decisions are stored and applied only while <code>contexa.security.zerotrust.enabled</code> is on and <code>contexa.security.zerotrust.mode</code> is <code>ENFORCE</code>, and the access control and challenge filters stop requests only then, in both ownership modes. Under <code>SHADOW</code>, <code>OBSERVE</code>, <code>DISABLED</code> or with <code>enabled: false</code> nothing is stopped; BLOCK, CHALLENGE and ESCALATE stored earlier stay and apply again when the mode returns to <code>ENFORCE</code>, unless they have expired or been released. In that time the agent request gate records and lets agents through. With <code>enabled: false</code> the authority adjustment when the login is read and the session tracking stop as well.
           </div>
 
           <h2 id="mfa-pending">MFA-in-progress access control</h2>
@@ -132,6 +164,7 @@
           <ul>
             <li><strong>Attempt limit:</strong> the release MFA start API and the access control filter look at <code>contexa.security.zerotrust.max-block-mfa-attempts</code> (default 2). The handler that counts failed release MFAs, however, uses a constant 2 instead of this setting. One failed MFA session counts once; at two the pending mark is removed and only block responses follow. Each failure returns 403 <code>BLOCK_MFA_FAILED</code> with the blocked page address, and the failure count is kept for 24 hours.</li>
             <li><strong>The session stays.</strong> When blocking, the filter only writes the response; it does not invalidate the session or log the user out.</li>
+            <li><strong>Under <code>HOST_OWNED</code></strong> the release MFA runs on Contexa's step-up. For a BLOCK an administrator lets the user release by MFA, the access control filter sends a browser to <code>/contexa/step-up?purpose=block</code> and answers an API with 401 <code>BLOCK_MFA_REQUIRED</code> and <code>mfaUrl</code>; passing it sets the same verified mark as the release MFA above. An administrator's approval still lifts the BLOCK.</li>
             <li><strong>An agent's BLOCK</strong> is 403 <code>AGENT_BLOCKED</code> and is not released by MFA. For releasing it see <a href="../agent/controls.html#stop">Stopping and releasing</a>.</li>
           </ul>
 
@@ -142,8 +175,8 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Filter</th><th>Addresses skipped (starting with)</th></tr></thead>
             <tbody>
-              <tr><td>Access control</td><td><code>/logout</code>, <code>/contexa/zero-trust</code>, <code>/contexa/api/aiam/zero-trust</code>, <code>/contexa/api/aiam/sse/zero-trust</code>, <code>/contexa/admin/api/aiam/zero-trust</code>, <code>/contexa/admin/api/aiam/sse/zero-trust</code>, <code>/.well-known/</code>. For a user waiting on the release MFA, MFA addresses also pass</td></tr>
-              <tr><td>Challenge</td><td><code>/logout</code>, the addresses registered by every MFA flow, <code>/mfa/challenge/</code>, <code>/api/mfa/</code>, <code>/contexa/admin/api/mfa/</code>, <code>/webauthn/</code>, <code>/login/webauthn</code>, <code>/contexa/zero-trust</code>, <code>/contexa/api/agent-confirmations</code>, <code>/.well-known/</code></td></tr>
+              <tr><td>Access control</td><td><code>/logout</code>, <code>/contexa/zero-trust</code>, <code>/contexa/step-up</code>, <code>/contexa/api/aiam/zero-trust</code>, <code>/contexa/api/aiam/sse/zero-trust</code>, <code>/contexa/admin/api/aiam/zero-trust</code>, <code>/contexa/admin/api/aiam/sse/zero-trust</code>, <code>/.well-known/</code>. For a user waiting on the release MFA, MFA addresses also pass</td></tr>
+              <tr><td>Challenge</td><td><code>/logout</code>, the addresses registered by every MFA flow, <code>/mfa/challenge/</code>, <code>/api/mfa/</code>, <code>/contexa/admin/api/mfa/</code>, <code>/webauthn/</code>, <code>/login/webauthn</code>, <code>/contexa/zero-trust</code>, <code>/contexa/step-up</code>, <code>/contexa/api/agent-confirmations</code>, <code>/.well-known/</code></td></tr>
             </tbody>
           </table></div>
 
@@ -153,7 +186,7 @@
             <li>Without the gate (no agent confirmation service bean), CHALLENGE is answered with 403 <code>AGENT_CONFIRMATION_REQUIRED</code>.</li>
             <li>The decision of an agent working for a person is read under the key <code>&lt;user&gt;::agent::&lt;agent&gt;</code>, and the agent also receives the delegating person's BLOCK.</li>
             <li>An agent's BLOCK is 403 <code>AGENT_BLOCKED</code>.</li>
-            <li>The gate lives only in this chain, so it does not run with <code>HOST_OWNED</code>. Also, with <code>HOST_OWNED</code> the authentication bridge is registered as a servlet filter with no order and runs after the application's security chain, so the URL authorization step of the application's chain has no delegation stamp yet.</li>
+            <li>The gate runs in both ownership modes. Under <code>HOST_OWNED</code> the challenge filter runs after the authentication bridge (<a href="#position-host">Under HOST_OWNED</a>), so the gate sees the delegation stamp. The URL authorization step inside the application's chain runs before the bridge, so it has no delegation stamp yet.</li>
           </ul>
 
           <h2 id="components">Components involved</h2>
@@ -163,9 +196,11 @@
               <tr><td><code>ZeroTrustActionRepository</code></td><td>The decision store. Reads decisions with <code>getCurrentAction(user, context hash)</code>. Memory or Redis (<code>contexa.infrastructure.mode</code>)</td></tr>
               <tr><td><code>AISessionSecurityContextRepository</code></td><td>Applies the decision and handles invalidated sessions when a session login is read, tracks sessions when it is saved</td></tr>
               <tr><td><code>AIOAuth2ZeroTrustFilter</code></td><td>Applies the decision to JWT requests</td></tr>
-              <tr><td><code>ZeroTrustChallengeFilter</code> · <code>ChallengeMfaInitializer</code></td><td>Starts or continues MFA for CHALLENGE</td></tr>
+              <tr><td><code>ZeroTrustChallengeFilter</code> · <code>ChallengeMfaInitializer</code></td><td>Starts or continues MFA for CHALLENGE (under <code>HOST_OWNED</code>, sends the user to the step-up)</td></tr>
               <tr><td><code>ZeroTrustAccessControlFilter</code></td><td>Stops BLOCK and ESCALATE, watches PENDING_ANALYSIS responses, raises ESCALATE to BLOCK</td></tr>
               <tr><td><code>MfaPendingAccessControlFilter</code></td><td>Restricts sessions that have not finished MFA</td></tr>
+              <tr><td><code>HostOwnedStepUpController</code> · <code>HostOwnedStepUpService</code></td><td>The step-up under <code>HOST_OWNED</code>: the pages under <code>/contexa/step-up</code>, its factors, and recording the result as a decision</td></tr>
+              <tr><td><code>HostOwnedUserPathGuard</code></td><td>Under <code>HOST_OWNED</code>, lets only a signed-in user reach Contexa's user pages</td></tr>
               <tr><td><code>MfaSessionRepository</code></td><td>Keeps MFA sessions</td></tr>
               <tr><td><code>MfaFlowUrlRegistry</code> · <code>AuthUrlProvider</code></td><td>MFA addresses (computing the skipped addresses and the MFA page addresses)</td></tr>
             </tbody>
@@ -180,6 +215,7 @@
               <tr><td><code>contexa.security.zerotrust.challenge.lock-wait-time</code></td><td><code>0</code></td><td>How long to wait for the challenge MFA start lock (0 answers 503 at once)</td></tr>
               <tr><td><code>contexa.security.zerotrust.challenge.lock-lease-time</code></td><td><code>30s</code></td><td>Lease time of that lock</td></tr>
               <tr><td><code>contexa.security.zerotrust.challenge.busy-retry-after-seconds</code></td><td><code>3</code></td><td><code>Retry-After</code> of the 503 when the lock is not obtained</td></tr>
+              <tr><td><code>contexa.bridge.step-up.reauthentication-url</code></td><td>none</td><td>Under <code>HOST_OWNED</code>, where the step-up sends the user for the application's own re-authentication (<a href="../common/bridge.html#settings">Connecting Your Existing Login</a>)</td></tr>
               <tr><td><code>contexa.identity.security-core.enabled</code></td><td><code>true</code></td><td>Off turns off these filters' auto-configuration</td></tr>
             </tbody>
           </table></div>

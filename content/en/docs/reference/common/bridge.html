@@ -40,7 +40,7 @@
           <h2 id="does-not">What the bridge does not do</h2>
           <ul>
             <li>When the application owns login (<code>HOST_OWNED</code>) it does not interfere with the application's authentication, authorization or session. It saves nothing to the session and writes no headers.</li>
-            <li>When your application owns login, the bridge filter is registered as a servlet filter with no order and runs <strong>after your Spring Security chain has finished</strong>. Controllers and <code>@Protectable</code> methods can read the stamps, but URL authorization inside your chain runs before they exist (Spring Boot's filter ordering). When Contexa owns login (<code>CONTEXA_OWNED</code>) it sits in Contexa's chain (after <code>SecurityContextHolderFilter</code> for session flows, after <code>BearerTokenAuthenticationFilter</code> for token flows).</li>
+            <li>When your application owns login, the bridge filter is registered as a servlet filter ordered right after your Spring Security chain (the chain's order + 1, before Contexa's enforcement filters), so it runs <strong>after your Spring Security chain has finished</strong>. Contexa's enforcement filters, controllers and <code>@Protectable</code> methods can read the stamps, but URL authorization inside your chain runs before they exist (Spring Boot's filter ordering). When Contexa owns login (<code>CONTEXA_OWNED</code>) it sits in Contexa's chain (after <code>SecurityContextHolderFilter</code> for session flows, after <code>BearerTokenAuthenticationFilter</code> for token flows).</li>
             <li>The exception: the <a href="#mirror">user mirror</a> writes user rows to the Contexa database even when the application owns login.</li>
           </ul>
 
@@ -163,6 +163,7 @@ request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
 
           <h2 id="mirror">User mirror</h2>
           <p>The bridge keeps a mirror row for an externally logged-in user in the Contexa database's user table, so the admin console and policies can refer to that user. The key is <code>brg_</code> + SHA-256 (authentication source, organization, user ID); the row has a random password and cannot be used to log in directly. When the same user comes again within 60 seconds (<code>contexa.bridge.sync.min-refresh-interval-seconds</code>) and nothing changed, the row is not written again. The email is read from the authentication attributes <code>email</code>, <code>mail</code> or <code>userEmail</code>; without one it is <code>&lt;key&gt;@shadow.contexa.local</code> (<code>contexa.bridge.sync.synthetic-email-domain</code>). To turn it off, set <code>contexa.bridge.sync.enabled=false</code>.</p>
+          <p>A value from your application that is longer than its column (a department that is a long directory name, a phone number with an extension, a long avatar URL) is cut to the column, so one long value never fails the copy. An address longer than 255 characters is replaced by the made-up one. A user ID longer than 255 characters gets no copy (one warning is logged); the user is still decided on and enforced, but has no factor of its own for the step-up.</p>
 
           <h2 id="settings">Settings you will change most</h2>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -180,11 +181,12 @@ request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
               <tr><td><code>contexa.bridge.authentication.headers.enabled</code></td><td><code>false</code></td><td>Read gateway headers</td><td>When a gateway passes the user in headers (with trusted proxies)</td></tr>
               <tr><td><code>contexa.bridge.network.trusted-proxies</code></td><td>none</td><td>Proxies whose headers and <code>X-Forwarded-For</code> are trusted</td><td>Always with headers</td></tr>
               <tr><td><code>contexa.bridge.network.trusted-proxy-validation-enabled</code></td><td><code>true</code></td><td>The trusted proxy check. When off, header reading is always refused and the client IP is taken the legacy way, trusting <code>X-Forwarded-For</code> from anyone</td><td>Leave it on (turning it off lets clients forge their IP)</td></tr>
+              <tr><td><code>contexa.bridge.step-up.reauthentication-url</code></td><td>none</td><td>Under <code>HOST_OWNED</code>, where the step-up page sends the user to re-authenticate with your application's own MFA or identity provider (for example an OIDC authorization request with <code>prompt=login</code> or <code>max_age=0</code>). Not offered when empty. A completed MFA in the authentication stamp, newer than the CHALLENGE, then releases it</td><td>When your application can re-authenticate users itself (<a href="../identity/zero-trust-filters.html#host-step-up">The step-up under HOST_OWNED</a>)</td></tr>
               <tr><td><code>contexa.bridge.sync.synthetic-email-domain</code></td><td><code>shadow.contexa.local</code></td><td>The email domain given to a mirror user without an email</td><td>To match your company's email rules</td></tr>
               <tr><td><code>contexa.bridge.sync.enabled</code></td><td><code>true</code></td><td>User mirror synchronization</td><td>To turn the user mirror sync off</td></tr>
             </tbody>
           </table></div>
-          <p>Every <code>contexa.bridge.*</code> setting (310) is in the <a href="../../install/configuration/index-all.html#contexa-bridge">Settings Index</a>.</p>
+          <p>Every <code>contexa.bridge.*</code> setting (311) is in the <a href="../../install/configuration/index-all.html#contexa-bridge">Settings Index</a>.</p>
 
           <h2 id="extension">Extension points</h2>
           <div class="table-scroll"><table class="api-table prose-table">

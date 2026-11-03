@@ -44,20 +44,21 @@ contexa init</code></pre>
         <p>No project yet? Run <code>contexa init</code> in an empty folder: it creates a small Spring Boot 3.5 application with Contexa and sample sign-in accounts (start.spring.io only creates Spring Boot 4 projects, which Contexa does not support yet).</p>
         <ol>
           <li><strong>Checks before any change:</strong> Spring Boot 3.5.x (on 3.4 and older, and on 4.x, it stops and changes nothing), Java 17 or later, the <code>@SpringBootApplication</code> class, and Docker or Ollama for the local services. Anything missing is explained with the fix.</li>
-          <li><strong>One question:</strong> the AI model provider, Ollama (runs on your computer, no API key; the default), OpenAI or Anthropic. The CLI then shows everything it will change and asks to go ahead.</li>
-          <li><strong>Local services, shared by your projects:</strong> PostgreSQL with pgvector in Docker (container <code>contexa-local-postgres</code>, on a free port such as 55432, bound to <code>127.0.0.1</code>) with a database of its own for each project; the Ollama already running on your computer, or one started in Docker, with the models <code>qwen3:8b</code> and <code>mxbai-embed-large</code> downloaded once; and, when Contexa provides the sign-in, a local mail inbox (Mailpit) that receives the one-time sign-in codes. Your existing PostgreSQL or Ollama on the default ports is left alone.</li>
+          <li><strong>One question:</strong> the AI model provider, Ollama (runs on your computer, no API key; the default), OpenAI or Anthropic. The CLI then shows everything it will change, including who will own sign-in (<a href="#cli-ownership">below</a>), and asks to go ahead.</li>
+          <li><strong>Local services, shared by your projects:</strong> PostgreSQL with pgvector in Docker (container <code>contexa-local-postgres</code>, on a free port such as 55432, bound to <code>127.0.0.1</code>) with a database of its own for each project; the Ollama already running on your computer, or one started in Docker, with the models <code>qwen3:8b</code> and <code>mxbai-embed-large</code> downloaded once; and a local mail inbox (Mailpit) that receives Contexa's one-time codes, in both ownerships: the second sign-in step when Contexa provides the sign-in, the step-up after a CHALLENGE when your application keeps it. The CLI points <code>spring.mail.*</code> at it. Your existing PostgreSQL or Ollama on the default ports is left alone.</li>
           <li><strong>Build file:</strong> adds the starter, the Spring AI BOM (1.1.8), the model starter and the PgVector starter (Maven, Gradle Groovy or Kotlin DSL, also in multi-module builds). Dependencies already in the file are kept.</li>
-          <li><strong>Main class:</strong> when your application declares a <code>SecurityFilterChain</code>, adds <code>@EnableAISecurity</code> without attributes (your application keeps sign-in; do the four things in <a href="#legacy-integration">Connect your existing sign-in</a>; when it signs in with Spring Boot's default user, that user <code>user</code> is kept with a password made once and kept outside the project, see <a href="troubleshooting.html#boot-default-user">Default user</a>). Otherwise it adds <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>, so Contexa provides the sign-in and the admin console.</li>
+          <li><strong>Main class:</strong> when your application declares a <code>SecurityFilterChain</code> (or you give <code>--ownership host</code>), adds <code>@EnableAISecurity</code> without attributes (your application keeps sign-in; do the two things in <a href="#legacy-integration">Connect your existing sign-in</a>; when it signs in with Spring Boot's default user, that user <code>user</code> is kept with a password made once and kept outside the project, see <a href="troubleshooting.html#boot-default-user">Default user</a>). Otherwise (or with <code>--ownership contexa</code>) it adds <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>, so Contexa provides the sign-in.</li>
           <li><strong>Settings:</strong> writes the Contexa settings to <code>src/main/resources/config/application.yml</code>. Spring Boot reads that location by itself, so your own <code>application.yml</code> and <code>application.properties</code> stay unchanged, and keys you already set are not written. It contains the dedicated database (<code>contexa.datasource.*</code>, each value overridable with <code>CONTEXA_DB_URL</code>, <code>CONTEXA_DB_USERNAME</code>, <code>CONTEXA_DB_PASSWORD</code>), <code>contexa.datasource.isolation.contexa-owned-application</code> set to <code>true</code> only when your application has no database of its own, the <code>SHADOW</code> enforcement mode and the model selection (<code>contexa.llm.*</code>). When the application already keeps its own file in that folder, the settings go to <code>application-contexa.yml</code> and that file gets one <code>spring.config.import</code> line.</li>
           <li><strong>Dependency check:</strong> resolves the dependencies with the project's own Gradle or Maven wrapper. If they cannot be downloaded, every project change is rolled back and the reason is shown.</li>
           <li><strong>Start and confirm:</strong> offers to start the application and reports the address once it is up, or the reason when it stops.</li>
         </ol>
-        <p>When Contexa provides the sign-in (and the application is not the example application), <code>contexa init</code> makes a password for the admin-console account <code>admin</code>, keeps it in <code>~/.contexa/credentials.properties</code> outside the project and shows it at the end. Contexa creates the account when the application first starts (<a href="configuration/iam.html#seed">First start</a>).</p>
+        <p>In both ownerships (unless the application is the example application or your settings already set <code>contexa.iam.seed.admin.*</code>), <code>contexa init</code> makes a password for the admin-console account <code>admin</code>, keeps it in <code>~/.contexa/credentials.properties</code> outside the project and shows it at the end. Contexa creates the account when the application first starts (<a href="configuration/iam.html#seed">First start</a>). When your application keeps sign-in, the last screen says: sign in to your application the way it always does (or with Spring Boot's default user), open the admin console <code>/contexa/admin</code>, and sign in there with Contexa's administrator <code>admin</code>, not with an account of your application.</p>
         <p>API keys for OpenAI and Anthropic come from <code>OPENAI_API_KEY</code> and <code>ANTHROPIC_API_KEY</code>, or are asked for and kept in <code>~/.contexa/credentials.properties</code>, outside the project. Running <code>contexa init</code> again is safe: it checks what is in place and adds only what is missing.</p>
         <div class="table-scroll"><table class="api-table prose-table">
           <thead><tr><th><code>init</code> option</th><th>Meaning</th></tr></thead>
           <tbody>
             <tr><td><code>--provider ollama|openai|anthropic</code></td><td>The AI model provider without the question (default <code>ollama</code>)</td></tr>
+            <tr><td><code>--ownership host|contexa</code></td><td>Who owns sign-in: <code>host</code> (your application keeps it) or <code>contexa</code> (Contexa provides it). Without it the CLI decides from your <code>SecurityFilterChain</code> (<a href="#cli-ownership">below</a>)</td></tr>
             <tr><td><code>--yes</code></td><td>No questions, use the defaults (scripts and CI)</td></tr>
             <tr><td><code>--dir &lt;path&gt;</code></td><td>Project folder (default: the current folder)</td></tr>
             <tr><td><code>--db-url &lt;jdbc-url&gt;</code></td><td>Use your own PostgreSQL with pgvector instead of the local one; the password comes from <code>CONTEXA_DB_PASSWORD</code></td></tr>
@@ -73,6 +74,25 @@ contexa init</code></pre>
             <li>Contexa starts in <code>SHADOW</code>: it records decisions but blocks nothing. Switch to <code>ENFORCE</code> after reviewing them (<a href="shadow-mode.html#change-mode">Changing the mode</a>).</li>
           </ul>
         </div>
+
+        <h3 id="cli-ownership">Which ownership <code>contexa init</code> chooses</h3>
+        <p>Before it changes anything, <code>contexa init</code> shows a <em>Security ownership</em> block: the ownership it chose, why (whether your application declares a <code>SecurityFilterChain</code>, or your <code>--ownership</code>), who does what, and the command for the other choice.</p>
+        <div class="table-scroll"><table class="api-table prose-table">
+          <thead><tr><th>What</th><th>Existing system (<code>SANDBOX</code>, <code>HOST_OWNED</code>)</th><th>New system (<code>FULL</code>, <code>CONTEXA_OWNED</code>)</th></tr></thead>
+          <tbody>
+            <tr><td>Chosen when</td><td>Your application declares a <code>SecurityFilterChain</code>, or <code>--ownership host</code></td><td>It declares none, or <code>--ownership contexa</code></td></tr>
+            <tr><td>Sign-in, sessions, cookies, URL rules</td><td>Your application, as now (Contexa only reads who signed in)</td><td>Contexa (sign-in page, passkey, one-time code)</td></tr>
+            <tr><td>Risk decisions and their enforcement on every path (block screen, step-up, agent request gate)</td><td>Contexa</td><td>Contexa, the same</td></tr>
+            <tr><td>A CHALLENGE</td><td>Contexa's step-up <code>/contexa/step-up</code> (a passkey, or a one-time code by mail); your sign-in and session stay as they are</td><td>Contexa's MFA</td></tr>
+            <tr><td>Admin console <code>/contexa/admin</code></td><td>Protected by Contexa with its own administrator account, apart from your users</td><td>Contexa's administrator account</td></tr>
+          </tbody>
+        </table></div>
+        <p>Use <code>--ownership host|contexa</code> when the detection does not fit, for example for an application that signs users in on its own without Spring Security (a filter, an interceptor, a session). Two choices come with a warning in the block:</p>
+        <ul>
+          <li><strong><code>--ownership contexa</code> for an application that declares its own chain:</strong> Contexa's chain takes every request first, so your chain and its sign-in are no longer used.</li>
+          <li><strong><code>--ownership host</code> for an application that declares no chain:</strong> Spring Boot's default security asks every request to sign in. To keep your access as it is, declare a chain, for example with <code>anyRequest().permitAll()</code>; the admin console stays protected by Contexa.</li>
+        </ul>
+        <p>The local mail inbox (Mailpit) is prepared for both, so the one-time codes arrive without a mail server of your own.</p>
 
         <h3 id="cli-commands">Other CLI commands</h3>
         <div class="table-scroll"><table class="api-table prose-table">
@@ -236,33 +256,26 @@ public List&lt;Customer&gt; getCustomers() { ... }</code></pre>
         </ul>
 
         <h2 id="legacy-integration">Connect your existing sign-in (when your application owns sign-in)</h2>
-        <p>By default (<code>SANDBOX</code>, authentication ownership <code>HOST_OWNED</code>) Contexa builds no security chain. Sign-in, sessions and access rules stay with your application's Spring Security, and Contexa only reads the result of your sign-in (<a href="../reference/common/bridge.html">the authentication bridge</a>). So your application must do these four things.</p>
+        <p>By default (<code>SANDBOX</code>, authentication ownership <code>HOST_OWNED</code>) Contexa builds no sign-in chain. Sign-in, sessions, cookies and access rules stay with your application's Spring Security, and Contexa only reads the result of your sign-in (<a href="../reference/common/bridge.html">the authentication bridge</a>). Contexa still enforces its decisions on every path, with filters that run right after your chain, and protects its admin console <code>/contexa/admin/**</code> itself with a chain of its own and Contexa's administrator sign-in. So your application must do these two things.</p>
         <ol>
           <li><strong>Declare your own <code>SecurityFilterChain</code>.</strong> Without it Spring Boot's default security applies and every request asks for sign-in; Contexa reports this with an ERROR log at startup.</li>
-          <li><strong>Protect the admin console <code>/contexa/admin/**</code> with the ADMIN role.</strong> Contexa's URL rule for the admin console lives only in the chain Contexa builds, and in this way there is no such chain.</li>
-          <li><strong>Turn on method security (<code>@EnableMethodSecurity</code>).</strong> The <code>@PreAuthorize("hasRole('ADMIN')")</code> on the admin controllers and services applies only with method security on, and Contexa turns it on only under <code>CONTEXA_OWNED</code>.</li>
-          <li><strong>Put the signed-in user into the <code>SecurityContext</code> as an authenticated <code>Authentication</code>.</strong> <code>@Protectable</code> methods refuse calls without it or with an anonymous one. A legacy user object kept only in the session is not proof of authentication.</li>
+          <li><strong>Put the signed-in user into the <code>SecurityContext</code> as an authenticated <code>Authentication</code>, in a filter of that chain.</strong> <code>@Protectable</code> methods refuse calls without it or with an anonymous one. A legacy user object kept only in the session is not proof of authentication. When the user is set later (in an MVC interceptor or a controller), Contexa's filters do not see it, so decisions are enforced for those requests only at <code>@Protectable</code> methods, and a WARN says so once.</li>
         </ol>
         <pre><code class="language-java">@Configuration
-@EnableMethodSecurity
 public class HostSecurityConfig {
 
     @Bean
     public SecurityFilterChain hostSecurityFilterChain(HttpSecurity http) throws Exception {
         http.authorizeHttpRequests(auth -&gt; auth
-                // the same as the rule Contexa puts in its own chain: self-service paths such as asking to release a block need sign-in only
-                .requestMatchers("/contexa/admin/api/aiam/zero-trust/**",
-                                 "/contexa/admin/api/aiam/sse/zero-trust/**").authenticated()
-                .requestMatchers("/contexa/admin/**").hasRole("ADMIN")
-                // other pages stay protected by your existing legacy filters
+                // your pages stay protected by your existing rules and filters
                 .anyRequest().permitAll());
         return http.build();
     }
 }</code></pre>
-        <p>Spring Security's defaults (CSRF protection, security response headers and so on) apply to this chain too, so adjust whatever differs from your existing behavior. Contexa's startup diagnostic names <code>anyRequest().permitAll()</code> as an example when no chain exists, but stopping there leaves the admin console unprotected.</p>
+        <p>Spring Security's defaults (CSRF protection, security response headers and so on) apply to this chain too, so adjust whatever differs from your existing behavior. Contexa's startup diagnostic names <code>anyRequest().permitAll()</code> as an example when no chain exists; that is safe for Contexa's paths, because the admin console is protected by Contexa's own chain and Contexa's user pages (decision screens, step-up, agent confirmations) answer only a signed-in user. Method security (<code>@EnableMethodSecurity</code>) is optional: when you turn it on, the <code>@PreAuthorize</code> on the admin console's controllers adds one more check.</p>
 
         <h3 id="auth-object">When you have a legacy session object</h3>
-        <p>The <code>authObjectLocation</code>, <code>authObjectAttribute</code> and <code>authObjectType</code> attributes of <code>@EnableAISecurity</code> only tell the bridge <strong>where to look first</strong> for the user object, and its attribute name and type. They do not connect sign-in, so item 4 above (an authenticated <code>Authentication</code>) is still needed.</p>
+        <p>The <code>authObjectLocation</code>, <code>authObjectAttribute</code> and <code>authObjectType</code> attributes of <code>@EnableAISecurity</code> only tell the bridge <strong>where to look first</strong> for the user object, and its attribute name and type. They do not connect sign-in, so item 2 above (an authenticated <code>Authentication</code>) is still needed.</p>
         <pre><code class="language-java">@EnableAISecurity(
     authObjectLocation = AuthObjectLocation.SESSION,   // AUTO (default), SESSION, REQUEST_ATTRIBUTE, HEADER
     authObjectAttribute = "loginUser"                  // legacy session attribute name
@@ -279,6 +292,10 @@ public class LegacyApplication { }</code></pre>
             <tr><td><code>[IamSeedData] OSS schema provenance verified. ...</code> (INFO)</td><td>The tables in the Contexa database are ready.</td></tr>
             <tr><td><code>Skipping Contexa-owned authentication chain bootstrap in HOST_OWNED mode</code> (INFO)</td><td>Contexa is on in the way where your application owns sign-in.</td></tr>
             <tr><td><code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared ...</code> (ERROR)</td><td>Your application has no security chain. Do <a href="#legacy-integration">item 1 above</a>.</td></tr>
+            <tr><td><code>[Contexa] HOST_OWNED: the application sets the signed-in user after Spring Security's filters ...</code> (WARN, once, at the first such request)</td><td>Your application sets the user in an MVC interceptor or a controller, so those requests are enforced only at <code>@Protectable</code> methods. Do <a href="#legacy-integration">item 2 above</a> in a filter of your chain.</td></tr>
+            <tr><td><code>[Contexa] CONTEXA_OWNED: Contexa's security chain takes every request first, so the application's own chain(s) [...] are never reached ...</code> (ERROR)</td><td>Contexa owns sign-in, but your application declares chains of its own that no request reaches. Use <code>HOST_OWNED</code> to keep your sign-in, or remove those chains.</td></tr>
+            <tr><td><code>[Contexa] CONTEXA_OWNED: Contexa's sign-in looks users up in the application's [...] instead of Contexa's user store; ...</code> (WARN)</td><td>Your application's <code>UserDetailsService</code> answers Contexa's sign-in, so Contexa's seeded administrator can sign in only if that store has the account.</td></tr>
+            <tr><td><code>[Contexa] A one-time-code factor is offered but no mail sender is configured (spring.mail.*) ...</code> (WARN)</td><td>No one-time code can be delivered. Configure <code>spring.mail.*</code>, or users verify with a passkey only.</td></tr>
             <tr><td><code>[Contexa] contexa.infrastructure.mode is standalone: ...</code> (WARN)</td><td>An expected warning that learned state is kept in memory.</td></tr>
             <tr><td><code>[ContexaCapability] &lt;capability&gt; status=... required=...</code> (ERROR)</td><td>A needed part is missing. See the capability check below.</td></tr>
             <tr><td><code>System runtime settings applied to AI decision mode: ...</code> (INFO)</td><td>The enforcement mode saved in the admin console was applied.</td></tr>
@@ -309,8 +326,8 @@ public class LegacyApplication { }</code></pre>
           </tbody>
         </table></div>
         <ul>
-          <li>The decision monitor opens only when the signed-in user's authorities include <code>ROLE_ADMIN</code>. When your application owns sign-in, give this role to your administrator accounts.</li>
-          <li>The sample accounts (five, including <code>admin</code>, with a shared password) are put into the Contexa database only with <code>contexa.iam.seed.accounts.enabled: true</code> (default <code>false</code>). They are for local trials; do not turn this on in a deployment. The Contexa sign-in page they are used with (<code>/contexa/admin/login</code>) works when Contexa owns sign-in (<code>CONTEXA_OWNED</code>).</li>
+          <li>The decision monitor opens only when the signed-in user's authorities include <code>ROLE_ADMIN</code>. When your application owns sign-in, the admin console signs in Contexa's own administrator accounts (users in the Contexa database with the ADMIN role) at <code>/contexa/admin/login</code>, apart from your users; your application's users cannot enter it. Contexa creates the first administrator at the first start from <code>contexa.iam.seed.admin.username</code>, <code>contexa.iam.seed.admin.password</code> and <code>contexa.iam.seed.admin.email</code> (none without the password; <code>contexa init</code> sets the password for you, by hand see the example in <a href="../reference/iam/admin.html#protect-host-owned">Admin Console</a>). The console's sign-out ends only the console sign-in; your application's sign-in stays.</li>
+          <li>The sample accounts (five, including <code>admin</code>, with a shared password) are put into the Contexa database only with <code>contexa.iam.seed.accounts.enabled: true</code> (default <code>false</code>). They are for local trials; do not turn this on in a deployment. The Contexa sign-in page they are used with (<code>/contexa/admin/login</code>) works under both ownerships.</li>
         </ul>
 
         <h2 id="startup-errors">Common errors on the first start</h2>

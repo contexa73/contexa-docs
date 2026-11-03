@@ -26,7 +26,7 @@
           <figure class="dg">
             <figcaption class="dg-caption"><strong>Request path by ownership</strong>The text in parentheses is what decides at that step.</figcaption>
             <div class="dg-compare">
-              <div class="dg-side dg-host"><p class="dg-side-title">Your application owns sign-in (<code>HOST_OWNED</code>, default)</p><ul><li>Your security chain checks sign-in and access (your rules)</li><li>The authentication bridge reads the sign-in result (read only)</li><li>Stored decisions are enforced before <code>@Protectable</code> methods (Contexa)</li><li>AI decision after the response (decision engine)</li></ul></div>
+              <div class="dg-side dg-host"><p class="dg-side-title">Your application owns sign-in (<code>HOST_OWNED</code>, default)</p><ul><li>Your security chain checks sign-in and access (your rules)</li><li>The authentication bridge reads the sign-in result (read only)</li><li>Request-time filters right after your chain enforce stored decisions on every path, and again before <code>@Protectable</code> methods (Contexa)</li><li>AI decision after the response (decision engine)</li></ul></div>
               <div class="dg-side"><p class="dg-side-title">Contexa owns sign-in (<code>CONTEXA_OWNED</code>)</p><ul><li>The Contexa security chain handles sign-in, MFA and sessions (Contexa)</li><li>Request-time filters enforce stored decisions at the URL (Contexa)</li><li>The agent request gate, and enforcement before <code>@Protectable</code> methods (Contexa)</li><li>AI decision after the response (decision engine)</li></ul></div>
             </div>
           </figure>
@@ -41,8 +41,9 @@
             </tbody>
           </table></div>
           <ul>
-            <li><strong>If you already have sign-in and want to keep it,</strong> choose the default (<code>HOST_OWNED</code>). A few tasks remain for your application (<a href="#host-owned">below</a>).</li>
-            <li><strong>To leave sign-in, MFA, request-time enforcement and the agent request gate to Contexa,</strong> choose <code>FULL</code>. The Contexa chain then receives requests first, so your existing chain may no longer be used (<a href="#contexa-owned">below</a>).</li>
+            <li><strong>If you already have sign-in and want to keep it,</strong> choose the default (<code>HOST_OWNED</code>). Contexa still decides and enforces on every path; two tasks remain for your application (<a href="#host-owned">below</a>).</li>
+            <li><strong>To leave sign-in, MFA and sessions to Contexa as well,</strong> choose <code>FULL</code>. The Contexa chain then receives requests first, so your existing chain may no longer be used (<a href="#contexa-owned">below</a>).</li>
+            <li><strong>With the CLI,</strong> <code>contexa init</code> chooses for you: <code>HOST_OWNED</code> when your application declares a <code>SecurityFilterChain</code>, <code>CONTEXA_OWNED</code> when it declares none, or what you give with <code>--ownership host|contexa</code> (<a href="installation-guide.html#cli-ownership">How the CLI chooses</a>).</li>
           </ul>
 
           <h2 id="ownership">What works under each ownership</h2>
@@ -50,29 +51,30 @@
             <thead><tr><th>What</th><th><code>HOST_OWNED</code> (default)</th><th><code>CONTEXA_OWNED</code></th></tr></thead>
             <tbody>
               <tr><td>Sign-in and sessions</td><td>Your application's Spring Security</td><td>The Contexa chain (form, passkey, one-time-token MFA, sessions)</td></tr>
-              <tr><td>Does Contexa build a security chain</td><td>No</td><td>Yes</td></tr>
+              <tr><td>Does Contexa build a security chain</td><td>No sign-in chain for your requests; only a chain of its own for the admin console <code>/contexa/admin/**</code></td><td>Yes</td></tr>
               <tr><td>When your application has no chain</td><td>Spring Boot's default security (every request asks for sign-in) and a Contexa ERROR log</td><td>The Contexa chain receives requests</td></tr>
-              <tr><td>URL protection of the admin console <code>/contexa/admin/**</code></td><td><strong>Your chain must do it</strong></td><td>The Contexa chain (<code>SANDBOX</code> shape: ADMIN role, <code>FULL</code> shape: dynamic authorization policies)</td></tr>
-              <tr><td>Method security (<code>@EnableMethodSecurity</code>), the admin console's <code>@PreAuthorize</code></td><td><strong>Your application must turn it on</strong></td><td>Contexa turns it on</td></tr>
+              <tr><td>URL protection of the admin console <code>/contexa/admin/**</code></td><td>Contexa's console chain: Contexa's administrator sign-in (<code>/contexa/admin/login</code>) and the ADMIN role. Your chain does not need to protect it</td><td>The Contexa chain (<code>SANDBOX</code> shape: ADMIN role, <code>FULL</code> shape: dynamic authorization policies)</td></tr>
+              <tr><td>Method security (<code>@EnableMethodSecurity</code>), the admin console's <code>@PreAuthorize</code></td><td>Optional: when your application turns it on, the admin console's <code>@PreAuthorize</code> adds a check</td><td>Contexa turns it on</td></tr>
               <tr><td>Method policies with AI security expressions (<code>#ai</code>)</td><td>None</td><td>Available</td></tr>
-              <tr><td>Enforcing stored decisions (BLOCK, CHALLENGE, ESCALATE)</td><td>Before <code>@Protectable</code> methods only</td><td>URL-level filters (request time) and before <code>@Protectable</code> methods</td></tr>
-              <tr><td>Agent request gate (call limits, confirmation by the accountable person, narrowed scope)</td><td>None</td><td>Available (<a href="../reference/agent/controls.html#ownership">Agent controls</a>)</td></tr>
+              <tr><td>Enforcing stored decisions (BLOCK, CHALLENGE, ESCALATE)</td><td>The same filters as servlet filters right after your chain (every path) and before <code>@Protectable</code> methods; the same answers as <code>CONTEXA_OWNED</code></td><td>URL-level filters (request time) and before <code>@Protectable</code> methods</td></tr>
+              <tr><td>Answering a CHALLENGE</td><td>Contexa's verification-only step-up <code>/contexa/step-up</code> (passkey, one-time code by mail, or your application's own re-authentication). Your sign-in, session and cookies stay as they are</td><td>Contexa's MFA flow</td></tr>
+              <tr><td>Agent request gate (call limits, confirmation by the accountable person, narrowed scope)</td><td>Available (<a href="../reference/agent/controls.html#ownership">Agent controls</a>)</td><td>Available (<a href="../reference/agent/controls.html#ownership">Agent controls</a>)</td></tr>
+              <tr><td>Language of your pages, your message bundle (<code>messages.properties</code>)</td><td>Unchanged: your pages keep the language your application resolves (<code>Accept-Language</code>, your <code>LocaleResolver</code>). Contexa's resolver (Korean by default, <code>?lang=</code>) and its <code>?lang=</code> switch serve only the screens under <code>/contexa/</code>. Your message source keeps your texts first; Contexa's texts stand behind it</td><td>Contexa resolves the language of the whole application (Korean by default, <code>?lang=</code>)</td></tr>
               <tr><td>Reading your sign-in (authentication bridge)</td><td>Yes (read only)</td><td>Yes</td></tr>
-              <tr><td>Contexa user lookup and authentication provider</td><td>Not registered</td><td>Registered. If your application has a <code>UserDetailsService</code>, that one is used</td></tr>
+              <tr><td>Contexa user lookup and authentication provider</td><td>Not registered for your requests (the admin console's chain has its own, for Contexa's administrators)</td><td>Registered. If your application has a <code>UserDetailsService</code>, that one is used</td></tr>
               <tr><td>Contexa authorization server (OAuth2) auto-configuration</td><td>None</td><td>Available</td></tr>
               <tr><td>AI decision after the response, decision and audit records</td><td>Yes</td><td>Yes</td></tr>
             </tbody>
           </table></div>
 
           <h2 id="host-owned">When your application owns sign-in (default)</h2>
-          <p>Contexa does not change your <code>SecurityFilterChain</code>, <code>UserDetailsService</code>, authentication providers or <code>spring.security.*</code> settings, and it does not put its own security chain, request-time filters or AI session repository on your request path. Instead your application must do the four things below. The example code is in <a href="installation-guide.html#legacy-integration">Connect your existing sign-in in the installation guide</a>.</p>
+          <p>Contexa does not change your <code>SecurityFilterChain</code>, <code>UserDetailsService</code>, authentication providers or <code>spring.security.*</code> settings, your sessions or your cookies, and it puts no sign-in chain or AI session repository on your request path. What it adds runs after your chain: its request-time filters, the step-up pages under <code>/contexa/step-up</code>, and a chain of its own that only takes the admin console <code>/contexa/admin/**</code>. Your application must do the two things below. The example code is in <a href="installation-guide.html#legacy-integration">Connect your existing sign-in in the installation guide</a>.</p>
           <ol>
             <li>Declare your own <code>SecurityFilterChain</code>.</li>
-            <li>Protect <code>/contexa/admin/**</code> with the ADMIN role in your chain.</li>
-            <li>Turn on method security with <code>@EnableMethodSecurity</code>.</li>
-            <li>Put the signed-in user into the <code>SecurityContext</code> as an authenticated <code>Authentication</code>.</li>
+            <li>Put the signed-in user into the <code>SecurityContext</code> as an authenticated <code>Authentication</code>, in a Spring Security filter of your chain.</li>
           </ol>
-          <p>Decisions are enforced at <code>@Protectable</code> methods. Before running a method Contexa checks the user's stored decision and does not run it on BLOCK, CHALLENGE or ESCALATE; a refusal thrown from a controller is answered by Contexa's exception handler with the status code of the decision (<a href="#responses">Decisions and answers</a>). The URL-level filters live only in the Contexa chain, so they do not work in this way.</p>
+          <p>Decisions are enforced on every path. The same filters Contexa puts in its own chain run as servlet filters right after your Spring Security chain, so your chain sets who the user is and applies your rules first; a stored BLOCK, CHALLENGE or ESCALATE then gets the same answer as under <code>CONTEXA_OWNED</code> (<a href="#responses">Decisions and answers</a>). Before running a <code>@Protectable</code> method Contexa checks the stored decision again. A CHALLENGE sends the user to Contexa's verification-only step-up (<a href="../reference/identity/zero-trust-filters.html#host-step-up">The step-up under <code>HOST_OWNED</code></a>).</p>
+          <p>If your application sets the signed-in user later, in an MVC interceptor or a controller, the filters see no user. Such requests are enforced only at <code>@Protectable</code> methods, and Contexa logs a WARN once after the start. When a person signs in through your form login or OAuth2 login, Contexa sends that sign-in to analysis, as it does with its own sign-in.</p>
 
           <h2 id="contexa-owned">When Contexa owns sign-in</h2>
           <h3 id="default-chain">The default chain shape</h3>
@@ -136,8 +138,8 @@
             </ul>
           </figure>
           <ul>
-            <li><strong><code>@Protectable</code> methods (both ways):</strong> on BLOCK, CHALLENGE or ESCALATE the method does not run; a refusal thrown from a controller is answered by Contexa's exception handler with the status codes above.</li>
-            <li><strong>At the URL (<code>CONTEXA_OWNED</code> only):</strong> request-time filters handle BLOCK (for a person, block-release MFA is offered first), ESCALATE and CHALLENGE; when there is no decision they wrap the response so it can be cut if a block decision arrives during analysis. Details are in <a href="../reference/identity/zero-trust-filters.html">Request-time enforcement</a>.</li>
+            <li><strong><code>@Protectable</code> methods (both ways):</strong> on BLOCK, CHALLENGE or ESCALATE the method does not run; a refusal thrown from a controller is answered by Contexa's exception handler: a browser page request (<code>Accept</code> with <code>text/html</code>) goes to the same screen as at the URL, other clients get the status codes above with a JSON body.</li>
+            <li><strong>At the URL (both ways):</strong> request-time filters handle BLOCK (for a person, block-release MFA is offered first), ESCALATE and CHALLENGE; when there is no decision they wrap the response so it can be cut if a block decision arrives during analysis. Under <code>CONTEXA_OWNED</code> they run in the Contexa chain, under <code>HOST_OWNED</code> right after your chain; a CHALLENGE goes to Contexa's MFA or to the step-up respectively. Details are in <a href="../reference/identity/zero-trust-filters.html">Request-time enforcement</a>.</li>
           </ul>
 
           <h2 id="custom-chain">Build the chain yourself (<code>CONTEXA_OWNED</code>)</h2>
