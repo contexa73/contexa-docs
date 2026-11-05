@@ -51,7 +51,7 @@
           <h2 id="prepare">Before you start</h2>
           <ul>
             <li><strong>Vector store:</strong> a <code>VectorStore</code> bean is needed, from the Spring AI pgvector starter (<code>spring-ai-starter-vector-store-pgvector</code>). Without it the general and behavior services are not created, and the pipeline's context retrieval returns nothing.</li>
-            <li><strong>Embedding model:</strong> one Spring AI embedding model (fixed to one provider). How it is chosen is in <a href="model-provider.html#embedding">Choosing the embedding model</a>. With the default provider OpenAI the default model is <code>text-embedding-3-small</code>.</li>
+            <li><strong>Embedding model:</strong> one Spring AI embedding model (fixed to one provider). How it is chosen is in <a href="model-provider.html#embedding">Choosing the embedding model</a>. Contexa follows your application's model: OpenAI with no model named is Spring AI's default <code>text-embedding-ada-002</code>.</li>
             <li><strong>Table:</strong> Contexa turns on Spring AI's <code>initialize-schema</code> by default. The first start creates the vector extension, the table (<code>public.vector_store</code>), its HNSW index and the metadata index used by per-user searches.</li>
             <li><strong>If migrations manage your schema,</strong> turn <code>initialize-schema</code> off and create the table, the vector index and the metadata index yourself. Off, nothing is created or changed at start.</li>
             <li>Keys under <code>contexa.vectorstore.pgvector.*</code> are handed to Spring AI as <code>spring.ai.vectorstore.pgvector.*</code> (unless that key is set itself). Keys written directly as <code>spring.ai.vectorstore.pgvector.*</code> are treated as an old prefix and log an ERROR line at start. The index type <code>contexa.vectorstore.pgvector.index-type</code> (default <code>HNSW</code>) and the distance <code>contexa.vectorstore.pgvector.distance-type</code> (default <code>COSINE_DISTANCE</code>) are not read by Contexa either; they are handed to Spring AI this way.</li>
@@ -64,31 +64,28 @@ contexa:
       initialize-schema: false   # handed over as spring.ai.vectorstore.pgvector.initialize-schema</code></pre>
 
           <h3 id="dimensions">Matching the dimension</h3>
-          <p>The dimension of the pgvector table must equal the length of the vectors the embedding model produces. Contexa decides the dimension in the order below and puts the result in as a default setting.</p>
+          <p>The dimension of the pgvector table must equal the length of the vectors the embedding model produces. Contexa decides the dimension in the order below and puts the result in as a default setting. A new database gets a vector column of that size.</p>
           <ol>
             <li><code>contexa.vectorstore.pgvector.dimensions</code> (or <code>spring.ai.vectorstore.pgvector.dimensions</code>)</li>
             <li><code>contexa.llm.embedding.dimensions</code></li>
             <li>The provider setting: <code>spring.ai.openai.embedding.options.dimensions</code> for OpenAI; <code>contexa.llm.embedding.ollama.dimensions</code> · <code>spring.ai.ollama.embedding.options.dimensions</code> for Ollama</li>
-            <li>The value of a model Contexa knows: 1024 for <code>text-embedding-3-small</code>, <code>text-embedding-3-large</code>, <code>mxbai-embed-large</code> and <code>bge-m3</code>; 1536 for <code>text-embedding-ada-002</code></li>
+            <li>The value of a model Contexa knows: 1536 for <code>text-embedding-ada-002</code> and <code>text-embedding-3-small</code>, 3072 for <code>text-embedding-3-large</code>, 1024 for <code>mxbai-embed-large</code> and <code>bge-m3</code></li>
             <li>For any other model, one of 1 to 3 must be set (otherwise the application does not start).</li>
           </ol>
-          <pre><code class="language-yaml"># Using 1536 dimensions (OpenAI)
+          <pre><code class="language-yaml"># A smaller output (OpenAI): text-embedding-3-large gives 3072 dimensions by itself
 spring:
   ai:
     openai:
       embedding:
         options:
-          model: text-embedding-3-small
-          dimensions: 1536
-contexa:
-  vectorstore:
-    pgvector:
-      dimensions: 1536</code></pre>
+          model: text-embedding-3-large
+          dimensions: 1536</code></pre>
           <p>The dimension is checked at start, and start stops in these cases:</p>
           <ul>
             <li>An unknown embedding model without a dimension set (<code>Unknown embedding model dimension</code>)</li>
             <li>The pgvector dimension setting differs from the embedding model's (<code>Embedding dimension mismatch</code>)</li>
-            <li>The <code>embedding</code> column of an existing table has another dimension than the setting. Recreate the table or embed the documents again.</li>
+            <li>The <code>embedding</code> column of an existing table has another dimension than the setting. Recreate the table or embed the documents again. An OpenAI installation from an earlier version (a 1024 table) stays as it is with <a href="../../install/configuration/ai.html#dimensions">two lines</a>, with nothing embedded again.</li>
+            <li>Above 2000 dimensions while Contexa creates the table: a pgvector HNSW index holds up to 2000. Configure a smaller output, or create the table yourself and set <code>contexa.vectorstore.pgvector.initialize-schema=false</code>.</li>
           </ul>
           <p>When the check passes, INFO <code>Embedding vector dimension verified: provider=…, model=…, dimension=…, source=…</code> is logged.</p>
 
@@ -248,7 +245,7 @@ List&lt;Document&gt; similar = behaviorVectorService
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.vectorstore.pgvector.dimensions</code></td><td><code>1024</code></td><td>Vector dimension (set automatically from the embedding model)</td><td>When you use an embedding model Contexa does not know</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.dimensions</code></td><td>the embedding model's size</td><td>Vector dimension (set automatically from the embedding model)</td><td>When you use an embedding model Contexa does not know</td></tr>
               <tr><td><code>contexa.vectorstore.pgvector.top-k</code></td><td><code>100</code></td><td>Default count of a general search</td><td>To put fewer documents into the prompt</td></tr>
               <tr><td><code>contexa.vectorstore.pgvector.similarity-threshold</code></td><td><code>0.5</code></td><td>Minimum relevance of a general search (0 to 1)</td><td>Raise it when unrelated documents come in</td></tr>
               <tr><td><code>contexa.vectorstore.retry.enabled</code></td><td><code>true</code></td><td>Store failed documents again in the background</td><td>When the application handles failures itself</td></tr>
