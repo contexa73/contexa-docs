@@ -57,6 +57,7 @@ function resolvePreferredLanguage(req) {
   const accepted = req.acceptsLanguages(...LOCALIZED_PREFIXES);
   return accepted && LOCALIZED_PREFIXES.includes(accepted) ? accepted : 'en';
 }
+
 function buildCandidates(relativePath, preferredLanguage) {
   const clean = sanitizeRelativePath(relativePath);
   const withoutTrailingSlash = clean.replace(/\/+$/, '');
