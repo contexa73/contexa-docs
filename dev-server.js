@@ -62,6 +62,7 @@ function buildCandidates(relativePath, preferredLanguage) {
   const clean = sanitizeRelativePath(relativePath);
   const withoutTrailingSlash = clean.replace(/\/+$/, '');
   const candidates = [];
+
   const pushCandidate = (candidate) => {
     const normalized = sanitizeRelativePath(candidate);
     if (!normalized) {
