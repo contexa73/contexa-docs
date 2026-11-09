@@ -30,7 +30,7 @@
               <li class="dg-step"><span class="dg-step-no">7</span><div class="dg-node dg-store"><span class="dg-node-title">Store the decision</span><span class="dg-node-desc">in enforcement mode (<code>ENFORCE</code>). A block also sends a signal that cuts responses in flight</span></div></li>
             </ol>
           </figure>
-          <p><strong>Example.</strong> A user exports a report through a protected method. The response leaves at once and analysis starts in the background. If the AI model chooses block, the decision is stored and the user's next request gets the block response. If the model chooses allow, that allow is used only for 15 seconds in the same session, IP and browser; after that, requests are pending analysis again and are analyzed.</p>
+          <p><strong>Example.</strong> A user exports a report through a protected method. The response leaves at once and analysis starts in the background. If the AI model chooses block, the decision is stored and the user's next request gets the block response. If the model chooses allow, that allow is used only for 15 minutes in the same session, IP and browser (<code>contexa.security.zerotrust.allow-validity</code>); after that, requests are pending analysis again and are analyzed.</p>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>Step 3 depends on the ownership mode</strong>The default is <code>HOST_OWNED</code>. The full comparison is in the overview.</figcaption>
             <div class="dg-compare">
@@ -68,7 +68,7 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Decision</th><th>Browser</th><th>API</th><th>How it ends</th></tr></thead>
             <tbody>
-              <tr><td>Allow</td><td colspan="2">goes on</td><td>—</td></tr>
+              <tr><td>Allow</td><td colspan="2">goes on. The response is wrapped and cut if a block signal arrives while it is being written</td><td>—</td></tr>
               <tr><td>Step-up authentication</td><td>sent to <code>/contexa/zero-trust/challenge-required?mfaUrl=…</code></td><td><code>401</code> <code>MFA_CHALLENGE_REQUIRED</code> (body <code>mfaUrl</code>). The MFA is started once per user under a lock (default lease 30 s); while another request is starting it, <code>503</code> <code>MFA_BUSY_RETRY</code> + <code>Retry-After: 3</code>. If the application has no MFA flow, <code>401</code> <code>ZERO_TRUST_CHALLENGE</code>. Under <code>HOST_OWNED</code> no MFA is started: <code>mfaUrl</code> is <code>/contexa/step-up</code></td><td>becomes allow after passing the MFA this decision started (a sign-in MFA does not release it; under <code>HOST_OWNED</code>, the step-up or the application's own re-authentication after the decision), or after 1,800 s</td></tr>
               <tr><td>Block</td><td>sent to <code>/contexa/zero-trust/blocked</code></td><td><code>403</code> <code>ACCOUNT_BLOCKED</code>. After the unblock MFA has started, <code>401</code> <code>BLOCK_MFA_REQUIRED</code></td><td>an administrator's approval (<a href="#block">How a block spreads and is released</a>)</td></tr>
               <tr><td>Held for review</td><td>sent to <code>/contexa/zero-trust/analysis-pending?returnUrl=…</code></td><td><code>423</code> <code>SECURITY_REVIEW_IN_PROGRESS</code> + <code>Retry-After: 30</code></td><td>an administrator's approval. MFA does not release it. When both the analysis decision (300 s) and 5 minutes from the first hold response have passed, the next request turns it into a block</td></tr>
@@ -207,7 +207,7 @@
           <ul>
             <li><strong>Request attribute</strong> <code>contexa.zeroTrustAction</code>: a request the decision was applied to keeps the decision (<code>CONTEXA_OWNED</code>).</li>
             <li><strong>Authentication object</strong> <code>ZeroTrustAuthenticationToken</code>: <code>getAction()</code> · <code>getTrustScore()</code> · <code>getThreatScore()</code>. It becomes this object only when the session chain changed the authorities; the token chain keeps a <code>JwtAuthenticationToken</code>.</li>
-            <li><strong>Policy expressions</strong> <code>#ai</code>: used in Contexa's policy (XACML) expressions. To use them in the application's <code>@PreAuthorize</code>, the mode must be <code>CONTEXA_OWNED</code>.</li>
+            <li><strong>Policy expressions</strong> <code>#ai</code>: used in Contexa's policy (XACML) expressions. They cannot be used in the application's <code>@PreAuthorize</code>.</li>
             <li><strong>Decision classes</strong>: on <code>ZeroTrustAction</code>, <code>isBlocking()</code> is true for block and hold, and <code>isAccessRestricted()</code> for block, step-up and hold.</li>
           </ul>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -223,18 +223,17 @@
             </tbody>
           </table></div>
           <div class="callout callout-warning">
-            <strong>The usual state is pending analysis.</strong> An allow is used only for 15 seconds in the same context, so requiring only <code>#ai.isAllowed()</code> refuses most requests. To filter out only restricting decisions, accept allow and pending analysis together, as below.
+            <strong>With no stored decision the state is pending analysis.</strong> An allow is used only for 15 minutes in the context it was made for, and a first request, a request after it expires and a request from another context are pending analysis, so requiring only <code>#ai.isAllowed()</code> refuses those requests. To filter out only restricting decisions, accept allow and pending analysis together, as below.
           </div>
-          <pre><code class="language-java">// #ai is registered only under CONTEXA_OWNED (@EnableAISecurity(mode = SecurityMode.FULL) or contexa.bridge.ownership=CONTEXA_OWNED).
-import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RestController;
+          <pre><code class="language-java">// #ai cannot be used in the application's @PreAuthorize. Use it in the condition of a Contexa method policy on a @Protectable method.
+// Policy condition (entered in the policy center): #ai.hasActionIn('ALLOW', 'PENDING_ANALYSIS') and hasRole('ADMIN')
+import io.contexa.contexacommon.annotation.Protectable;
+import org.springframework.stereotype.Service;
 
-@RestController
-public class ReportController {
+@Service
+public class ReportService {
 
-    @GetMapping("/reports")
-    @PreAuthorize("#ai.hasActionIn('ALLOW', 'PENDING_ANALYSIS') and hasRole('ADMIN')")
+    @Protectable
     public String reports() {
         return "ok";
     }

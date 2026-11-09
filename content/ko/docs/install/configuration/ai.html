@@ -118,8 +118,8 @@ contexa:
           </figure>
           <ul>
             <li><strong>모델 이름이 연결되는 방법.</strong> 적은 이름이 목록의 어떤 모델의 이름(빈 이름 · 바인딩 키 · 모델 이름 · 별칭)과 같으면 그 모델을 씁니다.</li>
-            <li><strong>같은 이름이 없으면</strong> 기본 채팅 모델을 복사해 모델 이름만 바꿔 씁니다. 이 복사는 모델이 <code>mutate()</code>를 지원할 때만 됩니다. Spring AI 1.1.8에서는 OpenAI 채팅 모델만 지원하고, Anthropic · Ollama 채팅 모델은 지원하지 않습니다. 그런 모델을 층마다 바꾸려면 <a href="#bindings">바인딩</a>으로 이름을 붙입니다(Ollama는 <a href="#ollama-layer-models">아래 방법</a>).</li>
-            <li><strong>층 모델을 만들 수 없으면 기동이 멈춥니다.</strong> 잘못 적은 이름이 운영 중에 조용히 다른 모델로 바뀌지 않게 하기 위해서입니다. 이 검사는 기본 채팅 모델이 있을 때 합니다.</li>
+            <li><strong>같은 이름이 없으면</strong> 기본 채팅 모델을 복사해 모델 이름만 바꿔 씁니다. 이 복사는 OpenAI 채팅 모델(<code>mutate()</code>)과 Anthropic 채팅 모델(Contexa가 같은 클라이언트와 기본 옵션으로 다시 만듦)에서 됩니다. Ollama 채팅 모델은 복사할 수 없습니다. 그런 모델을 층마다 바꾸려면 <a href="#bindings">바인딩</a>으로 이름을 붙입니다(Ollama는 <a href="#ollama-layer-models">아래 방법</a>).</li>
+            <li><strong>층 모델을 만들 수 없어도 기동은 계속됩니다.</strong> 기동할 때 ERROR 로그 한 줄이 그 층 · 적어 둔 모델 · 대신 쓰는 모델(백업 모델, 없으면 기본 채팅 모델)을 알립니다. 이 로그가 나오면 그 이름을 <a href="#bindings">바인딩</a>의 별칭이나 모델 이름으로 붙이십시오. 이 검사는 기본 채팅 모델이 있을 때 합니다.</li>
             <li><strong>백업 모델</strong>은 층 모델을 적었을 때만 쓰이고, 기동 때 검사하지 않습니다. 호출할 때 백업도 만들 수 없으면 기본 채팅 모델을 씁니다.</li>
           </ul>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -243,7 +243,7 @@ contexa:
               <tr><td><code>contexa.llm.gate.enabled</code></td><td><code>true</code></td><td>모델 호출이 서버별 관문을 지나는지</td></tr>
               <tr><td><code>contexa.llm.gate.self-hosted-max-concurrent</code></td><td><code>2</code></td><td>자체 호스팅 서버가 한 번에 받는 호출 수. 서버가 동시에 처리하는 요청 수에 맞춥니다(Ollama: <code>OLLAMA_NUM_PARALLEL</code>). <code>0</code>: 제한 없음</td></tr>
               <tr><td><code>contexa.llm.gate.remote-max-concurrent</code></td><td><code>16</code></td><td>원격 공급자가 한 번에 받는 호출 수. <code>0</code>: 제한 없음</td></tr>
-              <tr><td><code>contexa.llm.gate.first-back-off-ms</code></td><td><code>2000</code></td><td>분당 한도 · 과부하 뒤 처음 쉬는 시간. 같은 응답이 이어지면 두 배씩, 이 값의 여섯 배까지 늘어납니다</td></tr>
+              <tr><td><code>contexa.llm.gate.first-back-off-ms</code></td><td><code>2000</code></td><td>분당 한도 · 과부하(429 · 503 · 529)나 다시 보낼 만한 호출 실패(502 · 504 · 연결 오류 등) 뒤 서버 관문이 처음 쉬는 시간. 같은 응답이 이어지면 두 배씩, 이 값의 여섯 배까지 늘어납니다</td></tr>
               <tr><td><code>contexa.llm.gate.servers.&lt;이름&gt;.base-url</code></td><td>없음</td><td>서버 하나의 주소(공급자 설정에 쓴 그대로)</td></tr>
               <tr><td><code>contexa.llm.gate.servers.&lt;이름&gt;.max-concurrent</code></td><td>없음</td><td>그 서버가 한 번에 받는 호출 수</td></tr>
               <tr><td><code>contexa.llm.gate.servers.&lt;이름&gt;.one-model-at-a-time</code></td><td>없음</td><td>채팅 모델과 임베딩 모델을 함께 올려 두는 서버는 <code>false</code>. 비우면 자체 호스팅 서버는 <code>true</code></td></tr>
@@ -280,15 +280,18 @@ contexa:
           </ol>
           <p>OpenAI 임베딩을 쓸 때 Contexa는 <code>spring.ai.openai.embedding.options.model</code>의 기본값을 <code>text-embedding-3-small</code>로, <code>dimensions</code>를 위에서 정한 차원으로 넣습니다. 그래서 기본으로는 1024차원 벡터를 받습니다.</p>
           <div class="callout callout-warning">
-            <strong>차원을 바꾸면 이미 저장된 벡터와 맞지 않습니다.</strong> 기동할 때 Contexa는 쓰는 임베딩 모델의 차원, 설정된 벡터 저장소 차원, 이미 있는 <code>vector_store</code> 표의 차원을 비교하고 하나라도 다르면 기동을 멈춥니다. 차원을 바꾸려면 표를 새로 만들거나 문서를 다시 임베딩하십시오. 맞으면 기동 로그에 <code>Embedding vector dimension verified: provider=…, model=…, dimension=…</code>이 남습니다.
+            <strong>차원을 바꾸면 이미 저장된 벡터와 맞지 않습니다.</strong> 기동할 때 Contexa는 쓰는 임베딩 모델의 차원, 설정된 벡터 저장소 차원, 이미 있는 벡터 표(기본 <code>ctxa_vector_store</code>)의 차원을 비교하고 하나라도 다르면 기동을 멈춥니다. 차원을 바꾸려면 표를 새로 만들거나 문서를 다시 임베딩하십시오. 맞으면 기동 로그에 <code>Embedding vector dimension verified: provider=…, model=…, dimension=…</code>이 남습니다.
           </div>
 
           <h2 id="vector-store">벡터 저장소(pgvector)</h2>
-          <p>벡터는 Spring AI pgvector 자동 구성이 만드는 벡터 저장소 빈에 저장됩니다(의존성은 <a href="../installation-guide.html">설치 준비</a>). 설정은 <code>contexa.vectorstore.pgvector.*</code>로 적습니다. 여기에 적은 값은 같은 이름의 Spring AI 키로도 넘어가므로(그 Spring AI 키를 따로 적지 않았을 때) 저장소가 같은 값을 씁니다. 반대로 Spring AI 키(<code>spring.ai.vectorstore.pgvector.*</code>)에만 적으면 Contexa는 그것을 예전 키로 보고 기동 때 ERROR 로그를 남기므로, Contexa 키로 적으십시오.</p>
+          <p>벡터는 Contexa가 Contexa 전용 DB(<code>contexaJdbcTemplate</code>)에 직접 만드는 벡터 저장소 빈(<code>contexaVectorStore</code>)에 저장됩니다. 앱의 <code>VectorStore</code> 빈은 쓰지 않고, Contexa는 앱 DB에 아무것도 만들지 않습니다(의존성은 <a href="../installation-guide.html">설치 준비</a>). 설정은 <code>contexa.vectorstore.pgvector.*</code>로 적습니다. Contexa 저장소는 이 키만 읽습니다. <code>spring.ai.vectorstore.pgvector.*</code>는 앱 자신의 Spring AI 저장소를 위한 키라 Contexa 저장소에는 닿지 않습니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>설정</th><th>기본값</th><th>뜻</th></tr></thead>
             <tbody>
               <tr><td><code>contexa.vectorstore.pgvector.dimensions</code></td><td><code>1024</code></td><td>벡터 차원(128~3072). 적지 않으면 <a href="#dimensions">위 순서</a>로 정해집니다</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.initialize-schema</code></td><td><code>true</code></td><td>첫 기동 때 Contexa 전용 DB에 vector 확장 · 표 · 색인을 만들지. 마이그레이션으로 스키마를 관리하면 <code>false</code></td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.schema-name</code></td><td><code>public</code></td><td>벡터 표를 둘 스키마</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.table-name</code></td><td><code>ctxa_vector_store</code></td><td>벡터 표 이름. 기동할 때 이미 있는 표의 차원을 이 표에서 읽어 비교합니다</td></tr>
               <tr><td><code>contexa.vectorstore.pgvector.index-type</code></td><td><code>HNSW</code></td><td>색인 종류(<code>HNSW</code> · <code>IVFFLAT</code>). Spring AI 저장소가 표를 만들 때 씁니다</td></tr>
               <tr><td><code>contexa.vectorstore.pgvector.distance-type</code></td><td><code>COSINE_DISTANCE</code></td><td>거리 계산(<code>COSINE_DISTANCE</code> · <code>EUCLIDEAN_DISTANCE</code> · <code>NEGATIVE_INNER_PRODUCT</code>)</td></tr>
               <tr><td><code>contexa.vectorstore.pgvector.batch-size</code></td><td><code>100</code></td><td>한 번에 저장하는 문서 수</td></tr>
@@ -300,7 +303,7 @@ contexa:
               <tr><td><code>contexa.vectorstore.pgvector.hnsw.ef-search</code></td><td><code>100</code></td><td>모든 유사도 검색에 거는 HNSW 검색 폭(<code>hnsw.ef_search</code>). 크면 정확하고 느려집니다</td></tr>
             </tbody>
           </table></div>
-          <p><strong>첫 기동 때 표 만들기.</strong> Contexa는 Spring AI의 <code>spring.ai.vectorstore.pgvector.initialize-schema</code> 기본값을 <code>true</code>로 넣습니다(Spring AI 자체 기본은 <code>false</code>). 그래서 첫 기동 때 vector 확장, <code>vector_store</code> 표, HNSW 색인, 사용자별 검색용 메타데이터 색인을 만듭니다. 스키마를 마이그레이션으로 관리하는 DB에서는 끄고 표와 두 색인을 직접 만드십시오.</p>
+          <p><strong>첫 기동 때 표 만들기.</strong> Contexa는 <code>contexa.vectorstore.pgvector.initialize-schema</code> 기본값을 <code>true</code>로 넣습니다(Spring AI 자체 기본은 <code>false</code>). 그래서 첫 기동 때 Contexa 전용 DB에 vector 확장, <code>ctxa_vector_store</code> 표, HNSW 색인, 사용자별 검색용 메타데이터 색인을 만듭니다. 스키마를 마이그레이션으로 관리하는 DB에서는 끄고 표와 두 색인을 직접 만드십시오.</p>
           <pre><code class="language-yaml"># 기존 설정에 더하는 부분
 contexa:
   vectorstore:
@@ -397,7 +400,6 @@ contexa:
               <tr><td>채팅 <code>mode: fixed</code>인데 <code>priority</code>에 공급자가 둘 이상이거나, 그 공급자 모델이 없음</td><td>공급자를 하나만 적고, 그 공급자의 Spring AI 스타터를 넣습니다</td></tr>
               <tr><td>임베딩 <code>mode: dynamic-priority</code></td><td><code>fixed</code>로 바꿉니다</td></tr>
               <tr><td>임베딩 <code>priority</code>에 공급자가 둘 이상</td><td>하나만 적습니다</td></tr>
-              <tr><td>층 모델(<code>layer1.model</code> · <code>layer2.model</code>)을 만들 수 없음</td><td>그 이름을 <a href="#bindings">바인딩</a>의 별칭이나 모델 이름으로 붙이거나, 기본 채팅 모델을 OpenAI로 둡니다</td></tr>
               <tr><td>모델 이름 · 별칭이 두 모델에 겹침</td><td>이름을 서로 다르게 적습니다</td></tr>
               <tr><td><code>spring-primary</code>인데 primary가 둘 이상이거나, 모델이 여럿인데 primary가 없음</td><td>하나만 <code>primary: true</code>로 둡니다</td></tr>
               <tr><td>모르는 임베딩 모델인데 차원 설정이 없음</td><td><code>contexa.llm.embedding.dimensions</code>와 <code>contexa.vectorstore.pgvector.dimensions</code>를 그 모델의 차원으로 적습니다</td></tr>

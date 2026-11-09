@@ -23,7 +23,7 @@
           <ol class="dg-msgs">
             <li class="dg-msg"><span class="dg-actor">Contexa(앱 안)</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-store">Contexa 전용 DB</span><span class="dg-msg-text">사용자 · 역할 · 정책, 판정 기록, 감사 기록, 설정. <code>contexa.datasource.*</code>(필수)</span></li>
             <li class="dg-msg"><span class="dg-actor">Contexa(앱 안)</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-model">채팅 · 임베딩 모델</span><span class="dg-msg-text">판정 질문과 벡터 만들기. 공급자 키는 <code>spring.ai.*</code>, Ollama는 <code>contexa.llm.chat.ollama.*</code>도 가능</span></li>
-            <li class="dg-msg"><span class="dg-actor dg-host">Spring AI PgVector 스타터</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-store">벡터 표(<code>vector_store</code>)</span><span class="dg-msg-text">과거 판정 기록을 벡터로 저장 · 검색. 앱의 기본 DB 연결을 씀</span></li>
+            <li class="dg-msg"><span class="dg-actor dg-host">Spring AI PgVector 스타터</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-store">벡터 표(<code>ctxa_vector_store</code>)</span><span class="dg-msg-text">과거 판정 기록을 벡터로 저장 · 검색. Contexa 전용 DB 연결(<code>contexaJdbcTemplate</code>)을 씀</span></li>
           </ol>
         </figure>
         <p>순서: <a href="#cli">CLI로 설치</a> 또는 <a href="#manual-install">직접 설치</a> → <a href="#legacy-integration">기존 로그인과 연결</a>(로그인을 앱이 맡을 때) → <a href="#verify">켜졌는지 확인</a>.</p>
@@ -115,9 +115,10 @@ contexa init</code></pre>
         <p>아래 다섯 단계를 차례로 합니다. 예시는 로컬 Ollama 기준이고, OpenAI · Anthropic은 3단계에 따로 있습니다.</p>
 
         <h3 id="step-dependencies">1단계 · 의존성 넣기</h3>
-        <p>스타터와 함께 채팅 공급자 스타터 하나 이상과 PgVector 스타터를 넣습니다. 스타터는 이 둘을 가져오지 않습니다.</p>
+        <p>스타터와 함께 Spring Security 스타터, 채팅 공급자 스타터 하나 이상, PgVector 스타터를 넣습니다. 스타터는 이 셋을 가져오지 않습니다.</p>
         <pre><code class="language-groovy">dependencies {
     implementation 'ai.ctxa:spring-boot-starter-contexa:0.1.1'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation platform('org.springframework.ai:spring-ai-bom:1.1.8')
     implementation 'org.springframework.ai:spring-ai-starter-model-ollama'          // 또는 -openai, -anthropic
     implementation 'org.springframework.ai:spring-ai-starter-vector-store-pgvector'
@@ -141,6 +142,10 @@ contexa init</code></pre>
     &lt;version&gt;0.1.1&lt;/version&gt;
   &lt;/dependency&gt;
   &lt;dependency&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-security&lt;/artifactId&gt;
+  &lt;/dependency&gt;
+  &lt;dependency&gt;
     &lt;groupId&gt;org.springframework.ai&lt;/groupId&gt;
     &lt;artifactId&gt;spring-ai-starter-model-ollama&lt;/artifactId&gt;
   &lt;/dependency&gt;
@@ -161,7 +166,7 @@ CREATE EXTENSION IF NOT EXISTS vector;</code></pre>
           <li><strong>표는 첫 기동 때 Contexa가 만듭니다.</strong> 앱이 기동할 때 Contexa가 표를 만들고 검증합니다. 그 스키마는 <code>vector</code> 확장 만들기로 시작하므로, 계정에 확장을 만들 권한이 없으면 위처럼 미리 만들어 두세요.</li>
           <li><strong>깨끗한 DB를 쓰세요.</strong> Contexa 표가 일부만 있는 DB면 아무것도 바꾸지 않고 기동이 멈춥니다.</li>
           <li><strong>앱 DB와 같은 주소는 기본으로 막힙니다.</strong> 같은 주소를 쓰려면 <code>contexa.datasource.isolation.allow-shared-application-datasource=true</code>와 <code>contexa.datasource.isolation.shared-application-datasource-risk-accepted=true</code>를 둘 다 켜야 하고, <code>prod</code> · <code>production</code> 프로필에서는 켜도 거부됩니다.</li>
-          <li><strong>벡터 표의 위치:</strong> 벡터 표(<code>vector_store</code>)는 Spring AI의 PgVector 스타터가 만들고, 앱의 기본 DB 연결을 씁니다. Contexa의 DB 연결(<code>contexaJdbcTemplate</code>)은 기본 후보가 아니기 때문입니다. 그러니 앱의 기본 DB에도 <code>vector</code> 확장이 있어야 합니다. Contexa는 첫 기동 때 그 확장과 표를 만들도록 기본값(<code>spring.ai.vectorstore.pgvector.initialize-schema=true</code>)을 둡니다.</li>
+          <li><strong>벡터 표의 위치:</strong> 벡터 표(<code>ctxa_vector_store</code>)는 Contexa가 Contexa 전용 DB(<code>contexaJdbcTemplate</code>)에 직접 만듭니다. Spring AI의 PgVector 스타터는 그 클래스를 가져오는 의존성일 뿐이고, 앱의 기본 DB 연결과 앱의 <code>VectorStore</code> 빈은 쓰이지 않습니다. 그러니 <code>vector</code> 확장은 Contexa 전용 DB에 있으면 됩니다. Contexa는 첫 기동 때 그 확장과 표를 만들도록 기본값(<code>contexa.vectorstore.pgvector.initialize-schema=true</code>)을 둡니다.</li>
           <li><strong>앱에 자기 DB 연결이 없다면:</strong> 스타터가 JPA를 함께 가져오므로 Spring Boot가 앱의 기본 DB 연결을 만들려고 합니다. Contexa가 로그인을 맡는 <code>FULL</code>이면 Contexa DB가 앱의 기본 DB 연결이 되므로 따로 둘 것이 없습니다. 로그인을 앱이 맡는다면 앱용 DB 주소(<code>spring.datasource.url</code>)를 따로 적으세요.</li>
         </ul>
 
@@ -258,7 +263,7 @@ public List&lt;Customer&gt; getCustomers() { ... }</code></pre>
         <h2 id="legacy-integration">기존 로그인과 연결하기(로그인을 앱이 맡을 때)</h2>
         <p>기본(<code>SANDBOX</code>, 인증 소유권 <code>HOST_OWNED</code>)에서 Contexa는 로그인 체인을 만들지 않습니다. 로그인 · 세션 · 쿠키 · 접근 규칙은 앱의 Spring Security가 그대로 맡고, Contexa는 앱의 로그인 결과를 읽기만 합니다(<a href="../reference/common/bridge.html">인증 브리지</a>). 그래도 판정은 앱 체인 바로 뒤에서 도는 필터로 모든 경로에서 집행하고, 관리 화면 <code>/contexa/admin/**</code>는 자기 체인과 Contexa 관리자 로그인으로 직접 지킵니다. 그래서 앱이 할 일은 아래 두 가지입니다.</p>
         <ol>
-          <li><strong>자기 <code>SecurityFilterChain</code>을 둡니다.</strong> 없으면 Spring Boot 기본 보안이 걸려 모든 요청에 로그인을 요구하고, Contexa가 기동 때 ERROR 로그로 알립니다.</li>
+          <li><strong>자기 <code>SecurityFilterChain</code>을 둡니다.</strong> 없으면 Spring Boot 기본 보안이 걸려 모든 요청에 로그인을 요구하고, Contexa가 기동 때 WARN 로그로 알립니다.</li>
           <li><strong>로그인한 사용자를 그 체인의 필터에서 <code>SecurityContext</code>에 인증된 <code>Authentication</code>으로 넣습니다.</strong> <code>@Protectable</code> 메서드는 이것이 없거나 익명이면 거부합니다. 세션에만 저장된 레거시 사용자 객체는 인증 증거가 되지 않습니다. 사용자를 MVC 인터셉터나 컨트롤러에서 늦게 넣으면 Contexa 필터가 보지 못하므로, 그런 요청은 <code>@Protectable</code> 메서드에서만 집행되고 WARN 로그가 한 번 나옵니다.</li>
         </ol>
         <pre><code class="language-java">@Configuration
@@ -291,9 +296,9 @@ public class LegacyApplication { }</code></pre>
           <tbody>
             <tr><td><code>[IamSeedData] OSS schema provenance verified. ...</code>(INFO)</td><td>Contexa DB의 표가 준비됐습니다.</td></tr>
             <tr><td><code>Skipping Contexa-owned authentication chain bootstrap in HOST_OWNED mode</code>(INFO)</td><td>로그인을 앱이 맡는 방식으로 켜졌습니다.</td></tr>
-            <tr><td><code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared ...</code>(ERROR)</td><td>앱의 보안 체인이 없습니다. <a href="#legacy-integration">위 1번</a>을 하세요.</td></tr>
+            <tr><td><code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared ...</code>(WARN)</td><td>앱의 보안 체인이 없습니다. <a href="#legacy-integration">위 1번</a>을 하세요.</td></tr>
             <tr><td><code>[Contexa] HOST_OWNED: the application sets the signed-in user after Spring Security's filters ...</code>(WARN, 그런 요청이 처음 왔을 때 한 번)</td><td>앱이 MVC 인터셉터나 컨트롤러에서 사용자를 넣고 있어, 그런 요청은 <code>@Protectable</code> 메서드에서만 집행됩니다. <a href="#legacy-integration">위 2번</a>을 앱 체인의 필터에서 하세요.</td></tr>
-            <tr><td><code>[Contexa] CONTEXA_OWNED: Contexa's security chain takes every request first, so the application's own chain(s) [...] are never reached ...</code>(ERROR)</td><td>로그인을 Contexa가 맡는데 앱이 선언한 체인이 있어, 그 체인에는 요청이 가지 않습니다. 앱 로그인을 지키려면 <code>HOST_OWNED</code>를 쓰고, 아니면 그 체인을 지우세요.</td></tr>
+            <tr><td><code>Contexa owns the sign-in of this application, but the application declares its own security chain(s) [...] ...</code>(기동 거부)</td><td>로그인을 Contexa가 맡는데 앱이 선언한 체인이 있어, 그 체인에는 요청이 가지 않으므로 기동하지 않습니다. 앱 로그인을 지키려면 <code>HOST_OWNED</code>를 쓰고, 아니면 그 체인을 지우세요.</td></tr>
             <tr><td><code>[Contexa] CONTEXA_OWNED: Contexa's sign-in looks users up in the application's [...] instead of Contexa's user store; ...</code>(WARN)</td><td>앱의 <code>UserDetailsService</code>가 Contexa 로그인을 대신 받으므로, Contexa가 만든 시드 관리자는 그 저장소에 계정이 있어야 로그인할 수 있습니다.</td></tr>
             <tr><td><code>[Contexa] A one-time-code factor is offered but no mail sender is configured (spring.mail.*) ...</code>(WARN)</td><td>일회용 코드를 보낼 수 없습니다. <code>spring.mail.*</code>을 설정하거나, 사용자는 패스키로만 확인합니다.</td></tr>
             <tr><td><code>[Contexa] contexa.infrastructure.mode is standalone: ...</code>(WARN)</td><td>학습 상태가 메모리에 있다는 정상 경고입니다.</td></tr>

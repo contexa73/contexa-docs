@@ -23,7 +23,7 @@
           <ol class="dg-msgs">
             <li class="dg-msg"><span class="dg-actor">Contexa (in your app)</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-store">Dedicated Contexa database</span><span class="dg-msg-text">Users, roles, policies, decision records, audit records, settings. <code>contexa.datasource.*</code> (required)</span></li>
             <li class="dg-msg"><span class="dg-actor">Contexa (in your app)</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-model">Chat and embedding models</span><span class="dg-msg-text">Decision questions and vectors. Provider keys under <code>spring.ai.*</code>; for Ollama, <code>contexa.llm.chat.ollama.*</code> also works</span></li>
-            <li class="dg-msg"><span class="dg-actor dg-host">Spring AI PgVector starter</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-store">Vector table (<code>vector_store</code>)</span><span class="dg-msg-text">Stores and searches past decision records as vectors. Uses your application's default database connection</span></li>
+            <li class="dg-msg"><span class="dg-actor dg-host">Spring AI PgVector starter</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-store">Vector table (<code>ctxa_vector_store</code>)</span><span class="dg-msg-text">Stores and searches past decision records as vectors. Uses Contexa's dedicated database connection (<code>contexaJdbcTemplate</code>)</span></li>
           </ol>
         </figure>
         <p>Order: <a href="#cli">install with the CLI</a> or <a href="#manual-install">install by hand</a> → <a href="#legacy-integration">connect your existing sign-in</a> (when your application owns sign-in) → <a href="#verify">check that it is on</a>.</p>
@@ -115,9 +115,10 @@ contexa init</code></pre>
         <p>Do the five steps below in order. The examples use a local Ollama; OpenAI and Anthropic are covered in step 3.</p>
 
         <h3 id="step-dependencies">Step 1 · Add the dependencies</h3>
-        <p>Add at least one chat provider starter and the PgVector starter next to the starter. The starter does not bring either of them.</p>
+        <p>Add the Spring Security starter, at least one chat provider starter and the PgVector starter next to the starter. The starter brings none of them.</p>
         <pre><code class="language-groovy">dependencies {
     implementation 'ai.ctxa:spring-boot-starter-contexa:0.1.1'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation platform('org.springframework.ai:spring-ai-bom:1.1.8')
     implementation 'org.springframework.ai:spring-ai-starter-model-ollama'          // or -openai, -anthropic
     implementation 'org.springframework.ai:spring-ai-starter-vector-store-pgvector'
@@ -141,6 +142,10 @@ contexa init</code></pre>
     &lt;version&gt;0.1.1&lt;/version&gt;
   &lt;/dependency&gt;
   &lt;dependency&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-security&lt;/artifactId&gt;
+  &lt;/dependency&gt;
+  &lt;dependency&gt;
     &lt;groupId&gt;org.springframework.ai&lt;/groupId&gt;
     &lt;artifactId&gt;spring-ai-starter-model-ollama&lt;/artifactId&gt;
   &lt;/dependency&gt;
@@ -161,7 +166,7 @@ CREATE EXTENSION IF NOT EXISTS vector;</code></pre>
           <li><strong>Contexa creates its tables on the first start.</strong> When your application starts, Contexa creates and verifies its tables. Its schema begins by creating the <code>vector</code> extension, so if the account cannot create extensions, create it beforehand as above.</li>
           <li><strong>Use a clean database.</strong> On a database where only some Contexa tables exist, the startup stops without changing anything.</li>
           <li><strong>Using the same address as your application database is blocked by default.</strong> To use the same address you must set both <code>contexa.datasource.isolation.allow-shared-application-datasource=true</code> and <code>contexa.datasource.isolation.shared-application-datasource-risk-accepted=true</code>, and it is refused anyway under the <code>prod</code> or <code>production</code> profile.</li>
-          <li><strong>Where the vector table lives:</strong> the vector table (<code>vector_store</code>) is created by Spring AI's PgVector starter, which uses your application's default database connection, because Contexa's connection (<code>contexaJdbcTemplate</code>) is not a default candidate. So your application's default database needs the <code>vector</code> extension too. Contexa sets a default (<code>spring.ai.vectorstore.pgvector.initialize-schema=true</code>) so that the first start creates that extension and the table.</li>
+          <li><strong>Where the vector table lives:</strong> Contexa creates the vector table (<code>ctxa_vector_store</code>) itself, in the dedicated Contexa database (<code>contexaJdbcTemplate</code>). Spring AI's PgVector starter is only the dependency that brings the classes; your application's default database connection and your application's <code>VectorStore</code> bean are not used. So the <code>vector</code> extension is needed in the dedicated Contexa database. Contexa sets a default (<code>contexa.vectorstore.pgvector.initialize-schema=true</code>) so that the first start creates that extension and the table.</li>
           <li><strong>If your application has no database connection of its own:</strong> the starter brings JPA, so Spring Boot tries to create your application's default database connection. With <code>FULL</code>, where Contexa owns sign-in, the Contexa database becomes your application's default connection and nothing else is needed. When your application owns sign-in, set a separate address for your application (<code>spring.datasource.url</code>).</li>
         </ul>
 
@@ -258,7 +263,7 @@ public List&lt;Customer&gt; getCustomers() { ... }</code></pre>
         <h2 id="legacy-integration">Connect your existing sign-in (when your application owns sign-in)</h2>
         <p>By default (<code>SANDBOX</code>, authentication ownership <code>HOST_OWNED</code>) Contexa builds no sign-in chain. Sign-in, sessions, cookies and access rules stay with your application's Spring Security, and Contexa only reads the result of your sign-in (<a href="../reference/common/bridge.html">the authentication bridge</a>). Contexa still enforces its decisions on every path, with filters that run right after your chain, and protects its admin console <code>/contexa/admin/**</code> itself with a chain of its own and Contexa's administrator sign-in. So your application must do these two things.</p>
         <ol>
-          <li><strong>Declare your own <code>SecurityFilterChain</code>.</strong> Without it Spring Boot's default security applies and every request asks for sign-in; Contexa reports this with an ERROR log at startup.</li>
+          <li><strong>Declare your own <code>SecurityFilterChain</code>.</strong> Without it Spring Boot's default security applies and every request asks for sign-in; Contexa reports this with a WARN log at startup.</li>
           <li><strong>Put the signed-in user into the <code>SecurityContext</code> as an authenticated <code>Authentication</code>, in a filter of that chain.</strong> <code>@Protectable</code> methods refuse calls without it or with an anonymous one. A legacy user object kept only in the session is not proof of authentication. When the user is set later (in an MVC interceptor or a controller), Contexa's filters do not see it, so decisions are enforced for those requests only at <code>@Protectable</code> methods, and a WARN says so once.</li>
         </ol>
         <pre><code class="language-java">@Configuration
@@ -291,9 +296,9 @@ public class LegacyApplication { }</code></pre>
           <tbody>
             <tr><td><code>[IamSeedData] OSS schema provenance verified. ...</code> (INFO)</td><td>The tables in the Contexa database are ready.</td></tr>
             <tr><td><code>Skipping Contexa-owned authentication chain bootstrap in HOST_OWNED mode</code> (INFO)</td><td>Contexa is on in the way where your application owns sign-in.</td></tr>
-            <tr><td><code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared ...</code> (ERROR)</td><td>Your application has no security chain. Do <a href="#legacy-integration">item 1 above</a>.</td></tr>
+            <tr><td><code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared ...</code> (WARN)</td><td>Your application has no security chain. Do <a href="#legacy-integration">item 1 above</a>.</td></tr>
             <tr><td><code>[Contexa] HOST_OWNED: the application sets the signed-in user after Spring Security's filters ...</code> (WARN, once, at the first such request)</td><td>Your application sets the user in an MVC interceptor or a controller, so those requests are enforced only at <code>@Protectable</code> methods. Do <a href="#legacy-integration">item 2 above</a> in a filter of your chain.</td></tr>
-            <tr><td><code>[Contexa] CONTEXA_OWNED: Contexa's security chain takes every request first, so the application's own chain(s) [...] are never reached ...</code> (ERROR)</td><td>Contexa owns sign-in, but your application declares chains of its own that no request reaches. Use <code>HOST_OWNED</code> to keep your sign-in, or remove those chains.</td></tr>
+            <tr><td><code>Contexa owns the sign-in of this application, but the application declares its own security chain(s) [...] ...</code> (start refused)</td><td>Contexa owns sign-in, but your application declares chains of its own that no request reaches, so the application does not start. Use <code>HOST_OWNED</code> to keep your sign-in, or remove those chains.</td></tr>
             <tr><td><code>[Contexa] CONTEXA_OWNED: Contexa's sign-in looks users up in the application's [...] instead of Contexa's user store; ...</code> (WARN)</td><td>Your application's <code>UserDetailsService</code> answers Contexa's sign-in, so Contexa's seeded administrator can sign in only if that store has the account.</td></tr>
             <tr><td><code>[Contexa] A one-time-code factor is offered but no mail sender is configured (spring.mail.*) ...</code> (WARN)</td><td>No one-time code can be delivered. Configure <code>spring.mail.*</code>, or users verify with a passkey only.</td></tr>
             <tr><td><code>[Contexa] contexa.infrastructure.mode is standalone: ...</code> (WARN)</td><td>An expected warning that learned state is kept in memory.</td></tr>

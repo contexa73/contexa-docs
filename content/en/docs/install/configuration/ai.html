@@ -118,8 +118,8 @@ contexa:
           </figure>
           <ul>
             <li><strong>How a model name is resolved.</strong> When the name equals a name of a listed model (bean name, binding key, model name or alias), that model is used.</li>
-            <li><strong>When no model has the name</strong>, the primary chat model is copied with only the model name changed. The copy works only for a model that supports <code>mutate()</code>. In Spring AI 1.1.8 only the OpenAI chat model does; the Anthropic and Ollama chat models do not. To use such models per layer, name them with a <a href="#bindings">binding</a> (for Ollama, <a href="#ollama-layer-models">see below</a>).</li>
-            <li><strong>Startup stops when a layer model cannot be made.</strong> This keeps a mistyped name from silently turning into another model in production. The check runs when there is a primary chat model.</li>
+            <li><strong>When no model has the name</strong>, the primary chat model is copied with only the model name changed. The copy works for the OpenAI chat model (<code>mutate()</code>) and for the Anthropic chat model (Contexa builds the copy again with the same client and default options). The Ollama chat model cannot be copied. To use such models per layer, name them with a <a href="#bindings">binding</a> (for Ollama, <a href="#ollama-layer-models">see below</a>).</li>
+            <li><strong>Startup goes on when a layer model cannot be made.</strong> At startup one ERROR line names the layer, the model that was set and the model that runs in its place (the backup model, else the primary chat model). When you see it, give that name to a model as a <a href="#bindings">binding</a> alias or model name. The check runs when there is a primary chat model.</li>
             <li><strong>A backup model</strong> is used only when the layer model is set, and it is not checked at startup. When the backup cannot be made at call time either, the primary chat model is used.</li>
           </ul>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -243,7 +243,7 @@ contexa:
               <tr><td><code>contexa.llm.gate.enabled</code></td><td><code>true</code></td><td>Whether model calls pass a gate per server</td></tr>
               <tr><td><code>contexa.llm.gate.self-hosted-max-concurrent</code></td><td><code>2</code></td><td>Calls at once on a self-hosted server. Match the requests the server runs in parallel (Ollama: <code>OLLAMA_NUM_PARALLEL</code>). <code>0</code>: no limit</td></tr>
               <tr><td><code>contexa.llm.gate.remote-max-concurrent</code></td><td><code>16</code></td><td>Calls at once on a remote provider. <code>0</code>: no limit</td></tr>
-              <tr><td><code>contexa.llm.gate.first-back-off-ms</code></td><td><code>2000</code></td><td>The first pause after a rate limit or an overload. It doubles while the server keeps answering so, up to six times this</td></tr>
+              <tr><td><code>contexa.llm.gate.first-back-off-ms</code></td><td><code>2000</code></td><td>The first pause of the server gate after a rate limit, an overload (429, 503, 529) or another failure worth retrying (502, 504, a connection error and so on). It doubles while the server keeps answering so, up to six times this</td></tr>
               <tr><td><code>contexa.llm.gate.servers.&lt;name&gt;.base-url</code></td><td>none</td><td>The address of one server, as the provider is configured with it</td></tr>
               <tr><td><code>contexa.llm.gate.servers.&lt;name&gt;.max-concurrent</code></td><td>none</td><td>Calls at once on that server</td></tr>
               <tr><td><code>contexa.llm.gate.servers.&lt;name&gt;.one-model-at-a-time</code></td><td>none</td><td><code>false</code> for a server that keeps the chat and the embedding model loaded together. Empty: <code>true</code> for a self-hosted server</td></tr>
@@ -280,15 +280,18 @@ contexa:
           </ol>
           <p>With OpenAI embeddings, Contexa sets the default of <code>spring.ai.openai.embedding.options.model</code> to <code>text-embedding-3-small</code> and of <code>dimensions</code> to the dimension decided above, so 1024-dimension vectors are requested by default.</p>
           <div class="callout callout-warning">
-            <strong>A changed dimension no longer fits the stored vectors.</strong> At startup Contexa compares the dimension of the embedding model in use, the configured vector store dimension and the dimension of an existing <code>vector_store</code> table, and stops when any differs. To change the dimension, create the table again or embed the documents again. When they match, the startup log shows <code>Embedding vector dimension verified: provider=…, model=…, dimension=…</code>.
+            <strong>A changed dimension no longer fits the stored vectors.</strong> At startup Contexa compares the dimension of the embedding model in use, the configured vector store dimension and the dimension of an existing vector table (<code>ctxa_vector_store</code> by default), and stops when any differs. To change the dimension, create the table again or embed the documents again. When they match, the startup log shows <code>Embedding vector dimension verified: provider=…, model=…, dimension=…</code>.
           </div>
 
           <h2 id="vector-store">Vector store (pgvector)</h2>
-          <p>Vectors are stored in the vector store bean the Spring AI pgvector auto-configuration creates (dependencies in <a href="../installation-guide.html">Installation Guide</a>). Write its settings as <code>contexa.vectorstore.pgvector.*</code>. A value set here is also given to the Spring AI key of the same name (when that Spring AI key is not set itself), so the store uses the same value. The other way round, a value set only under the Spring AI key (<code>spring.ai.vectorstore.pgvector.*</code>) is treated by Contexa as an old key and logs an ERROR at startup, so write the Contexa key.</p>
+          <p>Vectors are stored in the vector store bean (<code>contexaVectorStore</code>) that Contexa builds itself on the dedicated Contexa database (<code>contexaJdbcTemplate</code>). It does not use your application's <code>VectorStore</code> bean, and Contexa creates nothing in your application's database (dependencies in <a href="../installation-guide.html">Installation Guide</a>). Write its settings as <code>contexa.vectorstore.pgvector.*</code>. Contexa's store reads only these keys; <code>spring.ai.vectorstore.pgvector.*</code> belongs to your application's own Spring AI store and does not reach Contexa's.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
             <tbody>
               <tr><td><code>contexa.vectorstore.pgvector.dimensions</code></td><td><code>1024</code></td><td>Vector dimension (128 to 3072). When not set, decided by the <a href="#dimensions">steps above</a></td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.initialize-schema</code></td><td><code>true</code></td><td>Whether the first start creates the vector extension, table and indexes in the dedicated Contexa database. <code>false</code> when migrations manage the schema</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.schema-name</code></td><td><code>public</code></td><td>Schema that holds the vector table</td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.table-name</code></td><td><code>ctxa_vector_store</code></td><td>Name of the vector table. At start the dimension of an existing table is read from this table and compared</td></tr>
               <tr><td><code>contexa.vectorstore.pgvector.index-type</code></td><td><code>HNSW</code></td><td>Index type (<code>HNSW</code> or <code>IVFFLAT</code>), used by the Spring AI store when it creates the table</td></tr>
               <tr><td><code>contexa.vectorstore.pgvector.distance-type</code></td><td><code>COSINE_DISTANCE</code></td><td>Distance (<code>COSINE_DISTANCE</code>, <code>EUCLIDEAN_DISTANCE</code> or <code>NEGATIVE_INNER_PRODUCT</code>)</td></tr>
               <tr><td><code>contexa.vectorstore.pgvector.batch-size</code></td><td><code>100</code></td><td>Documents stored at once</td></tr>
@@ -300,7 +303,7 @@ contexa:
               <tr><td><code>contexa.vectorstore.pgvector.hnsw.ef-search</code></td><td><code>100</code></td><td>HNSW search breadth set on every similarity search (<code>hnsw.ef_search</code>). Larger is more exact and slower</td></tr>
             </tbody>
           </table></div>
-          <p><strong>Creating the table at first start.</strong> Contexa sets the default of Spring AI's <code>spring.ai.vectorstore.pgvector.initialize-schema</code> to <code>true</code> (Spring AI's own default is <code>false</code>). So the first start creates the vector extension, the <code>vector_store</code> table, its HNSW index and the metadata index for per-user searches. For a database whose schema is managed by migrations, turn it off and create the table and both indexes yourself.</p>
+          <p><strong>Creating the table at first start.</strong> Contexa sets the default of <code>contexa.vectorstore.pgvector.initialize-schema</code> to <code>true</code> (Spring AI's own default is <code>false</code>). So the first start creates, in the dedicated Contexa database, the vector extension, the <code>ctxa_vector_store</code> table, its HNSW index and the metadata index for per-user searches. For a database whose schema is managed by migrations, turn it off and create the table and both indexes yourself.</p>
           <pre><code class="language-yaml"># Added to your existing settings
 contexa:
   vectorstore:
@@ -397,7 +400,6 @@ contexa:
               <tr><td>Chat <code>mode: fixed</code> with more than one provider in <code>priority</code>, or no model of that provider</td><td>Name one provider and add its Spring AI starter</td></tr>
               <tr><td>Embedding <code>mode: dynamic-priority</code></td><td>Change it to <code>fixed</code></td></tr>
               <tr><td>More than one provider in the embedding <code>priority</code></td><td>Name one</td></tr>
-              <tr><td>A layer model (<code>layer1.model</code>, <code>layer2.model</code>) cannot be made</td><td>Give that name to a model as a <a href="#bindings">binding</a> alias or model name, or keep OpenAI as the primary chat model</td></tr>
               <tr><td>A model name or alias belongs to two models</td><td>Make the names different</td></tr>
               <tr><td><code>spring-primary</code> with more than one primary, or several models and no primary</td><td>Mark one with <code>primary: true</code></td></tr>
               <tr><td>An unknown embedding model with no dimension set</td><td>Set <code>contexa.llm.embedding.dimensions</code> and <code>contexa.vectorstore.pgvector.dimensions</code> to that model's dimension</td></tr>

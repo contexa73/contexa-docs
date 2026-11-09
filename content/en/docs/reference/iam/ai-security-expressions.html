@@ -16,7 +16,7 @@
           </div>
 
           <div class="callout callout-warning">
-            <strong>Using <code>#ai</code> in <code>@PreAuthorize</code> requires <code>CONTEXA_OWNED</code>.</strong> Contexa enables Spring method security and registers the expression handler that carries <code>#ai</code> for the whole application only when <code>contexa.bridge.ownership</code> is <code>CONTEXA_OWNED</code> (the default of <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>). Under the default <code>HOST_OWNED</code>, use them in the conditions of Contexa policies: <code>@Protectable</code> method policies and URL policies connected to your chain.
+            <strong><code>#ai</code> cannot be used in the application's <code>@PreAuthorize</code>.</strong> Contexa does not turn Spring method security on for the whole application and does not register the expression handler that carries <code>#ai</code> in it. Even under <code>CONTEXA_OWNED</code>, the application's <code>@PreAuthorize</code> and <code>@PostAuthorize</code> are evaluated by Spring Security's default handler (Contexa's handler is used only for Contexa's own classes). Use <code>#ai</code> in the conditions of Contexa policies: <code>@Protectable</code> method policies and URL policies (under <code>HOST_OWNED</code>, URL policies connected to your chain).
           </div>
 
           <h2 id="where">Where they can be used</h2>
@@ -25,7 +25,7 @@
             <tbody>
               <tr><td>Conditions of <code>@Protectable</code> method policies</td><td>Yes</td><td>Yes</td></tr>
               <tr><td>Conditions of URL policies</td><td>Yes (the Contexa chain connects URL policies)</td><td>Yes once you connect URL policies to your chain. At that step there is no delegation stamp yet, so agent expressions answer as for a person's request and <code>#ai</code> reads the person's decision, not the delegated agent's (<a href="dynamic-authorization.html#enable">Enabling URL access policies</a>)</td></tr>
-              <tr><td><code>@PreAuthorize</code>, <code>@PostAuthorize</code> and other Spring method security</td><td>Yes (unless your application declares its own <code>MethodSecurityExpressionHandler</code> bean)</td><td>No. The handler your method security uses has no <code>#ai</code></td></tr>
+              <tr><td><code>@PreAuthorize</code>, <code>@PostAuthorize</code> and other Spring method security</td><td>No. Your method security uses Spring Security's default handler; Contexa's handler is not exposed to the application</td><td>No. The handler your method security uses has no <code>#ai</code></td></tr>
               <tr><td><code>agentRequestConfirmed()</code></td><td>True for a request the accountable person confirmed</td><td>The same: true for a request the accountable person confirmed (the agent request gate runs after the application's chain)</td></tr>
               <tr><td><code>agentCallsInLastMinuteAtMost(n)</code></td><td>Compared with the calls the gate counted</td><td>The same</td></tr>
             </tbody>
@@ -70,7 +70,7 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Decision</th><th>Meaning</th><th>Lifetime</th><th>Expression that is true</th></tr></thead>
             <tbody>
-              <tr><td><code>ALLOW</code></td><td>Allowed</td><td>15 seconds</td><td><code>isAllowed()</code></td></tr>
+              <tr><td><code>ALLOW</code></td><td>Allowed</td><td>15 minutes</td><td><code>isAllowed()</code></td></tr>
               <tr><td><code>CHALLENGE</code></td><td>Step-up authentication (MFA) needed</td><td>30 minutes</td><td><code>needsChallenge()</code></td></tr>
               <tr><td><code>ESCALATE</code></td><td>Held for review (analysis not finished)</td><td>5 minutes; while unresolved it keeps reading as ESCALATE</td><td><code>needsEscalation()</code></td></tr>
               <tr><td><code>BLOCK</code></td><td>Blocked</td><td>Until released</td><td><code>isBlocked()</code></td></tr>
@@ -143,7 +143,7 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Goal</th><th>Condition</th><th>Keep in mind</th></tr></thead>
             <tbody>
-              <tr><td>Allow only on ALLOW (strict)</td><td><code>#ai.isAllowed()</code></td><td>Denies with no decision (a first request) and once an ALLOW is 15 seconds old. For things that cannot be undone</td></tr>
+              <tr><td>Allow only on ALLOW (strict)</td><td><code>#ai.isAllowed()</code></td><td>Denies with no decision (a first request) and once an ALLOW is 15 minutes old. For things that cannot be undone</td></tr>
               <tr><td>Stop only blocks (lenient)</td><td><code>!#ai.isBlocked()</code></td><td>No decision, CHALLENGE and ESCALATE pass. For screens whose first request must not be stopped</td></tr>
               <tr><td>Deny when there is no decision</td><td><code>#ai.hasActionOrDefault('BLOCK', 'ALLOW')</code></td><td>Takes "no decision" as BLOCK, so true only on ALLOW</td></tr>
               <tr><td>Pass when there is no decision</td><td><code>#ai.hasActionOrDefault('ALLOW', 'ALLOW')</code></td><td>Takes "no decision" as ALLOW</td></tr>
@@ -157,14 +157,15 @@
 
           <h2 id="with-permissions">With permissions and ownership</h2>
           <ul>
-            <li><code>hasPermission(...)</code> is used only in method policy conditions (and in <code>@PreAuthorize</code> under <code>CONTEXA_OWNED</code>). URL policies remove it.</li>
+            <li>Contexa's <code>hasPermission(...)</code> evaluator is used in method policy conditions. The application's <code>@PreAuthorize</code> has no Contexa handler. URL policies remove it.</li>
             <li>The built-in domains are <code>USER</code>, <code>ROLE</code>, <code>ROLE_HIERARCHY</code>, <code>GROUP</code> and <code>PERMISSION</code>. Other domains such as ORDER or DOCUMENT need a custom evaluator; without one, a three-argument <code>hasPermission</code> ends in an exception (<a href="permission-evaluators.html">Permission Evaluators</a>).</li>
             <li><code>hasIpAddress</code> and <code>httpMethod</code> work only in URL policies; the <code>ownerField</code> owner check only in method policies (<a href="protectable.html#owner-field">Owner check</a>).</li>
           </ul>
           <pre><code class="language-text">hasPermission(#userId, 'USER', 'READ') and #ai.isAllowed()
 hasPermission(#groupId, 'GROUP', 'UPDATE') and !#ai.isBlocked()</code></pre>
-          <pre><code class="language-java">// CONTEXA_OWNED only: #ai in a Spring method security expression
-@PreAuthorize("!#ai.isBlocked() and hasRole('ADMIN')")
+          <pre><code class="language-java">// #ai cannot be used in the application's @PreAuthorize. Use it in the condition of a Contexa method policy on a @Protectable method.
+// Policy condition (entered in the policy center): !#ai.isBlocked() and hasRole('ADMIN')
+@Protectable
 public void rotateSigningKeys() {
     ...
 }</code></pre>
