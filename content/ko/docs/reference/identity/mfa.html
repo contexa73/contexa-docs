@@ -128,7 +128,7 @@
           <h3 id="custom-login">직접 만든 1차 로그인 화면</h3>
           <ul>
             <li><code>formLogin(form -&gt; form.loginPage("/login"))</code>처럼 <code>loginPage</code>를 주면 Contexa는 로그인 화면을 만들지 않습니다. 앱이 그 화면을 만들고, 화면은 <code>POST /mfa/login</code>으로 보내야 합니다.</li>
-            <li>Contexa가 만든 화면을 쓰면서 주소만 바꾸려면 <code>defaultLoginUrl("/signin")</code>을 씁니다. 화면 주소와 처리 주소가 함께 바뀝니다.</li>
+            <li><code>defaultLoginUrl("/signin")</code>은 처리 주소만 바꿉니다. Contexa가 만든 화면은 <code>/mfa/login</code>에 그대로 있고 <code>POST /signin</code>으로 제출합니다.</li>
           </ul>
           <h3 id="custom-pages">직접 만든 MFA 화면의 규칙</h3>
           <p>모양(CSS · 배치 · 로고 · 문구)은 자유롭게 바꿀 수 있습니다. 다만 Contexa 스크립트가 아래 요소를 찾으므로 그대로 두어야 합니다.</p>
@@ -206,10 +206,16 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td>1차 로그인 뒤 MFA 필요</td><td><code>status</code>(<code>MFA_REQUIRED</code>), <code>message</code>, <code>mfaSessionId</code>, <code>nextStepUrl</code>, <code>progress</code>, <code>nextFactorType</code>, <code>nextStepId</code>. 요소를 골라야 할 때는 <code>status</code>가 <code>MFA_REQUIRED_SELECT_FACTOR</code>이고 <code>availableFactors</code>가 붙습니다</td></tr>
               <tr><td>MFA 완료</td><td><code>authenticated</code>(<code>true</code>), <code>status</code>(<code>MFA_COMPLETED</code>), <code>message</code>, <code>redirectUrl</code>, <code>stateType</code>. 토큰 상태면 토큰 칸이 더해지고, 패스키 등록을 안내할 때는 <code>nextAction</code>이 붙습니다</td></tr>
               <tr><td>1차 로그인 차단</td><td>403 <code>AUTHENTICATION_BLOCKED</code></td></tr>
-              <tr><td>1차 로그인 실패</td><td>401 <code>PRIMARY_AUTH_FAILED</code>(API). 브라우저는 <code>/login?error=primary_auth_failed</code>로 이동</td></tr>
+              <tr><td>1차 로그인 실패</td><td>401 <code>PRIMARY_AUTH_FAILED</code>(API). 브라우저는 그 흐름의 로그인 화면에 <code>?error=primary_auth_failed</code>를 붙인 주소로 이동합니다(기본 <code>/mfa/login?error=primary_auth_failed</code>, 접두사가 있으면 그 아래). 1차 로그인에 <code>failureUrl</code>을 주었으면 그 주소로 이동합니다</td></tr>
               <tr><td>요소 확인 실패</td><td>401 <code>MFA_FACTOR_VERIFICATION_FAILED</code>: <code>timestamp</code>, <code>status</code>, <code>error</code>, <code>message</code>, <code>path</code> + <code>mfaSessionId</code>, <code>failedFactor</code>, <code>attemptsMade</code>, <code>maxAttempts</code>, <code>currentState</code></td></tr>
+              <tr><td>제한 시간이나 시도 한도를 넘긴 뒤 요소 제출</td><td>403 <code>MFA_SESSION_EXPIRED</code> · <code>MFA_RETRY_LIMIT_EXCEEDED</code>: <code>message</code>, <code>mfaSessionId</code>, <code>currentState</code>, <code>redirectUrl</code>(그 흐름의 로그인 화면). 로그인은 끝났고 1차 로그인부터 다시 합니다</td></tr>
+              <tr><td>요소를 받지 않는 상태에서 요소 제출</td><td>400 <code>MFA_INVALID_STATE</code></td></tr>
+              <tr><td>제출한 요소를 처리할 필터가 구성되지 않음</td><td>500 <code>MFA_FACTOR_MISCONFIGURED</code></td></tr>
+              <tr><td>다른 MFA 흐름의 주소로 보낸 요청</td><td>400 <code>MFA_FLOW_MISMATCH</code>: <code>flowInProgress</code>, <code>flowOfTheAddress</code>. 진행 중인 로그인은 건드리지 않으며 자기 주소에서 계속됩니다</td></tr>
+              <tr><td>같은 MFA 세션의 다른 요청을 처리하는 중</td><td>429 <code>MFA_BUSY_RETRY</code>, <code>Retry-After</code> 헤더와 <code>retryAfterMs</code>. 그 시간 뒤에 요청을 다시 보냅니다</td></tr>
             </tbody>
           </table></div>
+          <p>완료 응답의 <code>redirectUrl</code>은 브라우저가 로그인으로 보내지기 전에 요청했던 페이지입니다(같은 사이트 안의 경로와 쿼리). 그런 페이지가 없으면 1차 로그인의 <code>defaultSuccessUrl</code>, 그것도 없으면 <code>contexa.auth.urls.mfa.success</code>입니다. <code>defaultSuccessUrl(url, true)</code>면 항상 <code>url</code>입니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>엔드포인트</th><th>하는 일</th></tr></thead>
             <tbody>
@@ -350,7 +356,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
             <thead><tr><th>설정</th><th>기본값</th><th>뜻 · 언제 바꾸나</th></tr></thead>
             <tbody>
               <tr><td><code>contexa.auth.mfa.session-timeout-ms</code></td><td><code>600000</code></td><td>MFA 세션 유지 시간(ms). 요소를 마치는 데 시간이 더 필요할 때</td></tr>
-              <tr><td><code>contexa.auth.mfa.challenge-timeout-ms</code></td><td><code>300000</code></td><td>요소 하나의 확인 제한 시간(ms). 응답의 만료 시각에 쓰입니다</td></tr>
+              <tr><td><code>contexa.auth.mfa.challenge-timeout-ms</code></td><td><code>300000</code></td><td>요소 하나의 확인 제한 시간(ms). 응답의 만료 시각에 쓰이고, 이 시간이 지난 뒤 제출한 요소는 403 <code>MFA_SESSION_EXPIRED</code>로 거부됩니다</td></tr>
               <tr><td><code>contexa.auth.mfa.max-retry-attempts</code></td><td><code>5</code></td><td>요소 확인 시도 한도. 실패 응답의 <code>maxAttempts</code></td></tr>
               <tr><td><code>contexa.auth.mfa.minimum-delay-ms</code></td><td><code>500</code></td><td>로그인 실패 응답의 최소 지연(ms)</td></tr>
               <tr><td><code>contexa.identity.mfa.enabled</code></td><td><code>true</code></td><td>끄면 MFA 정책 자동 구성이 꺼집니다</td></tr>

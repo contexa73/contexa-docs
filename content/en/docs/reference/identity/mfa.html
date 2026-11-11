@@ -128,7 +128,7 @@
           <h3 id="custom-login">Your own primary login page</h3>
           <ul>
             <li>With <code>loginPage</code>, as in <code>formLogin(form -&gt; form.loginPage("/login"))</code>, Contexa does not generate a login page. The application makes that page, and the page posts to <code>POST /mfa/login</code>.</li>
-            <li>To keep Contexa's page and change only its address, use <code>defaultLoginUrl("/signin")</code>. The page address and the processing path change together.</li>
+            <li><code>defaultLoginUrl("/signin")</code> changes the processing path only: Contexa's page stays at <code>/mfa/login</code> and posts to <code>POST /signin</code>.</li>
           </ul>
           <h3 id="custom-pages">Rules for your own MFA pages</h3>
           <p>The look (CSS, layout, logo, wording) can change freely. Contexa's scripts look for the elements below, so keep them.</p>
@@ -206,10 +206,16 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td>MFA needed after the primary login</td><td><code>status</code> (<code>MFA_REQUIRED</code>), <code>message</code>, <code>mfaSessionId</code>, <code>nextStepUrl</code>, <code>progress</code>, <code>nextFactorType</code>, <code>nextStepId</code>. When a factor must be chosen, <code>status</code> is <code>MFA_REQUIRED_SELECT_FACTOR</code> with <code>availableFactors</code></td></tr>
               <tr><td>MFA complete</td><td><code>authenticated</code> (<code>true</code>), <code>status</code> (<code>MFA_COMPLETED</code>), <code>message</code>, <code>redirectUrl</code>, <code>stateType</code>. In the token state the token fields are added, and <code>nextAction</code> appears when passkey registration is suggested</td></tr>
               <tr><td>Primary login blocked</td><td>403 <code>AUTHENTICATION_BLOCKED</code></td></tr>
-              <tr><td>Primary login failed</td><td>401 <code>PRIMARY_AUTH_FAILED</code> (API). A browser moves to <code>/login?error=primary_auth_failed</code></td></tr>
+              <tr><td>Primary login failed</td><td>401 <code>PRIMARY_AUTH_FAILED</code> (API). A browser moves to the flow's login page with <code>?error=primary_auth_failed</code> (by default <code>/mfa/login?error=primary_auth_failed</code>, under the flow's prefix), or to the <code>failureUrl</code> of the primary login when one is set</td></tr>
               <tr><td>Factor check failed</td><td>401 <code>MFA_FACTOR_VERIFICATION_FAILED</code>: <code>timestamp</code>, <code>status</code>, <code>error</code>, <code>message</code>, <code>path</code> + <code>mfaSessionId</code>, <code>failedFactor</code>, <code>attemptsMade</code>, <code>maxAttempts</code>, <code>currentState</code></td></tr>
+              <tr><td>Factor submitted after its time limit or after the attempt limit</td><td>403 <code>MFA_SESSION_EXPIRED</code> · <code>MFA_RETRY_LIMIT_EXCEEDED</code>: <code>message</code>, <code>mfaSessionId</code>, <code>currentState</code>, <code>redirectUrl</code> (the flow's login page). The login has ended and starts again from the primary login</td></tr>
+              <tr><td>Factor submitted in a state that does not take it</td><td>400 <code>MFA_INVALID_STATE</code></td></tr>
+              <tr><td>No filter is configured for the submitted factor</td><td>500 <code>MFA_FACTOR_MISCONFIGURED</code></td></tr>
+              <tr><td>Request sent to the address of another MFA flow</td><td>400 <code>MFA_FLOW_MISMATCH</code>: <code>flowInProgress</code>, <code>flowOfTheAddress</code>. The login in progress is not touched and goes on at its own addresses</td></tr>
+              <tr><td>Another request of the same MFA session is being handled</td><td>429 <code>MFA_BUSY_RETRY</code> with a <code>Retry-After</code> header and <code>retryAfterMs</code>. Send the request again after that time</td></tr>
             </tbody>
           </table></div>
+          <p>The <code>redirectUrl</code> of the completion response is the page the browser asked for before it was sent to log in (its path and query, on the same site). Without such a page it is the <code>defaultSuccessUrl</code> of the primary login, and without that <code>contexa.auth.urls.mfa.success</code>. With <code>defaultSuccessUrl(url, true)</code> it is always <code>url</code>.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Endpoint</th><th>What it does</th></tr></thead>
             <tbody>
@@ -350,7 +356,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning · when to change</th></tr></thead>
             <tbody>
               <tr><td><code>contexa.auth.mfa.session-timeout-ms</code></td><td><code>600000</code></td><td>How long an MFA session lasts (ms). When users need more time to finish the factors</td></tr>
-              <tr><td><code>contexa.auth.mfa.challenge-timeout-ms</code></td><td><code>300000</code></td><td>Time limit of one factor's check (ms). Used for the expiry time in responses</td></tr>
+              <tr><td><code>contexa.auth.mfa.challenge-timeout-ms</code></td><td><code>300000</code></td><td>Time limit of one factor's check (ms). Used for the expiry time in responses, and a factor submitted after it is refused with 403 <code>MFA_SESSION_EXPIRED</code></td></tr>
               <tr><td><code>contexa.auth.mfa.max-retry-attempts</code></td><td><code>5</code></td><td>Attempt limit of a factor check. The <code>maxAttempts</code> of failure responses</td></tr>
               <tr><td><code>contexa.auth.mfa.minimum-delay-ms</code></td><td><code>500</code></td><td>Minimum delay of login failure responses (ms)</td></tr>
               <tr><td><code>contexa.identity.mfa.enabled</code></td><td><code>true</code></td><td>Off turns off the MFA policy auto-configuration</td></tr>
