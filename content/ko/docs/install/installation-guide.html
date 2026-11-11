@@ -246,7 +246,7 @@ public List&lt;Customer&gt; getCustomers() { ... }</code></pre>
         <figure class="dg">
           <figcaption class="dg-caption"><strong><code>@Protectable</code> 메서드 호출 한 번</strong>기본은 응답이 나간 뒤 판정하고, 그 판정은 다음 호출부터 적용됩니다.</figcaption>
           <ol class="dg-flow">
-            <li class="dg-node dg-request"><span class="dg-node-tag">요청</span><span class="dg-node-title">로그인한 사용자가 메서드를 부름</span><span class="dg-node-desc">인증(<code>Authentication</code>)이 없거나 익명이면 거부</span></li>
+            <li class="dg-node dg-request"><span class="dg-node-tag">요청</span><span class="dg-node-title">로그인한 사용자가 메서드를 부름</span><span class="dg-node-desc">인증(<code>Authentication</code>)이 없거나 익명이면 거부(<code>SHADOW</code> · <code>ENFORCE</code>에서만)</span></li>
             <li class="dg-node"><span class="dg-node-tag">실행 전</span><span class="dg-node-title">정책 검사와 저장된 판정 확인</span><span class="dg-node-desc">이 사용자에게 BLOCK · CHALLENGE · ESCALATE가 저장돼 있으면 실행하지 않고 거부(집행 모드 <code>ENFORCE</code>일 때)</span></li>
             <li class="dg-node dg-host"><span class="dg-node-tag">앱</span><span class="dg-node-title">메서드 실행, 응답</span></li>
             <li class="dg-node"><span class="dg-node-tag">실행 뒤</span><span class="dg-node-title">분석 사건 발행</span><span class="dg-node-desc">응답을 기다리게 하지 않습니다.</span></li>
@@ -264,7 +264,7 @@ public List&lt;Customer&gt; getCustomers() { ... }</code></pre>
         <p>기본(<code>SANDBOX</code>, 인증 소유권 <code>HOST_OWNED</code>)에서 Contexa는 로그인 체인을 만들지 않습니다. 로그인 · 세션 · 쿠키 · 접근 규칙은 앱의 Spring Security가 그대로 맡고, Contexa는 앱의 로그인 결과를 읽기만 합니다(<a href="../reference/common/bridge.html">인증 브리지</a>). 그래도 판정은 앱 체인 바로 뒤에서 도는 필터로 모든 경로에서 집행하고, 관리 화면 <code>/contexa/admin/**</code>는 자기 체인과 Contexa 관리자 로그인으로 직접 지킵니다. 그래서 앱이 할 일은 아래 두 가지입니다.</p>
         <ol>
           <li><strong>자기 <code>SecurityFilterChain</code>을 둡니다.</strong> 없으면 Spring Boot 기본 보안이 걸려 모든 요청에 로그인을 요구하고, Contexa가 기동 때 WARN 로그로 알립니다.</li>
-          <li><strong>로그인한 사용자를 그 체인의 필터에서 <code>SecurityContext</code>에 인증된 <code>Authentication</code>으로 넣습니다.</strong> <code>@Protectable</code> 메서드는 이것이 없거나 익명이면 거부합니다. 세션에만 저장된 레거시 사용자 객체는 인증 증거가 되지 않습니다. 사용자를 MVC 인터셉터나 컨트롤러에서 늦게 넣으면 Contexa 필터가 보지 못하므로, 그런 요청은 <code>@Protectable</code> 메서드에서만 집행되고 WARN 로그가 한 번 나옵니다.</li>
+          <li><strong>로그인한 사용자를 그 체인의 필터에서 <code>SecurityContext</code>에 인증된 <code>Authentication</code>으로 넣습니다.</strong> <code>@Protectable</code> 메서드는 이것이 없거나 익명이면 <code>SHADOW</code> · <code>ENFORCE</code> 모드(기본은 <code>ENFORCE</code>)에서 거부합니다. <code>DISABLED</code> · <code>OBSERVE</code>에서는 거부하지 않고, 메서드 정책이 보안 컨텍스트에 담긴 것을 보고 판단합니다. 세션에만 저장된 레거시 사용자 객체는 인증 증거가 되지 않습니다. 사용자를 MVC 인터셉터나 컨트롤러에서 늦게 넣으면 Contexa 필터가 보지 못하므로, 그런 요청은 <code>@Protectable</code> 메서드에서만 집행되고 WARN 로그가 한 번 나옵니다.</li>
         </ol>
         <pre><code class="language-java">@Configuration
 public class HostSecurityConfig {
@@ -299,7 +299,7 @@ public class LegacyApplication { }</code></pre>
             <tr><td><code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared ...</code>(WARN)</td><td>앱의 보안 체인이 없습니다. <a href="#legacy-integration">위 1번</a>을 하세요.</td></tr>
             <tr><td><code>[Contexa] HOST_OWNED: the application sets the signed-in user after Spring Security's filters ...</code>(WARN, 그런 요청이 처음 왔을 때 한 번)</td><td>앱이 MVC 인터셉터나 컨트롤러에서 사용자를 넣고 있어, 그런 요청은 <code>@Protectable</code> 메서드에서만 집행됩니다. <a href="#legacy-integration">위 2번</a>을 앱 체인의 필터에서 하세요.</td></tr>
             <tr><td><code>Contexa owns the sign-in of this application, but the application declares its own security chain(s) [...] ...</code>(기동 거부)</td><td>로그인을 Contexa가 맡는데 앱이 선언한 체인이 있어, 그 체인에는 요청이 가지 않으므로 기동하지 않습니다. 앱 로그인을 지키려면 <code>HOST_OWNED</code>를 쓰고, 아니면 그 체인을 지우세요.</td></tr>
-            <tr><td><code>[Contexa] CONTEXA_OWNED: Contexa's sign-in looks users up in the application's [...] instead of Contexa's user store; ...</code>(WARN)</td><td>앱의 <code>UserDetailsService</code>가 Contexa 로그인을 대신 받으므로, Contexa가 만든 시드 관리자는 그 저장소에 계정이 있어야 로그인할 수 있습니다.</td></tr>
+            <tr><td><code>[Contexa] CONTEXA_OWNED: the application declares the user store(s) [...], which Contexa's sign-in does not read: ...</code>(WARN)</td><td>앱이 <code>UserDetailsService</code>를 하나 이상 선언하고 있습니다(메시지에 빈 이름이 나옵니다). Contexa 로그인은 몇 개를 두었든 그것을 읽지 않습니다. 시드 관리자를 포함한 Contexa 계정은 Contexa 자신의 사용자 저장소에서 로그인하고, 앱의 사용자는 Contexa 로그인으로 로그인되지 않습니다. Contexa 화면에 로그인해야 하는 사용자는 Contexa의 계정이어야 합니다.</td></tr>
             <tr><td><code>[Contexa] A one-time-code factor is offered but no mail sender is configured (spring.mail.*) ...</code>(WARN)</td><td>일회용 코드를 보낼 수 없습니다. <code>spring.mail.*</code>을 설정하거나, 사용자는 패스키로만 확인합니다.</td></tr>
             <tr><td><code>[Contexa] contexa.infrastructure.mode is standalone: ...</code>(WARN)</td><td>학습 상태가 메모리에 있다는 정상 경고입니다.</td></tr>
             <tr><td><code>[ContexaCapability] &lt;기능&gt; status=... required=...</code>(ERROR)</td><td>필요한 부품이 빠졌습니다. 아래 기능 진단을 보세요.</td></tr>
