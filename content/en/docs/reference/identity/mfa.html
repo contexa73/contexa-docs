@@ -129,6 +129,8 @@
           <ul>
             <li>With <code>loginPage</code>, as in <code>formLogin(form -&gt; form.loginPage("/login"))</code>, Contexa does not generate a login page. The application makes that page, and the page posts to <code>POST /mfa/login</code>.</li>
             <li><code>defaultLoginUrl("/signin")</code> changes the processing path only: Contexa's page stays at <code>/mfa/login</code> and posts to <code>POST /signin</code>.</li>
+            <li>With <code>restLogin</code>, Contexa always generates the primary login page at <code>contexa.auth.urls.primary.form-login-page</code> (by default <code>/mfa/login</code>, under the flow's prefix), and the page posts JSON to the REST processing path.</li>
+            <li><code>rawFormLogin(...)</code> cannot be used in the MFA primary <code>formLogin</code>: the primary login is handled by Contexa's own filter, and startup stops. Use the form options instead.</li>
           </ul>
           <h3 id="custom-pages">Rules for your own MFA pages</h3>
           <p>The look (CSS, layout, logo, wording) can change freely. Contexa's scripts look for the elements below, so keep them.</p>
@@ -142,8 +144,16 @@
               <tr><td>Hidden input names</td><td><code>_csrf</code> (CSRF token), <code>mfaSessionId</code> (MFA session). Pages Contexa generates add both automatically</td></tr>
               <tr><td>Form ids</td><td><code>ottRequestForm</code>, <code>verifyForm</code>, <code>resendForm</code></td></tr>
               <tr><td>Button ids</td><td><code>loginButton</code>, <code>sendCodeButton</code>, <code>verifyButton</code>, <code>resendButton</code>, <code>authButton</code></td></tr>
+              <tr><td>Factor selection page</td><td>There is no page script for it. The page loads the SDK and calls <code>mfa.selectFactor('MFA_OTT')</code> or <code>mfa.selectFactor('MFA_PASSKEY')</code> (the names in <code>availableFactors</code> of the primary login's answer), then moves to the answer's <code>nextStepUrl</code>; with <code>autoRedirect</code> on, the SDK moves by itself</td></tr>
             </tbody>
           </table></div>
+          <ul>
+            <li><strong>The account name and the MFA session.</strong> The SDK keeps both in <code>sessionStorage</code> (<code>mfaUsername</code>, <code>mfaSessionId</code>) after the primary login through it. The code request form posts <code>username</code> and <code>_csrf</code>; a page fills <code>username</code> from <code>sessionStorage.getItem('mfaUsername')</code>. Pages Contexa generates fill both themselves.</li>
+            <li>Without the page configuration element, a page script shows in its message area that the element is missing and stops (its buttons do nothing).</li>
+            <li>The code entry script counts only a wrong code as an attempt (<code>MFA_FACTOR_VERIFICATION_FAILED</code>). At the attempt limit it disables the form; while another request of the same session is handled (429 <code>MFA_BUSY_RETRY</code>) it asks to try again; when the login has ended (time limit, session gone) it says so and moves to the answer's <code>redirectUrl</code>.</li>
+            <li>When a passkey cannot be used, the passkey script moves to <code>data-failure-url</code> with <code>?error=passkey_failed</code>; the browser's own message goes to the console only.</li>
+            <li>When the password has expired, the login script moves to the answer's <code>nextStepUrl</code> (the password change page).</li>
+          </ul>
 
           <h2 id="policy">The policy that decides whether MFA is needed</h2>
           <p>When the primary login succeeds, the MFA policy provider decides. The default provider is the AI adaptive provider (<code>AIAdaptiveMfaPolicyProvider</code>), and among the registered <strong>evaluators</strong> the one with the highest priority that covers this user decides.</p>
@@ -186,12 +196,12 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
 
           <h2 id="step-up">Extra verification after login</h2>
           <p>When the next request of a logged-in user finds a stored CHALLENGE decision, the request-time challenge filter starts MFA again (step-up). A browser goes to the <code>/contexa/zero-trust/challenge-required?mfaUrl=…</code> notice page, and an API gets 401 <code>MFA_CHALLENGE_REQUIRED</code> (body <code>mfaUrl</code>, <code>challengeNoticeUrl</code>). When this MFA succeeds, the decision changes to ALLOW. The full responses are in <a href="zero-trust-filters.html#responses">Request-Time Enforcement</a>.</p>
-          <p>On a page that loads the JavaScript SDK, the SDK looks at <code>fetch</code> responses and handles them as follows.</p>
+          <p>On a page that loads the JavaScript SDK, the SDK looks at <code>fetch</code> and <code>XMLHttpRequest</code> responses and handles them as follows.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Response</th><th>What the SDK does</th></tr></thead>
             <tbody>
               <tr><td>401 <code>MFA_CHALLENGE_REQUIRED</code> · <code>BLOCK_MFA_REQUIRED</code></td><td>Moves to <code>challengeNoticeUrl</code> (or <code>mfaUrl</code>)</td></tr>
-              <tr><td>Any other 401 (expired access token)</td><td>Refreshes the token once and sends the same request again</td></tr>
+              <tr><td>Any other 401 (expired access token)</td><td><code>fetch</code>: refreshes the token once and sends the same request again. <code>XMLHttpRequest</code>: a request sent when the token is known to have run out waits for the refresh first; a request already answered 401 keeps that answer (it cannot be sent again behind the application's back), and the token is refreshed so that the next request goes through</td></tr>
               <tr><td>403 <code>ACCOUNT_BLOCKED</code> · <code>BLOCK_MFA_FAILED</code></td><td>Moves to <code>redirectUrl</code> (blocked page)</td></tr>
               <tr><td>423 <code>SECURITY_REVIEW_IN_PROGRESS</code></td><td>Moves to <code>redirectUrl</code> (analysis pending page)</td></tr>
               <tr><td>403 with the response-cut marker</td><td>Moves to the blocked page</td></tr>
@@ -204,7 +214,8 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
             <thead><tr><th>When</th><th>Response body (JSON)</th></tr></thead>
             <tbody>
               <tr><td>MFA needed after the primary login</td><td><code>status</code> (<code>MFA_REQUIRED</code>), <code>message</code>, <code>mfaSessionId</code>, <code>nextStepUrl</code>, <code>progress</code>, <code>nextFactorType</code>, <code>nextStepId</code>. When a factor must be chosen, <code>status</code> is <code>MFA_REQUIRED_SELECT_FACTOR</code> with <code>availableFactors</code></td></tr>
-              <tr><td>MFA complete</td><td><code>authenticated</code> (<code>true</code>), <code>status</code> (<code>MFA_COMPLETED</code>), <code>message</code>, <code>redirectUrl</code>, <code>stateType</code>. In the token state the token fields are added, and <code>nextAction</code> appears when passkey registration is suggested</td></tr>
+              <tr><td>MFA complete</td><td><code>authenticated</code> (<code>true</code>), <code>status</code> (<code>MFA_COMPLETED</code>), <code>message</code>, <code>redirectUrl</code>, <code>stateType</code>. In the token state the token fields are added, and <code>nextAction</code> appears when passkey registration is suggested. When the chain uses CSRF, the token the login changed it to is added too: <code>csrfToken</code>, <code>csrfHeader</code>, <code>csrfParameter</code> (the SDK takes it over for its next requests)</td></tr>
+              <tr><td>The password is right and has expired</td><td>A browser moves to <code>/contexa/password-change?expired=true</code>. A script gets 401 <code>CREDENTIALS_EXPIRED</code> with <code>nextStepUrl</code> (that page). The account name is kept in the session for that page, not put in the address</td></tr>
               <tr><td>Primary login blocked</td><td>403 <code>AUTHENTICATION_BLOCKED</code></td></tr>
               <tr><td>Primary login failed</td><td>401 <code>PRIMARY_AUTH_FAILED</code> (API). A browser moves to the flow's login page with <code>?error=primary_auth_failed</code> (by default <code>/mfa/login?error=primary_auth_failed</code>, under the flow's prefix), or to the <code>failureUrl</code> of the primary login when one is set</td></tr>
               <tr><td>Factor check failed</td><td>401 <code>MFA_FACTOR_VERIFICATION_FAILED</code>: <code>timestamp</code>, <code>status</code>, <code>error</code>, <code>message</code>, <code>path</code> + <code>mfaSessionId</code>, <code>failedFactor</code>, <code>attemptsMade</code>, <code>maxAttempts</code>, <code>currentState</code></td></tr>
@@ -215,11 +226,11 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td>Another request of the same MFA session is being handled</td><td>429 <code>MFA_BUSY_RETRY</code> with a <code>Retry-After</code> header and <code>retryAfterMs</code>. Send the request again after that time</td></tr>
             </tbody>
           </table></div>
-          <p>The <code>redirectUrl</code> of the completion response is the page the browser asked for before it was sent to log in (its path and query, on the same site). Without such a page it is the <code>defaultSuccessUrl</code> of the primary login, and without that <code>contexa.auth.urls.mfa.success</code>. With <code>defaultSuccessUrl(url, true)</code> it is always <code>url</code>.</p>
+          <p>The <code>redirectUrl</code> of the completion response is the page the browser asked for before it was sent to log in (its path and query, on the same site). Without such a page it is the <code>defaultSuccessUrl</code> of the primary login, <code>formLogin</code> and <code>restLogin</code> alike (default <code>contexa.auth.urls.primary.login-success</code>, <code>/</code>). With <code>defaultSuccessUrl(url, true)</code> it is always <code>url</code>.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Endpoint</th><th>What it does</th></tr></thead>
             <tbody>
-              <tr><td><code>GET /api/mfa/config</code></td><td>MFA addresses and settings (used by the SDK)</td></tr>
+              <tr><td><code>GET /api/mfa/config</code></td><td>MFA addresses and settings (used by the SDK), with the context path. They are the addresses of the MFA flow of the login in progress; without one, of the flow named by <code>?flow=</code> (its name such as <code>admin</code>, or its type name such as <code>mfa_admin</code>); without that, of the only MFA flow when there is one; otherwise the default addresses</td></tr>
               <tr><td><code>POST /mfa/select-factor</code></td><td>Selects a factor</td></tr>
               <tr><td><code>POST /mfa/ott/generate-code</code></td><td>Issues a one-time code</td></tr>
               <tr><td><code>POST /login/mfa-ott</code></td><td>Checks a one-time code</td></tr>
@@ -230,11 +241,12 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
           </table></div>
           <ul>
             <li>The setting <code>contexa.auth.urls.mfa.status</code> (default <code>/mfa/status</code>) has an address but nothing handles it.</li>
-            <li>With <code>urlPrefix</code>, the SDK is told <code>/prefix/api/mfa/config</code>, but nothing receives that address; only <code>/api/mfa/config</code> answers.</li>
+            <li>With <code>urlPrefix</code>, the SDK is told <code>/prefix/api/mfa/config</code>, but nothing receives that address; only <code>/api/mfa/config</code> answers. While a login is in progress it answers with that login's flow. Before the primary login, a page of one of several MFA flows names its flow: <code>await mfa.init({ configUrl: '/api/mfa/config?flow=admin' })</code> before its first call.</li>
+            <li>With the token state and a prefix, the token refresh address is under the prefix too (<code>/prefix/api/refresh</code>), and the configuration names it as <code>api.refresh</code>.</li>
           </ul>
 
           <h2 id="multiple">Several MFA flows</h2>
-          <p>Each MFA flow can have its own chain, factors and addresses. <code>urlPrefix("/admin")</code> puts the prefix in front of every MFA address of that flow and makes the chain scope <code>/admin/**</code> (<code>securityMatcher</code> set automatically). The prefix may contain only letters, digits, <code>/</code>, <code>_</code> and <code>-</code>.</p>
+          <p>Each MFA flow can have its own chain, factors and addresses. <code>urlPrefix("/admin")</code> puts the prefix in front of every MFA address of that flow and makes the chain scope <code>/admin/**</code> (<code>securityMatcher</code> set automatically). The prefix is one or more <code>/segment</code> parts of letters, digits, <code>_</code> and <code>-</code>, such as <code>/admin</code> or <code>/admin/area</code>; a trailing or double slash, or <code>/</code> alone, stops startup. A login of another flow in the same state counts under the prefix only when it meets this flow (<a href="dsl.html#shared-login">Flows in the same state share the login</a>).</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Default address</th><th><code>urlPrefix("/admin")</code></th></tr></thead>
             <tbody>
@@ -275,8 +287,8 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
             <tbody>
-              <tr><td><code>primaryAuthentication(...)</code></td><td>Primary login (<code>formLogin</code> or <code>restLogin</code>)</td></tr>
-              <tr><td><code>ott(...)</code> · <code>passkey(...)</code></td><td>Second factors</td></tr>
+              <tr><td><code>primaryAuthentication(...)</code></td><td>Primary login (<code>formLogin</code> or <code>restLogin</code>; one of them, both stop startup)</td></tr>
+              <tr><td><code>ott(...)</code> · <code>passkey(...)</code></td><td>Second factors, each at most once per flow (a second <code>ott(...)</code> stops startup)</td></tr>
               <tr><td><code>requiredFactors(int)</code></td><td>How many factors must be completed</td></tr>
               <tr><td><code>name(String)</code> · <code>urlPrefix(String)</code> · <code>order(int)</code></td><td>Flow name · address prefix and scope · order (default 200)</td></tr>
               <tr><td><code>policyProvider(...)</code></td><td>This flow's MFA policy provider</td></tr>
@@ -303,7 +315,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td><code>autoInit</code></td><td><code>true</code></td><td>Restores the stored MFA progress and tokens</td></tr>
               <tr><td><code>autoRedirect</code></td><td><code>true</code></td><td>Moves between pages automatically for each MFA step</td></tr>
               <tr><td><code>tokenPersistence</code></td><td><code>'memory'</code></td><td>Token storage: <code>'memory'</code> (gone on reload), <code>'sessionStorage'</code>, <code>'localStorage'</code></td></tr>
-              <tr><td><code>attachAuthorization</code></td><td>none</td><td>When on, the SDK attaches the access token to requests</td></tr>
+              <tr><td><code>attachAuthorization</code></td><td>none</td><td>When on, the SDK attaches the access token to <code>fetch</code> and <code>XMLHttpRequest</code> requests</td></tr>
             </tbody>
           </table></div>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -318,12 +330,18 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td><code>persistTokensToStorage(result)</code></td><td>Stores tokens as <code>tokenPersistence</code> says</td></tr>
               <tr><td><code>logout()</code></td><td>Logs out and clears the client state and tokens</td></tr>
               <tr><td><code>clearClientState()</code> · <code>clearPersistedTokens()</code></td><td>Clears the in-memory state or the stored tokens without a server call</td></tr>
-              <tr><td><code>apiClient.login(username, password)</code> · <code>apiClient.loginForm(username, password)</code></td><td>Primary login (REST JSON or form)</td></tr>
+              <tr><td><code>apiClient.login(username, password)</code> · <code>apiClient.loginForm(username, password)</code></td><td>Primary login (REST JSON or form). When the answer is already complete (the policy asked for no factor), its tokens are kept as after a factor</td></tr>
+              <tr><td><code>apiClient.init(options)</code> · <code>apiClient.selectFactor(factorType)</code> · <code>apiClient.verifyOtt(code, username)</code> · <code>apiClient.logout()</code></td><td>The server calls behind <code>init</code>, <code>selectFactor</code>, <code>verifyOtt</code> and <code>logout</code>, without the client's state handling and page moves</td></tr>
               <tr><td><code>apiClient.requestOttCode()</code></td><td>Gets a one-time code again</td></tr>
               <tr><td><code>apiClient.getPasskeyOptions()</code> · <code>apiClient.verifyPasskey(credential)</code></td><td>Gets passkey options · checks the passkey</td></tr>
               <tr><td><code>window.ContexaMFA.refreshTokens()</code></td><td>Refreshes the access token</td></tr>
             </tbody>
           </table></div>
+          <ul>
+            <li>A login changes the CSRF token. When a login answer carries the new one (<code>csrfToken</code>, <code>csrfHeader</code>), the SDK writes it to the page's <code>_csrf</code> · <code>_csrf_header</code> meta tags, so a page that stays open after a script login can still log out and refresh tokens.</li>
+            <li>With the <code>HEADER</code> or <code>HEADER_COOKIE</code> transport the page's own requests carry the access token only with <code>attachAuthorization: true</code>; the example above leaves it off, so its requests after the login are anonymous. A page navigation never carries it.</li>
+            <li>The SDK's console messages hide token fields.</li>
+          </ul>
 
           <h2 id="states">Progress states</h2>
           <p>A state machine (<code>MfaState</code>) manages MFA progress. Its end states are:</p>
@@ -347,6 +365,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
           <h2 id="results">Changing result handling</h2>
           <ul>
             <li><code>.mfa()</code>'s <code>mfaSuccessHandler</code> and <code>mfaFailureHandler</code> accept a value but are not used.</li>
+            <li>A <code>successHandler</code> or <code>failureHandler</code> given to the primary login or to a factor is called for that step of that flow (<a href="authentication.html#handlers">Success and failure handling</a>).</li>
             <li>The handlers that write MFA responses (<code>PrimaryAuthenticationSuccessHandler</code>, <code>MfaFactorProcessingSuccessHandler</code>, <code>UnifiedAuthenticationFailureHandler</code>) are classes that cannot be extended (final).</li>
             <li>So MFA results are handled in the page or the SDK, from the JSON and redirects in <a href="#responses">Response formats</a>. For single login flows see <a href="authentication.html#handlers">Success and failure handling</a>.</li>
           </ul>
@@ -357,7 +376,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
             <tbody>
               <tr><td><code>contexa.auth.mfa.session-timeout-ms</code></td><td><code>600000</code></td><td>How long an MFA session lasts (ms). When users need more time to finish the factors</td></tr>
               <tr><td><code>contexa.auth.mfa.challenge-timeout-ms</code></td><td><code>300000</code></td><td>Time limit of one factor's check (ms). Used for the expiry time in responses, and a factor submitted after it is refused with 403 <code>MFA_SESSION_EXPIRED</code></td></tr>
-              <tr><td><code>contexa.auth.mfa.max-retry-attempts</code></td><td><code>5</code></td><td>Attempt limit of a factor check. The <code>maxAttempts</code> of failure responses</td></tr>
+              <tr><td><code>contexa.auth.mfa.max-retry-attempts</code></td><td><code>5</code></td><td>Attempt limit of a factor check. The <code>maxAttempts</code> of failure responses. Below 1 stops startup</td></tr>
               <tr><td><code>contexa.auth.mfa.minimum-delay-ms</code></td><td><code>500</code></td><td>Minimum delay of login failure responses (ms)</td></tr>
               <tr><td><code>contexa.identity.mfa.enabled</code></td><td><code>true</code></td><td>Off turns off the MFA policy auto-configuration</td></tr>
             </tbody>

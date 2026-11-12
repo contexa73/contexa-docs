@@ -164,11 +164,20 @@ public class LoginFlowsConfig {
         .session(Customizer.withDefaults())
         .build();</code></pre>
           <p>체인의 실제 순서 값은 <code>Ordered.HIGHEST_PRECEDENCE</code> + 흐름의 order라서, 앱이 따로 등록한 <code>SecurityFilterChain</code> 빈보다 앞에 섭니다.</p>
+          <h3 id="shared-login">같은 상태의 흐름은 로그인을 함께 씁니다</h3>
+          <p>세션 흐름 둘은 같은 HTTP 세션에 로그인을 두고, 토큰 흐름 둘은 같은 토큰을 받아들입니다. 그래서 한쪽에서 한 로그인은 다른 쪽 경로에서도 로그인입니다. 상태가 다른 흐름끼리는 서로의 로그인을 보지 않습니다.</p>
+          <p><strong>MFA 흐름은 자기 요구를 채운 로그인만 받습니다.</strong> MFA 흐름의 경로에서 로그인으로 인정되는 것은 다음과 같습니다.</p>
+          <ul>
+            <li>그 MFA 흐름이 끝낸 로그인(정책이 요소를 요구하지 않은 경우도 포함)</li>
+            <li>어느 흐름에서든 1차 로그인에 더해 이 흐름이 요구하는 수(<code>requiredFactors</code>) 이상의 요소로 끝낸 로그인</li>
+            <li>이 흐름이 요소 하나를 요구할 때, 그 뒤 Zero Trust 챌린지를 통과한 로그인</li>
+          </ul>
+          <p>그 밖의 로그인(form 흐름의 비밀번호 로그인, 요소를 더 적게 요구하는 MFA 흐름의 로그인 등)은 그 요청에서 로그인이 아닙니다. 흐름의 규칙은 그 요청을 익명으로 보고 흐름의 로그인으로 보냅니다. 아무것도 저장하지 않으므로 세션이나 토큰의 로그인은 다른 흐름에서 그대로 쓰입니다. 흐름의 로그인 주소와 MFA 단계 주소는 어떤 로그인으로도 열립니다. 앱이 직접 더한 로그인 방법(예: global의 <code>httpBasic()</code>)의 로그인에는 이 확인이 읽는 정보가 없어 그대로 둡니다.</p>
 
           <h2 id="global">모든 체인에 같은 설정(global)</h2>
           <p><code>global(http -&gt; ...)</code> 람다는 모든 흐름의 <code>HttpSecurity</code>에 가장 먼저 적용됩니다. 흐름별 설정은 그다음에 적용되므로 같은 항목이면 흐름 설정이 이깁니다. 예를 들어 흐름 옵션의 <code>disableCsrf()</code>는 그 체인의 CSRF만 끕니다. global 람다가 예외를 던지면 그 흐름에 경고 로그만 남기고 계속 진행합니다.</p>
           <p><strong>global에 쓴 <code>formLogin(...)</code>은 폼 흐름과 MFA 흐름에서 쓰이지 않습니다.</strong> 폼 흐름은 그것을 자기 폼 로그인으로 바꾸고, MFA 흐름은 그것을 제거합니다. 그대로 두면 요소 확인 없이 비밀번호만으로 로그인되기 때문입니다. 두 경우 모두 시작할 때 경고 로그를 남깁니다. 그 설정은 흐름에 씁니다: <code>form(form -&gt; form.loginPage(...))</code>, MFA는 <code>primaryAuthentication(primary -&gt; primary.formLogin(form -&gt; form.loginPage(...)))</code>.</p>
-          <p>global에 쓴 그 밖의 로그인 방법(예: <code>httpBasic()</code>)은 MFA 체인을 포함한 모든 체인에 더해집니다. 그러면 Basic 자격 증명을 실은 요청은 요소 확인 없이 비밀번호만으로 로그인됩니다. 그런 방법은 global이 아니라 필요한 흐름의 <code>rawHttp</code>에 씁니다.</p>
+          <p>global에 쓴 그 밖의 로그인 방법(예: <code>httpBasic()</code>, <code>webAuthn(...)</code>, <code>oneTimeTokenLogin(...)</code>)은 MFA 체인을 포함한 모든 체인에 더해집니다. 그러면 Basic 자격 증명을 실은 요청은 비밀번호만으로, 패스키를 등록해 둔 사람은 Spring의 <code>/login/webauthn</code>으로, 둘 다 요소 확인 없이 로그인됩니다. 이 로그인은 Spring 자체의 것이라 토큰 상태 체인에서는 토큰을 받지 못하고, 다음 요청은 다시 익명입니다. 그런 방법은 global이 아니라 필요한 단일 흐름의 <code>rawHttp</code>에 씁니다. MFA 흐름에서는 어디에 쓰든 요소 없이 로그인시킵니다.</p>
           <h3 id="csrf">CSRF</h3>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>흐름</th><th>CSRF</th></tr></thead>
@@ -176,7 +185,7 @@ public class LoginFlowsConfig {
               <tr><td>세션 상태</td><td>Spring 기본대로 켜져 있습니다.</td></tr>
               <tr><td>토큰 상태, <code>HEADER</code> · <code>HEADER_COOKIE</code> 전송</td><td>인가 서버를 포함하는 서버 모드(기본 <code>COMBINED</code>)에서는 <code>contexa.auth.oauth2-csrf</code>(기본 <code>false</code>)를 따르므로 기본으로 꺼집니다.</td></tr>
               <tr><td>토큰 상태, <code>COOKIE</code> 전송</td><td>늘 켜집니다. 브라우저가 쿠키를 자동으로 보내기 때문입니다. <code>contexa.auth.oauth2-csrf: false</code>를 적으면 시작이 실패합니다.</td></tr>
-              <tr><td>흐름 옵션 <code>disableCsrf()</code></td><td>그 체인만 끕니다.</td></tr>
+              <tr><td>흐름 옵션 <code>disableCsrf()</code></td><td>그 체인만 끕니다. 토큰 상태의 <code>COOKIE</code> 전송에서는 효과가 없고 CSRF가 켜진 채입니다.</td></tr>
             </tbody>
           </table></div>
           <p>쿠키로 CSRF 토큰을 주고받으려면 Spring 설정을 global에 둡니다.</p>
@@ -204,7 +213,7 @@ public class LoginFlowsConfig {
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>옵션</th><th>쓸 수 있는 방법</th><th>언제 쓰나</th></tr></thead>
             <tbody>
-              <tr><td><code>order(int)</code></td><td>폼 · REST · 일회용 코드 · 패스키</td><td>체인을 비교하는 순서를 바꿀 때. MFA는 <code>.mfa(mfa -&gt; mfa.order(...))</code></td></tr>
+              <tr><td><code>order(int)</code></td><td>폼 · REST · 일회용 코드 · 패스키</td><td>체인을 비교하는 순서를 바꿀 때. 준 값은 <code>order(0)</code>을 포함해 그대로 쓰입니다. MFA는 <code>.mfa(mfa -&gt; mfa.order(...))</code>: 1차 로그인이나 요소 안에 쓴 <code>order</code>는 효과가 없고 기동 시 경고를 남깁니다</td></tr>
               <tr><td><code>loginProcessingUrl(String)</code></td><td>폼 · REST · 일회용 코드 · 패스키</td><td>로그인 POST 주소를 바꿀 때. 단일 패스키 흐름에는 반영되지 않습니다</td></tr>
               <tr><td><code>defaultSuccessUrl(...)</code> · <code>failureUrl(String)</code></td><td>폼 · REST</td><td>로그인 성공 · 실패 뒤 이동할 주소</td></tr>
               <tr><td><code>successHandler(...)</code> · <code>failureHandler(...)</code></td><td>폼 · REST · 일회용 코드</td><td>응답을 직접 만들 때(<a href="authentication.html#handlers">성공 · 실패 처리</a>). 패스키 흐름에서는 쓰이지 않습니다</td></tr>
@@ -212,12 +221,13 @@ public class LoginFlowsConfig {
               <tr><td><code>disableCsrf()</code></td><td>모든 방법</td><td>그 체인만 CSRF를 끌 때</td></tr>
               <tr><td><code>cors(...)</code> · <code>headers(...)</code> · <code>sessionManagement(...)</code> · <code>logout(...)</code></td><td>모든 방법</td><td>그 체인의 Spring 설정을 바꿀 때. 세션 상태가 <code>sessionManagement</code>와 <code>logout</code>을 어떻게 쓰는지는 <a href="state-management.html#session">세션 상태</a>에 있습니다</td></tr>
               <tr><td><code>authorizeStaticPermitAll(...)</code></td><td>모든 방법</td><td>정적 경로를 인증 없이 열 때. global에 쓴 <code>anyRequest()</code> 규칙과 함께 쓸 수 있고, 그때는 정적 경로가 그 규칙보다 먼저 열립니다</td></tr>
-              <tr><td><code>rawHttp(...)</code></td><td>모든 방법</td><td>위에 없는 Spring 설정, 체인 범위(<code>securityMatcher</code>). 여러 번 부르면 차례로 모두 적용됩니다</td></tr>
+              <tr><td><code>rawHttp(...)</code></td><td>모든 방법</td><td>위에 없는 Spring 설정, 체인 범위(<code>securityMatcher</code>). 여러 번 부르면 차례로 모두 적용됩니다. 인가 규칙(<code>authorizeHttpRequests</code>)은 여기에 쓸 수 없고 global에 씁니다. 쓰면 그렇게 안내하는 메시지와 함께 기동이 멈춥니다. 여기에 쓴 <code>formLogin(...)</code>은 form 흐름 자체의 form 설정을 바꿉니다</td></tr>
               <tr><td><code>asep(...)</code></td><td>모든 방법</td><td>현재 버전에서는 효과가 없습니다(<a href="asep.html">ASEP</a>)</td></tr>
             </tbody>
           </table></div>
           <ul>
             <li>옵션은 global 다음에 적용됩니다. <code>rawHttp</code> 람다는 <code>SafeHttpCustomizer</code>라서 검사 예외를 던질 수 있습니다.</li>
+            <li>같은 자리에 더한 필터(예: <code>addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class)</code>)는 더한 순서대로 실행됩니다. global은 Contexa 자체 필터보다 먼저, <code>rawHttp</code>는 그 뒤에 적용되므로, <code>rawHttp</code>로 그 자리에 더한 필터는 Contexa가 만드는 화면(MFA 화면, REST 로그인 화면)에 답하는 필터 뒤에 서고 그 요청을 보지 못합니다. 그 요청도 보려면 global에 더하거나 더 앞의 필터 앞에 더합니다.</li>
             <li><code>.mfa()</code>에는 이 옵션들이 없습니다. MFA 흐름의 범위는 <code>urlPrefix</code>로 정하고, <code>rawHttp</code>는 1차 로그인 · 2차 요소의 옵션 안에서 씁니다.</li>
             <li>global은 옵션 없이 <code>HttpSecurity</code> 람다를 바로 받습니다.</li>
           </ul>
@@ -227,6 +237,23 @@ public class LoginFlowsConfig {
                 .rawHttp(http -&gt; http.headers(headers -&gt; headers.frameOptions(frame -&gt; frame.sameOrigin()))))
         .session(Customizer.withDefaults())
         .build();</code></pre>
+          <h3 id="refused">기동을 멈추는 구성</h3>
+          <p>아래 구성은 보호되지 않는 경로, 성공할 수 없는 로그인, 조용히 버려지는 설정을 남기므로 기동을 멈춥니다. 메시지는 옵션이나 설정의 이름과 고칠 내용을 말합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>구성</th><th>대신 할 일</th></tr></thead>
+            <tbody>
+              <tr><td>하나 이상의 <code>/segment</code>로 이루어지지 않은 <code>urlPrefix</code>(끝 슬래시, 연속 슬래시, <code>/</code>만, 그 밖의 문자)</td><td><code>/admin</code>이나 <code>/admin/area</code>처럼 씁니다</td></tr>
+              <tr><td><code>/</code>로 시작하지 않는 주소 옵션: <code>loginProcessingUrl</code>, 일회용 코드 옵션 <code>tokenGeneratingUrl</code> · <code>defaultSubmitPageUrl</code>, 패스키 옵션 <code>assertionOptionsEndpoint</code></td><td><code>/</code>로 시작합니다</td></tr>
+              <tr><td><code>formLogin</code>과 <code>restLogin</code>을 둘 다 쓴 MFA 1차 로그인</td><td>하나만 씁니다. 다른 하나는 MFA 흐름을 하나 더 둡니다</td></tr>
+              <tr><td>한 MFA 흐름에 같은 요소를 두 번(<code>ott(...)</code> 두 번)</td><td>요소마다 한 번씩 씁니다</td></tr>
+              <tr><td>MFA 1차 <code>formLogin</code> 안의 <code>rawFormLogin(...)</code></td><td>form 옵션(<code>loginPage</code>, <code>failureUrl</code> 등)을 씁니다. MFA 1차 로그인은 Spring의 form 로그인이 아니라 Contexa 자체 필터가 처리합니다</td></tr>
+              <tr><td>흐름 <code>rawHttp</code> 안의 <code>authorizeHttpRequests(...)</code></td><td>규칙을 global에 씁니다</td></tr>
+              <tr><td>서로 다른 요청을 받는 주소 설정 둘(<code>contexa.auth.urls.*</code>, <code>contexa.auth.internal.refresh-uri</code>)이 같은 값. 화면과 그 화면이 보내는 form 은 주소를 함께 쓸 수 있습니다(로그인 화면과 그 처리 경로)</td><td>저마다 다른 주소를 줍니다</td></tr>
+              <tr><td><code>contexa.auth.oauth2-server-mode: RESOURCE_SERVER</code> 에서 토큰 상태 흐름</td><td>로그인을 받는 앱은 <code>COMBINED</code>(또는 <code>AUTHORIZATION_SERVER</code>)를 쓰거나, 그 흐름에 세션 상태를 줍니다(<a href="state-management.html#oauth2">토큰 상태</a>)</td></tr>
+              <tr><td>1보다 작은 <code>contexa.auth.mfa.max-retry-attempts</code></td><td>1 이상</td></tr>
+              <tr><td>0 이하의 <code>contexa.auth.access-token-validity</code> 또는 <code>refresh-token-validity</code></td><td>양수 기간</td></tr>
+            </tbody>
+          </table></div>
 
           <h2 id="example">완전한 예제</h2>
           <p>API 클라이언트는 토큰, 관리자는 <code>/admin</code> 아래 MFA, 그 밖의 사용자는 폼 로그인을 쓰는 구성입니다.</p>
@@ -270,6 +297,7 @@ spring:
     host: smtp.example.com   # MFA의 일회용 코드를 메일로 보냄
     port: 587</code></pre>
           <ul>
+            <li>MFA 흐름과 form 흐름은 둘 다 세션에 로그인을 둡니다(<a href="#shared-login">같은 상태의 흐름은 로그인을 함께 씁니다</a>). <code>/login</code>에서 비밀번호로 로그인한 사람은 <code>/admin</code> 아래에서는 로그인한 것이 아니며, 그곳 요청은 <code>/admin/mfa/login</code>으로 갑니다. MFA 흐름을 끝낸 사람은 form 흐름의 화면에서도 로그인 상태입니다.</li>
             <li>토큰 서명 키스토어를 지정하지 않으면 시작할 때마다 바뀌는 임시 키를 씁니다. 운영 설정은 <a href="state-management.html#oauth2-required">토큰 상태에 꼭 필요한 설정</a>을 보세요.</li>
             <li>메일 발송 설정이 없으면 일회용 코드 발급이 실패합니다(<a href="authentication.html#ott">일회용 코드</a>).</li>
           </ul>

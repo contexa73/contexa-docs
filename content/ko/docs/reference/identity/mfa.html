@@ -129,6 +129,8 @@
           <ul>
             <li><code>formLogin(form -&gt; form.loginPage("/login"))</code>처럼 <code>loginPage</code>를 주면 Contexa는 로그인 화면을 만들지 않습니다. 앱이 그 화면을 만들고, 화면은 <code>POST /mfa/login</code>으로 보내야 합니다.</li>
             <li><code>defaultLoginUrl("/signin")</code>은 처리 주소만 바꿉니다. Contexa가 만든 화면은 <code>/mfa/login</code>에 그대로 있고 <code>POST /signin</code>으로 제출합니다.</li>
+            <li><code>restLogin</code>이면 Contexa가 1차 로그인 화면을 언제나 <code>contexa.auth.urls.primary.form-login-page</code>(기본 <code>/mfa/login</code>, 흐름의 접두사 아래)에 만들고, 그 화면은 REST 처리 주소로 JSON을 보냅니다.</li>
+            <li>MFA 1차 <code>formLogin</code>에는 <code>rawFormLogin(...)</code>을 쓸 수 없습니다. 1차 로그인은 Contexa 자체 필터가 처리하므로 기동이 멈춥니다. form 옵션을 씁니다.</li>
           </ul>
           <h3 id="custom-pages">직접 만든 MFA 화면의 규칙</h3>
           <p>모양(CSS · 배치 · 로고 · 문구)은 자유롭게 바꿀 수 있습니다. 다만 Contexa 스크립트가 아래 요소를 찾으므로 그대로 두어야 합니다.</p>
@@ -142,8 +144,16 @@
               <tr><td>숨은 입력 이름</td><td><code>_csrf</code>(CSRF 토큰), <code>mfaSessionId</code>(MFA 세션). Contexa가 만든 화면은 이 둘을 자동으로 넣습니다</td></tr>
               <tr><td>폼 id</td><td><code>ottRequestForm</code>, <code>verifyForm</code>, <code>resendForm</code></td></tr>
               <tr><td>버튼 id</td><td><code>loginButton</code>, <code>sendCodeButton</code>, <code>verifyButton</code>, <code>resendButton</code>, <code>authButton</code></td></tr>
+              <tr><td>요소 선택 화면</td><td>화면 스크립트가 따로 없습니다. 화면은 SDK를 올리고 <code>mfa.selectFactor('MFA_OTT')</code> 또는 <code>mfa.selectFactor('MFA_PASSKEY')</code>(1차 로그인 응답의 <code>availableFactors</code>에 있는 이름)를 부른 뒤 응답의 <code>nextStepUrl</code>로 이동합니다. <code>autoRedirect</code>가 켜져 있으면 SDK가 직접 이동합니다</td></tr>
             </tbody>
           </table></div>
+          <ul>
+            <li><strong>계정 이름과 MFA 세션.</strong> SDK로 1차 로그인을 하면 SDK가 둘 다 <code>sessionStorage</code>(<code>mfaUsername</code>, <code>mfaSessionId</code>)에 둡니다. 코드 요청 form은 <code>username</code>과 <code>_csrf</code>를 보내며, 화면은 <code>username</code>을 <code>sessionStorage.getItem('mfaUsername')</code>으로 채웁니다. Contexa가 만드는 화면은 둘 다 스스로 채웁니다.</li>
+            <li>화면 설정 요소가 없으면 화면 스크립트는 그 요소가 없다고 메시지 영역에 알리고 멈춥니다(버튼이 동작하지 않음).</li>
+            <li>코드 입력 스크립트는 틀린 코드(<code>MFA_FACTOR_VERIFICATION_FAILED</code>)만 시도로 셉니다. 시도 한도에 이르면 입력을 막고, 같은 세션의 다른 요청이 처리 중이면(429 <code>MFA_BUSY_RETRY</code>) 다시 시도하라고 알리며, 로그인이 끝났으면(제한 시간, 세션 없음) 그렇게 알리고 응답의 <code>redirectUrl</code>로 이동합니다.</li>
+            <li>패스키를 쓸 수 없으면 패스키 스크립트는 <code>data-failure-url</code>에 <code>?error=passkey_failed</code>를 붙여 이동합니다. 브라우저의 원문 메시지는 콘솔에만 남깁니다.</li>
+            <li>비밀번호가 만료됐으면 로그인 스크립트는 응답의 <code>nextStepUrl</code>(비밀번호 변경 화면)로 이동합니다.</li>
+          </ul>
 
           <h2 id="policy">MFA가 필요한지 정하는 정책</h2>
           <p>1차 로그인이 성공하면 MFA 정책 공급자가 판정합니다. 기본 공급자는 AI 적응형 공급자(<code>AIAdaptiveMfaPolicyProvider</code>)이고, 등록된 <strong>평가기</strong> 가운데 우선순위가 가장 높고 이 사용자를 맡는 평가기 하나가 결정합니다.</p>
@@ -186,12 +196,12 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
 
           <h2 id="step-up">로그인 뒤 추가 인증</h2>
           <p>로그인한 사용자의 다음 요청에 저장된 판정이 CHALLENGE이면, 요청 시점 챌린지 필터가 MFA를 다시 시작합니다(단계 상승). 브라우저는 <code>/contexa/zero-trust/challenge-required?mfaUrl=…</code> 안내 화면으로, API는 401 <code>MFA_CHALLENGE_REQUIRED</code>(본문 <code>mfaUrl</code> · <code>challengeNoticeUrl</code>)를 받습니다. 이 MFA가 성공하면 판정이 ALLOW로 바뀝니다. 자세한 응답은 <a href="zero-trust-filters.html#responses">요청 시점 집행</a>에 있습니다.</p>
-          <p>자바스크립트 SDK를 올린 화면에서는 SDK가 <code>fetch</code> 응답을 보고 아래처럼 처리합니다.</p>
+          <p>자바스크립트 SDK를 올린 화면에서는 SDK가 <code>fetch</code>와 <code>XMLHttpRequest</code> 응답을 보고 아래처럼 처리합니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>응답</th><th>SDK 동작</th></tr></thead>
             <tbody>
               <tr><td>401 <code>MFA_CHALLENGE_REQUIRED</code> · <code>BLOCK_MFA_REQUIRED</code></td><td><code>challengeNoticeUrl</code>(없으면 <code>mfaUrl</code>)로 이동</td></tr>
-              <tr><td>그 밖의 401(접근 토큰 만료)</td><td>토큰을 한 번 갱신하고 같은 요청을 다시 보냄</td></tr>
+              <tr><td>그 밖의 401(접근 토큰 만료)</td><td><code>fetch</code>: 토큰을 한 번 갱신하고 같은 요청을 다시 보냄. <code>XMLHttpRequest</code>: 토큰이 끝난 것을 알고 보내는 요청은 먼저 갱신을 기다림. 이미 401을 받은 요청은 그 응답 그대로이며(앱 모르게 다시 보낼 수 없음), 다음 요청이 통하도록 토큰을 갱신함</td></tr>
               <tr><td>403 <code>ACCOUNT_BLOCKED</code> · <code>BLOCK_MFA_FAILED</code></td><td><code>redirectUrl</code>(차단 화면)로 이동</td></tr>
               <tr><td>423 <code>SECURITY_REVIEW_IN_PROGRESS</code></td><td><code>redirectUrl</code>(분석 대기 화면)로 이동</td></tr>
               <tr><td>403 + 응답 끊김 표식</td><td>차단 화면으로 이동</td></tr>
@@ -204,7 +214,8 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
             <thead><tr><th>언제</th><th>응답 본문(JSON)</th></tr></thead>
             <tbody>
               <tr><td>1차 로그인 뒤 MFA 필요</td><td><code>status</code>(<code>MFA_REQUIRED</code>), <code>message</code>, <code>mfaSessionId</code>, <code>nextStepUrl</code>, <code>progress</code>, <code>nextFactorType</code>, <code>nextStepId</code>. 요소를 골라야 할 때는 <code>status</code>가 <code>MFA_REQUIRED_SELECT_FACTOR</code>이고 <code>availableFactors</code>가 붙습니다</td></tr>
-              <tr><td>MFA 완료</td><td><code>authenticated</code>(<code>true</code>), <code>status</code>(<code>MFA_COMPLETED</code>), <code>message</code>, <code>redirectUrl</code>, <code>stateType</code>. 토큰 상태면 토큰 칸이 더해지고, 패스키 등록을 안내할 때는 <code>nextAction</code>이 붙습니다</td></tr>
+              <tr><td>MFA 완료</td><td><code>authenticated</code>(<code>true</code>), <code>status</code>(<code>MFA_COMPLETED</code>), <code>message</code>, <code>redirectUrl</code>, <code>stateType</code>. 토큰 상태면 토큰 칸이 더해지고, 패스키 등록을 안내할 때는 <code>nextAction</code>이 붙습니다. 체인이 CSRF를 쓰면 로그인으로 바뀐 토큰도 붙습니다: <code>csrfToken</code>, <code>csrfHeader</code>, <code>csrfParameter</code>(SDK가 다음 요청부터 이 값을 씀)</td></tr>
+              <tr><td>비밀번호는 맞고 만료됨</td><td>브라우저는 <code>/contexa/password-change?expired=true</code>로 이동합니다. 스크립트는 401 <code>CREDENTIALS_EXPIRED</code>와 <code>nextStepUrl</code>(그 화면)을 받습니다. 계정 이름은 주소가 아니라 세션에 담아 그 화면에 넘깁니다</td></tr>
               <tr><td>1차 로그인 차단</td><td>403 <code>AUTHENTICATION_BLOCKED</code></td></tr>
               <tr><td>1차 로그인 실패</td><td>401 <code>PRIMARY_AUTH_FAILED</code>(API). 브라우저는 그 흐름의 로그인 화면에 <code>?error=primary_auth_failed</code>를 붙인 주소로 이동합니다(기본 <code>/mfa/login?error=primary_auth_failed</code>, 접두사가 있으면 그 아래). 1차 로그인에 <code>failureUrl</code>을 주었으면 그 주소로 이동합니다</td></tr>
               <tr><td>요소 확인 실패</td><td>401 <code>MFA_FACTOR_VERIFICATION_FAILED</code>: <code>timestamp</code>, <code>status</code>, <code>error</code>, <code>message</code>, <code>path</code> + <code>mfaSessionId</code>, <code>failedFactor</code>, <code>attemptsMade</code>, <code>maxAttempts</code>, <code>currentState</code></td></tr>
@@ -215,11 +226,11 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td>같은 MFA 세션의 다른 요청을 처리하는 중</td><td>429 <code>MFA_BUSY_RETRY</code>, <code>Retry-After</code> 헤더와 <code>retryAfterMs</code>. 그 시간 뒤에 요청을 다시 보냅니다</td></tr>
             </tbody>
           </table></div>
-          <p>완료 응답의 <code>redirectUrl</code>은 브라우저가 로그인으로 보내지기 전에 요청했던 페이지입니다(같은 사이트 안의 경로와 쿼리). 그런 페이지가 없으면 1차 로그인의 <code>defaultSuccessUrl</code>, 그것도 없으면 <code>contexa.auth.urls.mfa.success</code>입니다. <code>defaultSuccessUrl(url, true)</code>면 항상 <code>url</code>입니다.</p>
+          <p>완료 응답의 <code>redirectUrl</code>은 브라우저가 로그인으로 보내지기 전에 요청했던 페이지입니다(같은 사이트 안의 경로와 쿼리). 그런 페이지가 없으면 1차 로그인의 <code>defaultSuccessUrl</code>입니다. <code>formLogin</code>과 <code>restLogin</code> 모두 같고, 기본값은 <code>contexa.auth.urls.primary.login-success</code>(<code>/</code>)입니다. <code>defaultSuccessUrl(url, true)</code>면 항상 <code>url</code>입니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>엔드포인트</th><th>하는 일</th></tr></thead>
             <tbody>
-              <tr><td><code>GET /api/mfa/config</code></td><td>MFA 주소 · 설정 조회(SDK가 씀)</td></tr>
+              <tr><td><code>GET /api/mfa/config</code></td><td>MFA 주소 · 설정 조회(SDK가 씀). 주소에는 컨텍스트 경로가 붙습니다. 진행 중인 로그인이 있으면 그 로그인의 MFA 흐름 주소, 없으면 <code>?flow=</code>로 지정한 흐름(이름 <code>admin</code> 또는 타입 이름 <code>mfa_admin</code>)의 주소, 그것도 없으면 MFA 흐름이 하나일 때 그 흐름의 주소, 그 밖에는 기본 주소입니다</td></tr>
               <tr><td><code>POST /mfa/select-factor</code></td><td>요소 선택</td></tr>
               <tr><td><code>POST /mfa/ott/generate-code</code></td><td>일회용 코드 발급</td></tr>
               <tr><td><code>POST /login/mfa-ott</code></td><td>일회용 코드 확인</td></tr>
@@ -230,11 +241,12 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
           </table></div>
           <ul>
             <li>설정 <code>contexa.auth.urls.mfa.status</code>(기본 <code>/mfa/status</code>)는 주소만 있고 처리하는 곳이 없습니다.</li>
-            <li><code>urlPrefix</code>를 주면 SDK에 <code>/접두사/api/mfa/config</code>를 알려 주지만, 그 주소를 받는 곳은 없고 <code>/api/mfa/config</code>만 응답합니다.</li>
+            <li><code>urlPrefix</code>를 주면 SDK에 <code>/접두사/api/mfa/config</code>를 알려 주지만, 그 주소를 받는 곳은 없고 <code>/api/mfa/config</code>만 응답합니다. 로그인이 진행 중이면 그 로그인의 흐름으로 답합니다. 1차 로그인 전에는 여러 MFA 흐름 중 하나의 화면이 자기 흐름을 지정합니다: 첫 호출 전에 <code>await mfa.init({ configUrl: '/api/mfa/config?flow=admin' })</code>.</li>
+            <li>토큰 상태에 접두사가 있으면 토큰 갱신 주소도 접두사 아래(<code>/접두사/api/refresh</code>)이고, 설정 응답은 그 주소를 <code>api.refresh</code>로 알려 줍니다.</li>
           </ul>
 
           <h2 id="multiple">여러 MFA 흐름</h2>
-          <p>MFA 흐름마다 자기 체인 · 요소 · 주소를 가질 수 있습니다. <code>urlPrefix("/admin")</code>를 주면 그 흐름의 모든 MFA 주소 앞에 접두사가 붙고, 체인 범위가 <code>/admin/**</code>가 됩니다(<code>securityMatcher</code> 자동). 접두사에는 영문 · 숫자 · <code>/</code> · <code>_</code> · <code>-</code>만 쓸 수 있습니다.</p>
+          <p>MFA 흐름마다 자기 체인 · 요소 · 주소를 가질 수 있습니다. <code>urlPrefix("/admin")</code>를 주면 그 흐름의 모든 MFA 주소 앞에 접두사가 붙고, 체인 범위가 <code>/admin/**</code>가 됩니다(<code>securityMatcher</code> 자동). 접두사는 영문 · 숫자 · <code>_</code> · <code>-</code>로 된 <code>/segment</code> 하나 이상입니다(예: <code>/admin</code>, <code>/admin/area</code>). 끝 슬래시, 연속 슬래시, <code>/</code>만 쓴 값은 기동을 멈춥니다. 같은 상태의 다른 흐름에서 한 로그인은 이 흐름의 요구를 채울 때만 접두사 아래에서 인정됩니다(<a href="dsl.html#shared-login">같은 상태의 흐름은 로그인을 함께 씁니다</a>).</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>기본 주소</th><th><code>urlPrefix("/admin")</code></th></tr></thead>
             <tbody>
@@ -275,8 +287,8 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>옵션</th><th>뜻</th></tr></thead>
             <tbody>
-              <tr><td><code>primaryAuthentication(...)</code></td><td>1차 로그인(<code>formLogin</code> 또는 <code>restLogin</code>)</td></tr>
-              <tr><td><code>ott(...)</code> · <code>passkey(...)</code></td><td>2차 요소</td></tr>
+              <tr><td><code>primaryAuthentication(...)</code></td><td>1차 로그인(<code>formLogin</code> 또는 <code>restLogin</code> 중 하나. 둘 다 쓰면 기동이 멈춤)</td></tr>
+              <tr><td><code>ott(...)</code> · <code>passkey(...)</code></td><td>2차 요소. 흐름마다 요소당 한 번(<code>ott(...)</code>를 두 번 쓰면 기동이 멈춤)</td></tr>
               <tr><td><code>requiredFactors(int)</code></td><td>마쳐야 하는 요소 개수</td></tr>
               <tr><td><code>name(String)</code> · <code>urlPrefix(String)</code> · <code>order(int)</code></td><td>흐름 이름 · 주소 접두사와 범위 · 순서(기본 200)</td></tr>
               <tr><td><code>policyProvider(...)</code></td><td>이 흐름의 MFA 정책 공급자</td></tr>
@@ -303,7 +315,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td><code>autoInit</code></td><td><code>true</code></td><td>저장된 MFA 진행 상태와 토큰을 되살림</td></tr>
               <tr><td><code>autoRedirect</code></td><td><code>true</code></td><td>MFA 단계에 따라 자동으로 화면 이동</td></tr>
               <tr><td><code>tokenPersistence</code></td><td><code>'memory'</code></td><td>토큰 보관: <code>'memory'</code>(새로 고치면 사라짐) · <code>'sessionStorage'</code> · <code>'localStorage'</code></td></tr>
-              <tr><td><code>attachAuthorization</code></td><td>없음</td><td>켜면 SDK가 요청에 접근 토큰을 붙임</td></tr>
+              <tr><td><code>attachAuthorization</code></td><td>없음</td><td>켜면 SDK가 <code>fetch</code>와 <code>XMLHttpRequest</code> 요청에 접근 토큰을 붙임</td></tr>
             </tbody>
           </table></div>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -318,12 +330,18 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td><code>persistTokensToStorage(result)</code></td><td><code>tokenPersistence</code>에 따라 토큰 보관</td></tr>
               <tr><td><code>logout()</code></td><td>로그아웃하고 클라이언트 상태 · 토큰 정리</td></tr>
               <tr><td><code>clearClientState()</code> · <code>clearPersistedTokens()</code></td><td>서버 호출 없이 메모리 상태 · 보관한 토큰 지우기</td></tr>
-              <tr><td><code>apiClient.login(username, password)</code> · <code>apiClient.loginForm(username, password)</code></td><td>1차 로그인(REST JSON · 폼)</td></tr>
+              <tr><td><code>apiClient.login(username, password)</code> · <code>apiClient.loginForm(username, password)</code></td><td>1차 로그인(REST JSON · 폼). 응답이 이미 완료면(정책이 요소를 요구하지 않음) 요소를 거친 뒤처럼 토큰을 보관함</td></tr>
+              <tr><td><code>apiClient.init(options)</code> · <code>apiClient.selectFactor(factorType)</code> · <code>apiClient.verifyOtt(code, username)</code> · <code>apiClient.logout()</code></td><td><code>init</code> · <code>selectFactor</code> · <code>verifyOtt</code> · <code>logout</code> 뒤의 서버 호출만 함(클라이언트 상태 처리와 화면 이동 없음)</td></tr>
               <tr><td><code>apiClient.requestOttCode()</code></td><td>일회용 코드 다시 받기</td></tr>
               <tr><td><code>apiClient.getPasskeyOptions()</code> · <code>apiClient.verifyPasskey(credential)</code></td><td>패스키 옵션 받기 · 확인</td></tr>
               <tr><td><code>window.ContexaMFA.refreshTokens()</code></td><td>접근 토큰 갱신</td></tr>
             </tbody>
           </table></div>
+          <ul>
+            <li>로그인은 CSRF 토큰을 바꿉니다. 로그인 응답에 새 토큰(<code>csrfToken</code>, <code>csrfHeader</code>)이 있으면 SDK가 화면의 <code>_csrf</code> · <code>_csrf_header</code> 메타 태그에 써 두므로, 스크립트로 로그인한 뒤 그대로 열려 있는 화면도 로그아웃과 토큰 갱신을 할 수 있습니다.</li>
+            <li><code>HEADER</code>나 <code>HEADER_COOKIE</code> 전송에서는 <code>attachAuthorization: true</code>일 때만 화면의 요청에 접근 토큰이 붙습니다. 위 예제는 이 값을 켜지 않으므로 로그인 뒤 그 요청은 익명입니다. 화면 이동에는 언제나 붙지 않습니다.</li>
+            <li>SDK의 콘솔 메시지는 토큰 칸을 가립니다.</li>
+          </ul>
 
           <h2 id="states">진행 상태</h2>
           <p>MFA 진행은 상태 기계(<code>MfaState</code>)가 관리합니다. 끝나는 상태는 다음과 같습니다.</p>
@@ -347,6 +365,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
           <h2 id="results">결과 처리 바꾸기</h2>
           <ul>
             <li><code>.mfa()</code>의 <code>mfaSuccessHandler</code> · <code>mfaFailureHandler</code>는 값을 받기만 하고 쓰이지 않습니다.</li>
+            <li>1차 로그인이나 요소에 준 <code>successHandler</code> · <code>failureHandler</code>는 그 흐름의 그 단계에서 불립니다(<a href="authentication.html#handlers">성공 · 실패 처리</a>).</li>
             <li>MFA 응답을 만드는 처리기(<code>PrimaryAuthenticationSuccessHandler</code>, <code>MfaFactorProcessingSuccessHandler</code>, <code>UnifiedAuthenticationFailureHandler</code>)는 상속할 수 없는(final) 클래스입니다.</li>
             <li>그래서 MFA 결과는 위 <a href="#responses">응답 형식</a>의 JSON · 이동을 받아 화면이나 SDK에서 처리합니다. 단일 로그인 흐름의 처리기는 <a href="authentication.html#handlers">성공 · 실패 처리</a>를 보세요.</li>
           </ul>
@@ -357,7 +376,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
             <tbody>
               <tr><td><code>contexa.auth.mfa.session-timeout-ms</code></td><td><code>600000</code></td><td>MFA 세션 유지 시간(ms). 요소를 마치는 데 시간이 더 필요할 때</td></tr>
               <tr><td><code>contexa.auth.mfa.challenge-timeout-ms</code></td><td><code>300000</code></td><td>요소 하나의 확인 제한 시간(ms). 응답의 만료 시각에 쓰이고, 이 시간이 지난 뒤 제출한 요소는 403 <code>MFA_SESSION_EXPIRED</code>로 거부됩니다</td></tr>
-              <tr><td><code>contexa.auth.mfa.max-retry-attempts</code></td><td><code>5</code></td><td>요소 확인 시도 한도. 실패 응답의 <code>maxAttempts</code></td></tr>
+              <tr><td><code>contexa.auth.mfa.max-retry-attempts</code></td><td><code>5</code></td><td>요소 확인 시도 한도. 실패 응답의 <code>maxAttempts</code>. 1보다 작으면 기동이 멈춤</td></tr>
               <tr><td><code>contexa.auth.mfa.minimum-delay-ms</code></td><td><code>500</code></td><td>로그인 실패 응답의 최소 지연(ms)</td></tr>
               <tr><td><code>contexa.identity.mfa.enabled</code></td><td><code>true</code></td><td>끄면 MFA 정책 자동 구성이 꺼집니다</td></tr>
             </tbody>
