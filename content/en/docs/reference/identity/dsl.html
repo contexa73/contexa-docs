@@ -164,9 +164,20 @@ public class LoginFlowsConfig {
         .session(Customizer.withDefaults())
         .build();</code></pre>
           <p>A chain's actual order value is <code>Ordered.HIGHEST_PRECEDENCE</code> + the flow's order, so it comes before any <code>SecurityFilterChain</code> bean the application registers on its own.</p>
+          <h3 id="shared-login">Flows in the same state share the login</h3>
+          <p>Two session flows keep their logins in the same HTTP session, and two token flows accept the same tokens. A login made in one of them is therefore a login on the paths of the other too. Flows in different states do not see each other's logins.</p>
+          <p><strong>An MFA flow takes only the logins that meet it.</strong> On the paths of an MFA flow a login counts when</p>
+          <ul>
+            <li>that MFA flow completed it, also when its policy asked for no factor;</li>
+            <li>it was completed with the primary login plus at least as many factors as the flow asks for (<code>requiredFactors</code>), in any flow;</li>
+            <li>or, when the flow asks for one factor, the login has since passed a Zero Trust challenge.</li>
+          </ul>
+          <p>Any other login, such as a password login of a form flow or a login of an MFA flow that asks for fewer factors, is no login for that request: the flow's rules treat it as anonymous and send it to the flow's own sign-in. Nothing is saved by this, so the session or the token keeps the login for the other flows. The flow's sign-in and MFA step addresses stay reachable with any login. A login made by a method the application added itself (for example <code>httpBasic()</code> in global) carries none of the facts this check reads and is left as it is.</p>
 
           <h2 id="global">Settings for every chain (global)</h2>
           <p>The <code>global(http -&gt; ...)</code> lambda is applied first to every flow's <code>HttpSecurity</code>. Flow settings are applied after it, so for the same item the flow wins; for example the flow option <code>disableCsrf()</code> turns CSRF off for that chain only. If the global lambda throws, Contexa logs a warning for that flow and carries on.</p>
+          <p><strong>A <code>formLogin(...)</code> written in global is not used by a form flow or an MFA flow.</strong> A form flow replaces it with its own, and an MFA flow removes it, because it would log a user in with the password alone, beside the factors. Both log a warning at startup. Write those settings in the flow: <code>form(form -&gt; form.loginPage(...))</code>, or for MFA <code>primaryAuthentication(primary -&gt; primary.formLogin(form -&gt; form.loginPage(...)))</code>.</p>
+          <p>Any other login method written in global, such as <code>httpBasic()</code>, <code>webAuthn(...)</code> or <code>oneTimeTokenLogin(...)</code>, is added to every chain, MFA chains included. A request with Basic credentials is then logged in with the password alone, and a person with a registered passkey logs in at Spring's <code>/login/webauthn</code>, both without the factors. These logins are Spring's own: in a token-state chain they get no token, so the next request is anonymous again. Write such a method in the <code>rawHttp</code> of the single flow that needs it, not in global; in an MFA flow it logs people in without the factors wherever it is written.</p>
           <h3 id="csrf">CSRF</h3>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Flow</th><th>CSRF</th></tr></thead>
@@ -174,7 +185,7 @@ public class LoginFlowsConfig {
               <tr><td>Session state</td><td>On, as in Spring's default.</td></tr>
               <tr><td>Token state, <code>HEADER</code> or <code>HEADER_COOKIE</code> transport</td><td>In a server mode that includes the authorization server (default <code>COMBINED</code>) it follows <code>contexa.auth.oauth2-csrf</code> (default <code>false</code>), so it is off by default.</td></tr>
               <tr><td>Token state, <code>COOKIE</code> transport</td><td>Always on, because the browser sends the cookies by itself. Setting <code>contexa.auth.oauth2-csrf: false</code> makes startup fail.</td></tr>
-              <tr><td>Flow option <code>disableCsrf()</code></td><td>Turns it off for that chain only.</td></tr>
+              <tr><td>Flow option <code>disableCsrf()</code></td><td>Turns it off for that chain only. It has no effect with the <code>COOKIE</code> transport of the token state: CSRF stays on there.</td></tr>
             </tbody>
           </table></div>
           <p>To exchange the CSRF token in a cookie, put the Spring setting in global.</p>
@@ -202,20 +213,21 @@ public class LoginFlowsConfig {
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Option</th><th>Methods</th><th>When to use</th></tr></thead>
             <tbody>
-              <tr><td><code>order(int)</code></td><td>Form, REST, one-time code, passkey</td><td>To change the order chains are compared in. For MFA, <code>.mfa(mfa -&gt; mfa.order(...))</code></td></tr>
+              <tr><td><code>order(int)</code></td><td>Form, REST, one-time code, passkey</td><td>To change the order chains are compared in. Any value given is used, <code>order(0)</code> included. For MFA, <code>.mfa(mfa -&gt; mfa.order(...))</code>: an <code>order</code> inside the primary login or a factor has no effect and logs a warning at startup</td></tr>
               <tr><td><code>loginProcessingUrl(String)</code></td><td>Form, REST, one-time code, passkey</td><td>To change the login POST path. It has no effect on a single passkey flow</td></tr>
               <tr><td><code>defaultSuccessUrl(...)</code> · <code>failureUrl(String)</code></td><td>Form, REST</td><td>Where to go after login success or failure</td></tr>
               <tr><td><code>successHandler(...)</code> · <code>failureHandler(...)</code></td><td>Form, REST, one-time code</td><td>To write the response yourself (<a href="authentication.html#handlers">Success and failure handling</a>). Not used by passkey flows</td></tr>
               <tr><td><code>securityContextRepository(...)</code></td><td>Every method</td><td>To change where the login is kept. In session state Contexa's session repository takes precedence</td></tr>
               <tr><td><code>disableCsrf()</code></td><td>Every method</td><td>To turn CSRF off for that chain only</td></tr>
-              <tr><td><code>cors(...)</code> · <code>headers(...)</code> · <code>sessionManagement(...)</code> · <code>logout(...)</code></td><td>Every method</td><td>To change that chain's Spring settings</td></tr>
-              <tr><td><code>authorizeStaticPermitAll(...)</code></td><td>Every method</td><td>To open static paths without authentication</td></tr>
-              <tr><td><code>rawHttp(...)</code></td><td>Every method</td><td>Spring settings not listed above, and the chain scope (<code>securityMatcher</code>). Called several times, all of them apply in order</td></tr>
+              <tr><td><code>cors(...)</code> · <code>headers(...)</code> · <code>sessionManagement(...)</code> · <code>logout(...)</code></td><td>Every method</td><td>To change that chain's Spring settings. What the session state does with <code>sessionManagement</code> and <code>logout</code> is in <a href="state-management.html#session">Session state</a></td></tr>
+              <tr><td><code>authorizeStaticPermitAll(...)</code></td><td>Every method</td><td>To open static paths without authentication. It can be used together with an <code>anyRequest()</code> rule written in global: the static paths are then opened ahead of that rule</td></tr>
+              <tr><td><code>rawHttp(...)</code></td><td>Every method</td><td>Spring settings not listed above, and the chain scope (<code>securityMatcher</code>). Called several times, all of them apply in order. Authorization rules (<code>authorizeHttpRequests</code>) cannot be written here: they go in global, and startup stops with a message saying so. A <code>formLogin(...)</code> written here replaces the form flow's own form settings</td></tr>
               <tr><td><code>asep(...)</code></td><td>Every method</td><td>Has no effect in the current version (<a href="asep.html">ASEP</a>)</td></tr>
             </tbody>
           </table></div>
           <ul>
             <li>Options are applied after global. The <code>rawHttp</code> lambda is a <code>SafeHttpCustomizer</code>, so it may throw checked exceptions.</li>
+            <li>Filters added at the same place (for example <code>addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class)</code>) run in the order they were added. Global is applied before Contexa's own filters and <code>rawHttp</code> after them, so a filter added in <code>rawHttp</code> at that place runs after the filters that answer the pages Contexa generates (the MFA pages, the REST login page) and does not see those requests. Add it in global, or before an earlier filter, to see them too.</li>
             <li><code>.mfa()</code> has none of these options. An MFA flow's scope is set with <code>urlPrefix</code>, and <code>rawHttp</code> is used inside the primary login's or a factor's options.</li>
             <li>Global takes an <code>HttpSecurity</code> lambda directly, without options.</li>
           </ul>
@@ -225,6 +237,23 @@ public class LoginFlowsConfig {
                 .rawHttp(http -&gt; http.headers(headers -&gt; headers.frameOptions(frame -&gt; frame.sameOrigin()))))
         .session(Customizer.withDefaults())
         .build();</code></pre>
+          <h3 id="refused">What stops startup</h3>
+          <p>These configurations would leave a path unprotected, a login that cannot succeed or a setting that is silently dropped, so startup stops with a message that names the option or setting and what to change.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Configuration</th><th>What to do instead</th></tr></thead>
+            <tbody>
+              <tr><td><code>urlPrefix</code> that is not one or more <code>/segment</code> parts (a trailing or double slash, <code>/</code> alone, other characters)</td><td>Write it as <code>/admin</code> or <code>/admin/area</code></td></tr>
+              <tr><td>An address option that does not start with <code>/</code>: <code>loginProcessingUrl</code>, the one-time code options <code>tokenGeneratingUrl</code> and <code>defaultSubmitPageUrl</code>, the passkey option <code>assertionOptionsEndpoint</code></td><td>Start it with <code>/</code></td></tr>
+              <tr><td>An MFA primary login with both <code>formLogin</code> and <code>restLogin</code></td><td>Choose one; use a second MFA flow for the other</td></tr>
+              <tr><td>The same factor twice in one MFA flow (two <code>ott(...)</code>)</td><td>Write each factor once</td></tr>
+              <tr><td><code>rawFormLogin(...)</code> in an MFA primary <code>formLogin</code></td><td>Use the form options (<code>loginPage</code>, <code>failureUrl</code> and so on); the MFA primary login is handled by Contexa's own filter, not by Spring's form login</td></tr>
+              <tr><td><code>authorizeHttpRequests(...)</code> in a flow's <code>rawHttp</code></td><td>Write the rules in global</td></tr>
+              <tr><td>Two address settings (<code>contexa.auth.urls.*</code>, <code>contexa.auth.internal.refresh-uri</code>) with the same value for different requests. A page and the form it posts may share an address (the login page and its processing path)</td><td>Give each its own address</td></tr>
+              <tr><td>A token-state flow with <code>contexa.auth.oauth2-server-mode: RESOURCE_SERVER</code></td><td>Use <code>COMBINED</code> (or <code>AUTHORIZATION_SERVER</code>) where the application logs people in, or give the flow the session state (<a href="state-management.html#oauth2">Token state</a>)</td></tr>
+              <tr><td><code>contexa.auth.mfa.max-retry-attempts</code> below 1</td><td>1 or more</td></tr>
+              <tr><td><code>contexa.auth.access-token-validity</code> or <code>refresh-token-validity</code> of 0 or less</td><td>A positive duration</td></tr>
+            </tbody>
+          </table></div>
 
           <h2 id="example">Complete example</h2>
           <p>API clients use tokens, administrators use MFA under <code>/admin</code>, and everyone else uses form login.</p>
@@ -268,6 +297,7 @@ spring:
     host: smtp.example.com   # MFA sends the one-time code by email
     port: 587</code></pre>
           <ul>
+            <li>The MFA flow and the form flow both keep the login in the session (<a href="#shared-login">Flows in the same state share the login</a>). A person who logs in at <code>/login</code> with a password is not logged in under <code>/admin</code>: requests there are sent to <code>/admin/mfa/login</code>. A person who completed the MFA flow is logged in on the form flow's pages too.</li>
             <li>Without a signing key store, tokens are signed with a temporary key that changes at every start. For production, see <a href="state-management.html#oauth2-required">What the token state needs</a>.</li>
             <li>Without mail settings, issuing a one-time code fails (<a href="authentication.html#ott">One-time code</a>).</li>
           </ul>
@@ -290,6 +320,7 @@ spring:
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Order value</th><th>What the configurer does</th></tr></thead>
             <tbody>
+              <tr><td><code>HIGHEST_PRECEDENCE</code> + 50</td><td>Applies the defaults of the login state (in the session state, the address after logout), so that global and the flow options can change them</td></tr>
               <tr><td><code>HIGHEST_PRECEDENCE</code> + 100</td><td>Applies the global lambda</td></tr>
               <tr><td><code>HIGHEST_PRECEDENCE</code> + 105</td><td>Connects Contexa's session login repository</td></tr>
               <tr><td><code>HIGHEST_PRECEDENCE</code> + 110</td><td>Connects the authentication bridge filter</td></tr>

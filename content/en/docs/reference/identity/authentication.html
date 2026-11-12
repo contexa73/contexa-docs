@@ -56,7 +56,7 @@
               <tr><td><code>defaultSuccessUrl(String)</code>, <code>defaultSuccessUrl(String, boolean)</code></td><td>none</td><td>Where to go after login. With <code>true</code>, always there instead of the originally requested address</td></tr>
               <tr><td><code>failureUrl(String)</code></td><td>none (Spring's default <code>/login?error</code>)</td><td>Where to go after a failure</td></tr>
               <tr><td><code>permitAll()</code></td><td>off</td><td>When the login page and processing path must be open without authentication</td></tr>
-              <tr><td><code>rawFormLogin(...)</code></td><td>none</td><td>To work on Spring's <code>FormLoginConfigurer</code> directly. Called several times, only the last one remains</td></tr>
+              <tr><td><code>rawFormLogin(...)</code></td><td>none</td><td>To work on Spring's <code>FormLoginConfigurer</code> directly. Called several times, only the last one remains. Not in an MFA primary login: startup stops there</td></tr>
             </tbody>
           </table></div>
           <div class="callout callout-warning">
@@ -96,7 +96,8 @@ Content-Type: application/json
             </tbody>
           </table></div>
           <ul>
-            <li>The login processing path takes <code>POST</code> only. <code>GET /api/login</code> at the same path shows a default login page.</li>
+            <li>The login processing path takes <code>POST</code> only. <code>GET /api/login</code> at the same path shows a default login page. When <code>loginProcessingUrl</code> changes the path, the page is at the new path.</li>
+            <li>With <code>.session()</code>, <code>redirectUrl</code> is the page the browser asked for before it was sent to log in (its path and query), when there is one. With <code>defaultSuccessUrl(url, true)</code> it is always <code>url</code>.</li>
             <li>A failure returns 401 JSON, and the failure response leaves no sooner than <code>contexa.auth.mfa.minimum-delay-ms</code> (default 500 ms), to slow down password guessing.</li>
             <li><code>.oauth2()</code> already configures the stateless policy (<code>STATELESS</code>), so you do not set it again with <code>rawHttp</code>. With <code>.oauth2()</code>, <code>contexa.auth.oauth2.client-secret</code> is required (<a href="state-management.html#oauth2-required">What the token state needs</a>).</li>
           </ul>
@@ -120,7 +121,7 @@ Authorization: Bearer &lt;accessToken&gt;</code></pre>
             <ol class="dg-msgs">
               <li class="dg-msg"><span class="dg-actor dg-request">Browser</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /ott/generate</code>, <code>username</code> (required) · <code>email</code> (optional)</span></li>
               <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-host">Mail</span><span class="dg-msg-text">Sends the code to the user's email address</span></li>
-              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">Browser</span><span class="dg-msg-text">Moves to the code-sent address (<code>contexa.auth.urls.factors.ott.code-sent</code>)</span></li>
+              <li class="dg-msg"><span class="dg-actor">Contexa</span><span class="dg-msg-arrow">→</span><span class="dg-actor dg-request">Browser</span><span class="dg-msg-text">Moves to the code entry page (<code>/login/ott/verify</code>)</span></li>
               <li class="dg-msg"><span class="dg-actor dg-request">Browser</span><span class="dg-msg-arrow">→</span><span class="dg-actor">Contexa</span><span class="dg-msg-text"><code>POST /login/ott</code>, <code>username</code> · <code>token</code> → logged in</span></li>
             </ol>
           </figure>
@@ -129,9 +130,11 @@ Authorization: Bearer &lt;accessToken&gt;</code></pre>
         .session(Customizer.withDefaults())
         .build();</code></pre>
           <ul>
-            <li><strong>Sending service:</strong> the default <code>OneTimeTokenService</code> bean is <code>EmailOneTimeTokenService</code>. It keeps the code in the <code>one_time_tokens</code> table of the Contexa database and sends it with Spring mail (<code>spring.mail.*</code>).</li>
+            <li><strong>Sending service:</strong> the default <code>OneTimeTokenService</code> bean is <code>EmailOneTimeTokenService</code>. It keeps the code in the <code>ctxa_one_time_tokens</code> table of the Contexa database and sends it with Spring mail (<code>spring.mail.*</code>).</li>
             <li><strong>Recipient:</strong> the email address in the user table (<code>users</code>). Without one, the user name is used as the address. A request <code>email</code> that differs from the registered address is refused.</li>
+            <li><strong>Account state:</strong> a locked or disabled account gets no code. A code login does not use the password, so an account whose password has expired still logs in with a code.</li>
             <li><strong>When mail cannot be sent:</strong> with <code>contexa.auth.ott.fail-on-email-error</code> (default <code>true</code>) issuing fails. With <code>false</code> the code is still created and a warning is logged.</li>
+            <li><strong>Sending limits:</strong> at most <code>contexa.auth.ott.email-max-concurrent-sends</code> (default 64) mails are sent at one time. A request waits up to <code>contexa.auth.ott.email-send-wait-seconds</code> (default 5) for a place, and then fails as an undelivered mail does. <code>contexa.auth.ott.email-smtp-timeout-seconds</code> (default 0, not set) limits the connect, read and write of the SMTP conversation; a value is written into the application's mail sender where <code>spring.mail.properties.mail.smtp.*timeout</code> sets none, so it also applies to the application's other mail sent with that sender.</li>
             <li><strong>Validity:</strong> a code is valid for 5 minutes after it is created (Spring's default). <code>contexa.auth.mfa.otp-token-validity-seconds</code> (default 300) is used only for the number of minutes in the email text.</li>
           </ul>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -141,7 +144,7 @@ Authorization: Bearer &lt;accessToken&gt;</code></pre>
               <tr><td><code>defaultSubmitPageUrl(String)</code></td><td><code>/login/ott/verify</code></td><td>To change the code entry page path</td></tr>
               <tr><td><code>showDefaultSubmitPage(boolean)</code></td><td><code>true</code></td><td><code>false</code> when the application makes the code entry page</td></tr>
               <tr><td><code>loginProcessingUrl(String)</code></td><td><code>/login/ott</code></td><td>To change the code check path</td></tr>
-              <tr><td><code>tokenGenerationSuccessHandler(...)</code></td><td><code>oneTimeTokenCreationSuccessHandler</code> bean</td><td>To change the response after a code is created. The default handler moves to <code>contexa.auth.urls.factors.ott.code-sent</code> (default <code>/mfa/ott/code-sent</code>)</td></tr>
+              <tr><td><code>tokenGenerationSuccessHandler(...)</code></td><td><code>oneTimeTokenCreationSuccessHandler</code> bean</td><td>To change the response after a code is created. The default handler moves to the code entry page (<code>defaultSubmitPageUrl</code>). Only when <code>contexa.auth.urls.factors.ott.code-sent</code> is set to an address other than its default (<code>/mfa/ott/code-sent</code>) does it move there, with <code>email</code>, <code>type=code_sent</code>, <code>flow=ott_single</code> and <code>repository</code> in the query</td></tr>
               <tr><td><code>tokenService(...)</code></td><td><code>OneTimeTokenService</code> bean</td><td>See the warning below</td></tr>
             </tbody>
           </table></div>
@@ -179,7 +182,8 @@ public OneTimeTokenService oneTimeTokenService() {
             </tbody>
           </table></div>
           <ul>
-            <li>Passkey flows do not use the <code>successHandler</code> and <code>failureHandler</code> options (<a href="#handlers">Success and failure handling</a>).</li>
+            <li>A passkey flow in the session state does not use the <code>successHandler</code> and <code>failureHandler</code> options. In the token state, and for a passkey factor of MFA, they are called as for the other methods (<a href="#handlers">Success and failure handling</a>).</li>
+            <li>A passkey login is the login of the Contexa account the passkey belongs to, the same as its password login: no further account is created for it.</li>
             <li>With an empty <code>rpId</code> a validator logs an error at startup but does not stop it.</li>
             <li>With the Contexa database (a <code>contexaJdbcTemplate</code> bean), Spring's JDBC repositories that keep passkey data (<code>JdbcUserCredentialRepository</code>, <code>JdbcPublicKeyCredentialUserEntityRepository</code>) are registered automatically.</li>
           </ul>
@@ -219,8 +223,11 @@ public OneTimeTokenService oneTimeTokenService() {
           </table></div>
           <ul>
             <li>Contexa's handlers answer with JSON when the request's <code>Accept</code> or <code>Content-Type</code> carries JSON or its path contains <code>/api/</code>, and with a redirect otherwise.</li>
+            <li>In the token state a page login of a single flow goes, as in the session state, to the page the browser asked for before it was sent to log in (with <code>defaultSuccessUrl(url, true)</code> always to <code>url</code>). A failed page login moves to the flow's <code>failureUrl</code>, by default its login page with <code>?error</code> (<code>/login?error</code>), as in the session state.</li>
+            <li>When the password is right and has expired, a REST flow, a form flow in the token state and the MFA primary login send a browser to <code>/contexa/password-change?expired=true</code> and answer a script with 401 <code>CREDENTIALS_EXPIRED</code> and <code>nextStepUrl</code> (that page); the account name is kept in the session for the page. A form flow in the session state answers with its usual failure. One-time code and passkey logins do not use the password (<a href="#ott">One-time code</a>).</li>
             <li>In a <strong>form or REST flow</strong>, a given <code>successHandler</code> is attached directly in place of the automatic one. Even in the token state Contexa then issues no token, so that handler owns the response.</li>
             <li>In a <strong>one-time code flow</strong> the automatic handler, when there is one, comes first. In the token state the given handler is called first after the tokens are issued, and Contexa writes the response only if that handler did not.</li>
+            <li>In an <strong>MFA flow</strong>, a <code>successHandler</code> given to the primary login or to a factor is called when the login completes at that step: the primary login's when the policy asks for no factor, otherwise the one of the factor that completed it. A <code>failureHandler</code> is called for failures of its own step. Each is called for its own flow and step only. Contexa writes the response afterwards when the handler did not.</li>
             <li>For MFA results see <a href="mfa.html#results">MFA result handling</a>.</li>
           </ul>
 
@@ -243,6 +250,9 @@ public OneTimeTokenService oneTimeTokenService() {
               <tr><td><code>contexa.auth.urls.factors.passkey.rp-id</code></td><td><code>localhost</code></td><td>Passkey service name. Change it to the production domain</td></tr>
               <tr><td><code>contexa.auth.urls.factors.passkey.allowed-origins</code></td><td>none</td><td>Origins that may use passkeys (comma-separated). Without it, <code>http://localhost:</code> + the server port</td></tr>
               <tr><td><code>contexa.auth.ott.fail-on-email-error</code></td><td><code>true</code></td><td>Whether issuing a code fails when the email cannot be sent</td></tr>
+              <tr><td><code>contexa.auth.ott.email-max-concurrent-sends</code></td><td><code>64</code></td><td>How many login mails are sent at one time</td></tr>
+              <tr><td><code>contexa.auth.ott.email-send-wait-seconds</code></td><td><code>5</code></td><td>How long a request waits for a place among the mails being sent (seconds) before it fails</td></tr>
+              <tr><td><code>contexa.auth.ott.email-smtp-timeout-seconds</code></td><td><code>0</code></td><td>Time limit of the SMTP connect, read and write (seconds). <code>0</code> sets none</td></tr>
             </tbody>
           </table></div>
           <p>All login settings (including <code>contexa.auth.urls.*</code>) are in <a href="../../install/configuration/identity.html">Settings when Contexa owns login</a>.</p>
