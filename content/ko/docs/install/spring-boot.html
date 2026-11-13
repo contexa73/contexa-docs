@@ -36,13 +36,13 @@
             <thead><tr><th>이렇게 쓰면</th><th>인증 소유권</th><th>함께 정해지는 것</th></tr></thead>
             <tbody>
               <tr><td><code>@EnableAISecurity</code>(속성 없음 = <code>SANDBOX</code>)</td><td><code>HOST_OWNED</code></td><td>Contexa 소유 앱 표시(<code>contexa.datasource.isolation.contexa-owned-application</code>)는 <code>false</code></td></tr>
-              <tr><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code></td><td><code>CONTEXA_OWNED</code></td><td>Contexa 소유 앱 표시가 <code>true</code>(따로 적지 않았을 때)</td></tr>
-              <tr><td>설정 <code>contexa.bridge.ownership: CONTEXA_OWNED</code>(또는 <code>HOST_OWNED</code>)</td><td>적은 값</td><td>설정에 적은 값이 어노테이션의 기본값을 이깁니다. 기본 체인 모양은 여전히 <code>mode</code>를 따릅니다.</td></tr>
+              <tr><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code></td><td><code>CONTEXA_OWNED</code></td><td>따로 적지 않았고 앱에 자기 DB가 없으면 Contexa 소유 앱 표시가 <code>true</code>(<a href="#full-datasource">아래</a>)</td></tr>
+              <tr><td>설정 <code>contexa.bridge.ownership</code></td><td><code>mode</code>와 맞아야 함</td><td><code>SANDBOX</code>는 <code>HOST_OWNED</code>, <code>FULL</code>은 <code>CONTEXA_OWNED</code>와 짝입니다. 다른 쪽을 적으면 이유와 함께 기동이 멈추고, 적지 않으면 <code>mode</code>를 따릅니다. 모드를 코드 대신 설정으로 정하려면 <code>contexa.ai.security.mode</code>를 적습니다. 이 값이 어노테이션보다 앞섭니다.</td></tr>
             </tbody>
           </table></div>
           <ul>
             <li><strong>이미 로그인이 있고 그대로 두고 싶으면</strong> 기본(<code>HOST_OWNED</code>)을 고릅니다. 판정과 모든 경로의 집행은 이때도 Contexa가 하고, 앱이 할 일은 두 가지 남습니다(<a href="#host-owned">아래</a>).</li>
-            <li><strong>로그인 · MFA · 세션까지 Contexa에 맡기려면</strong> <code>FULL</code>을 고릅니다. 이때 Contexa 체인이 요청을 먼저 받으므로 앱의 기존 체인은 쓰이지 않을 수 있습니다(<a href="#contexa-owned">아래</a>).</li>
+            <li><strong>로그인 · MFA · 세션까지 Contexa에 맡기려면</strong> <code>FULL</code>을 고릅니다. 이때 보안 체인은 Contexa가 맡고, 자기 <code>SecurityFilterChain</code>을 선언한 앱은 기동하지 않습니다(<a href="#chain-order">아래</a>). 먼저 <a href="#full-changes">앱에서 달라지는 것</a>을 읽으세요.</li>
             <li><strong>CLI를 쓰면</strong> <code>contexa init</code>이 대신 고릅니다. 앱에 <code>SecurityFilterChain</code>이 있으면 <code>HOST_OWNED</code>, 없으면 <code>CONTEXA_OWNED</code>이고, <code>--ownership host|contexa</code>로 직접 정할 수도 있습니다(<a href="installation-guide.html#cli-ownership">CLI가 고르는 방법</a>).</li>
           </ul>
 
@@ -51,6 +51,7 @@
             <thead><tr><th>무엇</th><th><code>HOST_OWNED</code>(기본)</th><th><code>CONTEXA_OWNED</code></th></tr></thead>
             <tbody>
               <tr><td>로그인 · 세션</td><td>앱의 Spring Security</td><td>Contexa 체인(폼 · 패스키 · 일회용 토큰 MFA, 세션)</td></tr>
+              <tr><td><code>/contexa/</code> 아래 경로</td><td>Contexa가 씀: 관리 화면, 단계 인증, 로그인 화면과 API가 여기서 답함. 앱 자신의 엔드포인트는 여기에 두지 않음</td><td>같음</td></tr>
               <tr><td>Contexa가 보안 체인을 만드나</td><td>앱 요청을 받는 로그인 체인은 만들지 않음. 관리 화면 <code>/contexa/admin/**</code>만 맡는 자기 체인 하나만 만듦</td><td>예</td></tr>
               <tr><td>앱 체인이 없을 때</td><td>Spring Boot 기본 보안(모든 요청 로그인) + Contexa WARN 로그</td><td>Contexa 체인이 받음</td></tr>
               <tr><td>관리 화면 <code>/contexa/admin/**</code> URL 보호</td><td>Contexa의 관리 화면 체인: Contexa 관리자 로그인(<code>/contexa/admin/login</code>)과 ADMIN 역할. 앱 체인이 막을 필요 없음</td><td>Contexa 체인(<code>SANDBOX</code> 모양: ADMIN 역할, <code>FULL</code> 모양: 동적 인가 정책)</td></tr>
@@ -77,6 +78,26 @@
           <p>앱이 로그인한 사용자를 MVC 인터셉터나 컨트롤러에서 늦게 정하면 필터는 사용자를 보지 못합니다. 그런 요청은 <code>@Protectable</code> 메서드에서만 집행되고, 기동 뒤 처음 한 번 WARN 로그로 알려 줍니다. 사람이 앱의 폼 로그인이나 OAuth2 로그인으로 로그인하면 Contexa는 자기 로그인 때처럼 그 로그인을 분석에 보냅니다.</p>
 
           <h2 id="contexa-owned">Contexa가 로그인을 맡을 때</h2>
+          <h3 id="full-changes"><code>FULL</code>을 고르기 전에: 앱에서 달라지는 것</h3>
+          <p><code>FULL</code>에서는 Contexa 체인이 로그인을 맡고 모든 요청에 먼저 답하며, Spring Boot가 앱을 위해 만들던 보안 체인은 만들어지지 않습니다. 앱 코드는 바뀌지 않지만 일부 응답이 바뀝니다. 먼저 앱의 클라이언트와 아래 목록을 맞춰 보세요. 클라이언트가 이 응답 가운데 하나에 기대면 기본(<code>SANDBOX</code>)을 쓰세요. 앱이 로그인을 그대로 맡고, 판정과 모든 경로의 집행은 이때도 Contexa가 합니다.</p>
+          <ul>
+            <li><strong>URL 정책이 없는 경로는 로그인이 필요합니다.</strong> 새 설치는 어떤 URL 정책도 가리키지 않는 경로에 로그인한 사용자를 요구합니다. 그런 경로의 익명 요청은 JSON을 바라면(<code>Accept</code>에 <code>application/json</code>, <code>X-Requested-With: XMLHttpRequest</code>, 또는 <code>/api/</code> 아래 경로) <code>401</code>을 받고, 그 밖의 요청은 Contexa 로그인 화면(<code>/mfa/login</code>)으로 이동합니다. <code>/actuator/health</code>도 여기에 들므로, 로그인 없이 부르던 헬스 점검은 <code>401</code>이나 그 이동을 받습니다. 이 경로들에서 어떻게 할지는 시스템 설정 화면의 "적용되는 URL 정책이 없을 때의 결정"으로 고릅니다(<a href="../reference/iam/dynamic-authorization.html#how-it-decides">동적 인가</a>).</li>
+            <li><strong>쓰기 요청에는 CSRF 토큰이 필요합니다.</strong> Contexa 체인은 Spring Security의 CSRF 보호를 켜 둡니다. 토큰 없는 <code>POST</code> · <code>PUT</code> · <code>PATCH</code> · <code>DELETE</code>는 컨트롤러에 닿기 전에 <code>403</code>을 받고, 앱이 <code>401</code>로 답하던 요청(틀린 비밀번호 로그인, 읽지 못하는 본문, 익명 쓰기)도 마찬가지입니다. 토큰을 보내면 CSRF 검사는 통과합니다. 토큰은 세션에 두고 <code>XSRF-TOKEN</code> 쿠키는 만들지 않으며, Contexa 화면은 토큰을 <code>_csrf</code> · <code>_csrf_header</code> · <code>_csrf_parameter</code> meta 태그에 싣습니다. 토큰 없이 쓰던 단일 페이지 앱(SPA)이나 API 클라이언트는 토큰을 보내야 하고, 쿠키로 주고받으려면 <code>global()</code>에서 정합니다(<a href="../reference/identity/dsl.html#csrf">인증 DSL의 CSRF</a>).</li>
+            <li><strong>Contexa 로그인은 Contexa 계정만 읽습니다.</strong> Contexa 로그인(폼 · MFA 비밀번호 · REST · 일회용 코드 · 패스키)은 앱이 <code>UserDetailsService</code>를 몇 개 두었든 Contexa 자신의 사용자 저장소만 읽습니다(<a href="#existing-beans">기존 빈과의 관계</a>). 앱의 사용자는 Contexa 계정이 되기 전에는 로그인하지 못합니다. Contexa의 인증 제공자가 유일한 <code>AuthenticationProvider</code> 빈이면 Spring Security가 전역 <code>AuthenticationManager</code>를 그것으로 만들므로, 그 매니저로 로그인을 처리하는 앱 코드(예: <code>POST /api/authenticate</code> 같은 토큰 발급 엔드포인트)도 Contexa 계정으로 확인합니다.</li>
+            <li><strong>HTTP Basic · Bearer 클라이언트는 로그인되지 않습니다.</strong> 기본 체인은 Contexa의 폼 · 패스키 · 일회용 코드로 로그인합니다. HTTP Basic과 Bearer 토큰 인증이 없으므로, <code>Authorization: Basic …</code>이나 앱이 받던 Bearer 토큰을 보내는 클라이언트는 로그인하지 않은 것으로 다뤄집니다.</li>
+            <li><strong>로그인 사용자는 Contexa 타입입니다.</strong> Contexa로 비밀번호 로그인한 뒤의 principal은 <code>io.contexa.contexacommon.security.UnifiedCustomUserDetails</code>입니다. 이를 앱의 사용자 타입으로 캐스팅하는 코드는 <code>ClassCastException</code>을 내고, <code>@AuthenticationPrincipal MyUser</code>나 <code>@AuthenticationPrincipal Jwt</code> 같은 매개변수는 <code>null</code>을 받습니다.</li>
+            <li><strong>Spring Boot가 만들어 주던 체인은 만들어지지 않습니다.</strong> Spring Boot는 앱에 <code>SecurityFilterChain</code> 빈이 없을 때만 자기 체인을 만들고, Contexa 체인도 그런 빈입니다. 그래서 기본 체인(폼 로그인 · HTTP Basic), <code>/actuator/health</code>를 열어 두던 Actuator 관리 체인, 그리고 앱 설정에 따라 만들던 OAuth2 리소스 서버 · OAuth2 로그인 · SAML2 로그인 · Spring Authorization Server 체인이 없어집니다. 그 엔드포인트(<code>/.well-known/openid-configuration</code>, <code>/oauth2/jwks</code>, SAML2 서비스 제공자 메타데이터와 어설션 소비 서비스 등)는 <code>404</code> · <code>401</code> · <code>403</code>으로 답합니다. Contexa는 이 때문에 기동을 거부하지 않고, 기동 로그에도 알리지 않습니다.</li>
+          </ul>
+          <p><code>FULL</code>에서는 기동 로그에 다음 줄이 나올 수 있습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>기동 로그</th><th>뜻</th></tr></thead>
+            <tbody>
+              <tr><td><code>[OAuth2] JWK KeyStore not configured (contexa.auth.oauth2.jwk-key-store-path) - using an ephemeral RSA signing key ...</code>(WARN)</td><td>Contexa가 발급하는 토큰을 기동 때 만든 키로 서명하므로, 재기동하면 그 토큰은 무효가 됩니다. 운영에서는 <code>contexa.auth.oauth2.jwk-key-store-path</code>를 정합니다(<a href="configuration/identity.html#issuer">Contexa가 토큰을 발급할 때</a>).</td></tr>
+              <tr><td><code>Global AuthenticationManager configured with an AuthenticationProvider bean. UserDetailsService beans will not be used ...</code>(WARN, Spring Security)</td><td>비밀번호는 앱의 <code>UserDetailsService</code>가 아니라 Contexa의 인증 제공자가 확인합니다.</td></tr>
+              <tr><td><code>You are asking Spring Security to ignore ...StaticResourceRequest$StaticResourceRequestMatcher... This is not recommended ...</code>(WARN, Spring Security)</td><td>Contexa가 Spring Boot의 일반 정적 자원 위치(<code>/css/**</code> · <code>/js/**</code> · <code>/images/**</code> · <code>/webjars/**</code> · 파비콘)를 보안 체인 밖에 두므로, 앱이 로그인을 요구하던 곳이라도 누구나 읽을 수 있습니다.</td></tr>
+              <tr><td><code>[Contexa] CONTEXA_OWNED: the application declares the user store(s) [...], which Contexa's sign-in does not read: ...</code>(WARN)</td><td>앱이 <code>UserDetailsService</code>를 하나 이상 선언하고 있습니다. Contexa 로그인은 그것을 읽지 않습니다(위 참고).</td></tr>
+            </tbody>
+          </table></div>
           <h3 id="default-chain">기본 체인 모양</h3>
           <p>앱이 <code>PlatformConfig</code> 빈을 두지 않으면 Contexa가 기본 구성을 만들고, 모양은 <code>mode</code>에 따라 다릅니다.</p>
           <ul>
@@ -87,13 +108,13 @@
           <p>어노테이션 속성과 모드별 구성의 정본은 <a href="../reference/autoconfigure/ai-security.html#full"><code>@EnableAISecurity</code> 참조</a>에 있습니다.</p>
 
           <h3 id="chain-order">앱의 기존 체인과의 관계</h3>
-          <p>Contexa 체인은 가장 앞 순서(<code>Ordered.HIGHEST_PRECEDENCE</code> + 흐름의 order)로 등록되고, 기본 흐름은 경로 범위(<code>urlPrefix</code>)가 없어 모든 요청에 맞습니다. Spring Security는 요청에 맞는 첫 체인만 쓰므로, 이때 앱이 따로 선언한 체인에는 요청이 가지 않습니다. MFA 흐름에 <code>urlPrefix</code>를 주면 그 흐름의 체인은 <code>&lt;urlPrefix&gt;/**</code> 요청에만 맞습니다(<a href="../reference/identity/dsl.html">인증 DSL</a>).</p>
+          <p>Contexa 체인은 가장 앞 순서(<code>Ordered.HIGHEST_PRECEDENCE</code> + 흐름의 order)로 등록되고, 기본 흐름은 경로 범위(<code>urlPrefix</code>)가 없어 모든 요청에 맞습니다. Spring Security는 요청에 맞는 첫 체인만 쓰므로, 앱이 선언한 체인은 한 번도 돌지 않고 그 체인이 지키던 곳이 열립니다. 그래서 Contexa는 <code>CONTEXA_OWNED</code>에서 자기 <code>SecurityFilterChain</code>을 선언한 앱의 기동을 거부하고, 메시지에 그 체인을 적습니다. 앱 로그인을 지키려면 <code>mode = FULL</code> 없이 <code>@EnableAISecurity</code>를 쓰고, 아니면 그 체인을 지우세요. MFA 흐름에 <code>urlPrefix</code>를 주면 그 흐름의 체인은 <code>&lt;urlPrefix&gt;/**</code> 요청에만 맞습니다(<a href="../reference/identity/dsl.html">인증 DSL</a>).</p>
 
           <h3 id="existing-beans">기존 빈과의 관계</h3>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>앱에 있던 것</th><th><code>CONTEXA_OWNED</code>에서</th></tr></thead>
             <tbody>
-              <tr><td><code>SecurityFilterChain</code></td><td>지우거나 바꾸지 않고 Contexa 체인을 따로 빈으로 등록합니다. 다만 위 순서 때문에 요청을 받지 못할 수 있습니다.</td></tr>
+              <tr><td><code>SecurityFilterChain</code></td><td>둘 수 없습니다. <code>Contexa owns the sign-in of this application, but the application declares its own security chain(s) [...]</code>로 기동이 거부됩니다(<a href="#chain-order">앱의 기존 체인과의 관계</a>). 그 체인을 지우거나, <code>mode = FULL</code> 없이 <code>@EnableAISecurity</code>를 써서 앱 로그인을 지킵니다.</td></tr>
               <tr><td><code>UserDetailsService</code></td><td>앱의 것은 그대로 둡니다. Contexa의 사용자 조회(Contexa DB)는 두 경우 모두 등록하며, 앱의 것이 있으면 기본 후보가 아니어서 앱 코드가 타입으로 <code>UserDetailsService</code>를 주입받을 때 그것이 오지 않습니다. Contexa 로그인(폼 · MFA 비밀번호 · REST · 일회용 코드 · 패스키 · 코드 발송)은 앱이 <code>UserDetailsService</code>를 몇 개 선언했든 Contexa의 조회만 읽습니다. 앱의 사용자는 Contexa 로그인으로 로그인되지 않고 없는 이름과 똑같이 거절되며(REST 로그인은 401), 읽지 않는 앱의 저장소는 시작할 때 WARN으로 나옵니다. 토큰의 사용자를 확인하는 경로(리소스 서버의 토큰 변환기, 사람의 토큰을 갱신할 때의 계정 확인)는 앱의 저장소가 하나뿐이거나 <code>@Primary</code>가 붙어 있으면 그것을, 아니면 Contexa의 것을 그대로 씁니다.</td></tr>
               <tr><td><code>AuthenticationProvider</code></td><td>Contexa의 인증 제공자(<code>CustomAuthenticationProvider</code>)를 따로 등록합니다.</td></tr>
               <tr><td>CSRF · CORS 설정</td><td>앱 체인의 설정은 그대로이고, Contexa 체인의 것은 <code>global()</code>로 바꿉니다.</td></tr>
@@ -102,12 +123,12 @@
           </table></div>
 
           <h3 id="full-datasource"><code>FULL</code>이 더 하는 일</h3>
-          <p><code>FULL</code>은 Contexa 소유 앱 표시(<code>contexa.datasource.isolation.contexa-owned-application</code>)를 <code>true</code>로 둡니다. 그러면:</p>
+          <p><code>FULL</code>은 앱에 자기 DB가 없을 때, 곧 <code>spring.datasource.url</code>이 없거나 <code>contexa.datasource.url</code>과 같은 DB를 가리킬 때 Contexa 소유 앱 표시(<code>contexa.datasource.isolation.contexa-owned-application</code>)를 <code>true</code>로 둡니다. 직접 적은 값은 언제나 그대로 쓰입니다. 표시가 <code>true</code>면:</p>
           <ul>
-            <li>앱이 직접 DataSource 빈을 두지 않았다면 앱의 기본 DB 연결(<code>dataSource</code>)이 Contexa DB가 됩니다. 기본 <code>JdbcTemplate</code> · <code>TransactionTemplate</code>도 Contexa DB를 씁니다.</li>
+            <li>앱이 직접 DataSource 빈을 두지 않았다면 앱의 기본 DB 연결(<code>dataSource</code>)이 Contexa DB입니다. 앱이 따로 두지 않은 기본 <code>JdbcTemplate</code> · <code>TransactionTemplate</code>도 Contexa DB를 씁니다.</li>
             <li>기능 진단이 <code>FAIL_FAST</code>가 되어, 채팅 모델 · 벡터 저장소 같은 필수 부품이 빠지면 기동이 멈춥니다(<a href="installation-guide.html#capability">기능 진단</a>).</li>
           </ul>
-          <p>로그인은 Contexa에 맡기되 이 두 가지를 원하지 않으면 <code>mode</code>는 기본으로 두고 <code>contexa.bridge.ownership: CONTEXA_OWNED</code>만 적습니다(이때 체인은 <code>SANDBOX</code> 모양).</p>
+          <p><code>spring.datasource.url</code>이 앱 자신의 DB를 가리키면 <code>FULL</code>에서도 앱은 그 DB를 그대로 씁니다. 표시는 <code>false</code>로 남고 앱의 기본 연결은 바뀌지 않습니다. 그래도 표시를 직접 <code>true</code>로 적으면 Contexa DB가 앱의 DB가 되고, 기동 로그에 <code>[Contexa] contexa.datasource.isolation.contexa-owned-application=true: the application's spring.datasource is not used; Contexa's database serves the application.</code>(WARN)가 나옵니다.</p>
 
           <h2 id="modes">집행 모드</h2>
           <p>판정을 만들고 적용할지는 집행 모드(<code>contexa.security.zerotrust.mode</code>)가 정합니다. 로그인 소유 방식과는 따로 정합니다.</p>
