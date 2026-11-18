@@ -94,7 +94,7 @@ public class AppSecurityConfig {
     }
 }</code></pre>
           <div class="callout callout-warning">
-            <strong>정책이 없는 URL은 기본으로 열립니다.</strong> <code>.anyRequest().authenticated()</code>를 매니저로 바꾸면, 맞는 정책이 없는 URL은 "정책이 없을 때의 결정"(기본 <code>PERMIT</code>)에 따라 로그인 없이도 허용됩니다. 정책을 다 만들기 전에 <a href="#defaults">정책이 없을 때의 결정</a>을 먼저 정하세요.
+            <strong>정책이 없는 URL은 기본으로 로그인한 사용자에게만 열립니다.</strong> <code>.anyRequest().authenticated()</code>를 매니저로 바꾸면, 맞는 정책이 없는 URL은 "정책이 없을 때의 결정"(기본 <code>AUTHENTICATED</code>)에 따라 로그인한 사용자는 통과하고 로그인하지 않은 요청은 돌려보냅니다. 결정이 <code>PERMIT</code>일 때만 로그인 없이도 허용되며, 이전 버전에서 만든 설치는 설정 행에 <code>PERMIT</code>을 그대로 갖고 있습니다. 정책을 다 만들기 전에 <a href="#defaults">정책이 없을 때의 결정</a>을 먼저 정하세요.
           </div>
           <ul>
             <li>이 체인에서는 관리 콘솔도 시드 정책이 막습니다: <code>/contexa/admin/**</code>는 <code>ALLOW_CONTEXA_ADMIN_ADMINISTRATORS</code>(<code>hasRole('ADMIN')</code>)가 정합니다(<a href="admin.html#access">관리 콘솔 보호</a>).</li>
@@ -257,11 +257,11 @@ SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
           </table></div>
 
           <h2 id="defaults">정책이 없을 때의 결정과 결합 방식</h2>
-          <p>요청에 맞는 URL 정책이 없으면, 매니저는 "정책이 없을 때의 결정"을 씁니다. 기본값은 <code>PERMIT</code>(허용)입니다. 맞은 정책이 모두 DENY 정책이고 조건이 거짓(해당 없음)일 때도 같습니다(<code>DENY_UNLESS_PERMIT</code>은 이때 거부). 매니저의 마지막 줄은 이 결정을 넘겨 결합합니다.</p>
-          <pre><code class="language-java">return combiningEvaluator.evaluate(matchedDecisions, currentAlgorithm, currentNoPolicyDecision);</code></pre>
-          <p>정책이 없는 URL을 막는 방법은 설정입니다.</p>
+          <p>요청에 맞는 URL 정책이 없으면, 매니저는 "정책이 없을 때의 결정"을 씁니다. 기본값은 <code>AUTHENTICATED</code>(로그인한 사용자는 통과, 로그인하지 않은 요청은 돌려보냄, Contexa 자신의 로그인은 열려 있음)이고, <code>PERMIT</code>은 모두를 허용합니다. 맞은 정책이 모두 DENY 정책이고 조건이 거짓(해당 없음)일 때도 같습니다(<code>DENY_UNLESS_PERMIT</code>은 이때 거부). 매니저는 이 결정을 요청의 주체와 함께 넘겨 결합하며, 그래서 <code>AUTHENTICATED</code>가 로그인한 사용자와 방문자를 가릅니다.</p>
+          <pre><code class="language-java">CombinedDecision combined = combiningEvaluator.combine(matchedDecisions, currentAlgorithm, currentNoPolicyDecision, authenticationSupplier.get());</code></pre>
+          <p>정책이 없는 URL을 열거나 막는 방법은 설정입니다.</p>
           <ul>
-            <li><strong>막기로 바꾸기:</strong> 관리 콘솔 "IAM → 시스템 설정 → 적용되는 URL 정책이 없을 때의 결정"을 <code>DENY</code>로 저장합니다. 설정 이름은 <code>contexa.policy.no-matching-url-policy-decision</code>이지만, 기본 시드가 만든 시스템 설정 값이 기동 때 YAML을 덮어쓰므로 화면에서 바꿉니다(<a href="policy.html#decision-settings">결정 방식 설정</a>). 맞는 정책이 하나도 없으면 결합 방식과 관계없이 이 결정을 씁니다.</li>
+            <li><strong>막기로 바꾸기:</strong> 관리 콘솔 "IAM → 시스템 설정 → 적용되는 URL 정책이 없을 때의 결정"을 <code>DENY</code>로 저장합니다(거기서 <code>PERMIT</code>을 고르면 그런 URL이 모두에게 열립니다). 설정 이름은 <code>contexa.policy.no-matching-url-policy-decision</code>이며, 화면에서 저장한 값이 기동 때 YAML을 덮어쓰고 저장하기 전에는 YAML 값이 적용되므로(없으면 <code>AUTHENTICATED</code>) 화면에서 바꿉니다(<a href="policy.html#decision-settings">결정 방식 설정</a>). 맞는 정책이 하나도 없으면 결합 방식과 관계없이 이 결정을 씁니다.</li>
             <li><strong>넓은 정책으로는 만들 수 없습니다:</strong> <code>/**</code> 같은 넓은 경로에 정책을 두면 효과가 반대인 다른 정책과 대상이 겹쳐 충돌(<code>HIGH</code>)로 저장이 거부되거나, 나중에 만드는 반대 효과 정책이 거부됩니다(<a href="policy.html#effect">충돌 검사</a>).</li>
           </ul>
           <p>효과의 뜻: ALLOW 정책은 조건이 참이면 허용, 거짓이면 거부입니다. DENY 정책은 조건이 참이면 거부, 거짓이면 해당 없음(다음 정책으로)입니다. 결합 방식 네 가지는 <a href="policy.html#effect">효과 · 우선순위 · 결합</a>에 있습니다.</p>

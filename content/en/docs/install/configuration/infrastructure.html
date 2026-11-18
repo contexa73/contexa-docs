@@ -33,8 +33,8 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Part</th><th>Contents</th></tr></thead>
             <tbody>
-              <tr><td>The starter brings</td><td>The five Contexa modules (common · core · identity · iam · autoconfigure), the OAuth2 resource server · client · authorization server, the Spring AI 1.1.8 BOM. It does not bring the Spring Security starter (your application adds it)</td></tr>
-              <tr><td>The application adds</td><td>A chat model starter (one or more of OpenAI · Anthropic · Ollama), the pgvector vector store starter (<code>spring-ai-starter-vector-store-pgvector</code>). For distributed mode, Redis · Redisson · Kafka (<a href="#distributed">Distributed mode</a>)</td></tr>
+              <tr><td>The starter brings</td><td>The five Contexa modules (common · core · identity · iam · autoconfigure), the OAuth2 resource server · client · authorization server, the Spring AI 1.1.8 BOM</td></tr>
+              <tr><td>The application adds</td><td>Spring Security (<code>spring-boot-starter-security</code>), a chat model starter (one or more of OpenAI · Anthropic · Ollama), the pgvector vector store starter (<code>spring-ai-starter-vector-store-pgvector</code>). For distributed mode, Redis · Redisson · Kafka (<a href="#distributed">Distributed mode</a>)</td></tr>
               <tr><td>Spring Boot</td><td>3.x. Contexa is built on 3.5.4 and refuses to start on 4.x.</td></tr>
             </tbody>
           </table></div>
@@ -165,7 +165,7 @@ public class MyApplication { }</code></pre>
               <tr><td>MFA session</td><td>HTTP session (even if the application has Redis)</td><td>Redis (when a string Redis template is present)</td></tr>
               <tr><td>Contexa cache</td><td>Local cache (<code>contexa.cache.type</code> is always <code>LOCAL</code>)</td><td>Redis cache (<a href="#cache">Cache</a>)</td></tr>
               <tr><td>Login MFA state machine (when Contexa owns login)</td><td>Memory</td><td>Redis (when a Redisson bean and <code>spring-statemachine-data-redis</code> are present)</td></tr>
-              <tr><td>Redis · Kafka auto-configuration</td><td>Contexa's are left out. The application's Redis · Kafka auto-configuration is also left out unless the application writes its connection address (<code>spring.data.redis.host</code> · <code>spring.kafka.bootstrap-servers</code> and so on) itself</td><td>All kept</td></tr>
+              <tr><td>Redis · Kafka auto-configuration</td><td>Contexa's are left out. The application's Redis auto-configuration is also left out unless the application writes its connection address (<code>spring.data.redis.host</code> and so on) or one of its classes names Spring Data Redis or Redisson. The application's Kafka auto-configuration is kept</td><td>All kept</td></tr>
             </tbody>
           </table></div>
           <p>If the application declares store beans itself (<code>ZeroTrustActionRepository</code>, <code>BaselineDataStore</code>, <code>SecurityContextDataStore</code> and so on), those implementations are used instead of memory even in standalone mode. When the application provides both the baseline store and the context store (<code>SecurityContextDataStore</code>), the standalone WARN does not appear either.</p>
@@ -208,19 +208,19 @@ spring:
           <ul>
             <li><strong>Contexa creates the Redis connection.</strong> In distributed mode Contexa builds a single-server Redis connection itself from <code>spring.data.redis.host</code> · <code>port</code> · <code>password</code>, and this connection becomes the application's default Redis connection. It uses <code>contexa.security.zerotrust.redis.timeout</code>, in <strong>milliseconds</strong>, as the connect · command · pool-wait time limit.</li>
             <li><strong>Redisson.</strong> If the application declares no <code>RedissonClient</code> bean, Contexa builds a single-server client from <code>spring.data.redis.host</code> · <code>port</code>. That client uses no password and no database number (database 0). For a Redis with a password, declare your own <code>RedissonClient</code> bean.</li>
-            <li><strong>The Kafka connection</strong> uses Spring's <code>spring.kafka.*</code>. Events to analyze go to the topic <code>security.events.&lt;category&gt;.&lt;type&gt;</code> (for example <code>security.events.authorization.method</code>), and events that could not be handled go to the DLQ topic. A failed event is retried 3 times, 1 second apart.</li>
+            <li><strong>The Kafka connection</strong> uses Spring's <code>spring.kafka.*</code>. Events to analyze go to the topic <code>ctxa.&lt;application name&gt;.security.events.&lt;category&gt;.&lt;type&gt;</code> (for example <code>ctxa.order-service.security.events.authorization.method</code>), and events that could not be handled go to the DLQ topic. The application name is <code>spring.application.name</code>, lower-cased, with any character other than <code>a-z</code>, <code>0-9</code> and <code>-</code> written as <code>_</code> and the hex of its bytes; without a name the prefix is just <code>ctxa.</code> (<code>ctxa.security.events.authorization.method</code>). At start Contexa makes only the topics it uses: the three event topics (<code>authentication.mfa</code>, <code>authentication.success</code>, <code>authorization.method</code>) and the DLQ topic. Topics an earlier version made are not deleted. A failed event is retried 3 times, 1 second apart.</li>
           </ul>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
               <tr><td><code>contexa.infrastructure.mode</code></td><td><code>STANDALONE</code></td><td><code>standalone</code> or <code>distributed</code> (case does not matter)</td><td>To run several machines</td></tr>
               <tr><td><code>contexa.security.zerotrust.redis.timeout</code></td><td><code>5000</code></td><td>Connect · command · pool-wait time limit of the Redis connection in distributed mode (<strong>milliseconds</strong>). Writing <code>5</code> means 5 milliseconds</td><td>When Redis is far or slow</td></tr>
-              <tr><td><code>contexa.security.kafka.topic.dlq</code></td><td><code>security-events-dlq</code></td><td>Topic for events that could not be handled</td><td>When you have topic naming rules</td></tr>
-              <tr><td><code>security.plane.kafka.group-id</code></td><td><code>security-plane-consumer</code></td><td>Group of the Kafka listener that receives events. The name does not start with <code>contexa</code></td><td>When the same Kafka is shared with another Contexa group</td></tr>
+              <tr><td><code>contexa.security.kafka.topic.dlq</code></td><td><code>ctxa.&lt;application name&gt;.security-events-dlq</code> (<code>ctxa.security-events-dlq</code> without an application name)</td><td>Topic for events that could not be handled. A name set here is used exactly as it is set, with no prefix added, and that topic is the one made at start</td><td>When you have topic naming rules</td></tr>
+              <tr><td><code>security.plane.kafka.group-id</code></td><td><code>security-plane-consumer</code></td><td>Base name of the group of the Kafka listener that receives events. An application with a name joins <code>security-plane-consumer.&lt;identifier&gt;</code>, where the identifier is <code>spring.application.name</code> lower-cased, with any character other than <code>a-z</code>, <code>0-9</code>, <code>.</code>, <code>_</code> and <code>-</code> written as <code>~</code> and the hex of its bytes (a name that makes it longer than 48 characters is cut and ends in a digest); without a name the group is this value as it is. The name does not start with <code>contexa</code></td><td>When the same Kafka is shared with another Contexa group</td></tr>
             </tbody>
           </table></div>
           <div class="callout callout-info">
-            <strong>The Kafka listener group reads <code>security.plane.kafka.group-id</code>.</strong> This key is the exception that is read under its old name (not through an alias: the listener reads that name directly, and nothing is logged at start-up). The value is the base name of the listener group, and when the application has a name, <code>.&lt;application name&gt;</code> is added after it. <code>contexa.security.plane.kafka.group-id</code> is read by nothing and has no effect.
+            <strong>The Kafka listener group reads <code>security.plane.kafka.group-id</code>.</strong> This key is the exception that is read under its old name (not through an alias: the listener reads that name directly, and nothing is logged at start-up). The value is the base name of the listener group, and when the application has a name, <code>.</code> and its identifier (see the table above) are added after it. <code>contexa.security.plane.kafka.group-id</code> is read by nothing and has no effect.
           </div>
           <p>Decision engine throughput, such as the analysis queue · thread counts · time limits, is in <a href="security.html#throughput">Enforcement Modes and Decision Tuning</a>.</p>
 
@@ -243,7 +243,7 @@ spring:
           <p>Values for <code>contexa.cache.domains.roles</code> · <code>permissions</code> · <code>groups</code> · <code>soar</code> exist too, but no OSS code calls the Contexa cache with those domains today (Spring caches such as <code>@Cacheable("roles")</code> are separate).</p>
 
           <h2 id="scheduler-lock">Scheduled jobs across instances</h2>
-          <p>So that scheduled jobs, such as deleting records past their retention, run only once across instances, Contexa locks them with the <code>shedlock</code> table in the Contexa database (ShedLock). It does no harm with one instance. Contexa brings ShedLock itself; locking turns on when the Contexa database is present.</p>
+          <p>So that scheduled jobs, such as deleting records past their retention, run only once across instances, Contexa locks them with the <code>ctxa_shedlock</code> table in the Contexa database (ShedLock). It does no harm with one instance. Contexa brings ShedLock itself; locking turns on when the Contexa database is present.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
