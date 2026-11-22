@@ -1,0 +1,415 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">Home</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">Reference</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">Prompt Quality Assurance</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-primary">contexa-iam</span>
+              <span class="badge badge-primary">contexa-autoconfigure</span>
+            </div>
+            <h1>Prompt Quality Assurance</h1>
+            <p class="lead">How Contexa measures whether the security decision prompt decides right, and keeps a version that decides worse from deciding without a reason. It covers the labelled cases a version is graded against, the measurement and its metrics, the wrong cases and their causes, the quality gate, what operation adds to the cases, the quality report, and what a decision records about its prompt.</p>
+          </div>
+
+          <h2 id="overview">At a glance</h2>
+          <p>Quality is measured on decisions, not on the wording of a prompt. A version of the security decision prompt is run on <strong>labelled cases</strong>, decision inputs with their right answer, and its answers are graded against them by rules. When a version is to be used for decisions, the <strong>quality gate</strong> compares its measurement with the one of the version in use. Operation closes the loop: a decision an administrator rated, or an allowed decision later found to be a breach, becomes a case.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>The loop of prompt quality assurance</strong>A measurement never changes a decision: it writes no decision record, seal, outcome or learning, and its model calls wait behind real decisions.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-tag">1</span><span class="dg-node-title">Labelled cases</span><span class="dg-node-desc">a decision input and its right answer: the Contexa default set and your own cases, confirmed by a second administrator</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">2</span><span class="dg-node-title">Measure</span><span class="dg-node-desc">each case replayed through the decision pipeline, 3 runs by default: 11 metrics with 95% ranges, two versions compared case by case</span></li>
+              <li class="dg-node"><span class="dg-node-tag">3</span><span class="dg-node-title">Wrong cases and causes</span><span class="dg-node-desc">every wrong answer put down to one of seven causes, each with where it is fixed</span></li>
+              <li class="dg-node"><span class="dg-node-tag">4</span><span class="dg-node-title">New version</span><span class="dg-node-desc">made on the version screens and measured as it is saved</span></li>
+              <li class="dg-node dg-challenge"><span class="dg-node-tag">5</span><span class="dg-node-title">Quality gate</span><span class="dg-node-desc">nine conditions when a version is used for decisions or started as a canary; a reason overrides a block, going back needs none</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">6</span><span class="dg-node-title">Operation</span><span class="dg-node-desc">allowed decisions reviewed by risk, rated decisions and breaches made cases, the version in use measured again every week</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-tag">7</span><span class="dg-node-title">Evidence and report</span><span class="dg-node-desc">the sealed evidence of a decision, and the quality report for audits</span></li>
+            </ol>
+          </figure>
+          <ul>
+            <li><strong>Rules grade, a model does not:</strong> an answer is right when its action is one of the case's allowed actions. No model grades an answer.</li>
+            <li><strong>Every rate has its sample:</strong> a rate comes with its 95% range, counted by distinct root cases. When the cases cannot tell two versions apart, the screens say "Undecided".</li>
+            <li><strong>The security decision only:</strong> labelled cases, measurements and the quality gate exist for <code>cortex.security-decision</code>. The seven other prompts with versions (<a href="prompt-versions.html#other-prompts">Prompt Versions</a>) have none.</li>
+          </ul>
+          <div class="callout callout-info">
+            <strong>This replaces the prompt inspection and the official verification.</strong> The official verification (12 metrics, 66 checks, and the "Protected Candidates", "Official Inspection" and "Inspection Overview" screens), the scoring of the sealed structure and the deterministic replay are removed. The inspection of sealed packages keeps three checks as the evidence audit (<a href="evidence.html#audit">Sealed Evidence</a>). What an upgrade changes is in <a href="#removed">What was removed, and upgrading</a>.
+          </div>
+
+          <h2 id="screens">The five screens</h2>
+          <p>The menu group "Prompt Quality Assurance" holds five screens, each answering one question. A bar with the five menus sits on top of each screen, with a count beside four of them. Every screen and API needs the administrator role.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Menu</th><th>Address</th><th>The question it answers</th><th>Count beside the menu</th></tr></thead>
+            <tbody>
+              <tr><td>Quality</td><td><code>/contexa/admin/prompt-quality/status</code></td><td>"How right the prompt in use is, and what there is to check." (<a href="#status">The quality screen</a>)</td><td>—</td></tr>
+              <tr><td>Labelled cases</td><td><code>/contexa/admin/prompt-quality/cases</code>, one case at <code>/cases/{key}</code></td><td>"What decisions are graded against. A case is a decision input and its right answer." (<a href="#cases">Labelled cases</a>)</td><td>The cases of the scope: the Contexa default set and the cases kept, those waiting for confirmation included</td></tr>
+              <tr><td>Measure &amp; compare</td><td><code>/contexa/admin/prompt-quality/measure</code>, <code>/measure/{id}</code>, <code>/measure/run</code>, <code>/measure/compare</code>, <code>/measure/trials/{id}</code></td><td>"Measure a version on the labelled cases and see whether it beats the one in use." (<a href="#measure">Measuring a version</a>)</td><td>The measurements on labelled cases and on sealed decisions</td></tr>
+              <tr><td>Prompt versions</td><td><code>/contexa/admin/prompt-quality/versions</code></td><td>"Manage the prompt decisions use as versions." (<a href="prompt-versions.html">Prompt Versions</a>)</td><td>The versions, the hidden ones left out</td></tr>
+              <tr><td>Sealed evidence</td><td><code>/contexa/admin/prompt-quality/evidence</code>, one package at <code>/evidence/{packageId}</code></td><td>"The prompt, the facts and the answer of a decision, sealed as they were." (<a href="evidence.html#console">Sealed Evidence</a>)</td><td>The decisions sealed in the last 7 days</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>Earlier addresses</strong> lead to these screens: <code>/contexa/admin/prompt-inspection</code> and <code>/prompt-inspection/packages</code> to the sealed evidence list (the period and filters come along), <code>/prompt-inspection/packages/{packageId}</code> to that package, <code>/contexa/admin/prompt-quality/versions/trials</code> and <code>/prompt-quality/releases/compare</code> to Measure &amp; compare, <code>/versions/trials/{id}</code> to <code>/measure/trials/{id}</code>. The screens of the official verification (<code>/contexa/admin/prompt-quality/resources</code>, <code>/runtime-evidence</code>) are gone.</li>
+            <li>The screens take <code>?scope=</code> (the tenant of the prompt versions; without it, the whole platform). Cases, bundles and measurements belong to a scope as versions do.</li>
+            <li>An upgrade adds the new menus to an existing installation, removes the menus of the removed screens and turns "Sealed Prompts" into "Sealed evidence".</li>
+          </ul>
+
+          <h2 id="cases">Labelled cases</h2>
+          <p>A labelled case is a decision input with its right answer. The input is what the replay of a sealed decision reads (the canonical context, the request facts, the authentication state, the baselines and the past records), not the text of a prompt, so a case is drawn again in whatever form a version gives the prompt. Cases are kept apart from the sealed decisions of operation; a replay builds the sealed form in memory.</p>
+          <h3 id="cases-answer">The right answer</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>On the screen</th><th>What it holds</th></tr></thead>
+            <tbody>
+              <tr><td>Right answer (allowed actions)</td><td>The actions that are right, one or more (for a threat, for example <code>BLOCK</code>, <code>CHALLENGE</code> and <code>ESCALATE</code>). An answer is right when its action is one of them</td></tr>
+              <tr><td>Preferred action</td><td>Optional; one of the allowed actions</td></tr>
+              <tr><td>What it is</td><td>Threat, Normal or Uncertain. An uncertain case counts as a case that must be stopped, as a threat does</td></tr>
+              <tr><td>Kind</td><td>Outsider (someone else with the account), Insider (the account's owner doing what the role or the records do not cover), Normal work, Automation</td></tr>
+              <tr><td>Case grade</td><td>Ordinary, Must catch (such as an account takeover the server itself confirmed), Must not block. The gate lets no answer of a "Must catch" case allow and no answer of a "Must not block" case block, not in a single run</td></tr>
+              <tr><td>Why it is right</td><td>Required, in Korean, English or both</td></tr>
+              <tr><td>Facts that decide it</td><td>Optional, one a line (for example <code>intent.anomalySignal=CONFIRMED_ACCOUNT_TAKEOVER</code>). The cause "Input missing" is computed only for cases that name them</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>Roots:</strong> a case made from another case names that case's root. Variants of one decision are not independent, so the 95% ranges and the numbers of cases the gate needs are counted by distinct roots: variants alone do not fill a target.</li>
+            <li><strong>Where a case comes from:</strong> "Contexa default" (the default set), "From operation" (a sealed decision an administrator added, or a decision rated in the decision detail, <a href="#operation">Connected to operation</a>) and "Made by us" (a copy of another case with values changed, such as a new device, an outside address or an approval record taken out). A case from operation that the second analysis decided is marked and counted apart.</li>
+            <li><strong>Fixed environment:</strong> a case keeps the time zone and the context format it is read in.</li>
+          </ul>
+          <h3 id="cases-default">The Contexa default set</h3>
+          <p>The product ships a default set of 70 cases, read only. They are 25 sealed decisions, 35 controlled variants made from 10 of them, and 10 control cases (keys <code>VER-…</code>) that carry a malicious signal the server verified, graded "Must catch", with <code>BLOCK</code> as their only right action. The 60 ordinary cases are 15 of each kind (44 threats, 1 uncertain, 15 normal) and count as 25 distinct roots to stop and 10 to allow. Every case says why in Korean and English, the 45 variants name the facts that decide them, and every case is read in UTC. The default set has no "Must not block" case.</p>
+          <ul>
+            <li>A case of the default set is changed by copying it ("Copy to a new case"); the copy is counted under the same root.</li>
+            <li>Upgrading the product changes the default set only; your cases stay as they are.</li>
+          </ul>
+          <h3 id="cases-confirm">Confirmation by a second administrator, and publishing</h3>
+          <ul>
+            <li><strong>Two people set an answer.</strong> A case, and each change of its answer, waits ("To confirm") until an administrator other than the one who set the answer confirms it: "The administrator who set the answer cannot confirm it." A case labelled wrongly on purpose (an attack marked normal) would let a version that allows the attack pass. An installation with one administrator turns this off with <code>contexa.pqa.oss.quality.two-person-confirmation=false</code>: cases are then confirmed as they are submitted, and every change of an answer is still kept with who made it.</li>
+            <li><strong>Publishing</strong> ("Publish the bundle") fixes the default set of this build and the confirmed cases of the scope by their content hashes. "The gate reads the published bundle. Publishing fixes the list of cases, and only the added cases are measured again." A case waiting for confirmation is not in it, and the same cases published again are the bundle published before. With nothing published in a scope, the first automatic measurement publishes the default set alone.</li>
+            <li><strong>Changing an answer</strong> keeps the answer it replaces. The case detail shows "Answers better by changing the answer": the answers right on the present answer that were wrong on the answer the case was added with, counted apart because no version made them better.</li>
+            <li>Each step is audited: <code>PROMPT_QUALITY_CASE_SUBMITTED</code>, <code>PROMPT_QUALITY_CASE_ANSWER_CHANGED</code>, <code>PROMPT_QUALITY_CASE_CONFIRMED</code>, <code>PROMPT_QUALITY_CASE_SET_PUBLISHED</code>.</li>
+          </ul>
+          <h3 id="cases-privacy">Personal data</h3>
+          <p>A case from operation "holds a real user, real addresses and that user's baseline, and outlives the seal retention (90 days)". It stays in the Contexa database. Deleting a case deletes its answer changes and the answers measured on it, and a published bundle that held it reads it as missing. Deleting the user deletes the user's cases. The sealed package a case was added from is kept for as long as the case is. The quality report never reads the input of a case or why it is right (<a href="#report">The quality report</a>).</p>
+          <h3 id="cases-screen">The labelled cases screen</h3>
+          <ul>
+            <li><strong>Head:</strong> "Published bundle {version} · {when} · {n} cases" and the cases added since, with the buttons "Add from a sealed decision", "New case" and "Publish the bundle".</li>
+            <li><strong>Numbers:</strong> "Cases to stop" and "Cases to pass" (distinct roots of the published bundle against the target the gate needs, 200 and 300 by default), "Chance to tell a better version" and "To confirm".</li>
+            <li><strong>"Chance to tell a better version"</strong> is the chance that the distinct roots to stop tell apart a version that misses 10 points less, by the gate's paired comparison at its level. It is computed exactly, taking the miss rate of the version in use, the roots as independent and the two versions' results as correlated by 0.7. Until the targets are met, comparisons come out "Undecided".</li>
+            <li><strong>"Cases by resource grade"</strong> (Critical, Sensitive, General, Public), from the resource class the decision records keep: the roots to stop and to pass of the published bundle beside the decisions of the last 7 days, marked "Covered", "Few cases" (a side has fewer than 5 roots, the fewest a paired comparison of the grade can be significant with), "No case" or "No decision". "A measurement measures a version, not a resource": where operation decides and few cases cover the grade, the average hides a worse result there.</li>
+            <li><strong>The list</strong> (All, To confirm), with filters such as the resource grade and the case name: the case, class and kind, right answer, case grade, resource and grade, and its result in the latest measurement of the version in use ("Right", "Missed", "Off the answer", "Not measured", "To confirm"). Actions: Copy, Confirm, Delete, Change the answer.</li>
+            <li><strong>A case's detail:</strong> the right answer, why, the facts that decide it, the decision input (Request, Session, Unlike usual, Work records, Unknown), the results by version with the action of each run, and the answer changes.</li>
+          </ul>
+
+          <h2 id="measure">Measuring a version</h2>
+          <p>A measurement is one prompt version, under the model setting the server runs, on one published bundle, each case run a number of times: 3 by default, 1 to 10. Each answer is the case's input replayed through the engine's decision pipeline, as a sealed decision is replayed: the prompt drawn with the version, the response check, the corrective retry and the fallback action. After a first answer of <code>ESCALATE</code> the second pass is asked with the server's second-layer model.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Basis</th><th>What it counts</th></tr></thead>
+            <tbody>
+              <tr><td>First answer</td><td>"The answer the model gave with the prompt. It tells the prompt's quality, and the gate reads it."</td></tr>
+              <tr><td>Final action</td><td>"The action after the engine's closing rules. It tells what the user meets." The closing rules are computed from the server's settings: the second pass after an <code>ESCALATE</code>, an action of the second pass that is none of the four replaced by <code>CHALLENGE</code>, and an <code>ESCALATE</code> left after it ending in the terminal action the server is set to. The overload protection depends on the load of the moment, so it is not replayed, and the result says so</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>The model setting</strong> of a measurement is every server setting that changes an answer: the models each layer asks, the options of each layer's request (output limit, reasoning effort, verbosity, thinking, budget profile), the determinism of the call, the structured output, the prompt's truncation and argument excerpts, the minimum action rules and their mode, what an <code>ESCALATE</code> left after the second pass ends in, the time zone and the context format. Timeouts, caches and the model gate are not in it. Two measurements are compared only under the same setting; a measurement taken under a setting the server no longer runs is stale.</li>
+            <li><strong>Behind the decisions:</strong> a measurement waits in the server's line with the trials of the version screens, and its model calls wait behind real decisions at the model server's gate, <code>contexa.pqa.oss.quality.measurement.concurrency</code> at a time (1 by default; the gate of a self-hosted server has 2 slots, a remote provider 16).</li>
+            <li><strong>One server at a time</strong> runs measurements, under a lock of the database with a heartbeat (<code>heartbeat</code>, 30 s). A server that stops leaves the measurement to another within about two and a half minutes, which resumes it from the answers taken. "Cancel" is written to the database, so the server running it stops at its next answer.</li>
+            <li><strong>A busy model server does not count against the prompt.</strong> A replay the model server gave no answer to (busy, unreachable, a time limit) is asked again 2 more times, after 15 s and then 30 s. An answer that still did not come, or a case that could not be read, enters no metric, and the measurement shows "Incomplete, {n} answers".</li>
+            <li><strong>Calls are counted before it starts:</strong> "About {cases} cases × {runs} runs = {calls} calls · about {minutes} min · limit {limit}", and "{n} answers measured already under the same setting are used again". An answer makes at least one call and at most four for each attempt (the first pass and its corrective retry, the second pass and its retry): the default set run 3 times makes at least 210 calls and at most 2,520 with the default retries. A measurement that would make more calls than <code>contexa.pqa.oss.quality.measurement.call-limit</code> (3,000) does not start; one that reaches it stops and ends failed. The screen reckons about 7 seconds an answer.</li>
+            <li><strong>Answers are used again:</strong> an answer kept for the same case content, version, model setting and run is not measured again, so a bundle published with new cases is measured on the new cases only.</li>
+          </ul>
+          <h3 id="metrics">The 11 metrics</h3>
+          <p>A value is the mean of the runs. Each rate's 95% range is a Wilson interval with the distinct roots as its sample: the variants and runs of a root do not narrow it.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Metric</th><th>Definition</th></tr></thead>
+            <tbody>
+              <tr><td>Miss rate</td><td>Of the answers to cases that must be stopped, those that allowed. A case classed uncertain counts as one to stop</td></tr>
+              <tr><td>False stop rate</td><td>Of the answers to cases that must be allowed, those outside the allowed actions</td></tr>
+              <tr><td>Friction rate</td><td>Of the answers to cases that must be allowed, those that did not allow: it finds a version that asks every request to step up</td></tr>
+              <tr><td>Over-blocking</td><td>Of the answers to cases whose right answer has no <code>BLOCK</code>, those that blocked</td></tr>
+              <tr><td>Action hit rate</td><td>Of all answers, those inside the allowed actions</td></tr>
+              <tr><td>Deferral rate</td><td>Of all answers, those whose first answer is <code>ESCALATE</code>: it finds a version that only defers</td></tr>
+              <tr><td>Consistency</td><td>Of the cases with two or more answers, those whose answers all took the same action. It needs 2 runs or more</td></tr>
+              <tr><td>Citation accuracy</td><td>Of the facts the answers cite, those in the prompt that the response check did not name</td></tr>
+              <tr><td>Asked again</td><td>Of all answers, those that broke the answer contract and were asked again</td></tr>
+              <tr><td>Set without the model</td><td>Of all answers, those the engine decided because the model's answer could not be used</td></tr>
+              <tr><td>Decision time and answer tokens</td><td>The median and the 95th value. Shown, not judged</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="compare">Comparing two versions</h3>
+          <ul>
+            <li>Two measurements are compared only when taken the same way: the same bundle version, model setting and number of runs ("Same conditions: bundle {version} · {models} · {n} runs").</li>
+            <li><strong>Case against the same case:</strong> for each rate, each root holds the cases both measurements scored, and is worse, better or unchanged by its own rate. The exact one-sided sign test over the roots that changed says whether so many could turn one way by chance (the exact McNemar test when a root is one answer), at <code>contexa.pqa.oss.quality.gate.significance</code> (0.05).</li>
+            <li><strong>Verdicts:</strong> "Same" (no difference, or one within the noise of the rate), "Better" or "Worse" (beyond the noise, and the test rejects chance), "Undecided" (nothing is paired, the noise is not known, or too few roots changed to tell). Counting changed cases alone would stop the same prompt one time in four to one in two.</li>
+            <li><strong>The noise</strong> is how far two measurements of one version taken the same way differ, of the version in use first, else of the candidate, when each has answers of its own. A measurement that used answers of another again shows no noise and is not read for it. As answers are used again for the same case content, version, model setting and run, measuring a version again under the same setting gives no noise; without one, the screen says the noise is "not known yet, so a difference is "undecided"".</li>
+            <li><strong>Our cases apart:</strong> "Default bundle and our cases" shows the misses of each apart: "The default bundle does not stand for your environment and was used to make the product version, so it favours it."</li>
+            <li><strong>Cases added after the version:</strong> the cases that came in after the version was made, which its author could not see. "A worse result only here hints at a version fitted to the cases seen." The gate's ninth condition reads them.</li>
+          </ul>
+          <h3 id="measure-screen">The Measure &amp; compare screen</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>View</th><th>What it shows and does</th></tr></thead>
+            <tbody>
+              <tr><td>Measurements</td><td>The start: "Input" ("Labelled cases" or "Latest sealed decisions"), "Version", "Case bundle", "Runs" and the model setting the server runs, the call estimate and "Start measuring". "Measuring now" with the answers taken, the time left and "Cancel". The list, newest first: version and model setting, input, state (Queued, Running, Done, Incomplete, Cancelled, Failed), result, started. Below, "Results of running alongside" (<a href="prompt-versions.html#shadow">Run alongside</a>)</td></tr>
+              <tr><td>One version</td><td>The basis ("First answer", "Final action"), "The 11 metrics" with counts and 95% ranges, all cases or the cases of one resource grade, "Default bundle and our cases" and "Cases added after the version"</td></tr>
+              <tr><td>Two versions</td><td>A sentence on the misses, "Metric by metric" with each verdict and the noise, "Misses by resource grade" (a grade that got worse where the whole stayed the same), and "Changed cases" (Newly missed, Newly caught, Newly stopped, Newly passed) with both answers, the reason codes the model gave and how each cited fact stands against the facts</td></tr>
+              <tr><td>Wrong cases and causes</td><td>The causes of a measurement's wrong answers (<a href="#causes">below</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>"Measure" on a version of the version screens opens this screen with that version chosen.</li>
+            <li><strong>"Latest sealed decisions"</strong> is the trial of the version screens: the latest 20, 50 or 100 sealed decisions are decided again with two versions. There is no right answer to grade them against, so a trial compares the actions only (<a href="prompt-versions.html#trials">Trial decisions</a>). A trial's result opens at <code>/measure/trials/{id}</code>, and a sealed decision the two versions decided differently can be added as a case from it.</li>
+          </ul>
+
+          <h2 id="causes">Wrong cases and their causes</h2>
+          <p>The view "Wrong cases and causes" puts every wrong answer of a measurement down to one cause by deterministic rules, the first in the order below that holds. An administrator may change a cause ("Change cause"); a changed cause is kept and not overwritten. With "With the decisions rated "not valid" in operation", the decisions an administrator rated "not valid" in the decision detail over the last 90 days are classified as well.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Cause</th><th>When</th><th>Fix in</th></tr></thead>
+            <tbody>
+              <tr><td>Format and model</td><td>No answer, a fallback action after a broken contract, or a timeout. A timeout is judged by the limit of operation, the time limit of a first-layer model call (<code>contexa.security.tiered.layer1.timeout.llm-ms</code>, 90 s by default), not the replay's</td><td>Model setting</td></tr>
+              <tr><td>Changed by the engine</td><td>The model was right and a rule of the engine changed the action</td><td>Rule setting</td></tr>
+              <tr><td>Wrong input</td><td>A fact of the prompt differs from its source, as the evidence audit found. Only for decisions of operation whose seal the evidence audit ran on</td><td>Collector or your records</td></tr>
+              <tr><td>Input missing</td><td>A deciding fact is among the unknowns of the prompt, or the context level is low (<code>ENVIRONMENT_ONLY</code>, <code>IDENTITY_AWARE</code>). Only for cases with deciding facts written</td><td>Integration: the missing facts are named</td></tr>
+              <tr><td>Wrong grounds</td><td>A cited fact is not in the prompt, or its line does not say so</td><td>Prompt or model</td></tr>
+              <tr><td>Unstable</td><td>The same case gets another action from run to run. Only for a measurement of two runs or more</td><td>Prompt or model</td></tr>
+              <tr><td>Wrong judgement</td><td>The citations are right but the action is off the answer</td><td>A new prompt version</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>An answer no rule puts down to a cause is "Not classified".</li>
+            <li>For a cause fixed in a new prompt version, "New version with these cases beside it" opens the new version screen with the wrong cases in a card beside the parts: "Save and measure to run the whole case bundle again, these cases with it."</li>
+          </ul>
+
+          <h2 id="gate">The quality gate</h2>
+          <p>When a version of the security decision is used for decisions or started as a canary, the release gate reads the quality gate: the candidate's measurement against the measurement of the version in use, on the latest published bundle of the scope, on the first answer basis. The other seven prompts take no quality condition.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>#</th><th>Condition (as the confirmation names it)</th><th>When it does not hold</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>Both versions measured on the same case set version, model setting and runs</td><td>Blocks. A missing measurement fails it too</td></tr>
+              <tr><td>2</td><td>No "must catch" case was ever allowed</td><td>Blocks</td></tr>
+              <tr><td>3</td><td>No "must not block" case was ever blocked</td><td>Blocks</td></tr>
+              <tr><td>4</td><td>Misses did not rise significantly</td><td>Blocks</td></tr>
+              <tr><td>5</td><td>False stops, over-blocking, friction and deferrals did not rise significantly</td><td>Blocks</td></tr>
+              <tr><td>6</td><td>Set without the model within its limit, citation accuracy not significantly lower</td><td>Blocks above <code>model-less-limit</code> (5%) or when citation accuracy is worse</td></tr>
+              <tr><td>7</td><td>No case newly missed or newly stopped</td><td>Warns, with a link to the cases: a newly missed case unless condition 4 blocks, a newly stopped case unless condition 5 blocks</td></tr>
+              <tr><td>8</td><td>Enough cases to tell</td><td>Warns with how many roots are short (<code>minimum-stop-roots</code> 200 to stop, <code>minimum-allow-roots</code> 300 to pass) or how many rates are undecided</td></tr>
+              <tr><td>9</td><td>The same result on cases added after the version</td><td>Warns: the version may be fitted to the cases it saw. For misses, false stops, over-blocking and friction, Fisher's exact test asks whether the later roots fail more often than the earlier ones</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>"Significantly"</strong> is the paired comparison of <a href="#compare">Comparing two versions</a>: only a difference beyond the noise of one version measured twice blocks. Conditions 2 and 3 are the only ones that allow not a single answer.</li>
+            <li>With the default set alone (25 roots to stop, 10 to pass) condition 8 always warns.</li>
+          </ul>
+          <h3 id="gate-mode">Warning or blocking, and the reason that overrides</h3>
+          <ul>
+            <li><strong><code>WARN</code></strong> (the default of <code>contexa.pqa.oss.quality.gate.mode</code>): a verdict that blocks is applied as a warning: "The gate is in the warning mode, so the blocking conditions ({n}) are applied as warnings." The verdict itself is kept as computed.</li>
+            <li><strong><code>BLOCK</code></strong>: a blocking condition stops the version unless an administrator writes a reason ("Use with this reason", "Start with this reason"). "A reason lets it through; who let it through and why is kept in the audit records" (<code>PROMPT_VERSION_QUALITY_GATE_OVERRIDDEN</code>). A blank reason is refused. An urgent new version that fixes a failure goes this way too. The setting says to set <code>BLOCK</code> once the reproducibility and discrimination checks have passed on the installation.</li>
+            <li>A reason overrides only a quality block: "Something other than quality blocks it too, so a reason cannot let it through."</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>State of the measurements</th><th>On the confirmation</th><th>What the gate does</th></tr></thead>
+            <tbody>
+              <tr><td><code>MEASURED</code></td><td>Passed, Warning or Blocked</td><td>Reads the nine conditions</td></tr>
+              <tr><td><code>MISSING</code></td><td>"Not measured": the candidate, the version in use or both have no measurement on the latest bundle</td><td>Condition 1 blocks</td></tr>
+              <tr><td><code>STALE</code></td><td>"Measurement stale": the model setting changed since, with "Measure again"</td><td>Warns at least, and asks for the version to be measured again</td></tr>
+              <tr><td><code>UNMEASURABLE</code></td><td>"Cannot measure": "This installation cannot run the replay, so nothing can be measured. It is not a failure: the gate only warns."</td><td>Warns only</td></tr>
+              <tr><td><code>BASELINE_PENDING</code></td><td>"Baseline not measured": the version in use has no measurement yet and its first one is queued or running</td><td>Condition 1 warns instead of blocking until it is measured</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="gate-confirm">The confirmation</h3>
+          <ul>
+            <li>The confirmation of "Use for decisions" and of "Start the canary" shows the gate's state and a line, then under "Quality gate · case set {version} · {models} · {n} run(s)" the conditions that matter: when the verdict blocks, only the blocking conditions are open; otherwise the warnings are. The rest fold into "{n} passed", "{n} warnings" and "{n} not looked at".</li>
+            <li>The newly missed cases open in Measure &amp; compare ("Show the {n} newly missed cases"). When there are such cases and the verdict does not block, "I have read the newly missed cases" is ticked before going on.</li>
+            <li>The confirmation shows the latest trial ("Tried", "Not tried") only when the quality gate could not be read.</li>
+          </ul>
+          <h3 id="gate-outside">Going back, and versions that decide outside the gate</h3>
+          <ul>
+            <li><strong>Going back</strong> to a version the scope used for decisions before takes no quality condition ("Passed (going back)"). A rollback, an emergency rollback too, goes only to such a version; any other target is refused. A version counts as used for decisions when it decides now, was applied as <code>ACTIVE</code>, was the target of a rollback that was not refused, or is named in the rollback records; a version that only ran as a canary does not count.</li>
+            <li><strong>Two ways reach the decisions without the gate:</strong> the version <code>contexa.security.tiered.prompt-bundle.active</code> names, and the newest Contexa version an upgrade brings when no version is chosen on the screen. The version list says so ("{version} decides as the setting names it, without passing the release gate.") with the state of its measurement in this environment, and Contexa measures such a version once on its own.</li>
+            <li><strong>Right after an upgrade</strong> the version in use has no measurement. Contexa measures it once by itself on the latest published bundle, publishing the default set first when the scope has none (the default set run 3 times is 210 answers, and model calls are made); until then the gate only warns. A Contexa version whose measurement the product ships, taken the same way here, is not measured again. A version in use measured under other settings only is measured once again; this is looked for every 10 minutes.</li>
+            <li>The gate's answer is in <code>GET /contexa/admin/api/prompt-quality/versions/{number}/use-check</code> (<code>?target=CANARY</code> for a canary) under <code>quality</code>: <code>mode</code>, <code>measurement</code>, <code>verdict</code> (as computed), <code>applied</code> (<code>PASSED</code>, <code>WARNING</code> or <code>BLOCKED</code>), <code>rollback</code>, <code>overridable</code>, <code>rows</code> (the nine conditions), <code>changes</code> and <code>details</code>. <code>POST /{number}/use</code> and <code>/canary/start</code> take <code>overrideReason</code> (<a href="prompt-versions.html#api">Prompt Versions API</a>).</li>
+          </ul>
+
+          <h2 id="operation">Connected to operation</h2>
+          <h3 id="operation-sealing">What is sealed</h3>
+          <p>Decisions that stopped the request (<code>CHALLENGE</code>, <code>ESCALATE</code>, <code>BLOCK</code>) and allowed decisions with a sign of risk are sealed first, up to 2,000 packages a UTC day, besides the window after a change and the 1% share. A seal now keeps the baselines the decision read, so a replay later reads what the decision read (<a href="evidence.html#when">When it is sealed</a>).</p>
+          <h3 id="operation-review">The review queue samples allowed decisions by risk</h3>
+          <p>A random sample of allowed decisions hardly ever finds a miss: with one miss in 10,000 allowed decisions, 20 a day find one in 500 days on average. So the review queue (Zero Trust → Decision records, <code>?view=review</code>) draws each UTC day:</p>
+          <ol>
+            <li>up to <code>contexa.security.zerotrust.console.review-daily-sample</code> (20) stopped decisions, at random;</li>
+            <li>up to <code>review-risk-sample</code> (10) allowed decisions with a sign that they may be misses: the explanation the model marked most likely is not legitimate work, the second analysis decided, the model was asked again, at least <code>contexa.pqa.oss.sealed-evidence.unknown-fact-threshold</code> (3) decision facts were unknown, or the personal baseline is not established; and the allowed decisions of a user blocked that day, looking back <code>review-blocked-lookback-days</code> (7) from the block, unless an administrator released the block or judged it wrong. Those before a block come first, then those with more signs;</li>
+            <li>up to <code>review-allowed-sample</code> (5) allowed decisions without a sign, at random, to fill the number of ordinary cases.</li>
+          </ol>
+          <p>While the sealed evidence capture runs, only sealed decisions are drawn, so a reviewed decision can be replayed and made a case. Test runs are not drawn, and the allowed decisions of a day are drawn once. With the defaults the queue takes up to 35 decisions a day instead of 20.</p>
+          <h3 id="operation-promote">Evaluate and add as a case, and breaches after an allow</h3>
+          <ul>
+            <li><strong>"Evaluate and add as a case"</strong> in a decision's detail keeps the evaluation and a case with the right answer you set: "The evaluation and the case are kept together or not at all. The case uses the sealed input." A decision that is not sealed cannot become a case: "This decision is not sealed, so it cannot become a case; the evaluation alone is kept." The case belongs to the platform scope and waits for a second administrator like any case.</li>
+            <li><strong>"Confirm a breach after the allow"</strong> on a decision that allowed records the outcome <code>ALLOWED_BREACH_CONFIRMED</code> ("Allowed, later confirmed a breach") with an optional note. It counts as a miss seen in operation; recording it again keeps the first record, and only a decision that allowed can be confirmed. The outcome filter of the decision records has the value.</li>
+            <li>The sealed evidence screen ("Add as a case"), the labelled cases screen ("Add from a sealed decision") and a trial's result (a decision the two versions decided differently) add a sealed decision as a case too.</li>
+          </ul>
+          <h3 id="operation-remeasure">Measured again on schedule</h3>
+          <ul>
+            <li>At <code>contexa.pqa.oss.quality.remeasure.cron</code> (<code>0 0 2 * * SUN</code>, UTC; <code>-</code> turns it off) the version in use of every scope is measured again on the bundle its measurements run on. One server runs it.</li>
+            <li>The same version, bundle and settings measured before give no new answer, so it starts a measurement only for what is new: a bundle published with new cases (each new case run 3 times makes 3 to 12 calls) or settings that change an answer (the default set run 3 times makes 210 to 840 calls, at most 2,520 with the retries of a busy model server). A measurement the schedule could not finish is tried again.</li>
+            <li>A measurement taken again is compared with the version's measurement before; one that came out worse or changed is logged as a warning and shown on the quality screen. The product has no other notification of administrators.</li>
+          </ul>
+          <h3 id="status">The quality screen</h3>
+          <ul>
+            <li><strong>Head:</strong> the version in use and since when (the first hour it decided within the last 90 days), its latest measurement (bundle, models, runs), a sentence on its misses, the period of the operation numbers (day, week by default, month, quarter) and the "Quality report" button.</li>
+            <li><strong>"Version in use":</strong> whether its measurement is current or stale, the bundle, the model setting, the runs and "Next scheduled".</li>
+            <li><strong>"Measured on the cases":</strong> the 11 metrics with their 95% ranges.</li>
+            <li><strong>"Seen in operation":</strong> six numbers counted from the real decisions of the version in use and of the version before it, over periods of the same length on each side of the change: Stopped, Step-ups passed, Blocks released, Reviewed as right, Asked again, Set without the model. They are not graded against right answers.</li>
+            <li><strong>The things to check:</strong></li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>To check</th><th>Its button</th></tr></thead>
+            <tbody>
+              <tr><td>"The measurement is stale: the model setting changed"</td><td>Measure again</td></tr>
+              <tr><td>"Not measured: version {version} has no measurement" ("Without a measurement the first condition of the gate blocks")</td><td>Measure</td></tr>
+              <tr><td>"Baseline not measured yet: {version} is being measured" ("Until then the gate only warns")</td><td>Open</td></tr>
+              <tr><td>"Cannot be measured: this installation cannot replay decisions"</td><td>—</td></tr>
+              <tr><td>"The scheduled measurement got worse: {metric} {before} → {after}"</td><td>Compare</td></tr>
+              <tr><td>"The scheduled measurement decided otherwise: {n} newly missed · {m} newly stopped"</td><td>Compare</td></tr>
+              <tr><td>"{n} cases waiting to be confirmed"</td><td>Confirm</td></tr>
+              <tr><td>"{n} decisions waiting for review" ("Sampled by risk. A reviewed decision can be added as a case")</td><td>Review</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="report">The quality report</h2>
+          <p>"Quality report" on the head of the quality screen exports, for a scope and a period of whole UTC days ("First day (UTC)", "Last day (UTC)"; 90 days by default, at most 400), one zip: <code>report.json</code> for a machine and <code>report-ko.md</code> and <code>report-en.md</code> for people. It asks no model.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Section</th><th>What it holds</th></tr></thead>
+            <tbody>
+              <tr><td>1. Accuracy of the version in use</td><td>The measurements of the version in use and of the versions before it. Declaration of the accuracy metrics (EU AI Act, Article 15)</td></tr>
+              <tr><td>2. Case set versions</td><td>The bundles the measurements ran on</td></tr>
+              <tr><td>3. Monitoring in operation</td><td>The operation numbers of the period. Monitoring after the release (EU AI Act, Article 72)</td></tr>
+              <tr><td>4. Overturned decisions</td><td>The blocks an administrator released, the decisions an administrator rated wrong and the allowed requests confirmed as breaches. Monitoring of the decisions people overturned (NIST AI RMF, MANAGE)</td></tr>
+              <tr><td>5. Changes and approvals</td><td>The changes of the versions and who approved them</td></tr>
+              <tr><td>6. Masking</td><td>The masking rules the report was made with</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>The people the decisions and cases are about</strong> get pseudonyms: a keyed hash under a key drawn for this report and never written, the same person the same pseudonym within the report and another one in the next.</li>
+            <li><strong>Texts administrators wrote</strong> (a reason, a note, a title) are kept, with the identifiers of such people replaced by their pseudonyms and every e-mail address and IP address replaced by a mark.</li>
+            <li><strong>Never read into the report:</strong> the input of a case, why it is right, a decision's request, path, address, session or summary, and the note an administrator wrote on an overturned decision (its reason code is in it).</li>
+            <li>The administrators who acted are named as they are: the report is the record of who approved what.</li>
+            <li>API: <code>GET /contexa/admin/api/prompt-quality/report?scope=&amp;from=YYYY-MM-DD&amp;to=YYYY-MM-DD</code>; a period that starts after it ends or is longer than 400 days answers <code>400</code>.</li>
+          </ul>
+
+          <h2 id="identity">What a decision says about its prompt</h2>
+          <p>A decision's prompt execution information, and its sealed evidence, name the prompt it was drawn with in two ways.</p>
+          <ul>
+            <li><strong>The version:</strong> its name (<code>v2.0</code>), what chose it and its content hash, as fixed on the event when the decision started (<code>promptBundleSelection.version</code>, <code>.source</code>, <code>.contentHash</code>). The decision record keeps the version name and the content hash.</li>
+            <li><strong>The governance descriptor</strong> of the template: prompt key <code>cortex.security-decision</code>, template key, release <code>2026.11.16-v1.0</code> (a bundle name, so the product default <code>2026.11.18-v1.0</code> and the versions on it carry it too), output contract <code>CORTEX_PROMPT_CONTRACT_V5</code>, the user text layout <code>v1.0-dictionary-blocks</code>, and the release's hash. The trace check of the evidence audit compares the sealed descriptor with its release in the registry. The manifests of the earlier bundles v19, v20 and v21 are gone.</li>
+          </ul>
+          <h3 id="selection">What chose the version</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Selection source</th><th>When</th></tr></thead>
+            <tbody>
+              <tr><td><code>REGISTRY</code></td><td>the version used for decisions on the screen, of the request's tenant or of <code>PLATFORM_GLOBAL</code></td></tr>
+              <tr><td><code>CANARY</code></td><td>the canary of the screen, for a request inside its share and targets</td></tr>
+              <tr><td><code>CONFIGURATION</code></td><td>no label: the version <code>contexa.security.tiered.prompt-bundle.active</code> names (outside the gate)</td></tr>
+              <tr><td><code>BUILD_DEFAULT</code></td><td>no label and no setting: the newest version provided by Contexa (outside the gate), or the product document of the build when no version can be read</td></tr>
+              <tr><td><code>SHADOW</code></td><td>the version run alongside, only on a sampled copy apart from the decision</td></tr>
+              <tr><td><code>REPLAY</code></td><td>a sealed decision asked again (<a href="evidence.html#replay">Replay</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <p>The order is in <a href="prompt-versions.html#resolve">How a decision's version is chosen</a>. Labels are read through the registry, cached for up to 60 seconds with an invalidation check every 5 seconds.</p>
+
+          <h2 id="registry">The registry behind the versions</h2>
+          <p>Each version has one row in the prompt governance registry, and the screen's actions move the row's state through the release gate, which reads the quality gate for the security decision. The states keep their vocabulary (<code>PromptBundleState</code>); the screen shows them in its own words.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Registry state</th><th>On the screen</th></tr></thead>
+            <tbody>
+              <tr><td><code>ACTIVE</code></td><td>Used for decisions</td></tr>
+              <tr><td><code>CANARY</code></td><td>Canary</td></tr>
+              <tr><td><code>SHADOW</code></td><td>Running alongside</td></tr>
+              <tr><td><code>AVAILABLE</code></td><td>Not used (a new version starts here)</td></tr>
+              <tr><td><code>DEPRECATED</code></td><td>Not used (a row an earlier bundle left; read as AVAILABLE)</td></tr>
+              <tr><td><code>RETIRED</code></td><td>Hidden</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>A move the gate refuses changes nothing and is recorded with its reasons; an applied move changes the registry state and the approval and rollback records, and announces a runtime cache invalidation. Moving a version to ACTIVE turns the other ACTIVE version of the same tenant and prompt into AVAILABLE (a bundle's row into DEPRECATED). A version used for decisions, a canary or a version run alongside goes back to AVAILABLE when it stops; a hidden version takes no state.</li>
+            <li><strong>At start</strong> every server registers the build's product defaults as versions (the first installation's v1.0, an upgrade's next numbers) and retires the registry rows that name an earlier bundle. Those rows are kept: the trace check of earlier sealed decisions reads them.</li>
+            <li>Rollback, emergency rollback with a second administrator's approval, canary and running alongside are done on the version screens (<a href="prompt-versions.html#use">Use for decisions and rollback</a>).</li>
+          </ul>
+
+          <h2 id="removed">What was removed, and upgrading</h2>
+          <ul>
+            <li><strong>Removed:</strong> the official verification of a sealed package (12 metrics, 66 checks, its runs, results and reverification) with its screens "Protected Candidates" (<code>/contexa/admin/prompt-quality/resources</code>) and "Official Inspection" (<code>/contexa/admin/prompt-quality/runtime-evidence</code>) and their APIs, the "Inspection Overview" screen and its API <code>GET /contexa/admin/api/prompt-inspection/overview</code>, the scoring of the sealed structure and the deterministic replay.</li>
+            <li><strong>The inspection checks:</strong> three stay as the evidence audit of sealed packages (<code>SEAL_INTEGRITY</code>, <code>BUNDLE_TRACE</code>, <code>SOURCE_TRUTH</code>). The six that read the prompt's lines (<code>DICTIONARY_CONTRACT</code>, <code>DECISION_FACT_MATCH</code>, <code>FACT_ACCURACY</code>, <code>UNKNOWN_DECLARED</code>, <code>PAST_RECORD_NOTATION</code>, <code>SAME_FACT</code>) check the renderer in the build over the golden inputs instead, and the citation check of <code>REASON_MATCH</code> runs on the decision path for every decision, its result kept with the decision record. The inspector is version 30 (<code>prompt-inspector/30</code>), so the sealed packages are inspected again with the three checks.</li>
+            <li><strong>Removed settings:</strong> <code>contexa.pqa.official-verification.stale-execution-timeout</code>, <code>contexa.pqa.routes.official-api-root</code>, <code>contexa.pqa.routes.enterprise-api-root</code>, <code>contexa.pqa.routes.enterprise-verification-runtime-runs-path</code>. They are no longer read.</li>
+            <li><strong>The capability <code>PQA_ENGINE</code> is gone.</strong> Remove <code>contexa.capability.required.pqa-engine</code> from the configuration: the key no longer names a capability, and binding <code>contexa.capability.required</code> can then fail at start.</li>
+            <li><strong>The 58 tables of the official verification</strong> are not created on a new installation, and an existing installation keeps them: Contexa never drops them by itself. The script <code>META-INF/contexa/db/drop-retired-official-verification.sql</code> of <code>contexa-iam</code> drops them; run it by hand against the Contexa database (for example <code>psql -f drop-retired-official-verification.sql</code>), and only after the upgrade: an older version reads a database without these tables as a partial installation and refuses to start.</li>
+            <li><strong>What an upgrade changes in operation:</strong> the new version screen of the security decision saves and measures instead of using a version for decisions at once (<a href="prompt-versions.html#three-clicks">Prompt Versions</a>); the first start measures the version in use (210 answers, with model calls); the version in use is measured again every week; the review queue takes up to 35 decisions a day; stopped decisions and risky allowed ones are sealed up to 2,000 a day; a sealed package is no longer deleted after 30 days because its inspection found nothing (<a href="evidence.html#retention">Retention</a>); and the trials of the version screens wait behind the measurements in one line.</li>
+          </ul>
+
+          <h2 id="api">Pages and APIs</h2>
+          <div class="callout callout-warning">
+            <strong>Every page and API requires the administrator (<code>ADMIN</code>) role.</strong> Under <code>CONTEXA_OWNED</code> this check applies through method security. Under the default <code>HOST_OWNED</code> Contexa's console chain lets only an administrator signed in to the console reach <code>/contexa/admin/**</code>, and method security adds the same check when the application turns it on (<a href="overview.html#ownership">What runs under each ownership mode</a>).
+          </div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What</th><th>API (each takes <code>?scope=</code>)</th></tr></thead>
+            <tbody>
+              <tr><td>Quality</td><td><code>GET /contexa/admin/api/prompt-quality/status?period=day|week|month|quarter</code>; the report <code>GET /contexa/admin/api/prompt-quality/report?from=&amp;to=</code></td></tr>
+              <tr><td>Labelled cases</td><td>Under <code>/contexa/admin/api/prompt-quality/cases</code>: <code>GET</code> (the list), <code>GET /{key}</code>, <code>GET /{key}/input</code>; <code>POST</code> (a copy of a case, body <code>{"sourceKey", "input", "answer"}</code>), <code>POST /promote</code> (from a sealed decision, body <code>{"packageId", "answer"}</code>), <code>POST /{key}/answer</code>, <code>/{key}/confirm</code>, <code>/{key}/delete</code>, <code>POST /publish</code></td></tr>
+              <tr><td>Measurements</td><td>Under <code>/contexa/admin/api/prompt-quality/measure</code>: <code>GET</code> (the list), <code>GET /band</code>, <code>GET /estimate?version=&amp;caseSet=&amp;repeats=</code>, <code>POST</code> body <code>{"version", "caseSet", "repeats"}</code>, <code>POST /{id}/cancel</code>, <code>GET /run</code> (the latest), <code>GET /{id}</code>, <code>GET /compare?candidate=&amp;reference=</code> (or <code>candidateMeasure=&amp;referenceMeasure=</code>), <code>GET /compare/answers?case=</code></td></tr>
+              <tr><td>Causes</td><td><code>GET /contexa/admin/api/prompt-quality/measure/run/causes</code>, <code>GET /measure/{id}/causes</code>, <code>POST /measure/causes/{id}/category</code></td></tr>
+              <tr><td>Cases from a trial</td><td><code>GET /contexa/admin/api/prompt-quality/measure/trials/{trialId}/divergent</code>, <code>POST /measure/trials/{trialId}/cases</code></td></tr>
+              <tr><td>Cases and breaches from decisions</td><td><code>POST /contexa/admin/api/zero-trust/decisions/{observationId}/case</code> body <code>{"evaluation", "answer"}</code>; <code>POST /contexa/admin/api/zero-trust/decisions/{observationId}/breach</code> body <code>{"note"}</code></td></tr>
+              <tr><td>Sealed evidence, the evidence audit, replay</td><td><a href="evidence.html#console">Sealed Evidence</a></td></tr>
+              <tr><td>Versions, the gate's answer, use for decisions</td><td><a href="prompt-versions.html#api">Prompt Versions</a></td></tr>
+            </tbody>
+          </table></div>
+          <p>A refused request answers with its reason code, for example <code>SELF_CONFIRMATION</code>, <code>READ_ONLY</code>, <code>NOT_SEALED</code> and <code>NOT_DIVERGENT</code> for the cases, and <code>NO_CASE_SET</code>, <code>REPEATS</code>, <code>CALL_LIMIT</code> and <code>RUNNING</code> for a measurement.</p>
+
+          <h2 id="settings">Settings</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.prompt.governance.enabled</code></td><td><code>true</code></td><td>The version screens and their API, trials, the registry, release gate and rollback, and with them the labelled cases, measurements, quality gate, quality screen and report</td><td>Off when versions are not managed on the screen</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.two-person-confirmation</code></td><td><code>true</code></td><td>A case and each change of its answer wait for another administrator's confirmation</td><td>Off for an installation with one administrator</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.repeats</code></td><td><code>3</code></td><td>Runs of each case when a start asks for no number (1–10)</td><td>Rarely: only measurements with the same runs are compared</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.concurrency</code></td><td><code>1</code></td><td>Replays of one measurement at once, behind the decisions</td><td>2 or more for a remote provider; 2 halves the time</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.retries</code></td><td><code>2</code></td><td>More tries of a replay the model server did not answer</td><td>For a model server that is often busy</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.retry-delay</code></td><td><code>15s</code></td><td>Wait before the first retry; the second waits twice as long</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.call-limit</code></td><td><code>3000</code></td><td>Most model calls of one measurement; <code>0</code> sets no limit</td><td>When each call is paid for</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.heartbeat</code></td><td><code>30s</code></td><td>How often the running server renews its lock and the others look for work (the lock holds four heartbeats)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.gate.mode</code></td><td><code>WARN</code></td><td><code>WARN</code> applies a blocking verdict as a warning; <code>BLOCK</code> blocks it, and a reason overrides it</td><td><code>BLOCK</code> once the reproducibility and discrimination checks have passed</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.gate.model-less-limit</code></td><td><code>0.05</code></td><td>The largest share (0–1) of the candidate's answers set without the model</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.gate.significance</code></td><td><code>0.05</code></td><td>The level of the exact tests; a larger one blocks smaller differences</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.gate.minimum-stop-roots</code></td><td><code>200</code></td><td>Distinct roots to stop from which two versions can be told apart</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.gate.minimum-allow-roots</code></td><td><code>300</code></td><td>Distinct roots to allow from which two versions can be told apart</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.remeasure.cron</code></td><td><code>0 0 2 * * SUN</code></td><td>When the version in use is measured again (UTC); <code>-</code> turns it off</td><td>To move or stop the weekly measurement</td></tr>
+              <tr><td><code>contexa.security.zerotrust.console.review-daily-sample</code></td><td><code>20</code></td><td>Stopped decisions of a day sampled for review</td><td>For more or fewer reviews</td></tr>
+              <tr><td><code>contexa.security.zerotrust.console.review-risk-sample</code></td><td><code>10</code></td><td>Allowed decisions of a day sampled by risk; <code>0</code> samples none</td><td>For more or fewer reviews</td></tr>
+              <tr><td><code>contexa.security.zerotrust.console.review-allowed-sample</code></td><td><code>5</code></td><td>Allowed decisions of a day without a sign, sampled at random; <code>0</code> samples none</td><td>To fill the ordinary cases faster or slower</td></tr>
+              <tr><td><code>contexa.security.zerotrust.console.review-blocked-lookback-days</code></td><td><code>7</code></td><td>Days looked back from a block for the blocked user's allowed decisions</td><td>Rarely</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-yaml">contexa:
+  pqa:
+    oss:
+      quality:
+        two-person-confirmation: true
+        measurement:
+          repeats: 3
+          concurrency: 1
+          call-limit: 3000
+        gate:
+          mode: WARN       # BLOCK once the gate has been checked on this installation
+        remeasure:
+          cron: "0 0 2 * * SUN"</code></pre>
+          <p>A gate value outside its range stops the start. The sealing, evidence audit and retention settings are in <a href="evidence.html#settings">Sealed Evidence</a>; the version settings are in <a href="prompt-versions.html#settings">Prompt Versions</a>.</p>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="prompt-versions.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">Previous</span>
+              <span class="docs-nav-title">Prompt Versions</span>
+            </a>
+            <a href="evidence.html" class="docs-nav-link next">
+              <span class="docs-nav-label">Next</span>
+              <span class="docs-nav-title">Sealed Evidence</span>
+            </a>
+          </div>
