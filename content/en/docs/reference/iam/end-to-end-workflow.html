@@ -15,6 +15,10 @@
             <p class="lead">This walkthrough moves hard-coded <code>requestMatchers</code> rules into database policies, so URL and method access can change without code changes. It covers preparation, four scenarios, the decision when no policy applies, checking and rolling back, and the order in which one request is processed.</p>
           </div>
 
+          <div class="callout callout-info">
+            <strong>Terms on this page.</strong> <strong>Dynamic authorization</strong> keeps access rules as policies in the database instead of in code, and a change applies at once. The <strong>dynamic authorization manager</strong> (<code>CustomDynamicAuthorizationManager</code>) is the code that decides URL requests by those policies, and a <strong>static rule</strong> is a <code>requestMatchers(...)</code> rule written in code. A <strong>resource</strong> is one place that can be protected (a URL or a method), and the <strong>simulator</strong> is the tool that computes the result of a policy in advance. Policy, effect, condition and combining algorithm are explained in <a href="xacml.html">Authorization Overview</a>.
+          </div>
+
           <h2 id="why">What you gain</h2>
           <p>A typical Spring Security application writes its access rules in Java configuration. Each new endpoint or role change means editing code, building and deploying.</p>
           <pre><code class="language-java">http.authorizeHttpRequests(auth -&gt; auth
@@ -68,7 +72,7 @@
             <tbody>
               <tr><td><code>HOST_OWNED</code> (default)</td><td>Evaluated only when the application's chain calls <code>.access(customDynamicAuthorizationManager)</code></td><td>Evaluated</td></tr>
               <tr><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code></td><td>The CONTEXA chain sends every request except static files</td><td>Evaluated</td></tr>
-              <tr><td>SANDBOX mode with <code>CONTEXA_OWNED</code> set explicitly</td><td>Not evaluated (that chain only restricts <code>/contexa/admin/**</code> to ADMIN and allows the rest)</td><td>Evaluated</td></tr>
+              <tr><td>SANDBOX mode with <code>contexa.bridge.ownership: CONTEXA_OWNED</code> set as well</td><td>Not a possible setup. The mode and the ownership disagree, and the application does not start (<a href="../identity/dsl.html#enable">How to turn it on</a>)</td><td>Not applicable</td></tr>
             </tbody>
           </table></div>
           <p>In the default <code>HOST_OWNED</code> mode, connect the manager in the application's security configuration. Keep static matchers only for paths that must really be public, such as static files and public APIs.</p>
@@ -98,7 +102,7 @@ public class AppSecurityConfig {
           </div>
           <ul>
             <li>In this chain the seed policies also protect the admin console: <code>/contexa/admin/**</code> is decided by <code>ALLOW_CONTEXA_ADMIN_ADMINISTRATORS</code> (<code>hasRole('ADMIN')</code>) (<a href="admin.html#access">Protecting the admin console</a>).</li>
-            <li>Make your packages the scan target: admin console "IAM → System Settings → Controller base packages" (<a href="resource-scanner.html#packages">Choosing the packages to scan</a>). With the default <code>io.contexa.contexaiam.</code> none of your endpoints are registered.</li>
+            <li>Your application's own packages (the packages Spring Boot knows) are added to the scan automatically, so you do not need to list them. To scan classes outside them too, add those packages in the admin console under "IAM → System Settings → Controller base packages" (<a href="resource-scanner.html#packages">Choosing the packages to scan</a>).</li>
           </ul>
 
           <h2 id="scenario-url">Scenario 1: protecting URLs</h2>
@@ -155,7 +159,7 @@ Condition   hasAuthority('ROLE_ADMIN')
           <p><strong>6. When the request arrives,</strong> <code>DELETE /api/v1/invoices/42</code> is handled like this. The chain hands it to <code>CustomDynamicAuthorizationManager</code>; the manager walks the URL policies in priority order, finds the one whose path and method match (the policy above) and evaluates its condition. With the default <code>FIRST_APPLICABLE</code> that first result (allow or deny) is final, and it is audited either way. No code change, no redeploy.</p>
 
           <h2 id="scenario-method">Scenario 2: protecting methods</h2>
-          <p>Putting <code>@Protectable</code> on a service method protects it method by method. <code>ownerField</code> names the field that holds the owner in the returned or target object.</p>
+          <p>Putting <code>@Protectable</code> on a service method protects it method by method. <code>ownerField</code> names the field that holds the owner. It is read from the target object that <code>hasPermission(...)</code> in the policy condition receives (or from the entity loaded by its ID); the method's return value is not checked (<a href="protectable.html#owner-field">Owner check</a>).</p>
           <pre><code class="language-java">@Service
 public class DocumentService {
 
@@ -180,7 +184,7 @@ public class DocumentService {
         documentRepository.save(doc);
     }
 }</code></pre>
-          <p>"Load Resources" registers two method resources in the same list as URL resources, with the same review, permission, policy and exclusion steps. The class must be inside a scan package, and only <code>@Protectable</code> placed directly on a method is listed.</p>
+          <p>"Load Resources" registers two method resources in the same list as URL resources, with the same review, permission, policy and exclusion steps. The class must be inside a scan package. <code>@Protectable</code> on a method lists that method, and <code>@Protectable</code> on a class lists every public non-static method declared in that class.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Identifier</th><th>Owning class</th><th>Type</th></tr></thead>
             <tbody>
@@ -195,7 +199,7 @@ Condition 1  !#ai.isBlocked()
 Condition 2  hasAuthority('ROLE_ADMIN') or hasPermission(#documentId, 'DOCUMENT', 'UPDATE')</code></pre>
           <ul>
             <li>The two conditions are joined with AND, so the call is allowed only when "not BLOCK, and administrator or owner". A separate DENY policy on the same method would have the same target as an opposite-effect policy and fail the conflict check (<code>CRITICAL</code>) (<a href="policy.html#effect">Effect, priority and combining</a>).</li>
-            <li>When <code>updateDocument</code> is called, CONTEXA's method interception (AOP) evaluates the policies before the method runs. <code>hasPermission(...)</code> needs a domain permission evaluator for the <code>DOCUMENT</code> type to allow it (<a href="permission-evaluators.html">Permission evaluators</a>); then the document's <code>createdBy</code> value is compared with the login name (<code>authentication.getName()</code>). <code>ROLE_ADMIN</code> skips the owner comparison.</li>
+            <li>When <code>updateDocument</code> is called, CONTEXA's method interceptor (Spring AOP) evaluates the policies before the method runs. <code>hasPermission(...)</code> needs a domain permission evaluator for the <code>DOCUMENT</code> type to allow it (<a href="permission-evaluators.html">Permission evaluators</a>); then the document's <code>createdBy</code> value is compared with the login name (<code>authentication.getName()</code>). <code>ROLE_ADMIN</code> skips the owner comparison.</li>
             <li>A method without a policy to run follows the "decision when no method policy applies" (default <code>PERMIT</code>).</li>
           </ul>
 
