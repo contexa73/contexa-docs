@@ -4,7 +4,7 @@
             <span class="breadcrumb-separator">/</span>
             <a href="../../docs/install/index.html">Install</a>
             <span class="breadcrumb-separator">/</span>
-            <span class="breadcrumb-current">Start Safely with Enforcement Modes</span>
+            <span class="breadcrumb-current">Start Safely in Shadow Mode</span>
           </nav>
 
           <!-- Page Header -->
@@ -12,39 +12,57 @@
             <div class="docs-module-badge">
               <span class="badge badge-primary">contexa-core</span>
             </div>
-            <h1>Start Safely with Enforcement Modes</h1>
-            <p class="lead">How to watch AI decisions in shadow mode (<code>SHADOW</code>) before applying them, check the results, and then move to enforcement (<code>ENFORCE</code>). It covers the four enforcement modes, the two ways to change the mode, where to look at the results, and how to roll back.</p>
+            <h1>Start Safely in Shadow Mode</h1>
+            <p class="lead">By default CONTEXA applies AI decisions to real requests, so a wrong decision can block a normal user. Shadow mode (<code>SHADOW</code>) makes decisions and records them, but blocks nobody. This page shows how to watch the results in shadow mode and then move to enforcement mode (<code>ENFORCE</code>). It covers the three operating modes, the two ways to change the mode, where to look at the results, and how to roll back.</p>
           </div>
 
-          <h2 id="overview">The four enforcement modes</h2>
-          <p>The enforcement mode (<code>contexa.security.zerotrust.mode</code>) decides whether AI decisions are made and whether they are applied. The default is <code>ENFORCE</code>. When you first adopt Contexa, run it in the order <strong>observe</strong> (<code>SHADOW</code>) → <strong>check</strong> (<a href="#where-to-look">Where to look at the results</a>) → <strong>enforce</strong> (<code>ENFORCE</code>).</p>
+          <h2 id="overview">The three operating modes</h2>
+          <p>The operating mode (<code>contexa.security.zerotrust.mode</code>) decides two things: whether the AI makes decisions, and whether those decisions are applied to real requests. A decision is the AI's conclusion about one user's request: ALLOW, step-up authentication (CHALLENGE), held for review (ESCALATE) or BLOCK. If you set no mode, CONTEXA runs in <code>ENFORCE</code>.</p>
+          <p>When you first adopt CONTEXA, work in this order:</p>
+          <ol>
+            <li><strong>Observe:</strong> Turn on <code>SHADOW</code>. The AI makes and records decisions, and no request is stopped.</li>
+            <li><strong>Check:</strong> Read the recorded decisions in the admin console (<a href="#where-to-look">Where to look at the results</a>). See how many decisions would have blocked or challenged normal users.</li>
+            <li><strong>Enforce:</strong> When the results are acceptable, switch to <code>ENFORCE</code>. From then on decisions apply to real requests.</li>
+          </ol>
+          <p>The default is <code>ENFORCE</code>, so you must set <code>SHADOW</code> yourself to start by observing. The <a href="#change-mode">next section</a> shows how.</p>
+          <p>The table shows what each mode does.</p>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>Mode</th><th>AI analysis</th><th>Decision and audit records</th><th>Enforcement (store decision, block)</th><th>Learning</th></tr></thead>
+            <thead><tr><th>Mode</th><th>In short</th><th>AI analysis</th><th>Decision and audit records</th><th>Enforcement (store decision, block)</th><th>Learning</th></tr></thead>
             <tbody>
-              <tr><td><code>DISABLED</code></td><td>Not for <code>@Protectable</code> calls and the decision API</td><td>Not for those calls</td><td>No</td><td>No</td></tr>
-              <tr><td><code>OBSERVE</code></td><td>Same as <code>DISABLED</code> (only the monitoring label differs)</td><td>Same</td><td>No</td><td>No</td></tr>
-              <tr><td><code>SHADOW</code></td><td>Yes</td><td>Yes</td><td>No</td><td>No</td></tr>
-              <tr><td><code>ENFORCE</code> (default)</td><td>Yes</td><td>Yes</td><td>Yes: the decision is stored and applied from the next request</td><td>Only ALLOW decisions that were applied</td></tr>
+              <tr><td>Off (<code>DISABLED</code>)</td><td>Turns AI decisions off.</td><td>No (neither for <code>@Protectable</code> calls nor for the decision API)</td><td>Not kept for those calls</td><td>No</td><td>No</td></tr>
+              
+              <tr><td>Shadow mode (<code>SHADOW</code>)</td><td>Makes and records decisions, but blocks nobody.</td><td>Yes</td><td>Kept</td><td>No. The decision is kept only in a memory that shadow mode alone uses</td><td>Yes: ALLOW decisions only</td></tr>
+              <tr><td>Enforcement mode (<code>ENFORCE</code>, default)</td><td>Stores decisions and applies them from the user's next request.</td><td>Yes</td><td>Kept</td><td>Yes: the decision is stored and applied from the next request</td><td>Yes: only ALLOW decisions that were applied</td></tr>
             </tbody>
           </table></div>
-          <p>The sign-in success event (Contexa's MFA sign-in when Contexa owns sign-in; the application's interactive form or OAuth2 sign-in when the application owns it) is published without looking at the enforcement mode. The decision engine looks at the mode only at the enforcement step, so this event is analyzed and recorded under <code>DISABLED</code> and <code>OBSERVE</code> too, just not enforced. To stop all analysis, use <code>contexa.security.zerotrust.enabled: false</code>.</p>
+          <p><code>OBSERVE</code> is an old name that is still accepted. When you set it, the mode is read as <code>DISABLED</code> and a WARN is logged at start. The admin console does not offer it.</p>
+          <p>The terms in the table:</p>
+          <ul>
+            <li><strong>Decision and audit records:</strong> Two records in the CONTEXA database. The decision record (<code>ctxa_ai_security_decision_observation</code>) holds each decision and the reasons for it. The audit record (<code>ctxa_audit_log</code>) is the history of security events. They are database tables, not log files, so you can read them in the admin console.</li>
+            <li><strong>Enforcement:</strong> Storing the decision and using it on the same user's next requests. On a BLOCK it also sends the signal that cuts responses in flight and writes a blocked-user record.</li>
+            <li><strong>Shadow memory:</strong> The place where shadow mode keeps its decisions, apart from the store that enforcement uses. It exists so that the next request of the same user does not call the AI again. No request is stopped because of it.</li>
+            <li><strong>Learning:</strong> Adding the usage pattern of a request that got an ALLOW (hours, network, browser and so on) to that user's behavioral baseline. The AI reads the baseline in later decisions. An ALLOW for a user who already has a stricter decision in place is not learned, in any mode.</li>
+          </ul>
+          <p>CONTEXA analyzes calls to methods marked <code>@Protectable</code>, not every request (agent requests included). The decision API (AuthZEN) lets another system ask CONTEXA whether a user may do something. It is off by default (<code>contexa.security.zerotrust.authzen.enabled</code>); when you turn it on, the evaluation requests it receives are analyzed too. A sign-in is never analyzed, in any mode. The first protected method a user calls after signing in gets that user's first decision.</p>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>The path of one decision</strong>Up to the decision record, <code>SHADOW</code> and <code>ENFORCE</code> are the same; the rest happens only under <code>ENFORCE</code>.</figcaption>
+            <figcaption class="dg-caption"><strong>The path of one decision</strong>Recording the decision and learning from an ALLOW are the same under <code>SHADOW</code> and <code>ENFORCE</code>; storing the decision and applying it to the next request happen only under <code>ENFORCE</code>.</figcaption>
             <ol class="dg-flow">
-              <li class="dg-node dg-request"><span class="dg-node-tag">Request</span><span class="dg-node-title">A <code>@Protectable</code> method call</span><span class="dg-node-desc">or a sign-in success</span></li>
+              <li class="dg-node dg-request"><span class="dg-node-tag">Request</span><span class="dg-node-title">A <code>@Protectable</code> method call</span><span class="dg-node-desc">Agent requests included</span></li>
               <li class="dg-node dg-model"><span class="dg-node-tag">Decision engine</span><span class="dg-node-title">The AI model decides</span><span class="dg-node-desc">By default after the response</span></li>
               <li class="dg-node dg-store"><span class="dg-node-tag">Records</span><span class="dg-node-title">Decision and audit records</span><span class="dg-node-desc"><code>ctxa_ai_security_decision_observation</code>, <code>ctxa_audit_log</code></span></li>
               <li class="dg-node"><span class="dg-node-tag"><code>ENFORCE</code> only</span><span class="dg-node-title">The user's decision is stored</span><span class="dg-node-desc">On BLOCK, a signal that cuts responses in flight and a blocked-user record</span></li>
               <li class="dg-node dg-host"><span class="dg-node-tag"><code>ENFORCE</code> only</span><span class="dg-node-title">Applied to the next request</span></li>
-              <li class="dg-node dg-allow"><span class="dg-node-tag"><code>ENFORCE</code> only</span><span class="dg-node-title">Only applied ALLOW decisions are learned</span><span class="dg-node-desc">Reflected in the behavioral baseline</span></li>
+              <li class="dg-node dg-allow"><span class="dg-node-tag"><code>SHADOW</code> and <code>ENFORCE</code></span><span class="dg-node-title">ALLOW decisions are learned</span><span class="dg-node-desc">Reflected in the behavioral baseline</span></li>
             </ol>
           </figure>
+          <p>A stored decision is applied in two places. One is a filter CONTEXA puts in front of requests (called the request-time filters in this page). The other is the check right before a <code>@Protectable</code> method runs. Both are used whether your application owns sign-in (<code>HOST_OWNED</code>) or CONTEXA does (<code>CONTEXA_OWNED</code>). "Both ownership modes" in this page means these two cases (see <a href="spring-boot.html">Add to an existing Spring Security application</a>).</p>
 
           <h2 id="change-mode">Two ways to change the mode, and which wins</h2>
+          <p>You set the mode by saving it in the admin console or by writing it in <code>application.yml</code>. When both exist, the value saved in the admin console wins. To change the mode on a running system, use the admin console: it needs no restart.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Way</th><th>When it applies</th><th>Precedence</th></tr></thead>
             <tbody>
-              <tr><td>Save in the admin console at <code>/contexa/admin/system-settings</code></td><td>At once (no restart). The saved value stays in the Contexa database (<code>ctxa_system_settings</code>) and is applied again each time the application finishes starting.</td><td>1 (highest)</td></tr>
+              <tr><td>Save in the admin console at <code>/contexa/admin/system-settings</code></td><td>At once (no restart). The saved value stays in the CONTEXA database (<code>ctxa_system_settings</code>) and is applied again each time the application finishes starting. When you run several instances with <code>contexa.infrastructure.mode: distributed</code>, the other instances receive the save signal and apply the same value.</td><td>1 (highest)</td></tr>
               <tr><td><code>contexa.security.zerotrust.mode</code> in <code>application.yml</code></td><td>Read at startup, so a change needs a restart.</td><td>2: only when no value was saved in the admin console</td></tr>
               <tr><td>Nothing set</td><td>—</td><td>3: <code>ENFORCE</code></td></tr>
             </tbody>
@@ -54,90 +72,127 @@
     zerotrust:
       mode: SHADOW   # DISABLED, OBSERVE, SHADOW, ENFORCE</code></pre>
           <ul>
-            <li>When no value is stored, the system settings screen pre-fills the current mode. So saving once, even to change another field, makes the database value win over YAML from then on. Saving with the mode field empty stores <code>SHADOW</code>.</li>
+            <li><strong>Choices in the admin console:</strong> The mode list offers only "Disabled", "Shadow" and "Enforce", which are <code>DISABLED</code>, <code>SHADOW</code> and <code>ENFORCE</code>. <code>OBSERVE</code> is not offered. When you change the mode you can fill in "Why the mode changes"; it is kept in the audit record and shown in the "Mode history" of the adoption screen.</li>
+            <li><strong>The pre-filled value:</strong> When no mode is stored, the screen pre-fills the mode in effect. If you save only another setting, the mode is not stored, so YAML keeps winning. When you choose a mode different from the one in effect, the database value wins over YAML from then on. Choosing the same mode as YAML on purpose is not stored either, so YAML keeps deciding. If a mode is already stored and you save with the mode field empty, <code>SHADOW</code> is stored.</li>
             <li>The CLI's <code>contexa mode --shadow</code> and <code>--enforce</code> change only YAML. With a value saved in the admin console they have no effect.</li>
-            <li>A decision analysis event carries the mode in force when it was created. An event created under <code>SHADOW</code> is not enforced even if the mode became <code>ENFORCE</code> by the time its decision arrives.</li>
+            <li><strong>Analyses in flight when you change the mode:</strong> Each analysis request carries the mode it was created under. An analysis created under <code>SHADOW</code> is not enforced even if the mode became <code>ENFORCE</code> by the time its result arrives. Likewise an analysis created under <code>ENFORCE</code> is not enforced if you switch to <code>SHADOW</code> before its result arrives.</li>
           </ul>
 
           <h2 id="shadow-behavior">What actually happens in <code>SHADOW</code></h2>
+          <p>Shadow mode makes decisions and records them, but never uses a decision to stop a user. The behavior falls into three groups.</p>
+          <p><strong>What it analyzes and remembers</strong></p>
           <ul>
-            <li><strong>What is analyzed:</strong> not every request, but <code>@Protectable</code> method calls and sign-in successes: Contexa's MFA sign-in when Contexa owns sign-in, the application's interactive sign-in (form login, OAuth2 login) when the application owns it.</li>
+            <li><strong>What is analyzed:</strong> not every request, but calls to <code>@Protectable</code> methods (agent requests included). A sign-in is not analyzed; the first protected method a user calls after signing in gets that user's first decision.</li>
             <li><strong>What is kept:</strong> the decision goes to the decision record table (<code>ctxa_ai_security_decision_observation</code>) and the audit records (<code>ctxa_audit_log</code>), not only to the log.</li>
-            <li><strong>What is not done:</strong> storing the user's decision, the block signal that cuts responses in flight, the blocked-user record, sending risk signals, and learning. So no behavioral baseline is built during <code>SHADOW</code>.</li>
-            <li><strong><code>@Protectable</code> methods:</strong> even with a stored BLOCK, CHALLENGE or ESCALATE, the method runs and only a log line is written. A <code>sync = true</code> method is analyzed inside the request and runs even when the decision is BLOCK or the analysis fails.</li>
-            <li><strong>Request-time filters (both ownership modes):</strong> nothing is stopped. A BLOCK, CHALLENGE or ESCALATE stored earlier (a decision from an <code>ENFORCE</code> period, or an administrator's block) is not enforced while <code>SHADOW</code> lasts, and applies again under <code>ENFORCE</code> if it has not expired.</li>
-            <li><strong>Latency:</strong> the default asynchronous methods are analyzed after the response, so they do not slow down. <code>sync = true</code> methods and agent requests with no decision on record are analyzed inside the request, so they do.</li>
-            <li><strong>Calls without authentication:</strong> only <code>SHADOW</code> and <code>ENFORCE</code> refuse a <code>@Protectable</code> call that arrives with no authentication or with an anonymous one. Under <code>DISABLED</code> and <code>OBSERVE</code> (and with <code>enabled: false</code>) Contexa does not refuse it: the call goes on as the application made it, and the method policies still decide on what the security context holds, a visitor or nobody.</li>
-            <li><strong>Unchanged by the mode:</strong> refusals by policy (XACML) decisions, which apply under every mode. Re-evaluating a delegated agent's request as its delegator is only recorded while enforcement is off (any mode other than <code>ENFORCE</code>, or <code>enabled: false</code>).</li>
-            <li><strong>Decision API (AuthZEN):</strong> under <code>SHADOW</code> it analyzes, but the answer's <code>decision</code> is always <code>true</code>. Under <code>DISABLED</code> and <code>OBSERVE</code> it answers <code>true</code> without analysis.</li>
-            <li><strong>Agent request gate</strong> (both ownership modes): while enforcement is off (any mode other than <code>ENFORCE</code>) it records ended delegations, narrowed scopes and call limits and lets the request through (<a href="../reference/agent/controls.html#shadow">SHADOW in agent controls</a>).</li>
+            <li><strong>What is remembered and learned:</strong> decisions are kept in the shadow memory. The next request of the same user is answered from it, so the AI is not called again, and the number of AI calls and the cost during shadow mode match those of <code>ENFORCE</code>. ALLOW decisions are learned into the behavioral baseline exactly as under <code>ENFORCE</code>.</li>
+            <li><strong>Latency:</strong> the default (asynchronous) methods are analyzed after the response, so they do not slow down. <code>sync = true</code> methods and agent requests with no decision on record wait for the decision inside the request, so they do.</li>
+          </ul>
+          <p><strong>What it does not do</strong></p>
+          <ul>
+            <li><strong>Not done:</strong> storing the decision in the enforcement store, sending the block signal that cuts responses in flight, writing the blocked-user record, sending the risk signal that tells your application's receivers a user's risk level changed, and narrowing an agent's allowed scope.</li>
+            <li><strong><code>@Protectable</code> methods:</strong> even with a stored BLOCK, CHALLENGE or ESCALATE, the method runs and only a log line is written. <code>sync = true</code> makes a method wait, before it runs, for the decision made inside the request; under shadow mode the method runs even when that decision is BLOCK or the analysis fails.</li>
+            <li><strong>Request-time filters (both ownership modes):</strong> nothing is stopped. A BLOCK, CHALLENGE or ESCALATE stored during an <code>ENFORCE</code> period, or an administrator's block, is not enforced while <code>SHADOW</code> lasts, and applies again under <code>ENFORCE</code> if it has not expired.</li>
+            <li><strong>Decision API (AuthZEN):</strong> under <code>SHADOW</code> it analyzes, but the <code>decision</code> in the answer is always <code>true</code>. Under <code>DISABLED</code> and <code>OBSERVE</code> it answers <code>true</code> without analysis.</li>
+            <li><strong>Agent request gate</strong> (both ownership modes): it checks whether an agent's request meets an ended delegation, a narrowed scope or a call limit. While enforcement is off (any mode other than <code>ENFORCE</code>) it records what it finds and lets the request through (<a href="../reference/agent/controls.html#shadow">SHADOW in agent controls</a>).</li>
+            <li><strong>Re-evaluation as the delegator:</strong> when an agent calls on behalf of a user, CONTEXA evaluates the call again as that user (the delegator) to see whether the user could have made it. While enforcement is off (any mode other than <code>ENFORCE</code>, or <code>enabled: false</code>) the result is only recorded and the call is not stopped.</li>
+          </ul>
+          <p><strong>What shadow mode still stops</strong></p>
+          <ul>
+            <li><strong>Calls without sign-in:</strong> when a caller who has not signed in, or is anonymous, calls a <code>@Protectable</code> method, CONTEXA refuses the call under <code>SHADOW</code> and <code>ENFORCE</code>. Under <code>DISABLED</code> and <code>OBSERVE</code> (and with <code>enabled: false</code>) CONTEXA does not refuse it: the call goes on as the application made it, and the method policies still decide on what the security context holds, a visitor or nobody. So moving from <code>DISABLED</code> to <code>SHADOW</code> can refuse such calls for the first time.</li>
+            <li><strong>Refusals by access policies (XACML):</strong> a call that an access policy refuses is refused under every mode.</li>
           </ul>
 
           <h2 id="where-to-look">Where to look at the results</h2>
+          <p>After you turn on shadow mode, look at the results in the admin console. The Zero Trust screens are easiest to follow in the order Overview, Adoption, Decision records, and all of them need <code>ROLE_ADMIN</code>.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Where</th><th>What you see</th></tr></thead>
             <tbody>
-              <tr><td>Zero Trust → Overview <code>/contexa/admin/zero-trust</code></td><td>Protection coverage, the period's decisions and what they stopped, by day, and the console's warnings. Under <code>SHADOW</code> the numbers are what would have been stopped. Needs <code>ROLE_ADMIN</code></td></tr>
-              <tr><td>Zero Trust → Adoption <code>/contexa/admin/zero-trust/adoption</code></td><td>Whether to move to <code>ENFORCE</code>, weighed on the <code>SHADOW</code> decisions since <code>SHADOW</code> started (else the last 90 days). Verdicts: <code>RECOMMENDED</code> ("Every recommended criterion is met: moving to ENFORCE can be considered."), <code>CONDITIONS_UNMET</code> ("{count} criteria are not met: hold off applying."), <code>DATA_INSUFFICIENT</code> ("Not enough data to judge yet: the observation period or the decisions fall short of the recommended criteria."). It also shows "Mode history" with the reason of each change</td></tr>
-              <tr><td>Zero Trust → Decision records <code>/contexa/admin/zero-trust/decisions</code></td><td>Each decision and why. Under <code>SHADOW</code> nobody is blocked, so a first block <code>SHADOW</code> would have made waits in the "Review queue" tab (<code>?view=review</code>) as "Would have blocked" (<code>SHADOW_BLOCK</code>), beside "Daily sample" and "Rule broken"</td></tr>
-              <tr><td>Zero Trust → Operations <code>/contexa/admin/zero-trust/operations</code></td><td>The path of a decision, failures by kind, decisions set without the model and "Latency by stage"</td></tr>
-              <tr><td>Security event log <code>/contexa/admin/security-monitor</code></td><td>Security events from the audit records (<code>ctxa_audit_log</code>)</td></tr>
-              <tr><td>Contexa database</td><td>Decision records <code>ctxa_ai_security_decision_observation</code>, audit records <code>ctxa_audit_log</code></td></tr>
+              <tr><td>Zero Trust → Overview <code>/contexa/admin/zero-trust</code></td><td>Protection coverage, the number of decisions and of stopped requests per period (by day), and the console's warnings. Under shadow mode the stopped requests are not requests that were really stopped, but requests that enforcement would have stopped.</td></tr>
+              <tr><td>Zero Trust → Adoption <code>/contexa/admin/zero-trust/adoption</code></td><td>Whether it is safe to move to <code>ENFORCE</code>. It weighs the <code>SHADOW</code> decisions made since shadow mode started, or the last 90 days of <code>SHADOW</code> decisions when the mode is not <code>SHADOW</code> now. It also shows the "Mode history" with the reason given for each change.</td></tr>
+              <tr><td>Zero Trust → Decision records <code>/contexa/admin/zero-trust/decisions</code></td><td>Each decision and why. Nobody is blocked under <code>SHADOW</code>, so a decision that came out as BLOCK in shadow mode (on its first attempt, not a retry) waits for an administrator in the "Review queue" tab (<code>?view=review</code>) as "Would have blocked" (<code>SHADOW_BLOCK</code>). The tab also holds a "Daily sample" drawn at random each day and decisions marked "Rule broken" (the AI's answer broke a decision rule). An administrator opens each one and rates whether the decision was valid.</td></tr>
+              <tr><td>Zero Trust → Operations <code>/contexa/admin/zero-trust/operations</code></td><td>The path of a decision, failures by kind, decisions set without an answer from the model, and "Latency by stage" (the time each step of a decision took).</td></tr>
+              <tr><td>Security event log <code>/contexa/admin/security-monitor</code></td><td>Security events read from the audit records (<code>ctxa_audit_log</code>)</td></tr>
+              <tr><td>CONTEXA database</td><td>Decision records <code>ctxa_ai_security_decision_observation</code>, audit records <code>ctxa_audit_log</code></td></tr>
             </tbody>
           </table></div>
-          <p>Contexa protects the admin console in both ownership modes. When your application owns sign-in, you sign in there with a Contexa administrator account, not an application account (<a href="installation-guide.html#admin-console">installation guide</a>).</p>
+          <p>The adoption screen ends in one of three verdicts:</p>
+          <ul>
+            <li><code>RECOMMENDED</code>: "Every recommended criterion is met: moving to ENFORCE can be considered."</li>
+            <li><code>CONDITIONS_UNMET</code>: "{count} criteria are not met: hold off applying."</li>
+            <li><code>DATA_INSUFFICIENT</code>: "Not enough data to judge yet: the observation period or the decisions fall short of the recommended criteria."</li>
+          </ul>
+          <p>CONTEXA protects the admin console in both ownership modes. When your application owns sign-in, you sign in there with a CONTEXA administrator account, not an application account (<a href="installation-guide.html#admin-console">installation guide</a>).</p>
 
           <h2 id="go-enforce">Moving to <code>ENFORCE</code></h2>
-          <p>Check before you move:</p>
+          <p>First look at whether the verdict of the adoption screen is <code>RECOMMENDED</code>. With <code>CONDITIONS_UNMET</code> the table "Each criterion now" shows the criteria that are not met; with <code>DATA_INSUFFICIENT</code> the observation period or the number of decisions falls short. The screen weighs these criteria, with these recommended values by default:</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Criterion on the screen</th><th>What it measures</th><th>Recommended by default</th></tr></thead>
+            <tbody>
+              <tr><td>Observation period and decisions</td><td>How long shadow mode has been watched and how many decisions came in. When this falls short, the verdict is <code>DATA_INSUFFICIENT</code> whatever the other criteria say.</td><td>At least 14 days and 5,000 decisions</td></tr>
+              <tr><td>Decided by the model</td><td>The share of decisions the AI model answered itself.</td><td>At least 95%</td></tr>
+              <tr><td>Set without the model</td><td>The share of decisions CONTEXA made with a fallback because the model gave no usable answer.</td><td>At most 5%</td></tr>
+              <tr><td>Decisions with an established baseline</td><td>The share of decisions for users who already have a behavioral baseline.</td><td>At least 70%</td></tr>
+              <tr><td>Found valid by review (95% lower bound)</td><td>Of the decisions an administrator reviewed, the share rated valid, given as a 95% lower bound. A small sample gives a lower bound, and fewer than 30 reviewed decisions count as not enough data.</td><td>At least 90% (at least 30 reviewed decisions)</td></tr>
+              <tr><td>User burden (95th percentile)</td><td>Count the challenges each user would have received, convert to a week, and take the value of the user at the 95th percentile (the 5% with the most challenges are above it).</td><td>At most 3 a week</td></tr>
+              <tr><td>User wait p95 (synchronous)</td><td>The 95th percentile of the time users waited for a decision from a <code>sync = true</code> method.</td><td>At most 10 seconds</td></tr>
+            </tbody>
+          </table></div>
+          <p>These are recommendations to start from, not a guarantee of the product; change them in the system settings (Zero Trust console) or with <code>contexa.security.zerotrust.console.adoption.*</code>. Your team checks the following itself.</p>
           <ul>
-            <li>The verdict of the adoption screen is <code>RECOMMENDED</code>. With <code>CONDITIONS_UNMET</code> the table "Each criterion now" shows the criteria not met; with <code>DATA_INSUFFICIENT</code> the observation period or the decisions fall short. The recommended criteria by default: at least 14 days and 5,000 decisions observed, at least 95% decided by the model, at most 5% set without the model, at least 70% with an established baseline, found valid by review with a 95% lower bound of at least 90% over at least 30 reviewed decisions, a user burden (95th percentile) of at most 3 challenges a week and a user wait p95 (synchronous) of at most 10 seconds. They are recommendations, not a guarantee of the product; change them in the system settings (Zero Trust console) or with <code>contexa.security.zerotrust.console.adoption.*</code>.</li>
-            <li>The decisions <code>SHADOW</code> would have blocked ("Would have blocked" in the review queue) have been reviewed: under <code>ENFORCE</code> these users would be blocked.</li>
-            <li>In the mix of decision types (ALLOW, BLOCK, CHALLENGE, ESCALATE), the share of normal requests that got BLOCK or CHALLENGE (the false positive rate) is below the bar your team set (for example under 1%). The code does not set this bar.</li>
-            <li>Decision latency does not affect throughput (Zero Trust → Operations, "Latency by stage"; the adoption criterion "User wait p95 (synchronous)").</li>
-            <li>You get alerts when BLOCK or ESCALATE decisions come out.</li>
-            <li>The decision store fits your operation: <code>standalone</code> (default) is memory, <code>distributed</code> is Redis (<a href="index.html#infrastructure">Infrastructure mode</a>).</li>
+            <li>Check that the decisions <code>SHADOW</code> would have blocked ("Would have blocked" in the review queue) have been reviewed. Under <code>ENFORCE</code> these users are really blocked.</li>
+            <li>Check that, in the mix of decision types (ALLOW, BLOCK, CHALLENGE, ESCALATE), the share of normal requests that got BLOCK or CHALLENGE (the false positive rate) is below the bar your team set (for example under 1%). The code does not set this bar.</li>
+            <li>Check that decision latency does not affect throughput (Zero Trust → Operations, "Latency by stage"; the adoption criterion "User wait p95 (synchronous)").</li>
+            <li>Check that you get alerts when BLOCK or ESCALATE decisions come out.</li>
+            <li>Check that the decision store fits your operation: <code>standalone</code> (default) is memory, <code>distributed</code> is Redis (<a href="index.html#infrastructure">Infrastructure mode</a>).</li>
           </ul>
           <pre><code class="language-yaml">contexa:
   security:
     zerotrust:
       mode: ENFORCE</code></pre>
-          <p>If a mode was ever saved in the admin console, change it there instead of in YAML. After the switch, stored decisions apply like this.</p>
+          <p>If a mode was ever saved in the admin console, change it there instead of in YAML. After the switch:</p>
+          <ul>
+            <li>If you ran under <code>ENFORCE</code> before, the BLOCK, CHALLENGE and ESCALATE decisions stored then, and administrators' blocks, apply again unless they have expired.</li>
+            <li>The decisions in the shadow memory do not carry over. Each user gets a new decision under <code>ENFORCE</code>.</li>
+            <li>The behavioral baseline learned during shadow mode stays in use.</li>
+          </ul>
+          <p>Stored decisions then apply like this.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Decision</th><th>Answer</th><th>Where it is enforced</th></tr></thead>
             <tbody>
               <tr><td>ALLOW</td><td>Goes on</td><td>—</td></tr>
-              <tr><td>CHALLENGE</td><td><code>401</code>, step-up authentication (MFA) required (with <code>HOST_OWNED</code>, Contexa's step-up <code>/contexa/step-up</code>)</td><td>The request-time filters and before <code>@Protectable</code> methods, in both ownership modes</td></tr>
+              <tr><td>CHALLENGE</td><td><code>401</code>, with a demand for step-up authentication (MFA). When your application owns sign-in (<code>HOST_OWNED</code>), the user is sent to CONTEXA's step-up screen <code>/contexa/step-up</code>.</td><td>The request-time filters and before <code>@Protectable</code> methods, in both ownership modes</td></tr>
               <tr><td>BLOCK</td><td><code>403</code>. The request-time filters first offer a person block-release MFA. Only people go to the blocked-user records.</td><td>The same</td></tr>
               <tr><td>ESCALATE</td><td><code>423</code>, held for review</td><td>The same</td></tr>
-              <tr><td>No decision (<code>PENDING_ANALYSIS</code>)</td><td>Goes on and analysis starts. The request-time filters wrap the response so it can be cut if a block decision arrives during analysis.</td><td>The request-time filters, in both ownership modes</td></tr>
+              <tr><td>No decision (<code>PENDING_ANALYSIS</code>)</td><td>The request goes on and analysis starts. The request-time filters wrap the response so that it can be cut if a block decision arrives during analysis.</td><td>The request-time filters, in both ownership modes</td></tr>
             </tbody>
           </table></div>
 
           <h2 id="rollback">Rolling back</h2>
+          <p>If enforcement causes trouble, move the mode back to <code>SHADOW</code>. From then on new decisions are not applied. There are four ways, and the further down the table, the more they switch off.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Way</th><th>Result</th></tr></thead>
             <tbody>
-              <tr><td>Save <code>SHADOW</code> in the admin console</td><td>Applies at once (no restart). New decisions are not stored, applied or learned from.</td></tr>
+              <tr><td>Save <code>SHADOW</code> in the admin console</td><td>Applies at once (no restart). New decisions are not applied. Decision and audit records are still written, and ALLOW decisions are still learned.</td></tr>
               <tr><td>YAML <code>contexa.security.zerotrust.mode: SHADOW</code></td><td>Applies after a restart, and only when no value was saved in the admin console.</td></tr>
-              <tr><td><code>contexa.security.zerotrust.enabled: false</code></td><td>No AI analysis, and the decision event listener stops too (<code>mode: DISABLED</code> does not stop the listener).</td></tr>
-              <tr><td><code>contexa.enabled: false</code></td><td>Turns none of Contexa on. Without your own chain, Spring Boot's default security applies.</td></tr>
+              <tr><td><code>contexa.security.zerotrust.enabled: false</code></td><td>No AI analysis (the same as <code>mode: DISABLED</code>). In addition, where CONTEXA owns sign-in, it also stops changing authorities when the sign-in is read and stops session tracking. <code>mode: DISABLED</code> stops neither.</td></tr>
+              <tr><td><code>contexa.enabled: false</code></td><td>Turns none of CONTEXA on. Without a Spring Security filter chain of your own, Spring Boot's default security applies.</td></tr>
             </tbody>
           </table></div>
           <div class="callout callout-warning">
-            <p><strong>Decisions already stored stay, but are not enforced while you are rolled back.</strong> In both ownership modes the request-time filters and the check before <code>@Protectable</code> methods follow the enforcement mode and <code>contexa.security.zerotrust.enabled</code>. So after switching to <code>SHADOW</code> or turning it off nothing is stopped (the check before <code>@Protectable</code> methods only records). A BLOCK, CHALLENGE or ESCALATE stored before the switch, an administrator's block included, stays and applies again after you switch back to <code>ENFORCE</code>, until it expires or an administrator releases it.</p>
+            <p><strong>Decisions already stored stay, but are not enforced while you are rolled back.</strong> In both ownership modes the request-time filters and the check before <code>@Protectable</code> methods follow the operating mode and <code>contexa.security.zerotrust.enabled</code>. So after switching to <code>SHADOW</code>, or turning AI decisions off with <code>contexa.security.zerotrust.enabled: false</code>, these two stop nothing on the strength of a stored decision (the check before <code>@Protectable</code> methods only records). A BLOCK, CHALLENGE or ESCALATE stored before the switch, an administrator's block included, stays and applies again after you switch back to <code>ENFORCE</code>, until it expires or an administrator releases it. One step does not follow the mode: where CONTEXA owns sign-in, it narrows a user's authorities by the stored decision when the sign-in is read, and only <code>enabled: false</code> stops that.</p>
           </div>
-          <p>Learned state is not erased by changing the mode. In <code>standalone</code>, though, it lives in memory and is lost on restart. Changing the mode in the admin console needs no restart.</p>
+          <p>The behavioral baseline is not erased by changing the mode. In <code>standalone</code>, though, it lives in memory and is lost when the application restarts. Changing the mode in the admin console needs no restart, so the baseline is kept.</p>
 
           <h2 id="internals">For reference: steps after a decision</h2>
-          <p>A decision event goes through the handlers below in order. Under <code>SHADOW</code> only the enforcement step (55) differs. Enforcement happens only when <code>contexa.security.zerotrust.enabled</code> is <code>true</code> and the mode is <code>ENFORCE</code> (<code>isEnforcementEnabled()</code>).</p>
+          <p>One analysis request (a decision event) goes through the handlers below, in the order of their numbers. Under shadow mode only the enforcement step (55) differs. That step stores and applies the decision only when <code>contexa.security.zerotrust.enabled</code> is <code>true</code> and the mode is <code>ENFORCE</code> (<code>isEnforcementEnabled()</code>).</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Order</th><th>What it does</th><th>Under <code>SHADOW</code></th></tr></thead>
             <tbody>
-              <tr><td>50</td><td>Make the decision (<code>ProcessingExecutionHandler</code>)</td><td>The same</td></tr>
-              <tr><td>55</td><td>Enforcement (<code>SecurityDecisionEnforcementHandler</code>): writes the decision record; with <code>ENFORCE</code> stores the decision (<code>writeFinalAction</code>), on BLOCK sets the block flag (<code>setBlockedFlag</code>), sends the block signal (<code>registerBlockAndAwait</code>) and records the blocked user (<code>recordBlock</code>), and learns from applied ALLOW decisions</td><td>Writes the decision record only and skips the rest</td></tr>
-              <tr><td>56</td><td>Seal evidence (<code>SealedEvidenceCaptureHandler</code>)</td><td>The same</td></tr>
-              <tr><td>60</td><td>Audit record (<code>AuditingHandler</code>)</td><td>The same (written)</td></tr>
-              <tr><td>65</td><td>Forward to Contexa SaaS (<code>SaasForwardingHandler</code>, only when turned on)</td><td>The same</td></tr>
+              <tr><td>50</td><td>Make the decision (<code>ProcessingExecutionHandler</code>): runs the AI analysis and makes the decision.</td><td>The same</td></tr>
+              <tr><td>55</td><td>Enforcement (<code>SecurityDecisionEnforcementHandler</code>): writes the decision record. With <code>ENFORCE</code> it also stores the decision (<code>writeFinalAction</code>); on BLOCK it sets the block flag (<code>setBlockedFlag</code>), sends the block signal (<code>registerBlockAndAwait</code>) and records the blocked user (<code>recordBlock</code>); and it learns from applied ALLOW decisions.</td><td>Writes the decision record, keeps the decision in the shadow memory and learns from ALLOW decisions. It skips storing the decision, the block flag, the block signal and the blocked-user record.</td></tr>
+              <tr><td>56</td><td>Seal evidence (<code>SealedEvidenceCaptureHandler</code>): seals the basis of the decision (the input sent to the AI and so on) into an evidence package and stores it. A sampling rule chooses which decisions are stored.</td><td>The same</td></tr>
+              <tr><td>60</td><td>Audit record (<code>AuditingHandler</code>): writes the audit record.</td><td>The same (written)</td></tr>
+              <tr><td>65</td><td>Forward to CONTEXA SaaS (<code>SaasForwardingHandler</code>, only when turned on): collects decisions other than ALLOW and pending analysis for sending to CONTEXA SaaS.</td><td>The same</td></tr>
             </tbody>
           </table></div>
           <p>Each step is detailed in <a href="../reference/architecture/decision-engine.html#handlers">Decision engine</a>.</p>
@@ -146,10 +201,10 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>The enforcement mode. A value saved in the admin console wins.</td><td><code>SHADOW</code> when you first adopt Contexa</td></tr>
-              <tr><td><code>contexa.security.zerotrust.enabled</code></td><td><code>true</code></td><td><code>false</code> stops AI analysis and the decision event listener.</td><td>To turn AI decisions off entirely</td></tr>
-              <tr><td><code>contexa.security.zerotrust.baseline.learning.enabled</code></td><td><code>true</code></td><td>Behavioral baseline learning (from applied ALLOW decisions)</td><td>To stop learning</td></tr>
-              <tr><td><code>contexa.autonomous.enabled</code></td><td><code>true</code></td><td>The whole decision engine (autonomous security). When it is not <code>true</code>, all of Contexa goes off</td><td>To take Contexa out altogether. To turn off only the decisions, use <code>contexa.security.zerotrust.mode: DISABLED</code></td></tr>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>The operating mode. A value saved in the admin console wins.</td><td><code>SHADOW</code> when you first adopt CONTEXA</td></tr>
+              <tr><td><code>contexa.security.zerotrust.enabled</code></td><td><code>true</code></td><td><code>false</code> stops AI analysis, and where CONTEXA owns sign-in it also stops changing authorities and session tracking.</td><td>To turn AI decisions off entirely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.enabled</code></td><td><code>true</code></td><td>Behavioral baseline learning (from ALLOW decisions)</td><td>To stop learning</td></tr>
+              <tr><td><code>contexa.autonomous.enabled</code></td><td><code>true</code></td><td>The whole decision engine (autonomous security). When it is not <code>true</code>, all of CONTEXA goes off: an application that owns sign-in starts without CONTEXA, and where CONTEXA owns sign-in the start is refused.</td><td>To take CONTEXA out altogether. To turn off only the decisions, use <code>contexa.security.zerotrust.mode: DISABLED</code></td></tr>
               <tr><td><code>contexa.infrastructure.mode</code></td><td><code>standalone</code></td><td>Keep decision and learning state in memory (<code>standalone</code>) or in Redis (<code>distributed</code>)</td><td>Several instances, keeping learning across restarts</td></tr>
             </tbody>
           </table></div>
@@ -167,7 +222,7 @@
                 <p>How a stored decision applies to the next request.</p>
               </a>
               <a href="../reference/architecture/overview.html" class="related-link-card">
-                <h3>How Contexa Works</h3>
+                <h3>How CONTEXA Works</h3>
                 <p>Request-time enforcement, asynchronous decisions and the decision store.</p>
               </a>
               <a href="../reference/architecture/zero-trust-flow.html" class="related-link-card">

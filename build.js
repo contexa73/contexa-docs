@@ -272,7 +272,7 @@ function build() {
             const plain = (s) => s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().replace(/"/g, '&quot;');
             const h1 = contentHtml.match(/<h1[^>]*>([\s\S]*?)<\/h1>/);
             const lead = contentHtml.match(/<p class="lead[^"]*">([\s\S]*?)<\/p>/);
-            if (h1) html = html.replace(/<title>[^<]*<\/title>/, `<title>Contexa — ${plain(h1[1])}</title>`);
+            if (h1) html = html.replace(/<title>[^<]*<\/title>/, `<title>CONTEXA — ${plain(h1[1])}</title>`);
             if (lead) {
               const desc = plain(lead[1]);
               html = html.replace(/<meta\s+name="description"\s+content="[^"]*">/,
@@ -284,7 +284,7 @@ function build() {
             const plain = (s) => s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().replace(/"/g, '&quot;');
             const h1 = contentHtml.match(/<h1[^>]*>([\s\S]*?)<\/h1>/);
             const lead = contentHtml.match(/<p class="lead">([\s\S]*?)<\/p>/);
-            if (h1) html = html.replace(/<title>[^<]*<\/title>/, `<title>${plain(h1[1])} | Contexa Docs</title>`);
+            if (h1) html = html.replace(/<title>[^<]*<\/title>/, `<title>${plain(h1[1])} | CONTEXA Docs</title>`);
             if (lead) {
               const desc = plain(lead[1]);
               html = html.replace(/<meta\s+name="description"\s+content="[^"]*">/,
@@ -314,9 +314,9 @@ function build() {
         const canonicalUrl = `${DOCS_BASE_URL}/${lang}${pageUrl}`;
 
         const titleMatch = html.match(/<title>([^<]*)<\/title>/);
-        const pageTitle = titleMatch ? titleMatch[1] : 'Contexa';
+        const pageTitle = titleMatch ? titleMatch[1] : 'CONTEXA';
         const descMatch = html.match(/<meta\s+name="description"\s+content="([^"]*)"/);
-        const pageDesc = descMatch ? descMatch[1] : 'Open-source AI security for Spring Security that stops the attacks that look like normal work after sign-in.';
+        const pageDesc = descMatch ? descMatch[1] : 'Open-source post-authentication runtime security for Spring Boot.';
 
         const headTags = [
           `<!-- Canonical -->`,
@@ -330,7 +330,7 @@ function build() {
           `<meta property="og:description" content="${pageDesc}">`,
           `<meta property="og:image" content="${DOCS_BASE_URL}/assets/img/contexa.png">`,
           `<meta property="og:url" content="${canonicalUrl}">`,
-          `<meta property="og:site_name" content="Contexa">`,
+          `<meta property="og:site_name" content="CONTEXA">`,
           `<!-- Twitter Card -->`,
           `<meta name="twitter:card" content="summary_large_image">`,
           `<meta name="twitter:title" content="${pageTitle}">`,
@@ -406,8 +406,8 @@ function build() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Contexa — After sign-in, stop the attacks that look like normal work</title>
-  <meta name="description" content="Open-source AI security for Spring Security. Contexa's AI judges each protected request by people and AI agents against usual behavior and company records, then allows it, asks for more authentication, or blocks it.">
+  <title>CONTEXA — Detect and respond to threats that get past the login, request by request</title>
+  <meta name="description" content="Account takeover and insider misuse pass login and permission checks. CONTEXA assesses each protected request against the behavioral baseline and business context, then allows, steps up or blocks it.">
   <link rel="canonical" href="${DOCS_BASE_URL}/en/index.html">
   <link rel="alternate" hreflang="en" href="${DOCS_BASE_URL}/en/index.html">
   <link rel="alternate" hreflang="ko" href="${DOCS_BASE_URL}/ko/index.html">
@@ -422,8 +422,8 @@ function build() {
   </script>
 </head>
 <body>
-  <h1>Contexa — After sign-in, stop the attacks that look like normal work</h1>
-  <p>Open-source AI security for Spring Security.</p>
+  <h1>CONTEXA — Detect and respond to threats that get past the login, request by request</h1>
+  <p>Open-source post-authentication runtime security for Spring Boot.</p>
   <p><a href="/en/index.html">View in English</a> | <a href="/ko/index.html">한국어로 보기</a></p>
 </body>
 </html>`;

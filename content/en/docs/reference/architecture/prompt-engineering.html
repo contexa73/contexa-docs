@@ -12,52 +12,76 @@
               <span class="badge badge-primary">contexa-common</span>
             </div>
             <h1>The Decision Prompt</h1>
-            <p class="lead">What the text sent to the AI model for a decision (the decision prompt) is made of. It covers the version a decision is drawn with, the facts given to the model, the minimum action rules and the budget, and the form and checks of the model's answer.</p>
+            <p class="lead">What the AI model receives when CONTEXA hands it a decision (the decision prompt). The page covers what the model gets, the order the text is built in, which fact goes into which block, the form of the model's answer and how CONTEXA checks it, and what an application can change.</p>
           </div>
 
           <h2 id="overview">At a glance</h2>
-          <p>A decision prompt gathers the facts of a request, puts them into one <strong>canonical context</strong>, and draws a system text and a user text with the <strong>prompt version</strong> the decision runs. Before the model's answer becomes a decision, it is checked once more. The engine only states facts; the model chooses the action (allow, step-up, block, hold for review).</p>
+          <p>For each decision it hands to the AI model, CONTEXA sends two texts. The <strong>system text</strong> is a set of instructions: the model's role, how to read the facts, and how to answer. The <strong>user text</strong> states the facts of that one request, split into blocks. The model answers with one JSON object that holds an action: allow (ALLOW), step-up authentication (CHALLENGE), hold for review (ESCALATE) or block (BLOCK). CONTEXA checks that the answer follows the format and the citation rules, and only then records it as the decision. When the first analysis (Layer 1) answers hold for review (ESCALATE), a second analysis (Layer 2) decides again from the same text plus the facts it newly found.</p>
+          <p>The work is split. The CONTEXA engine collects and computes the facts and writes them into the user text. It first puts the facts into one form, the <strong>canonical context</strong>, and builds the user text from it. The model reads the facts and chooses the action. The product default version has no rule or threshold that picks an action. A floor on the action is added to the system text only when the host turns it on (<a href="#minimum-action">Minimum action rules</a>).</p>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>From facts to a decision</strong>Left to right. The version is fixed once per event, and Layer 2 of the same event uses the same version.</figcaption>
+            <figcaption class="dg-caption"><strong>From facts to a decision</strong>Left to right. One version is fixed for each decision (event), and the second analysis of the same event uses the same version.</figcaption>
             <ol class="dg-flow dg-flow-h">
-              <li class="dg-node dg-request"><span class="dg-node-title">Gather facts</span><span class="dg-node-desc">authentication, authorization and delegation stamps</span></li>
-              <li class="dg-node"><span class="dg-node-title">Canonical context</span><span class="dg-node-desc">one form, hardened</span></li>
-              <li class="dg-node"><span class="dg-node-title">Decision facts</span><span class="dg-node-desc">differences from usual, company records</span></li>
-              <li class="dg-node"><span class="dg-node-title">Draw the prompt</span><span class="dg-node-desc">with the version v1.0, v2.0 …</span></li>
+              <li class="dg-node dg-request"><span class="dg-node-title">Gather facts</span><span class="dg-node-desc">the application's sign-in, permission and delegation information (three stamps)</span></li>
+              <li class="dg-node"><span class="dg-node-title">Canonical context</span><span class="dg-node-desc">one form, cleaned up</span></li>
+              <li class="dg-node"><span class="dg-node-title">Decision facts</span><span class="dg-node-desc">differences from the baseline, work records</span></li>
+              <li class="dg-node"><span class="dg-node-title">Build the prompt</span><span class="dg-node-desc">the version's system text and the request's user text</span></li>
               <li class="dg-node dg-model"><span class="dg-node-title">AI model</span><span class="dg-node-desc">chooses the action</span></li>
               <li class="dg-node"><span class="dg-node-title">Response check</span><span class="dg-node-desc">form and citations</span></li>
               <li class="dg-node dg-store"><span class="dg-node-title">Decision record</span><span class="dg-node-desc">proposed and final action</span></li>
             </ol>
           </figure>
           <div class="callout callout-info">
-            <strong>One missing fact does not stop a decision.</strong> The user text names every unknown fact in the UNKNOWN block, and the system text states that an unknown fact is neither the same as usual nor different.
+            <strong>One missing fact does not stop a decision.</strong> The user text names every unknown fact in the UNKNOWN block. The system text tells the model not to read an unknown fact as matching the baseline or as differing from it.
           </div>
+          <p>The page follows the order of the figure.</p>
+          <ol>
+            <li><a href="#versions">Prompts are managed as versions</a>: the sentences of the system text live in a version document, not in code, and each decision runs one version.</li>
+            <li><a href="#facts">Gathering facts</a> and <a href="#canonical">The canonical context and decision facts</a>: starting from the stamps (records built from the application's sign-in, permission and delegation information), how the facts for the user text are made.</li>
+            <li><a href="#rendering">Building the prompt</a>: which fact goes into which block and in what form, and which parts the system text is made of.</li>
+            <li><a href="#minimum-action">Minimum action rules</a>: a floor that keeps the model's action from being too weak.</li>
+            <li><a href="#output">The form of the model's answer and its check</a>: what the answer holds, why it has that form, and how it is checked.</li>
+            <li><a href="#decision-record">The final decision record</a>, <a href="#human-agent">How people's and agents' requests differ</a> and <a href="#trust">What can be trusted</a>: how the result is kept and audited.</li>
+            <li><a href="#settings">Settings you often change</a>: what an application can change.</li>
+          </ol>
 
-          <h2 id="versions">One prompt, kept as versions</h2>
-          <p>The decision prompt has the prompt key <code>cortex.security-decision</code>. Its sentences are not in the code: they come from the <strong>version</strong> a decision runs. The version Contexa ships is the product default; this build's release is <code>v1.1.0</code> (document <code>prompt-versions/cortex.security-decision/v1.1.0.yaml</code> of <code>contexa-core</code>). The earlier releases <code>2026.11.16-v1.0</code> and <code>2026.11.18-v1.0</code> are shipped beside it. <code>2026.11.18-v1.0</code> draws the same prompt as <code>2026.11.16-v1.0</code> except for the reason code line <code>VERIFIED_SIGNAL</code> and the use stated for the <code>VerifiedSignal</code> line; <code>v1.1.0</code> draws the same prompt as <code>2026.11.18-v1.0</code>: it takes out the Precedence sentence and the "Blocks your organization added" sentence, which <code>2026.11.18-v1.0</code> draws in a version the organization changed or added to, so no version on <code>v1.1.0</code> draws them (<a href="prompt-versions.html#new-product">A new product default</a>). An organization makes its own versions from it on the admin console or in documents (<a href="prompt-versions.html">Prompt Versions</a>). Every version keeps what the engine fixes.</p>
+          <h2 id="versions">Prompts are managed as versions</h2>
+          <p>The sentences of the decision prompt are not in the code. They live in a document called a prompt version. Each decision runs one version, and that version supplies the sentences of the system text. The prompt key is <code>cortex.security-decision</code>.</p>
+          <p>The version CONTEXA ships is the product default. This build's release is <code>v1.1.0</code>, in the document <code>prompt-versions/cortex.security-decision/v1.1.0.yaml</code> of <code>contexa-core</code>. The earlier releases <code>2026.11.16-v1.0</code> and <code>2026.11.18-v1.0</code> are shipped beside it. The three differ little.</p>
+          <ul>
+            <li><code>2026.11.16-v1.0</code>: the first release.</li>
+            <li><code>2026.11.18-v1.0</code>: the same prompt as <code>2026.11.16-v1.0</code>, except for the reason code <code>VERIFIED_SIGNAL</code> and the use stated for the <code>VerifiedSignal</code> line. The Precedence sentence and the "Blocks your organization added" sentence appear only in the system text of a version an organization changed or added to.</li>
+            <li><code>v1.1.0</code>: the same prompt as <code>2026.11.18-v1.0</code>, without the Precedence sentence and the "Blocks your organization added" sentence that <code>2026.11.18-v1.0</code> adds for organization versions. No version built on <code>v1.1.0</code> includes these two sentences (<a href="prompt-versions.html#new-product">A new product default</a>).</li>
+          </ul>
+          <p>An organization makes its own versions from the product version, on the admin console or in documents (<a href="prompt-versions.html">Prompt Versions</a>). Every version keeps what the engine fixes: the blocks, lines and order of the user text, the fact IDs, the form of the answer and the reason code names.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Item</th><th>What it is</th></tr></thead>
             <tbody>
-              <tr><td>System text</td><td>The parts of the version, top to bottom. The product default draws 13: mission, how to read the evidence, more reading, similar case reading and limits, how to judge (H1–H4, and another explanation when the facts point to one), responses, honesty and more honesty, and the answer format (output, reason codes, citation rules, and the format instruction for a call without native structured output). The parts drawn only under a condition, and two parts Contexa prepared, are in <a href="prompt-versions.html#parts">Locked parts and parts you may change</a></td></tr>
-              <tr><td>User text</td><td>Eight dictionary blocks the engine fills for every decision (<a href="#user-blocks">The user text</a>). Their titles, line names, order and fact IDs are fixed in every version; a version may only add reference blocks between them</td></tr>
-              <tr><td>Reading past decision records</td><td>The exact lookup of the person's records on the same action, joined with a similarity search whose finds are drawn as <code>SimilarCase</code> lines. A version that deletes the part "Similar case reading" turns the similarity search off</td></tr>
-              <tr><td>Output contract</td><td>v5 (<code>CORTEX_PROMPT_CONTRACT_V5</code>): the action, a risk score, the explanation judged most likely, 1–3 reason codes and one sentence (<a href="#output">The form of the model's answer</a>)</td></tr>
-              <tr><td>Response check</td><td>Form, citations and statements that contradict the lines, the decision boundaries whose facts were drawn, and enforced minimum action floors (<a href="#checks">Response check</a>)</td></tr>
-              <tr><td>Minimum action rules</td><td>Recorded for every decision; with <code>ENFORCE</code> the system text states the floors and the check enforces them (<a href="#minimum-action">Minimum action rules</a>)</td></tr>
+              <tr><td>System text</td><td>The instructions to the model. It is built from the parts of the version, top to bottom. The product default has 13 parts: mission, how to read the evidence, more reading, similar case reading and limits, how to judge (H1–H4, and another explanation when the facts point to one), responses, honesty and more honesty, and the answer format (output, reason codes, citation rules, and the format instruction). The format instruction is added only for a call without native structured output (a provider feature that forces the answer to follow a JSON schema). The parts included only under a condition, and two parts CONTEXA prepared, are in <a href="prompt-versions.html#parts">Locked parts and parts you may change</a></td></tr>
+              <tr><td>User text</td><td>The facts of this request. For every decision the engine fills eight blocks of the dictionary (<a href="#user-blocks">The user text</a>). Block titles, line names, order and fact IDs are the same in every version; a version may only add reference blocks between them</td></tr>
+              <tr><td>Finding past records</td><td>An exact lookup of the person's past records on the same action, joined with a similarity search whose finds are added as <code>SimilarCase</code> lines. A version that deletes the part "Similar case reading" turns the similarity search off</td></tr>
+              <tr><td>Answer form (output contract)</td><td>v5 (<code>CORTEX_PROMPT_CONTRACT_V5</code>): the action, a risk score, the explanation the model finds most likely, 1–3 reason codes and one sentence (<a href="#output">The form of the model's answer</a>)</td></tr>
+              <tr><td>Response check</td><td>The check CONTEXA runs on the model's answer: form, citations, statements that contradict the lines, the decision boundaries whose facts the prompt states, and the minimum action floors when they are enforced (<a href="#checks">Response check</a>)</td></tr>
+              <tr><td>Minimum action rules</td><td>The rules that applied are recorded for every decision. With <code>ENFORCE</code> the system text states the floors and the response check enforces them (<a href="#minimum-action">Minimum action rules</a>)</td></tr>
               <tr><td>Agent requests</td><td>Agent lines in the user text (<a href="#human-agent">How people's and agents' requests differ</a>)</td></tr>
             </tbody>
           </table></div>
           <h3 id="choose">Which version a decision runs</h3>
+          <p>The version is chosen in this order (<a href="prompt-versions.html#resolve">How a decision's version is chosen</a>).</p>
+          <ol>
+            <li>The version chosen on the admin screen: the one marked "Use for decisions", or the version of a canary the request falls inside (a version applied to some users first).</li>
+            <li>If none, the version the setting <code>contexa.security.tiered.prompt-bundle.active</code> names (<code>v2.0</code> form).</li>
+            <li>If none, the newest version provided by CONTEXA.</li>
+          </ol>
           <ul>
-            <li>The version chosen on the screen ("Use for decisions", or a canary the request falls inside), else the version <code>contexa.security.tiered.prompt-bundle.active</code> names (<code>v2.0</code> form), else the newest version provided by Contexa (<a href="prompt-versions.html#resolve">How a decision's version is chosen</a>).</li>
-            <li>The first prompt of an event fixes the version on the event (<code>promptBundleSelection.version</code>, <code>.source</code>, <code>.contentHash</code>), and the Layer 2 prompt and every retry of the same event use the same version.</li>
-            <li>A version name the store cannot find, or no choice, runs the product default of the build, with one error log per name. The earlier bundles v19, v20 and v21 are gone; a setting that still names one is logged once as a warning and is not used.</li>
+            <li>When a decision starts, its first prompt fixes the chosen version on the event (<code>promptBundleSelection.version</code>, <code>.source</code>, <code>.contentHash</code>). The second-analysis prompt and every retry of the same event use the same version.</li>
+            <li>With no choice, the product default of the build runs. When the store cannot find the version the choice names, the product default runs as well, and CONTEXA logs one error per name.</li>
+            <li>The earlier bundles v19, v20 and v21 are gone. A setting that still names one is logged once as a warning and is not used.</li>
           </ul>
 
           <h2 id="facts">Gathering facts: stamps and evidence quality</h2>
-          <p>The raw material of a decision is the three stamps the authentication bridge makes for each request. The bridge reads the application's sign-in, permission and delegation information in a fixed order (<a href="../common/bridge.html#order">the bridge's reading order</a>).</p>
+          <p>The raw material of a decision is three stamps made for each request. A stamp is a record that the CONTEXA authentication bridge builds by reading the application's sign-in, permission and delegation information in a fixed order (<a href="../common/bridge.html#order">the bridge's reading order</a>).</p>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>The three stamps</strong>The three stamps feed the actor, session, authorization and delegation parts of the canonical context.</figcaption>
+            <figcaption class="dg-caption"><strong>The three stamps</strong>The three stamps fill the actor, session, authorization and delegation parts of the canonical context.</figcaption>
             <div class="dg-grid">
               <div class="dg-node dg-host"><span class="dg-node-tag">Authentication stamp</span><span class="dg-node-title"><code>AuthenticationStamp</code></span><span class="dg-node-desc">principalId · principalType · authenticationType · authenticationSource · authenticationAssurance · mfaCompleted · authenticationTime · sessionId · authorities</span></div>
               <div class="dg-node dg-host"><span class="dg-node-tag">Authorization stamp</span><span class="dg-node-title"><code>AuthorizationStamp</code></span><span class="dg-node-desc">effect (ALLOW · DENY · UNKNOWN) · privileged · scopeTags · policyId · policyVersion · decisionSource · effectiveRoles · effectiveAuthorities</span></div>
@@ -65,29 +89,29 @@
             </div>
           </figure>
           <ul>
-            <li>The delegation stamp's <code>subjectId</code> is the delegator for an agent acting for a person, and the agent itself (<code>delegated=false</code>) for an agent acting on its own.</li>
-            <li>Headers sent by a client are not taken as they are. The header channel is off by default, and even when on, a header is accepted only from a trusted proxy and only when its subject is the signed-in subject.</li>
+            <li>The delegation stamp's <code>subjectId</code> is the delegator (the person) for an agent acting for a person, and the agent itself (<code>delegated=false</code>) for an agent acting on its own.</li>
+            <li>CONTEXA does not trust headers sent by a client as they are. The header channel is off by default. Even when it is on, CONTEXA accepts a header only from a trusted proxy and only when the header's subject is the signed-in subject.</li>
           </ul>
           <h3 id="quality">Evidence quality labels</h3>
-          <p>Every gathered value gets a label for where it came from. The labels name the source; they are not a ranking from strong to weak.</p>
+          <p>CONTEXA labels every gathered value with where it came from. A label names the source; it is not a ranking from strong to weak.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Label</th><th>Meaning</th></tr></thead>
             <tbody>
-              <tr><td><code>EXPLICIT_CUSTOMER_SIGNAL</code></td><td>a value the application (host) gave. Set whenever a value exists, through any channel</td></tr>
-              <tr><td><code>STRUCTURAL_DISCOVERY_ONLY</code></td><td>a value the bridge found by looking at the structure</td></tr>
-              <tr><td><code>DERIVED_RUNTIME_FALLBACK</code></td><td>a value filled in from runtime continuity</td></tr>
-              <tr><td><code>HEURISTIC_HINT_ONLY</code></td><td>a hint only; it must not be promoted to a meaningful conclusion</td></tr>
-              <tr><td><code>BRIDGE_COMPLETENESS_ONLY</code></td><td>for reporting how much the bridge read (completeness)</td></tr>
-              <tr><td><code>UNAVAILABLE</code></td><td>no evidence</td></tr>
-              <tr><td><code>DERIVED_FROM_AMR</code></td><td>read from the token's <code>amr</code> claim, not stated by the application</td></tr>
-              <tr><td><code>CLASS_NAME_FALLBACK</code></td><td>a Java class name standing in for a fact the application did not state; not a sign-in fact</td></tr>
-              <tr><td><code>SIGNED_TOKEN_CLAIM</code></td><td>read from a claim of the access token the authorization server signed</td></tr>
-              <tr><td><code>AGENT_REGISTRY_RECORD</code></td><td>the registry record of an agent an operator registered and approved</td></tr>
+              <tr><td><code>EXPLICIT_CUSTOMER_SIGNAL</code></td><td>A value the application (host) gave directly. It is set whenever a value exists, through any channel</td></tr>
+              <tr><td><code>STRUCTURAL_DISCOVERY_ONLY</code></td><td>A value the bridge found by looking at the application's structure</td></tr>
+              <tr><td><code>DERIVED_RUNTIME_FALLBACK</code></td><td>A value filled in from information that carries over at runtime, because the application gave none. Example: the application gave no authorization information, so the roles were filled in from the signed-in user's authorities</td></tr>
+              <tr><td><code>HEURISTIC_HINT_ONLY</code></td><td>A hint only. It must not be promoted to a meaningful conclusion. Example: a signal that guesses a privileged authority because its name contains ADMIN, ROOT, SUPER or PRIVILEGED</td></tr>
+              <tr><td><code>BRIDGE_COMPLETENESS_ONLY</code></td><td>A value that reports how much the bridge read (completeness). It is for reporting</td></tr>
+              <tr><td><code>UNAVAILABLE</code></td><td>No evidence</td></tr>
+              <tr><td><code>DERIVED_FROM_AMR</code></td><td>Read from the token's <code>amr</code> claim, not stated by the application</td></tr>
+              <tr><td><code>CLASS_NAME_FALLBACK</code></td><td>A Java class name standing in for a fact the application did not state. It is not a sign-in fact</td></tr>
+              <tr><td><code>SIGNED_TOKEN_CLAIM</code></td><td>Read from a claim of the access token that the authorization server signed</td></tr>
+              <tr><td><code>AGENT_REGISTRY_RECORD</code></td><td>The registry record of an agent that an operator registered and approved</td></tr>
             </tbody>
           </table></div>
 
           <h2 id="canonical">The canonical context and decision facts</h2>
-          <p>The stamps and the facts gathered by collectors and enrichers are put into one <strong>canonical context</strong> (<code>CanonicalSecurityContext</code>). Collectors add the session flow, work profile and role scope; enrichers add authentication strength, delegation, peer group, friction (approval history), organization and reasoning memory; inference computes the observed scope and whether the delegated scope is exceeded, and grades the completeness. There are 25 top-level fields.</p>
+          <p>The facts of one request come from several places. Besides the three stamps, collectors and enrichers add values, and an inference step computes from them. CONTEXA puts all of it into one <strong>canonical context</strong> (<code>CanonicalSecurityContext</code>), and the user text is built from that context. Collectors add the session flow, the work profile and the role scope. Enrichers add authentication strength, delegation, peer group, friction (step-up, block and approval history), organization and reasoning memory. The inference step computes the observed scope and whether the delegated scope is exceeded, and grades the completeness. There are 25 top-level fields.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Field</th><th>What it holds (examples)</th></tr></thead>
             <tbody>
@@ -99,157 +123,205 @@
               <tr><td>Resource <code>resource</code></td><td>resourceType · businessLabel · sensitivity · resourceClass · actionFamily</td></tr>
               <tr><td>Authorization <code>authorization</code></td><td>effectiveRoles · effectivePermissions · scopeTags · authorizationEffect · policyId · policyVersion</td></tr>
               <tr><td>Delegation <code>delegation</code></td><td>delegated · agentId · objectiveId · allowedOperations · allowedResources · objectiveDrift · maxItemsPerRequest · standing</td></tr>
-              <tr><td>Execution subject and envelope</td><td>the kind of subject making the request (person, service, agent), and the objective, scope and period of a delegated execution</td></tr>
-              <tr><td>Bridge and observed scope</td><td>how much the bridge read (completeness), the scope seen from recent protected-resource access</td></tr>
+              <tr><td>Execution subject and envelope</td><td>The kind of subject making the request (person, service, agent), and the objective, scope and period of a delegated execution</td></tr>
+              <tr><td>Bridge and observed scope</td><td>How much the bridge read (completeness), and the scope seen from recent protected-resource access</td></tr>
               <tr><td>Six profiles</td><td>session narrative · work · role scope · peer cohort · friction · reasoning memory</td></tr>
               <tr><td>Seven more fields</td><td>coverage report, extra attributes, trust profiles, data conflicts, collection time, request observation time, decision facts</td></tr>
             </tbody>
           </table></div>
           <ul>
-            <li><strong>Hardening:</strong> the hardener (<code>CanonicalSecurityContextHardener</code>) fills empty parts, trims strings and normalizes case, ranges and order. Prompt injection is handled not by the hardener but by the rendering rules: text anyone can write is drawn apart as UNTRUSTED TEXT.</li>
-            <li>The check that decodes a request payload and requires at least 80% printable characters is done by the event enricher, not the hardener.</li>
+            <li><strong>Hardening:</strong> the hardener (<code>CanonicalSecurityContextHardener</code>) fills empty parts, trims strings and normalizes case, ranges and order. The hardener does not stop prompt injection. The rules that build the prompt do: text anyone can write goes into its own block, UNTRUSTED TEXT.</li>
+            <li>The event enricher, not the hardener, decodes a request payload and checks that at least 80% of its characters are printable.</li>
           </ul>
           <h3 id="coverage">Four levels of completeness</h3>
-          <p>The coverage evaluator (<code>ContextCoverageEvaluator</code>) grades the facts that were filled. A low grade adds a warning to the prompt not to conclude from work patterns.</p>
+          <p>The coverage evaluator (<code>ContextCoverageEvaluator</code>) grades the canonical context by the facts that were filled. The model reads the grade and the missing facts on the <code>Coverage</code> line of the UNKNOWN block, so it knows which comparisons are possible.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Level</th><th>Facts available</th></tr></thead>
             <tbody>
-              <tr><td><code>BUSINESS_AWARE</code></td><td>identity, session, scope, resource and observed patterns</td></tr>
-              <tr><td><code>SCOPE_AWARE</code></td><td>identity and scope. No observed profile</td></tr>
-              <tr><td><code>IDENTITY_AWARE</code></td><td>identity only. No scope or profile</td></tr>
-              <tr><td><code>ENVIRONMENT_ONLY</code></td><td>environment only, such as IP and time</td></tr>
+              <tr><td><code>BUSINESS_AWARE</code></td><td>Identity, session, scope, resource and observed patterns, all of them</td></tr>
+              <tr><td><code>SCOPE_AWARE</code></td><td>Identity and scope. No observed profile</td></tr>
+              <tr><td><code>IDENTITY_AWARE</code></td><td>Identity only. No scope or profile</td></tr>
+              <tr><td><code>ENVIRONMENT_ONLY</code></td><td>Environment only, such as IP and time</td></tr>
             </tbody>
           </table></div>
           <h3 id="decision-facts">Decision facts</h3>
-          <p>The decision facts resolver (<code>DecisionFactsResolver</code>) computes once how the request differs from usual behavior, whether the company rule is met at request time, the approval, assignment, ticket, on-call and trip records, repeats in the session, scope group comparisons and data conflicts. A fact the engine cannot settle is left only as a name, as "unknown". The same computation stays in the canonical context, so the prompt, the sealed evidence, the response check and the evidence audit all read one computation.</p>
+          <p>Decision facts are comparison results that the engine computes once for each request. The decision facts resolver (<code>DecisionFactsResolver</code>) works out:</p>
+          <ul>
+            <li>where the request differs from the user's baseline (what the user usually does)</li>
+            <li>whether an approval, assignment, ticket, on-call or trip record explains each difference</li>
+            <li>whether the company rule is met at request time</li>
+            <li>whether the same action repeats in the session, how the request compares with the scope group, and whether sources disagree</li>
+          </ul>
+          <p>A fact the engine cannot settle is not given a value. Only its name stays, as "unknown". The result stays in the canonical context, so the prompt, the sealed evidence, the response check and the evidence audit all read the same computation. For example, when a user who normally works in the morning sends a request at 3 a.m., the engine computes a time difference (<code>DEVIATION_TIME</code>). A valid approval or ticket that covers the work explains the difference.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Dimension</th><th>Reason code</th><th>Record that can explain a difference</th></tr></thead>
             <tbody>
-              <tr><td>time · day</td><td><code>DEVIATION_TIME</code> · <code>DEVIATION_DAY</code></td><td>a valid approval or ticket covering the work</td></tr>
-              <tr><td>network</td><td><code>DEVIATION_NETWORK</code></td><td>a registered trip that holds the request address</td></tr>
-              <tr><td>device · login method</td><td><code>DEVIATION_DEVICE</code> · <code>DEVIATION_LOGIN_METHOD</code></td><td>none</td></tr>
-              <tr><td>target · action · class · rate</td><td><code>DEVIATION_TARGET</code> · <code>DEVIATION_ACTION</code> · <code>DEVIATION_RESOURCE_CLASS</code> · <code>DEVIATION_RATE</code></td><td>a valid approval or ticket covering the work</td></tr>
-              <tr><td>size</td><td><code>DEVIATION_SIZE</code></td><td>a valid approval or ticket covering the work, or the item limit of a satisfied assigned exception</td></tr>
+              <tr><td>time · day</td><td><code>DEVIATION_TIME</code> · <code>DEVIATION_DAY</code></td><td>A valid approval or ticket covering the work</td></tr>
+              <tr><td>network</td><td><code>DEVIATION_NETWORK</code></td><td>A registered trip that holds the request address</td></tr>
+              <tr><td>device · login method</td><td><code>DEVIATION_DEVICE</code> · <code>DEVIATION_LOGIN_METHOD</code></td><td>None</td></tr>
+              <tr><td>target · action · class · rate</td><td><code>DEVIATION_TARGET</code> · <code>DEVIATION_ACTION</code> · <code>DEVIATION_RESOURCE_CLASS</code> · <code>DEVIATION_RATE</code></td><td>A valid approval or ticket covering the work</td></tr>
+              <tr><td>size</td><td><code>DEVIATION_SIZE</code></td><td>A valid approval or ticket covering the work, or the item limit of a satisfied assigned exception</td></tr>
             </tbody>
           </table></div>
-          <p>A difference from a baseline that is not established, or a dimension not compared, is unknown, not "unexplained". The user text writes these facts only as records and comparisons, without the engine's conclusions: whether a record covers a difference, and whether the company rule is met, is the model's to judge. Only a version that puts in the prepared part "Decision rules" also gets the engine's conclusion lines <code>DeviationsExplained</code> and <code>PolicySatisfied</code>.</p>
+          <p>A difference from a baseline that is not established, or a dimension that was not compared, is unknown. It is not "unexplained". The user text writes these facts only as records and comparisons, without the engine's conclusions. The model itself decides whether a record covers a difference and whether the company rule is met. Only a version that includes the prepared part "Decision rules" also gets the engine's conclusion lines <code>DeviationsExplained</code> and <code>PolicySatisfied</code>.</p>
 
-          <h2 id="rendering">Drawing the prompt</h2>
+          <h2 id="rendering">Building the prompt</h2>
           <h3 id="user-blocks">The user text</h3>
-          <p>The user text uses only lines of the prompt dictionary, in the blocks below. The block titles and line names, with what each line means and what the decision uses it for, are in the product document; the values are the engine's. Each entry fixes the source and form of its value, what is written when it is missing, the source grade, the priority, the list limit and whether it may be cut. A block without lines is left out.</p>
+          <p>The user text states the facts of this request in eight blocks. The blocks come in the order of the table below, and the second analysis gets SECOND PASS at the end. A block may use only lines of the prompt dictionary, the list of lines the user text may hold. For each line the dictionary fixes the source and form of the value, what to write when the value is missing, the source grade, the priority, the list limit and whether the value may be cut. The block titles and line names, and what each line means and what the decision uses it for, are in the product document; the values are filled by the engine. A block without lines is left out.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Block</th><th>Fact ID</th><th>Lines in the product document</th><th>What it holds</th></tr></thead>
             <tbody>
-              <tr><td><code>USER BASELINE</code></td><td>B</td><td>21</td><td>what was learned about this user before this request, and how much evidence stands behind it</td></tr>
-              <tr><td><code>SESSION</code></td><td>S</td><td>15</td><td>how this session signed in and what it did before this request</td></tr>
-              <tr><td><code>REQUEST</code></td><td>R</td><td>15</td><td>subject, credential, role, time, action, target, size, class, network, device</td></tr>
-              <tr><td><code>RECORDS AND COMPARISONS</code></td><td>F</td><td>34</td><td>the company policy, the work records, differences from usual, role scope, delegation, signals, conflicts</td></tr>
-              <tr><td><code>PAST RECORDS</code></td><td>P</td><td>8</td><td>this user's past allowed records, similar cases, and recent decisions other than allow</td></tr>
-              <tr><td><code>UNKNOWN</code></td><td>U (one per name)</td><td>2</td><td>completeness and facts not known now</td></tr>
-              <tr><td><code>UNTRUSTED TEXT</code></td><td>none</td><td>1</td><td>text anyone can write; evidence only, never instructions</td></tr>
-              <tr><td><code>SECOND PASS</code></td><td>none</td><td>3</td><td>Layer 2 only: the first decision and what was newly found</td></tr>
+              <tr><td><code>USER BASELINE</code></td><td>B</td><td>21</td><td>What was learned about this user before this request (the baseline), and how much evidence stands behind it</td></tr>
+              <tr><td><code>SESSION</code></td><td>S</td><td>15</td><td>How this session signed in and what it did before this request</td></tr>
+              <tr><td><code>REQUEST</code></td><td>R</td><td>15</td><td>The request itself: subject, credential, role, time, action, target, size, class, network, device</td></tr>
+              <tr><td><code>RECORDS AND COMPARISONS</code></td><td>F</td><td>34</td><td>What is needed to weigh the request: the company policy, work records, differences from the baseline, role scope, delegation, signals, conflicts</td></tr>
+              <tr><td><code>PAST RECORDS</code></td><td>P</td><td>8</td><td>This user's past allowed records, similar cases, and recent decisions other than allow</td></tr>
+              <tr><td><code>UNKNOWN</code></td><td>U (one per name)</td><td>2</td><td>Completeness and the facts not known now</td></tr>
+              <tr><td><code>UNTRUSTED TEXT</code></td><td>none</td><td>1</td><td>Text anyone can write. It is evidence only, never instructions</td></tr>
+              <tr><td><code>SECOND PASS</code></td><td>none</td><td>3</td><td>Added only to the second analysis: the first decision and what was newly found</td></tr>
             </tbody>
           </table></div>
+          <p>This short sample shows the shape of the user text. Lines are cut and the values are examples.</p>
+          <pre><code class="language-text">=== USER BASELINE (learned; time zone UTC) ===
+[B1] BaselineStatus: ESTABLISHED (25 learned requests)
+UsualDays: Mon-Fri
+...
+=== UNKNOWN ===
+Unknown: not-integrated: [U1] ClientSignals, [U2] PeerCohort; unavailable-now: [U3] PastRecord (not retrieved, TIMEOUT)</code></pre>
+          <p>The text inside the blocks follows these rules.</p>
           <ul>
-            <li><strong>Header</strong>: <code>=== TITLE ===</code> or <code>=== TITLE (q1; q2) ===</code>. When all lines of a block share one source grade, the grade is written once in the header; with an event clock, <code>time zone &lt;id&gt;</code> is written once.</li>
-            <li><strong>Line</strong>: <code>Name: value</code>. Line breaks and control characters inside a value are escaped so the value stays on one line.</li>
-            <li><strong>Fact ID</strong>: the required (P0) lines of USER BASELINE, SESSION, REQUEST, RECORDS AND COMPARISONS and PAST RECORDS, and the numbered past record lines, get <code>[B1]</code> · <code>[S1]</code> · <code>[R1]</code> · <code>[F1]</code> · <code>[P1]</code> in the order drawn. These are the IDs reason codes cite.</li>
-            <li><strong>List</strong>: <code>PastRecord</code>, <code>SimilarCase</code> and <code>NewPastRecord</code> lines are numbered up to 5; the rest is counted on one line such as <code>PastRecord6: +3 more</code>, which has no fact ID.</li>
-            <li><strong>UNKNOWN</strong>: names are written per kind, <code>not-integrated: [U1] A, [U2] B; unavailable-now: [U3] C (reason)</code>. <code>not-integrated</code> means no integration provides that fact; <code>unavailable-now</code> means the source gave no value for this request.</li>
-            <li><strong>SECOND PASS</strong>: Layer 2 sends the first user text exactly as sent, then this block with only the facts gathered after the first pass: the first verdict and, when the first pass could not retrieve past records, the records Layer 2 found (<code>NewPastRecord</code>); when the first pass retrieved its own, "none new".</li>
-            <li><strong>UNTRUSTED TEXT</strong>: in the form <code>source=...; "..."</code>; this text is the only value that may be cut (<code>… [+n chars cut]</code>, at <code>contexa.security.tiered.truncation.layer1.payload</code>, default 200 characters, in both layers). A resource's business label (a document title and so on) is free text the application received, so it is drawn here too, and the REQUEST target line holds only <code>(business label in UNTRUSTED TEXT)</code> in its place.</li>
-            <li><strong>Reference blocks of the organization</strong>: a block a version adds is drawn right after the block it follows, after a blank line, under <code>=== Title (reference written by your organization) ===</code>, in Layer 1, Layer 2, the retries and the replays. It has no fact IDs, so no reason code can cite it; a title or a line that could read as a block header is drawn in quotes (<a href="prompt-versions.html#parts">Prompt Versions</a>). In <code>2026.11.18-v1.0</code> and the versions on it, the system text of a version the organization changed or added to gets the locked part "Blocks your organization added", which says such a block tells how the organization works, not what happened in this request; release <code>v1.1.0</code> has no such part, and the block's header says it is the organization's reference.</li>
-            <li><strong>Evidence completeness</strong> is recorded for each prompt as <code>SUFFICIENT</code> · <code>PARTIAL</code> · <code>INCOMPLETE</code>. Without the canonical context or the actor, session or resource identity, or with a blocking omission, it is <code>INCOMPLETE</code>; it is <code>PARTIAL</code> when the UNKNOWN block names any fact, or when, for example, the role, authorization scope, resource sensitivity or MFA state is missing. The descriptor (<code>PromptGovernanceDescriptor</code>) records the prompt key, template key and release with the prompt, beside the version name and content hash.</li>
+            <li><strong>Header</strong>: <code>=== TITLE ===</code> or <code>=== TITLE (q1; q2) ===</code>. When all lines of a block share one source grade, the grade is written once in the header. With an event clock, <code>time zone &lt;id&gt;</code> is written once.</li>
+            <li><strong>Line</strong>: <code>Name: value</code>. Line breaks and control characters inside a value are escaped, so the value stays on one line.</li>
+            <li><strong>Fact ID</strong>: the required (P0) lines of USER BASELINE, SESSION, REQUEST, RECORDS AND COMPARISONS and PAST RECORDS, and the numbered past record lines, get <code>[B1]</code> · <code>[S1]</code> · <code>[R1]</code> · <code>[F1]</code> · <code>[P1]</code> in the order they stand. When the model gives a reason code, it points to the supporting line with this ID.</li>
+            <li><strong>List</strong>: <code>PastRecord</code>, <code>SimilarCase</code> and <code>NewPastRecord</code> lines are numbered up to 5. The rest is counted on one line such as <code>PastRecord6: +3 more</code>, which has no fact ID.</li>
+            <li><strong>UNKNOWN</strong>: the names of unknown facts are written by kind: <code>not-integrated: [U1] A, [U2] B; unavailable-now: [U3] C (reason)</code>. <code>not-integrated</code> means no integration provides that fact. <code>unavailable-now</code> means the source gave no value for this request.</li>
+            <li><strong>SECOND PASS</strong>: the second analysis sends the first user text exactly as it was sent, then adds this block. The block holds only the facts gathered after the first analysis: the first decision and, when the first analysis could not retrieve past records, the records the second analysis found (<code>NewPastRecord</code>). When the first analysis retrieved its own, the block says "none new".</li>
+            <li><strong>UNTRUSTED TEXT</strong>: the form is <code>source=...; "..."</code>. This block is the only place a value may be cut (<code>… [+n chars cut]</code>, at <code>contexa.security.tiered.truncation.layer1.payload</code>, default 200 characters, in both analyses). A resource's business label (a document title and so on) is free text the application received, so it goes here too, and the REQUEST target line holds only <code>(business label in UNTRUSTED TEXT)</code> in its place.</li>
+            <li><strong>Reference blocks of the organization</strong>: a version of an organization may add reference blocks to the user text. An added block follows the block it is placed after, with a blank line between, under the header <code>=== Title (reference written by your organization) ===</code>, in the first analysis, the second analysis, retries and replays. It has no fact IDs, so no reason code can cite it. A title or a line that could read as a block header is put in quotes (<a href="prompt-versions.html#parts">Prompt Versions</a>). In <code>2026.11.18-v1.0</code> and the versions on it, the system text of a version the organization changed or added to gets the locked part "Blocks your organization added". It tells the model that such a block says how the organization works, not what happened in this request. Release <code>v1.1.0</code> has no such part, and the block's header says it is the organization's reference.</li>
+            <li><strong>Evidence completeness</strong> is recorded for each prompt as <code>SUFFICIENT</code>, <code>PARTIAL</code> or <code>INCOMPLETE</code>. It is <code>INCOMPLETE</code> without the canonical context, when the actor, session or resource identity is unknown, or when something that must not be missing was left out. It is <code>PARTIAL</code> when the UNKNOWN block names any fact, or when, for example, the role, authorization scope, resource sensitivity or MFA state is missing. The prompt information record (<code>PromptGovernanceDescriptor</code>) keeps the prompt key, template key and release, with the version name and content hash.</li>
           </ul>
+          <p>The source grade tells where a value came from.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Source grade</th><th>Meaning</th></tr></thead>
             <tbody>
-              <tr><td><code>host</code></td><td>given by the application: work record providers, bridge stamps, request fields, resource descriptions</td></tr>
-              <tr><td><code>learned</code></td><td>learned from allowed requests: baselines, work profiles, past records</td></tr>
-              <tr><td><code>computed</code></td><td>computed by the engine from the request and records</td></tr>
-              <tr><td><code>inferred</code></td><td>estimated by a fallback rule because no explicit value exists</td></tr>
-              <tr><td><code>untrusted</code></td><td>text anyone can write</td></tr>
+              <tr><td><code>host</code></td><td>Given by the application: work record providers, bridge stamps, request fields, resource descriptions</td></tr>
+              <tr><td><code>learned</code></td><td>Learned from allowed requests: baselines, work profiles, past records</td></tr>
+              <tr><td><code>computed</code></td><td>Counted or measured by the engine from the request and the records: times, frequencies, counts, durations. It is not a decision</td></tr>
+              <tr><td><code>inferred</code></td><td>Estimated by a fallback rule because no explicit value exists</td></tr>
+              <tr><td><code>untrusted</code></td><td>Text anyone can write</td></tr>
             </tbody>
           </table></div>
+          <p>For each line, the dictionary fixes what the prompt shows when the value is missing. The rule exists so that nothing is made up.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Missing notation</th><th>What the prompt shows when there is no value</th></tr></thead>
             <tbody>
-              <tr><td><code>RENDERED_VALUE</code></td><td>the line is written with the entry's missing wording (for example <code>not learned</code>, <code>none</code>)</td></tr>
-              <tr><td><code>LINE_OMITTED</code></td><td>the line is not written</td></tr>
-              <tr><td><code>UNKNOWN_BLOCK</code></td><td>the line is not written; the name and kind go to the UNKNOWN block</td></tr>
-              <tr><td><code>BLOCK_OMITTED</code></td><td>the whole block is left out</td></tr>
-              <tr><td><code>ALWAYS_PRESENT</code></td><td>a value the request always states; without it the name goes to the UNKNOWN block</td></tr>
+              <tr><td><code>RENDERED_VALUE</code></td><td>The line is written with the "none" wording fixed for that line (for example <code>not learned</code>, <code>none</code>)</td></tr>
+              <tr><td><code>LINE_OMITTED</code></td><td>The line is not written</td></tr>
+              <tr><td><code>UNKNOWN_BLOCK</code></td><td>The line is not written. Its name and kind go to the UNKNOWN block</td></tr>
+              <tr><td><code>BLOCK_OMITTED</code></td><td>The whole block is left out</td></tr>
+              <tr><td><code>ALWAYS_PRESENT</code></td><td>A value the request always states. Without it, the name goes to the UNKNOWN block</td></tr>
             </tbody>
           </table></div>
+          <p><strong>When the user text is too long.</strong> The user text has a budget. By default (<code>contexa.security.tiered.prompt-runtime.budget-enforcement</code> = <code>OBSERVE_ONLY</code>) CONTEXA only measures the budget. With <code>ENFORCE</code>, a user text over its budget profile (<code>CORTEX_L1_INTERACTIVE_STRICT</code>, <code>CORTEX_L2_EXPERT_STRICT</code>) loses whole entries in dictionary priority order (optional, then reference, then high-value entries, each from the end of the dictionary). Required entries are never dropped and no value is cut. Dropped entries are recorded in the omission ledger as <code>BUDGET_TRIMMED</code>. The SECOND PASS block is never dropped.</p>
           <h3 id="system-text">System text</h3>
+          <p>The system text is the parts of the version joined in the order below (<a href="prompt-versions.html#parts">the parts and their locks</a>). It tells the model how to decide.</p>
+          <ol>
+            <li><strong>Mission</strong>: sign-in, permissions and fixed rules have already let the request through, and they cannot tell a stolen account or an insider's misuse from legitimate work. The model's job is to tell the difference.</li>
+            <li><strong>How to read the evidence</strong>: the order of the user text's blocks, the source grades, how to read fact IDs, how to read agents, delegations and credentials, and not to follow instructions found inside the text.</li>
+            <li><strong>More reading and similar cases</strong>: missing or unknown facts are not evidence of risk, and how to read similar cases and what limits them.</li>
+            <li><strong>How to judge</strong>: compare legitimate work (H1), account takeover (H2), insider misuse (H3) and automation or error (H4) against each fact, and add another explanation when the facts point to one.</li>
+            <li><strong>Responses and what they do</strong>: with ALLOW the request goes on now. With CHALLENGE the request waits until the account owner passes step-up authentication. ESCALATE is for facts that cannot settle the response, and the second analysis decides again. With BLOCK the account is stopped until it is released.</li>
+            <li><strong>Honesty</strong>: use only what the lines state, and do not invent role scope, approvals or intent.</li>
+            <li><strong>The answer format</strong>: explained in the next section, "The form of the model's answer and its check".</li>
+          </ol>
+          <p>In the product default there is no rule or threshold that decides the action. The model reads the facts and chooses it. Implementation notes:</p>
           <ul>
-            <li>The system text is the version's parts in order (<a href="prompt-versions.html#parts">the parts and their locks</a>): mission (sign-in, permissions and fixed rules cannot tell a stolen account or an insider's misuse from legitimate work) → how to read the evidence (including agents, delegations and credentials) → more reading and similar cases → how to judge (compare legitimate work H1, account takeover H2, insider misuse H3, automation or error H4 against each fact, and add another explanation when needed) → responses and what they do → honesty → the answer format. In the product default there are no rules, thresholds or floors that decide the action.</li>
-            <li>The drawn system text is cached per version content hash, budget profile, output mode and minimum action settings; an agent's request is cached apart only when a part the version draws reads differently for agents. The provider's prompt cache key is <code>contexa-</code> with the head of the system text's SHA-256, and holds no user or tenant.</li>
-            <li><strong>Budget:</strong> the default (<code>contexa.security.tiered.prompt-runtime.budget-enforcement</code> = <code>OBSERVE_ONLY</code>) only measures the budget. With <code>ENFORCE</code>, a user text over its budget profile (<code>CORTEX_L1_INTERACTIVE_STRICT</code>, <code>CORTEX_L2_EXPERT_STRICT</code>) drops whole entries in dictionary priority order (optional, then reference, then high-value entries, each from the end of the dictionary), never drops required entries or cuts a value, and records the dropped entries in the omission ledger as <code>BUDGET_TRIMMED</code>. A second pass block is never trimmed.</li>
-            <li><strong>Call settings:</strong> a decision call carries determinism values (temperature <code>0.0</code>, seed <code>1</code>), and providers that support it get native structured output (a strict JSON schema with the meaning of each reason code). The output limit is 4096 tokens for Layer 1 and 2560 for Layer 2.</li>
+            <li>The built system text is cached per version content hash, budget profile, output mode and minimum action settings. An agent's request is cached apart only when a part the version includes reads differently for agents. The provider's prompt cache key is <code>contexa-</code> with the head of the system text's SHA-256, and it holds no user or tenant.</li>
+            <li><strong>Call settings:</strong> a decision call carries determinism values (temperature <code>0.0</code>, seed <code>1</code>), and providers that support it get native structured output (a strict JSON schema with the meaning of each reason code). The output limit is 4096 tokens for the first analysis and 2560 for the second.</li>
             <li>OSS has no implementation of the provider that adds rules to the prompt at runtime, so by default no rule is added.</li>
           </ul>
 
           <h2 id="minimum-action">Minimum action rules</h2>
-          <p>The minimum action rules (<code>MinimumActionRules</code>) read the decision facts and set the weakest action a request requires (a floor). The order of actions is ALLOW &lt; CHALLENGE &lt; ESCALATE &lt; BLOCK. A rule is only a floor and never chooses the action itself. Only differences no record explains are counted.</p>
+          <p>The minimum action rules (<code>MinimumActionRules</code>) put a floor under the model's action so it cannot be too weak. The engine reads the decision facts and sets the weakest action the request requires. The actions rank ALLOW &lt; CHALLENGE &lt; ESCALATE &lt; BLOCK. A rule is only a floor and never chooses the action itself. Only differences that no record explains are counted.</p>
+          <p>For example, a user with an established baseline requests a <code>SENSITIVE</code> resource, the time and the network both differ from the baseline, and no approval or trip record explains them. The first rule applies and sets the floor to CHALLENGE. An ALLOW answer then breaks the floor.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Rule</th><th>Condition</th><th>Floor</th><th>Settings (under <code>contexa.security.zerotrust.minimum-action</code>)</th></tr></thead>
             <tbody>
-              <tr><td><code>MIN_P1_IDENTITY_DEVIATION</code></td><td>the resource class is at least the minimum class, and at least the minimum number of time, day, network and device differ from usual without explanation</td><td>CHALLENGE</td><td><code>.identity.enabled</code> (<code>true</code>), <code>.identity.min-deviations</code> (<code>2</code>), <code>.identity.min-resource-class</code> (<code>SENSITIVE</code>)</td></tr>
-              <tr><td><code>MIN_P2_NEW_DEVICE_OR_NETWORK_EXPORT</code></td><td>the action is EXPORT, the resource class is SENSITIVE or CRITICAL, and the device or network differs from usual without explanation</td><td>CHALLENGE</td><td><code>.new-device-export.enabled</code> (<code>true</code>)</td></tr>
-              <tr><td><code>MIN_P3_POLICY_NOT_SATISFIED</code></td><td>no valid record covers what the company rule requires</td><td><code>.policy-satisfaction.action</code> (<code>ESCALATE</code>)</td><td><code>.policy-satisfaction.enabled</code> (<code>true</code>). The floor can only be CHALLENGE or ESCALATE; another value stops the start</td></tr>
+              <tr><td><code>MIN_P1_IDENTITY_DEVIATION</code></td><td>The resource class is at least the minimum class, and at least the minimum number of time, day, network and device differ from the baseline without explanation</td><td>CHALLENGE</td><td><code>.identity.enabled</code> (<code>true</code>), <code>.identity.min-deviations</code> (<code>2</code>), <code>.identity.min-resource-class</code> (<code>SENSITIVE</code>)</td></tr>
+              <tr><td><code>MIN_P2_NEW_DEVICE_OR_NETWORK_EXPORT</code></td><td>The action is EXPORT, the resource class is SENSITIVE or CRITICAL, and the device or network differs from the baseline without explanation</td><td>CHALLENGE</td><td><code>.new-device-export.enabled</code> (<code>true</code>)</td></tr>
+              <tr><td><code>MIN_P3_POLICY_NOT_SATISFIED</code></td><td>No valid record covers what the company rule requires</td><td><code>.policy-satisfaction.action</code> (<code>ESCALATE</code>)</td><td><code>.policy-satisfaction.enabled</code> (<code>true</code>). The floor can only be CHALLENGE or ESCALATE; any other value stops the application from starting</td></tr>
             </tbody>
           </table></div>
           <ul>
-            <li><strong>Observe (default, <code>contexa.security.zerotrust.minimum-action.mode</code> = <code>OBSERVE</code>):</strong> the rules hit and whether the decision was weaker are only recorded in the event metadata (<code>minimumActionMode</code>, <code>minimumActionFindings</code>); the decision stays as it is, and the system text says nothing of floors.</li>
-            <li><strong>Enforce (<code>ENFORCE</code>):</strong> the system text gets the locked part "Minimum action floors" with the rules turned on and the host's values, and the last sentence of "Responses and what they do" names the floor exception. The response check treats an answer weaker than a floor as a violation (<code>MINIMUM_ACTION_VIOLATION</code>), asks once more, and ends as held for review (ESCALATE) if it is still weaker.</li>
-            <li>When Layer 2 still chooses ESCALATE, it ends as the fallback action regardless of the floor (see <a href="#checks">Response check</a> below).</li>
+            <li><strong>Observe (default, <code>contexa.security.zerotrust.minimum-action.mode</code> = <code>OBSERVE</code>):</strong> CONTEXA only records the rules that applied and whether the decision was weaker, in the event metadata (<code>minimumActionMode</code>, <code>minimumActionFindings</code>). The decision stays as it is, and the system text says nothing of floors. This is the stage for watching how often the rules apply before enforcing them.</li>
+            <li><strong>Enforce (<code>ENFORCE</code>):</strong> the system text gets the locked part "Minimum action floors" with the rules turned on and the host's values, and the last sentence of "Responses and what they do" names the floor exception. The response check treats an answer weaker than a floor as a violation (<code>MINIMUM_ACTION_VIOLATION</code>) and asks once more. If the answer is still weaker, the decision ends as hold for review (ESCALATE).</li>
+            <li>When the second analysis still chooses ESCALATE, it ends as the fallback action regardless of the floor (see <a href="#checks">Response check</a> below).</li>
           </ul>
 
           <h2 id="output">The form of the model's answer and its check</h2>
-          <p>The output contract is the form of the model's answer. The provider schema, the system text's answer format and the parser that reads the answer all use the same contract, v5.</p>
+          <p>The model answers with one JSON object of a fixed form. The form is called the output contract. The provider schema, the system text's answer format and the parser that reads the answer all use the same contract, v5.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Field</th><th>v5</th></tr></thead>
             <tbody>
-              <tr><td><code>action</code></td><td>one of ALLOW · CHALLENGE · ESCALATE · BLOCK</td></tr>
-              <tr><td><code>riskScore</code></td><td>a number from 0 to 1, kept for audit only, not used for the decision</td></tr>
-              <tr><td><code>hypothesis</code></td><td>the explanation judged most likely: H1, H2, H3, H4, or H5 for another one the model names</td></tr>
-              <tr><td><code>reasonCodes</code></td><td>1–3 objects <code>{"code", "fact"}</code>, the strongest first, each code once. 52 codes (51 without <code>VERIFIED_SIGNAL</code> in a version on <code>2026.11.16-v1.0</code>), drawn in the system text with their meaning and the lines each may cite</td></tr>
-              <tr><td><code>reason</code></td><td>one sentence of at most 25 words. The engine keeps the first sentence, up to 40 words and 300 characters</td></tr>
+              <tr><td><code>action</code></td><td>One of ALLOW · CHALLENGE · ESCALATE · BLOCK</td></tr>
+              <tr><td><code>riskScore</code></td><td>A number from 0 to 1. It is kept for audit only and is not used for the decision</td></tr>
+              <tr><td><code>hypothesis</code></td><td>The explanation the model finds most likely: H1, H2, H3, H4, or H5 for another one the model names</td></tr>
+              <tr><td><code>reasonCodes</code></td><td>1–3 objects <code>{"code", "fact"}</code>, starting with the fact that weighed most, each code once. There are 52 codes (51 without <code>VERIFIED_SIGNAL</code> in a version on <code>2026.11.16-v1.0</code>). The system text gives each code with its meaning and the lines it may cite</td></tr>
+              <tr><td><code>reason</code></td><td>One sentence of at most 25 words. The engine keeps the first sentence, up to 40 words and 300 characters</td></tr>
             </tbody>
           </table></div>
-          <p>All five keys are required and no other key is allowed. <code>fact</code> is a fact ID of the form <code>^[BSRFPU][0-9]{1,2}$</code>. Each reason code has the dictionary lines it may cite, and <code>MATERIAL_MISSING_EVIDENCE</code> cites the <code>U</code> ID the UNKNOWN line gives the missing fact. A call without native structured output gets the locked part "Format instruction" with the schema in the system text.</p>
+          <p>All five keys are required and no other key is allowed. <code>fact</code> is the fact ID in front of a line of the user text, of the form <code>^[BSRFPU][0-9]{1,2}$</code>. Each reason code has the dictionary lines it may cite. For example, <code>DEVIATION_TIME</code> may cite only the line that states differences from the baseline (<code>DeviationsFromBaseline</code>). <code>MATERIAL_MISSING_EVIDENCE</code> cites the <code>U</code> ID the UNKNOWN line gives the missing fact. A call without native structured output gets the locked part "Format instruction" with the schema in the system text.</p>
           <pre><code class="language-json">{"action": "ESCALATE", "riskScore": 0.62, "hypothesis": "H3", "reasonCodes": [{"code": "NO_COVERING_RECORD", "fact": "F5"}, {"code": "DEVIATION_TIME", "fact": "F1"}], "reason": "No approval covers this export and the time is outside the user's usual hours."}</code></pre>
+          <p>This answer proposes hold for review (ESCALATE). The reason code <code>NO_COVERING_RECORD</code> (no record covers the work) cites the <code>[F5]</code> line of the user text, and <code>DEVIATION_TIME</code> (the time differs from the baseline) cites the <code>[F1]</code> line.</p>
+          <h3 id="output-why">Why the form is what it is</h3>
+          <ul>
+            <li><strong>The answer is short.</strong> An answer in the earlier form (v4) ran to 600–1,000 tokens, most of them the five explanations with their lists of supporting facts, so a decision spent most of its time writing them. v5 keeps only what the decision and its record use. It no longer asks for a confidence value or MITRE IDs.</li>
+            <li><strong>Every reason code carries a fact ID.</strong> That lets CONTEXA check that the line the model cites is in the prompt and is a line that code may cite. When the model makes up a code or a line, the response check catches it.</li>
+            <li><strong>The form is strict.</strong> The JSON schema requires all five keys and allows no other. The provider schema, the answer format instruction and the parser read the same contract, so they cannot disagree.</li>
+            <li><strong>The risk score is for audit.</strong> The <code>action</code> sets the response. The score is kept only in <code>llmAuditRiskScore</code> of the decision record.</li>
+          </ul>
           <h3 id="checks">Response check</h3>
+          <p>CONTEXA checks the model's answer once before it becomes a decision. Most of the check asks whether what the model says matches the lines of the user text. It looks for a code or a line that does not exist, a past record the prompt does not show, and a statement about MFA, sensitivity or an authorization denial that the lines contradict. Two checks look at the action itself.</p>
+          <ul>
+            <li><strong>Decision boundaries:</strong> a boundary says that when certain facts hold, the action must be a certain one. A boundary is checked only when the prompt states the lines of its facts.
+              <ul>
+                <li>Required block boundary: the action must be BLOCK when the authorization effect is BLOCK or DENY, when there is a tenant conflict, or when at least two of these categories are confirmed together: session or request-rate abuse, a device mismatch, automation signs, and impossible travel.</li>
+                <li>Block without decisive evidence: the model chose BLOCK, the required block boundary does not hold, and there is no signal the server confirmed.</li>
+                <li>Low-risk boundary: the action must be ALLOW when the authorization effect is ALLOW, the resource class is not SENSITIVE or CRITICAL, and there is no unexplained difference, no anomaly and no unmet company rule.</li>
+                <li>Covered-work boundary: the action must be ALLOW when the authorization effect is ALLOW, the company rule is met, and there is no unexplained difference and no anomaly.</li>
+              </ul></li>
+            <li><strong>Floors:</strong> under <code>ENFORCE</code>, an answer weaker than a minimum action floor is a violation.</li>
+          </ul>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>What the check does</strong>It asks again at most once, and an answer cut at the output limit is asked again with twice the limit.</figcaption>
             <div class="dg-compare">
-              <div class="dg-side"><p class="dg-side-title">Every version</p><ul><li>form; a reason that contradicts the lines (MFA, sensitivity, authorization denial, past records the prompt does not show); reason codes present; each citation names a code, a drawn fact ID, a line the code may cite, and a condition that holds</li><li>the decision boundaries whose facts the prompt drew (required block, block without decisive evidence, low-risk, covered work), floors under <code>ENFORCE</code>, and a second pass that still answers ESCALATE</li><li>a violation is asked once more with what was wrong; an answer whose only fault is unsupported reason codes is kept and recorded without asking again</li></ul></div>
-              <div class="dg-side dg-model"><p class="dg-side-title">When it stays broken</p><ul><li>no usable form: held for review (ESCALATE); from Layer 1 it goes to Layer 2</li><li>a floor still broken: ESCALATE</li><li>a boundary still broken: in a version with the prepared part "Decision rules", the action the boundary names (BLOCK for the required block boundary, ALLOW for the low-risk and covered-work boundaries, else ESCALATE); in any other version the model's answer stays and the breach is recorded</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Every version</p><ul><li>The form; a reason that contradicts the lines (MFA, sensitivity, authorization denial, past records the prompt does not show); reason codes present; each citation names a code, a fact ID the prompt gives, a line the code may cite, and a condition that holds</li><li>The decision boundaries whose facts the prompt states (required block, block without decisive evidence, low-risk, covered work), floors under <code>ENFORCE</code>, and a second analysis that still answers ESCALATE</li><li>A violation is asked once more, with what was wrong. An answer whose action stands and whose only fault is unsupported reason codes is kept and recorded without asking again</li></ul></div>
+              <div class="dg-side dg-model"><p class="dg-side-title">When it stays broken</p><ul><li>No usable form: hold for review (ESCALATE). From the first analysis it goes to the second</li><li>A floor still broken: ESCALATE</li><li>A boundary still broken: in a version with the prepared part "Decision rules", the action the boundary names (BLOCK for the required block boundary, ALLOW for the low-risk and covered-work boundaries, else ESCALATE). In any other version the model's answer stays and the breach is recorded</li></ul></div>
             </div>
           </figure>
           <ul>
-            <li><strong>A signal the server confirmed:</strong> when the prompt states an anomaly signal the server itself issued, on the <code>VerifiedSignal</code> line, the response check reads it as decisive evidence for BLOCK. A BLOCK with that line is not a block without decisive evidence, and beside that signal the low-risk and covered-work boundaries do not hold. The line permits a BLOCK and does not ask for one; when to choose BLOCK is what a version with the prepared part "Verified signal boundary" says.</li>
-            <li>The sentence that asks again comes from the version's <code>corrections</code>: one for the output contract, one for a minimum action floor, and one for the decision rules of a version that puts them in.</li>
-            <li><strong>ESCALATE after Layer 2:</strong> unless <code>contexa.security.tiered.layer2.allow-escalate-final-action</code> is <code>true</code>, an ESCALATE remaining after Layer 2 becomes <code>contexa.security.tiered.layer2.escalate-fallback-action</code> (default <code>CHALLENGE</code>), and the decision records <code>LAYER2_ESCALATE_TERMINALIZED</code>. This is the same for every version.</li>
+            <li><strong>A signal the server confirmed:</strong> when the prompt states an anomaly signal the server itself issued, on the <code>VerifiedSignal</code> line, the response check reads it as decisive evidence for BLOCK. A BLOCK with that line is not a block without decisive evidence, and beside that signal the low-risk and covered-work boundaries do not hold. The line permits a BLOCK and does not ask for one. When to choose BLOCK is what a version with the prepared part "Verified signal boundary" says.</li>
+            <li>An answer whose only fault is unsupported reason codes is not asked again because asking again can make the model change the action.</li>
+            <li>The sentence that asks again comes from the version's <code>corrections</code>: one for the output contract, one for a minimum action floor, and one for the decision rules of a version that includes them.</li>
+            <li><strong>ESCALATE after the second analysis:</strong> unless <code>contexa.security.tiered.layer2.allow-escalate-final-action</code> is <code>true</code>, an ESCALATE remaining after the second analysis becomes <code>contexa.security.tiered.layer2.escalate-fallback-action</code> (default <code>CHALLENGE</code>), and the decision records <code>LAYER2_ESCALATE_TERMINALIZED</code>. This is the same for every version.</li>
             <li>What happens when no answer comes from the model (provider failure, timeout) is in <a href="decision-engine.html#overrides">Decision Engine, "When the model's answer is changed"</a>.</li>
           </ul>
 
           <h2 id="decision-record">The final decision record</h2>
-          <p>The decision record (<code>SecurityDecision</code>) keeps the action the model proposed, the action actually enforced and why they differ.</p>
+          <p>The decision record (<code>SecurityDecision</code>) keeps the action the model proposed, the action actually enforced and why they differ. A constraint is a step that adjusts the model's proposed action to CONTEXA's policy. For example, it changes an ESCALATE that remains after the second analysis to the configured fallback action.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
             <tbody>
-              <tr><td><code>action</code></td><td>the action the model proposed</td></tr>
-              <tr><td><code>autonomousAction</code></td><td>the action actually enforced after the constraints</td></tr>
-              <tr><td><code>llmAuditRiskScore</code> · <code>llmAuditConfidence</code></td><td>the model's scores before the constraints (audit)</td></tr>
-              <tr><td><code>reasonCodes</code></td><td>the reason codes cited</td></tr>
-              <tr><td><code>hypotheses</code></td><td>the explanation the model judged most likely</td></tr>
-              <tr><td><code>autonomyConstraintApplied</code></td><td>whether a constraint changed the action, with its reasons and summary</td></tr>
-              <tr><td><code>processingLayer</code></td><td>1 = Layer 1, 2 = Layer 2</td></tr>
+              <tr><td><code>action</code></td><td>The action the model proposed</td></tr>
+              <tr><td><code>autonomousAction</code></td><td>The action actually enforced after the constraints</td></tr>
+              <tr><td><code>llmAuditRiskScore</code> · <code>llmAuditConfidence</code></td><td>The model's scores before the constraints (audit). A v5 answer has no confidence field, so <code>llmAuditConfidence</code> may be empty</td></tr>
+              <tr><td><code>reasonCodes</code></td><td>The reason codes cited</td></tr>
+              <tr><td><code>hypotheses</code></td><td>The explanation the model found most likely</td></tr>
+              <tr><td><code>autonomyConstraintApplied</code></td><td>Whether a constraint changed the action, with its reasons and summary</td></tr>
+              <tr><td><code>processingLayer</code></td><td>1 = first analysis (Layer 1), 2 = second analysis (Layer 2)</td></tr>
             </tbody>
           </table></div>
-          <p>An excerpt of a Layer 2 decision. The model cited an unknown fact and proposed ESCALATE, and the remaining ESCALATE was changed to the configured fallback action CHALLENGE.</p>
+          <p>An excerpt of a second-analysis decision. The model cited an unknown fact and proposed ESCALATE, and the remaining ESCALATE was changed to the configured fallback action CHALLENGE.</p>
           <pre><code class="language-json">{
   "eventId": "evt_8a9f3b2c1d",
   "action": "ESCALATE",
@@ -267,39 +339,46 @@
 }</code></pre>
 
           <h2 id="human-agent">How people's and agents' requests differ</h2>
-          <p>The prompt treats a request as an agent's when the execution subject is <code>DELEGATED_AGENT</code> (or the delegation is <code>delegated=true</code>) or <code>AUTONOMOUS_AGENT</code>, and an agent ID exists. A service client (<code>SERVICE_CLIENT</code>) is not an agent.</p>
+          <p>An agent is an AI program that acts for a person or in its own name. The prompt treats a request as an agent's when the execution subject is <code>DELEGATED_AGENT</code> (or the delegation is <code>delegated=true</code>) or <code>AUTONOMOUS_AGENT</code>, and an agent ID exists. A service client (<code>SERVICE_CLIENT</code>) is not an agent.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Part of the prompt</th><th>A person's request</th><th>An agent's request</th></tr></thead>
             <tbody>
-              <tr><td>System text</td><td colspan="2">One text that always explains how to read agents, delegations and credentials. Only the prepared part "Decision rules" reads differently: for an agent it leaves out the automation category of the block boundary</td></tr>
-              <tr><td>Lines with a value only for an agent</td><td>—</td><td>the subject line in agent form, <code>BaselineSubject</code>, <code>UsualSequence</code>, <code>UsualClients</code>, <code>DelegationActivity</code></td></tr>
-              <tr><td>Lines drawn when their source exists</td><td colspan="2"><code>Credential</code>, <code>Confirmation</code>, <code>Delegation</code> and <code>DelegationControls</code>, <code>RecordsHolder</code>, <code>RecordProvenance</code>, <code>ArgumentOrigin</code></td></tr>
-              <tr><td>Response check</td><td>client signals count for the block boundary</td><td>the agent's client signals never count as an automation category</td></tr>
+              <tr><td>System text</td><td colspan="2">The same system text, which always explains how to read agents, delegations and credentials. Only the prepared part "Decision rules" reads differently: for an agent it leaves out the automation category of the block boundary</td></tr>
+              <tr><td>Lines with a value only for an agent</td><td>—</td><td>The subject line in agent form, <code>BaselineSubject</code>, <code>UsualSequence</code>, <code>UsualClients</code>, <code>DelegationActivity</code></td></tr>
+              <tr><td>Lines written when their source exists</td><td colspan="2"><code>Credential</code>, <code>Confirmation</code>, <code>Delegation</code> and <code>DelegationControls</code>, <code>RecordsHolder</code>, <code>RecordProvenance</code>, <code>ArgumentOrigin</code></td></tr>
+              <tr><td>Response check</td><td>Client signals count for the block boundary</td><td>The agent's client signals never count as an automation category</td></tr>
             </tbody>
           </table></div>
           <ul>
-            <li>Whether the delegated scope is exceeded is computed by the engine as a <strong>fact</strong> only. Allow, extra confirmation or block is the model's choice (<a href="../agent/delegation.html#drift">Drift</a>).</li>
-            <li>Agents do not do MFA. An agent's step-up is replaced by confirmation from the accountable person under <code>CONTEXA_OWNED</code> (<a href="../agent/controls.html#confirm">Confirmation</a>).</li>
-            <li>The agent lines are in every version; no setting is needed (<a href="../agent/overview.html#prompt-facts">Facts the decision model receives</a>).</li>
+            <li>The engine computes whether the delegated scope is exceeded as a <strong>fact</strong> only. The model chooses allow, step-up authentication or block (<a href="../agent/delegation.html#drift">Drift</a>).</li>
+            <li>Agents do not do MFA. Under <code>CONTEXA_OWNED</code> (CONTEXA owns the sign-in), confirmation from the accountable person replaces an agent's step-up (<a href="../agent/controls.html#confirm">Confirmation</a>).</li>
+            <li>The agent lines are in every version, and no setting is needed (<a href="../agent/overview.html#prompt-facts">Facts the decision model receives</a>).</li>
           </ul>
 
           <h2 id="trust">What can be trusted</h2>
+          <p>What the model received and which version ran can be checked after the decision.</p>
           <ul>
-            <li>The system and user texts exactly as sent to the model are kept as sealed evidence after the decision (a sample, <a href="evidence.html">Sealed evidence</a>), with the version name and its content hash. The canonical context is sealed with them.</li>
+            <li>The system and user texts exactly as sent to the model are kept as sealed evidence after the decision, with the version name and its content hash. This is done for a sample of decisions, not all (<a href="evidence.html">Sealed evidence</a>). The canonical context is sealed with them.</li>
             <li>Sealed packages are audited apart from the decision by three checks: integrity, trace of origin and source records (<a href="evidence.html#audit">The evidence audit</a>). The audit changes no prompt, decision or rule.</li>
             <li>The quality of a version is measured on labelled cases, and the quality gate reads the measurement when a version is used for decisions (<a href="prompt-quality.html">Prompt Quality Assurance</a>).</li>
-            <li>A new version is tried on recent sealed decisions, applied to some users first or run alongside, and rolled back by using an earlier version (<a href="prompt-versions.html">Prompt Versions</a>).</li>
+            <li>A new version can be tried on recent sealed decisions, applied to some users first or run alongside, and rolled back by using an earlier version (<a href="prompt-versions.html">Prompt Versions</a>).</li>
           </ul>
 
           <h2 id="settings">Settings you often change</h2>
+          <p>An application can change three things: which version runs, the runtime settings such as the minimum action rules, the budget and the output limit, and the facts it supplies (stamps and work records). The engine fixes the blocks, lines and order of the user text, the fact IDs and the form of the answer. A setting or a version cannot change them.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change it</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.security.tiered.prompt-bundle.active</code></td><td>none (the screen's choice, else the newest Contexa version)</td><td>the version decisions use when the screen has chosen none (<code>v2.0</code> form)</td><td>to pin a version by configuration</td></tr>
-              <tr><td><code>contexa.security.zerotrust.minimum-action.mode</code></td><td><code>OBSERVE</code></td><td>only record the minimum action rules, or state them in the prompt and enforce them in the response check (<code>ENFORCE</code>)</td><td>to force the floors after watching the rule records long enough</td></tr>
-              <tr><td><code>contexa.security.tiered.prompt-runtime.budget-enforcement</code></td><td><code>OBSERVE_ONLY</code></td><td>drop entries of a user text over its budget (<code>ENFORCE</code>)</td><td>when the model's input limit or cost must be kept</td></tr>
-              <tr><td><code>contexa.security.tiered.layer2.escalate-fallback-action</code></td><td><code>CHALLENGE</code></td><td>the action an ESCALATE remaining after Layer 2 becomes</td><td>to treat undecided requests more strictly (<code>BLOCK</code>)</td></tr>
-              <tr><td><code>contexa.security.tiered.argument-origin.max-excerpt-chars</code></td><td><code>300</code></td><td>the longest tool-output sentence quoted on the argument origin line (0–300)</td><td>to shorten quotes. To stop quoting, <code>contexa.security.tiered.argument-origin.quote-excerpt: false</code></td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-bundle.active</code></td><td>none (the screen's choice, else the newest CONTEXA version)</td><td>The version decisions use when the screen has chosen none (<code>v2.0</code> form)</td><td>To pin a version by configuration</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.mode</code></td><td><code>OBSERVE</code></td><td>Only record the minimum action rules, or state them in the prompt and enforce them in the response check (<code>ENFORCE</code>)</td><td>To force the floors after watching the rule records long enough</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-runtime.budget-enforcement</code></td><td><code>OBSERVE_ONLY</code></td><td>Drop entries of a user text over its budget (<code>ENFORCE</code>)</td><td>When the model's input limit or cost must be kept</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.escalate-fallback-action</code></td><td><code>CHALLENGE</code></td><td>The action an ESCALATE remaining after the second analysis becomes. ESCALATE or PENDING_ANALYSIS here becomes CHALLENGE</td><td>To treat undecided requests more strictly (<code>BLOCK</code>)</td></tr>
+              <tr><td><code>contexa.security.tiered.layer2.allow-escalate-final-action</code></td><td><code>false</code></td><td>Whether an ESCALATE remaining after the second analysis stays as it is instead of becoming the fallback action</td><td>When ESCALATE must be accepted as a final action</td></tr>
+              <tr><td><code>contexa.security.tiered.argument-origin.max-excerpt-chars</code></td><td><code>300</code></td><td>The longest tool-output sentence quoted on the argument origin line (0–300)</td><td>To shorten quotes. To stop quoting, <code>contexa.security.tiered.argument-origin.quote-excerpt: false</code></td></tr>
+              <tr><td><code>contexa.security.tiered.truncation.layer1.payload</code></td><td><code>200</code></td><td>The length (in characters) at which one text in the UNTRUSTED TEXT block is cut. Both analyses use this value</td><td>When a cut request path or body leaves out something the decision needs</td></tr>
+              <tr><td><code>contexa.security.tiered.determinism.temperature</code> · <code>.seed</code></td><td><code>0.0</code> · <code>1</code></td><td>The determinism values every decision call carries. Only the values the provider and model accept are applied; the others are recorded on the call</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.tiered.layer1.max-output-tokens</code> · <code>contexa.security.tiered.layer2.max-output-tokens</code></td><td><code>4096</code> · <code>2560</code></td><td>The output limit of the model's answer, in tokens. A reasoning model's reasoning tokens count against it</td><td>When answers are often cut at the limit</td></tr>
+              <tr><td><code>contexa.security.tiered.prompt-runtime.native-structured-output-enabled</code></td><td><code>true</code></td><td>Whether to use the provider's native structured output. When off, the system text gets the "Format instruction" and the answer is validated and converted</td><td>When the provider or model does not support native structured output, or has problems with it</td></tr>
             </tbody>
           </table></div>
           <p>All settings are in <a href="../../install/configuration/ai.html">AI model configuration</a> and <a href="../../install/configuration.html">Configuration</a>; the version settings are in <a href="prompt-versions.html#settings">Prompt Versions</a>.</p>
