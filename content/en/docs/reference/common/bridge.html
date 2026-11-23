@@ -15,7 +15,7 @@
           </div>
 
           <h2 id="overview">Overview</h2>
-          <p>When CONTEXA is on in its default mode (<code>@EnableAISecurity</code>, the application owns login: <code>HOST_OWNED</code>), your Spring Security keeps handling login. On every request CONTEXA reads the result through the <strong>authentication bridge</strong> (<code>BridgeResolutionFilter</code>) and makes three <strong>stamps</strong>, which become facts of the decision prompt.</p>
+          <p>When CONTEXA is on in its default mode (<code>@EnableAISecurity</code>, the application owns login: <code>HOST_OWNED</code>), your Spring Security keeps handling login. On every request CONTEXA reads the result through the <strong>authentication bridge</strong> (<code>BridgeResolutionFilter</code>) and makes three <strong>stamps</strong>. A stamp is a mark of authentication, authorization or delegation information that the authentication bridge attaches to a request: the authentication stamp (who is it), the authorization stamp (what can they do) and the delegation stamp (who handed over what). The stamps become facts of the decision prompt.</p>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>From login information to decision facts</strong>The bridge only reads. It does not change the application's login, session or response.</figcaption>
             <ol class="dg-flow">
@@ -34,14 +34,14 @@
             <li><strong>If a session object holds roles or delegation information, just match the key names.</strong> The bridge scans session attributes for the user object (<a href="#session-object">Finding the user in the session or request attributes</a>).</li>
           </ol>
           <div class="callout callout-info">
-            <strong>A legacy application without Spring Security.</strong> Add Spring Security, declare a chain that keeps your existing access rules (for example <code>anyRequest().permitAll()</code>), and in a filter of that chain put the user your existing login verified into the <code>SecurityContext</code>. Calling <a href="#handoff">direct handoff</a> alone records evidence for that request only and does not fill the <code>SecurityContext</code>, so it is not enough for <code>@Protectable</code>.
+            <strong>A legacy application without Spring Security.</strong> Add Spring Security, declare a chain that keeps your existing access rules (for example <code>anyRequest().permitAll()</code>), and in a filter of that chain put the user your existing login verified into the <code>SecurityContext</code>. Calling <a href="#handoff">direct handoff</a> alone leaves only the decision facts of that request and does not fill the <code>SecurityContext</code>, so it is not enough for <code>@Protectable</code>.
           </div>
 
           <h2 id="does-not">What the bridge does not do</h2>
           <ul>
             <li>When the application owns login (<code>HOST_OWNED</code>) it does not interfere with the application's authentication, authorization or session. It saves nothing to the session and writes no headers.</li>
-            <li>When your application owns login, the bridge filter is registered as a servlet filter ordered right after your Spring Security chain (the chain's order + 1, before CONTEXA's enforcement filters). So it runs <strong>after your Spring Security chain has finished</strong>.</li>
-            <li>CONTEXA's enforcement filters, controllers and <code>@Protectable</code> methods can read the stamps, but URL authorization inside your chain runs before they exist (Spring Boot's filter ordering).</li>
+            <li>When your application owns login, the bridge filter is registered as a servlet filter ordered right after your Spring Security chain (the chain's order + 1, before CONTEXA's request-time filters). So it runs <strong>after your Spring Security chain has finished</strong>.</li>
+            <li>CONTEXA's request-time filters, controllers and <code>@Protectable</code> methods can read the stamps, but URL authorization inside your chain runs before they exist (Spring Boot's filter ordering).</li>
             <li>When CONTEXA owns login (<code>CONTEXA_OWNED</code>) the bridge filter sits in CONTEXA's chain: after <code>SecurityContextHolderFilter</code> for session flows, after <code>BearerTokenAuthenticationFilter</code> for token flows.</li>
             <li>The exception: the <a href="#mirror">user mirror</a> writes user rows to the CONTEXA database even when the application owns login.</li>
           </ul>
@@ -146,13 +146,13 @@ request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
                 .withAuthenticationType("PASSWORD+ONE_TIME_CODE")
                 .withMfaVerified(true));</code></pre>
           <ul>
-            <li>It records authentication evidence for that request (source <code>EXPLICIT_HANDOFF</code>). If the bridge filter finds a different user in the same request, a conflict is marked.</li>
+            <li>It records the authentication stamp for that request (source <code>EXPLICIT_HANDOFF</code>). If the bridge filter finds a different user in the same request, a conflict is marked.</li>
             <li>When the application owns login (<code>HOST_OWNED</code>) it does not fill the <code>SecurityContext</code>. Only when CONTEXA owns login (<code>CONTEXA_OWNED</code>) does it fill the <code>SecurityContext</code> and save it to the session.</li>
             <li>Without <code>@EnableAISecurity</code> it throws <code>IllegalStateException</code>; if no user ID can be determined, <code>IllegalArgumentException</code>.</li>
           </ul>
 
           <h2 id="coverage">Coverage: how much the bridge knew</h2>
-          <p>For every request the bridge computes how complete its information is and puts it in the prompt (<code>bridge &lt;level&gt;</code>), so the model knows what it does not know.</p>
+          <p>For every request the bridge computes how complete its information is and puts it in the prompt (<code>bridge &lt;level&gt;</code>), so the model knows which information the bridge could not confirm.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Level</th><th>Score</th><th>Meaning</th></tr></thead>
             <tbody>
@@ -167,7 +167,7 @@ request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
           <p>The bridge keeps a mirror row for an externally logged-in user in the CONTEXA database's user table, so the admin console and policies can refer to that user. The key is <code>brg_</code> + SHA-256 (authentication source, organization, user ID). The row has a random password and cannot be used to log in directly.</p>
           <ul>
             <li><strong>Not written again:</strong> when the same user comes again within 60 seconds (<code>contexa.bridge.sync.min-refresh-interval-seconds</code>) and nothing changed, the row is not written again.</li>
-            <li><strong>Remembered result:</strong> the same value is also how long the result of that check is remembered. With a value of 0 or less nothing is remembered.</li>
+            <li><strong>Remembered result:</strong> the same value is also how long the result of the mirror synchronisation (checking the mirror row and updating it when needed) is remembered. With a value of 0 or less nothing is remembered.</li>
             <li><strong>When the remembered result is used:</strong> for an application that owns login (<code>HOST_OWNED</code>), a request of the same user with the same facts (authentication source, name, authorities, attributes, client IP and the rest the check compares) is answered from memory. Until that time has passed, CONTEXA does not read its database for it.</li>
             <li><strong>Email:</strong> it is read from the authentication attributes <code>email</code>, <code>mail</code> or <code>userEmail</code>. Without one it is <code>&lt;key&gt;@shadow.contexa.local</code> (<code>contexa.bridge.sync.synthetic-email-domain</code>).</li>
             <li><strong>Turning it off:</strong> set <code>contexa.bridge.sync.enabled=false</code>.</li>
@@ -175,7 +175,7 @@ request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
           <p>A value from your application that is longer than its column (a department that is a long directory name, a phone number with an extension, a long avatar URL) is cut to the column, so one long value never fails the copy.</p>
           <ul>
             <li>An email address longer than 255 characters is replaced by the made-up one.</li>
-            <li>A user ID longer than 255 characters gets no copy (one warning is logged). The user is still decided on and enforced, but has no factor of its own for the step-up.</li>
+            <li>A user ID longer than 255 characters gets no copy (one warning is logged). The user is still decided on and enforced, but with no mirror row the step-up that uses the mirror row's information cannot be used (the one-time code by mail goes to the email address in the mirror row).</li>
           </ul>
 
           <h2 id="settings">Settings you will change most</h2>
@@ -183,7 +183,7 @@ request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
               <tr><td><code>contexa.bridge.enabled</code></td><td><code>true</code></td><td>Turns the bridge filter on (when off, only direct handoff works)</td><td>To turn the bridge off (fewer decision facts)</td></tr>
-              <tr><td><code>contexa.bridge.ownership</code></td><td><code>HOST_OWNED</code> (<code>CONTEXA_OWNED</code> with <code>mode=FULL</code>)</td><td>Who owns login. When set, it wins over the annotation</td><td><code>CONTEXA_OWNED</code> when CONTEXA should own sign-in</td></tr>
+              <tr><td><code>contexa.bridge.ownership</code></td><td><code>HOST_OWNED</code> (<code>CONTEXA_OWNED</code> with <code>mode=FULL</code>)</td><td>Who owns login (the authentication ownership). It may be set only to the value that matches the security mode; a different value stops the start</td><td>Usually not set. With the security mode <code>FULL</code> it is <code>CONTEXA_OWNED</code></td></tr>
               <tr><td><code>contexa.bridge.populate-security-context</code></td><td><code>true</code></td><td>Under <code>CONTEXA_OWNED</code>, fills an empty SecurityContext with the user the bridge found (never under <code>HOST_OWNED</code>)</td><td><code>false</code> when CONTEXA owns sign-in but your application fills the SecurityContext</td></tr>
               <tr><td><code>contexa.bridge.authentication.session.object-type-name</code></td><td>None</td><td>The class name of the session's user object (+8 score)</td><td>When the session holds several objects that look like users</td></tr>
               <tr><td><code>contexa.bridge.authentication.session.auto-discover</code></td><td><code>true</code></td><td>Scan session attributes beyond the candidate names</td><td><code>false</code> to look only at the given and candidate names</td></tr>
@@ -194,7 +194,7 @@ request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
               <tr><td><code>contexa.bridge.authentication.headers.enabled</code></td><td><code>false</code></td><td>Read gateway headers</td><td>When a gateway passes the user in headers (with trusted proxies)</td></tr>
               <tr><td><code>contexa.bridge.network.trusted-proxies</code></td><td>none</td><td>Proxies whose headers and <code>X-Forwarded-For</code> are trusted</td><td>Always with headers</td></tr>
               <tr><td><code>contexa.bridge.network.trusted-proxy-validation-enabled</code></td><td><code>true</code></td><td>The trusted proxy check. When off, header reading is always refused and the client IP is taken the legacy way, trusting <code>X-Forwarded-For</code> from anyone</td><td>Leave it on (turning it off lets clients forge their IP)</td></tr>
-              <tr><td><code>contexa.bridge.step-up.reauthentication-url</code></td><td>none</td><td>Under <code>HOST_OWNED</code>, where the step-up page sends the user to re-authenticate with your application's own MFA or identity provider (for example an OIDC authorization request with <code>prompt=login</code> or <code>max_age=0</code>). Not offered when empty. A completed MFA in the authentication stamp, newer than the CHALLENGE, then releases it</td><td>When your application can re-authenticate users itself (<a href="../identity/zero-trust-filters.html#host-step-up">The step-up under HOST_OWNED</a>)</td></tr>
+              <tr><td><code>contexa.bridge.step-up.reauthentication-url</code></td><td>none</td><td>Under <code>HOST_OWNED</code>, where the step-up page sends the user to re-authenticate with your application's own MFA or identity provider (for example an OIDC authorization request with <code>prompt=login</code> or <code>max_age=0</code>). Not offered when empty. When the application re-authenticates the user after a CHALLENGE, and the authentication stamp records a completed MFA with an authentication time later than the time of the CHALLENGE, the CHALLENGE is released</td><td>When your application can re-authenticate users itself (<a href="../identity/zero-trust-filters.html#host-step-up">The step-up under HOST_OWNED</a>)</td></tr>
               <tr><td><code>contexa.bridge.sync.synthetic-email-domain</code></td><td><code>shadow.contexa.local</code></td><td>The email domain given to a mirror user without an email</td><td>To match your company's email rules</td></tr>
               <tr><td><code>contexa.bridge.sync.enabled</code></td><td><code>true</code></td><td>User mirror synchronization</td><td>To turn the user mirror sync off</td></tr>
             </tbody>
