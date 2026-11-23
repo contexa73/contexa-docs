@@ -30,7 +30,7 @@
           </figure>
 
           <h2 id="ownership">What works under each ownership</h2>
-          <p>The gate (① to ④) runs in both ownership modes: inside the security chain CONTEXA builds under <code>CONTEXA_OWNED</code>, and as a servlet filter right after the application's Spring Security chain by default (<code>HOST_OWNED</code>), behind the authentication bridge that stamps the delegation. The <code>@Protectable</code> methods (⑤) and the handling after a decision work in both.</p>
+          <p>The authentication ownership says who handles login: <code>HOST_OWNED</code> when your application does (default), <code>CONTEXA_OWNED</code> when CONTEXA does. The gate (① to ④) runs in both ownership modes: inside the security chain CONTEXA builds under <code>CONTEXA_OWNED</code>, and as a servlet filter right after the application's Spring Security chain by default (<code>HOST_OWNED</code>), behind the authentication bridge that adds the delegation stamp (the mark of authentication, authorization and delegation facts the bridge puts on a request). The <code>@Protectable</code> methods (⑤) and the handling after a decision work in both.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Control</th><th><code>CONTEXA_OWNED</code><br>(<code>@EnableAISecurity(mode = SecurityMode.FULL)</code>)</th><th><code>HOST_OWNED</code> (default)</th></tr></thead>
             <tbody>
@@ -107,7 +107,7 @@ Content-Type: application/json
 
 { "method": "POST", "target": "/api/reports/export?month=2026-10",
   "bodySha256": "9f86d081…", "reason": "Monthly report export" }</code></pre>
-          <p>It returns <code>202</code> with the confirmation's status (<code>409</code> without an accountable person, <code>403</code> when the caller is not an agent). <code>target</code> is the path with the query, starting with <code>/</code>; <code>bodySha256</code> is the SHA-256 (hexadecimal) of the body it will send. Poll the status at <code>GET /contexa/api/agent-confirmations/{id}</code>. This too needs the gate that consumes confirmations, so it works only under <code>CONTEXA_OWNED</code>.</p>
+          <p>It returns <code>202</code> with the confirmation's status (<code>409</code> without an accountable person, <code>403</code> when the caller is not an agent). <code>target</code> is the path with the query, starting with <code>/</code>; <code>bodySha256</code> is the SHA-256 (hexadecimal) of the body it will send. Poll the status at <code>GET /contexa/api/agent-confirmations/{id}</code>. The agent request gate applies an approved confirmation by marking the request, and the gate runs in both ownership modes. So this works in both for policies of <code>@Protectable</code> methods. URL policies are evaluated after the gate only under <code>CONTEXA_OWNED</code>. Under <code>HOST_OWNED</code>, URL policies connected to your own chain are evaluated before the gate, when the confirmation mark does not exist yet, so keep a policy that needs a confirmation on a method (<a href="../iam/ai-security-expressions.html#where">AI security expressions</a>).</p>
           <p>The start of the confirmation link in notices is set with <code>confirmation-link-base-url</code> (for example <code>https://app.example.com</code>). Left empty, the link is relative, with the application's path only. The Host header the agent sent is never used in the link.</p>
 
           <h2 id="stop">Stopping and releasing</h2>
@@ -184,7 +184,7 @@ Content-Type: application/json
           </ul>
 
           <h2 id="shadow">In modes that do not enforce (SHADOW and so on)</h2>
-          <p>When the operating mode is not <code>ENFORCE</code> (SHADOW, OBSERVE, DISABLED, or <code>contexa.security.zerotrust.enabled=false</code>), the gate records ended delegations, narrowed scopes and call limits and lets the request on. The re-evaluation as the delegator is only recorded too. A CHALLENGE in force still waits for its confirmation.</p>
+          <p>When the operating mode is not <code>ENFORCE</code> (<code>SHADOW</code> or <code>DISABLED</code>, including its former name <code>OBSERVE</code>, or <code>contexa.security.zerotrust.enabled=false</code>), the gate records ended delegations, narrowed scopes and call limits and lets the request on. The re-evaluation as the delegator is only recorded too. A CHALLENGE in force for the agent still waits for its confirmation in these modes.</p>
 
           <h2 id="expressions">Policy expressions</h2>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -218,7 +218,7 @@ Content-Type: application/json
             </tbody>
           </table></div>
           <p>The oldest records removed by the audit log retention (default 90 days, <a href="../iam/admin.html#system-settings">System Settings</a>) do not count as <code>MISMATCH</code>.</p>
-          <p>A decision record keeps the time of its event, and the save does not write it again, so the record is verified as it was sealed. A decision record saved before this was fixed had its time written again by the save and stays <code>MISMATCH</code>; it is not sealed again, so that a mismatch keeps meaning a record was altered (<a href="../../install/troubleshooting.html#old-records-mismatch">Old decision records mismatch after an upgrade</a>).</p>
+          <p>A decision record keeps the time of its event, and the save does not write it again, so the record is verified as it was sealed. An earlier version wrote the time again when it saved a decision record. A record saved by that version stays <code>MISMATCH</code>; it is not sealed again, so that a mismatch keeps meaning a record was altered (<a href="../../install/troubleshooting.html#old-records-mismatch">Old decision records mismatch after an upgrade</a>).</p>
 
           <h2 id="console">Console screens and APIs</h2>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -227,7 +227,7 @@ Content-Type: application/json
               <tr><td>Agent list, detail, registration</td><td><code>/contexa/admin/agents</code> (<code>/detail</code>, <code>/new</code>)</td><td>Registry, status, delegations, decision records</td></tr>
               <tr><td>Agent stops tab</td><td><code>/contexa/admin/blacklist/agents</code></td><td>Stopped agents and delegations, release, kill switch</td></tr>
               <tr><td>Confirmation page</td><td><code>/contexa/agent-confirmations</code></td><td>My confirmations and notices; approve, refuse, report; release my stopped agents (reason required)</td></tr>
-              <tr><td>Learning control API</td><td><code>/contexa/admin/api/agents/learning</code></td><td><code>QUARANTINE</code> (kept but never read, nothing more learned), <code>RELEASE</code> or <code>REMOVE</code> the learning of an agent or of one delegation. Other agents' and people's learning is never touched</td></tr>
+              <tr><td>Learning control API</td><td><code>/contexa/admin/api/agents/learning</code></td><td>For one agent or one delegation, <code>QUARANTINE</code> (the learning records CONTEXA built are kept but no decision reads them and nothing more is added), <code>RELEASE</code> or <code>REMOVE</code> them. Other agents' and people's learning is never touched</td></tr>
             </tbody>
           </table></div>
           <p>Stops, releases, confirmations and delegation records are all kept in the audit log (<code>AGENT_*</code> categories).</p>
