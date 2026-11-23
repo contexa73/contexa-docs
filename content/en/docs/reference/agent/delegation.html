@@ -12,16 +12,20 @@
               <span class="badge badge-secondary">Agent security</span>
             </div>
             <h1>Delegation and Objective Contracts</h1>
-            <p class="lead">How to tell CONTEXA the scope of work a person gave an agent (operations, targets, period, quantity), and how CONTEXA compares that scope with the actual request and passes the result to the decision model as facts. The engine never blocks a request for leaving the scope: it only compares, and the model decides.</p>
+            <p class="lead">A delegation is the record that tells CONTEXA the scope of work a person gave an AI agent (operations, targets, period, quantity). CONTEXA compares that scope with the actual request of the agent and passes the result, whether the request is outside the scope (drift), to the decision model as a fact. The engine never blocks a request only because it leaves the scope; the decision model decides. This page covers how to record a delegation, the rules by which the record narrows the delegation a request states, objective contracts, the drift comparison, policy expressions and settings.</p>
+          </div>
+
+          <div class="callout callout-info">
+            <strong>Terms on this page.</strong> A <strong>delegation</strong> is the scope of work a person gave an agent. A <strong>delegation stamp</strong> is the delegation information the authentication bridge reads from a request (token, session, request attributes, headers) and attaches to it; it is the delegation the request states about itself. A <strong>delegation record</strong> is a delegation a person left through the delegation API or in your business system. An <strong>objective contract</strong> is the scope of operations and resources your application declares for each kind of work. The other terms, such as delegator and accountable person, are in <a href="overview.html#terms">Agents as Security Subjects</a>.
           </div>
 
           <h2 id="overview">Overview</h2>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>From a delegation to decision facts</strong>The delegation a request states is narrowed by the delegation record, then compared with the actual request.</figcaption>
             <ol class="dg-flow">
-              <li class="dg-node dg-request"><span class="dg-node-title">The delegation the request states</span><span class="dg-node-desc">The delegation stamp read from token claims, the session, request attributes or headers</span></li>
+              <li class="dg-node dg-request"><span class="dg-node-title">The delegation the request states</span><span class="dg-node-desc">The delegation information (the delegation stamp) read from token claims, the session, request attributes or headers</span></li>
               <li class="dg-node dg-store"><span class="dg-node-tag">Delegation record</span><span class="dg-node-title">Narrowed by the record</span><span class="dg-node-desc">The record a person left (or your business system) narrows the scope; it never widens it</span></li>
-              <li class="dg-node"><span class="dg-node-tag">CONTEXA</span><span class="dg-node-title">Scope comparison</span><span class="dg-node-desc">Whether the current operation, target and item count are within the delegation and the objective contract, as the fact "drift yes / no"</span></li>
+              <li class="dg-node"><span class="dg-node-tag">CONTEXA</span><span class="dg-node-title">Scope comparison</span><span class="dg-node-desc">Whether the current operation, target and item count are within the delegation and the objective contract, as the fact "drift: yes or no"</span></li>
               <li class="dg-node dg-model"><span class="dg-node-tag">AI model</span><span class="dg-node-title">Decision</span><span class="dg-node-desc">Weighs the comparison with the rest of the context and decides allow, challenge or block</span></li>
             </ol>
           </figure>
@@ -32,7 +36,7 @@
             <tbody>
               <tr><td><code>agentId</code></td><td>The agent given the work (required)</td><td><code>report-bot</code></td></tr>
               <tr><td><code>objectiveId</code> / <code>objectiveFamily</code></td><td>The work's ID / its kind (an <a href="#contracts">objective family</a> your application declares)</td><td><code>RPT-2026-10</code> / <code>MONTHLY_REPORT</code></td></tr>
-              <tr><td><code>objectiveSummary</code></td><td>The work as the delegator described it (up to 1000 characters). Handled as untrusted text in decisions</td><td>Write the October sales report</td></tr>
+              <tr><td><code>objectiveSummary</code></td><td>The work as the delegator described it. Text over 1000 characters is cut. Handled as untrusted text in decisions</td><td>Write the October sales report</td></tr>
               <tr><td><code>allowedOperations</code></td><td>Allowed operations, in the words of <code>@Protectable</code> <code>actions</code> (upper-cased)</td><td><code>["READ"]</code></td></tr>
               <tr><td><code>allowedResources</code></td><td>Allowed targets: path patterns or your business IDs</td><td><code>["/api/reports/**"]</code></td></tr>
               <tr><td><code>approvalRequired</code></td><td>Whether the delegator must approve before the work is done</td><td><code>false</code></td></tr>
@@ -42,11 +46,11 @@
               <tr><td><code>maxItemsPerRequest</code> / <code>maxItemsTotal</code></td><td>The most items one export may carry / the most items in the session in all (at least 1; none when not stated)</td><td><code>100</code> / <code>1000</code></td></tr>
             </tbody>
           </table></div>
-          <p>Each of the operation and target lists holds up to 100 items. A delegation ends when it expires or is revoked, but its record is kept: when it ended is itself a fact the decision weighs.</p>
+          <p>Each of the operation and target lists holds up to 100 items. After blanks and duplicates are removed, a list over 100 items is refused with <code>400</code>. A delegation ends when it expires or is revoked, but its record is kept, because when it ended is itself a fact the decision weighs.</p>
 
-          <h2 id="sources">Ways to state a delegation</h2>
+          <h2 id="sources">How to tell CONTEXA about a delegation</h2>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>Way</th><th>Who</th><th>How</th></tr></thead>
+            <thead><tr><th>Method</th><th>Who</th><th>How</th></tr></thead>
             <tbody>
               <tr><td>Delegation API</td><td>The delegator</td><td><code>POST /contexa/api/agent-delegations</code>. Recorded in the signed-in person's name only.</td></tr>
               <tr><td>Admin API</td><td>An administrator or an integration</td><td><code>POST /contexa/admin/api/agent-delegations</code> (<code>ADMIN</code> role). The delegator, writer and time are given as your records state them.</td></tr>
@@ -56,7 +60,7 @@
             </tbody>
           </table></div>
           <div class="callout callout-info">
-            <strong>An agent cannot record a delegation.</strong> A delegation must be a person's word, so a call to the delegation API with a token obtained for a person (<code>act</code>), an agent's own token or an agent account is refused with <code>403</code>.
+            <strong>An agent cannot record a delegation.</strong> A delegation must be a person's word, so the delegation API refuses with <code>403</code> every request that the authentication bridge identifies as an agent's. Examples are a token obtained for a person (a token with an <code>act</code> claim), an agent's own token (a token whose <code>client_id</code> equals <code>sub</code>) and an agent account.
           </div>
 
           <h3 id="api">Delegation API</h3>
@@ -77,7 +81,13 @@ Content-Type: application/json
             <li>On success it returns <code>201</code> with the delegation. Its <code>state</code> is one of <code>VALID</code>, <code>NOT_STARTED</code>, <code>EXPIRED</code> and <code>REVOKED</code>.</li>
             <li>The end must come after the start, and the period may not exceed <code>contexa.security.zerotrust.agent.delegation-max-validity</code> (default 30 days). Delegate again when the work goes on.</li>
             <li><code>GET</code> lists your delegations, latest first, up to 200; <code>POST /{delegationId}/revoke</code> (body <code>{"reason": "..."}</code>) revokes one of yours. A revocation through the admin API requires a reason.</li>
-            <li>When a person leaves several delegations to the same agent, the one the request names by <code>delegation_id</code> is used; else the latest started one that holds now; else the latest started one at all, ended ones included.</li>
+            <li>When a person leaves several delegations to the same agent, CONTEXA picks the one the request follows in this order:
+              <ol>
+                <li>The delegation the request names with <code>delegation_id</code>, but only when that person left it for that agent.</li>
+                <li>The delegation that holds now and started latest.</li>
+                <li>When none holds now, the one that started latest, ended ones included.</li>
+              </ol>
+              When a tenant is known and has no delegation, a delegation recorded without a tenant is looked up last.</li>
             <li>Each record and revocation writes <code>AGENT_DELEGATION_RECORDED</code> or <code>AGENT_DELEGATION_REVOKED</code> to the audit log with who did it. Deleting the delegator's account deletes that person's delegations too.</li>
           </ul>
 
@@ -94,18 +104,18 @@ Content-Type: application/json
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Item</th><th>Rule</th></tr></thead>
             <tbody>
-              <tr><td>Objective</td><td>The record's objective when they differ</td></tr>
-              <tr><td>Allowed operations and targets</td><td>The items both state. When they share none, the record's list (an empty list means "not stated" and would widen the scope)</td></tr>
+              <tr><td>Objective</td><td>The record's value when the record has one (a different value the request stated is kept as a conflict)</td></tr>
+              <tr><td>Allowed operations and targets</td><td>When only one side states a list, that list. When both state one, the items both state. An item counts as shared only when the strings are equal (blanks and case are ignored); a pattern that contains another pattern is not recognized. When they share no item, the record's list (an empty list means "not stated" and would widen the scope)</td></tr>
               <tr><td>Approval required, containment only</td><td>Required when either requires it</td></tr>
               <tr><td>Privileged export</td><td>Allowed only when neither denies it</td></tr>
               <tr><td>End, item limits</td><td>The earlier end, the lower limit</td></tr>
-              <tr><td>A record for another agent</td><td>Not applied</td></tr>
+              <tr><td>A record for another agent</td><td>Not applied when the request names an agent ID and the record belongs to another agent</td></tr>
             </tbody>
           </table></div>
           <p>The lookup result is kept in the decision context as <code>delegationRecordLookup</code>: <code>FOUND</code> (applied), <code>NOT_FOUND</code> (no record; the stated delegation as is), <code>AGENT_MISMATCH</code> (a record for another agent) or <code>FAILED</code> (the lookup failed). The items the record overrode are kept as conflicts, with the record's writer and time. A person's own request is never looked up.</p>
 
           <h3 id="standing">Standing delegation of an autonomous agent</h3>
-          <p>An autonomous agent has no delegator. CONTEXA then looks once more for the delegation the agent's sponsor recorded for it and applies it with the same rules as a <strong>standing delegation</strong>. The sponsor records it through the delegation API for that agent. The agent still works in its own name, so the request is not marked as delegated.</p>
+          <p>An autonomous agent has no delegator, so a lookup with the agent itself as the delegator finds no record. CONTEXA then treats the agent's sponsor (<code>sponsor</code>, the accountable person named at registration) as the delegator, looks once more for a delegation recorded for that agent, and applies it with the same rules as a <strong>standing delegation</strong>. The sponsor records it through the delegation API for that agent. The agent still works in its own name, so the request is not marked as delegated.</p>
 
           <h2 id="contracts">Objective contracts</h2>
           <p>Your application can declare, for each objective family, the operations and resource families the work needs. When a delegation states no allowed operations or resource families of its own, the contract is what it is compared with.</p>
@@ -125,7 +135,7 @@ Content-Type: application/json
           </ul>
 
           <h2 id="drift">Drift: the engine compares, the model decides</h2>
-          <p>For each request the engine compares the items below and puts the result in the decision context as "drift yes / no" with the comparison sentences. When there is nothing to compare, it records the comparison as incomplete.</p>
+          <p>For each request the engine compares the items below and puts the result in the decision context as the drift (yes or no) with the comparison sentences. Drift means that the request is outside the delegated scope. When there is nothing to compare, it records the comparison as incomplete.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Comparison</th><th>Against</th></tr></thead>
             <tbody>
@@ -143,7 +153,7 @@ Content-Type: application/json
           </ul>
 
           <h2 id="expressions">Checking the delegation in policy expressions</h2>
-          <p>Apart from the model's decision, URL and method policies can check a delegation deterministically. These expressions read the request's delegation stamp (token, session, ...); the record-narrowed delegation is used in the model's decision.</p>
+          <p>Apart from the model's decision, a policy condition can check a delegation by a fixed rule. These expressions read the delegation stamp of the request (token, session and so on). The delegation narrowed by the record is used in the model's decision. Where the expressions can be used is in <a href="../iam/ai-security-expressions.html#where">AI Security Expressions</a>.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Expression</th><th>Meaning</th></tr></thead>
             <tbody>
@@ -176,7 +186,7 @@ Content-Type: application/json
               <tr><td><code>expires-at-claims</code></td><td><code>[delegation_expires_at, execution_expires_at, delegationExpiresAt]</code>. Without one, a delegation ends no later than the token</td></tr>
             </tbody>
           </table></div>
-          <p>The agent markers (<code>agent-actor-markers</code>, <code>delegated-markers</code>, <code>agent-client-ids</code>) are in <a href="overview.html#paths">How CONTEXA recognizes an agent</a>. The session, request attribute and header settings (<code>contexa.bridge.delegation.session.*</code>, <code>request-attributes.*</code>, <code>headers.*</code>) are in <a href="../common/bridge.html#settings">bridge settings</a>.</p>
+          <p>The agent markers (<code>agent-actor-markers</code>, <code>delegated-markers</code>, <code>agent-client-ids</code>) are in <a href="overview.html#paths">How CONTEXA identifies an agent</a>. The session, request attribute and header settings (<code>contexa.bridge.delegation.session.*</code>, <code>request-attributes.*</code>, <code>headers.*</code>) are in <a href="../common/bridge.html#settings">bridge settings</a>.</p>
           <h3 id="settings-other">Other settings</h3>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
