@@ -29,7 +29,7 @@
           <ul>
             <li>You need <code>@EnableAISecurity</code> on the application class, <code>contexa.datasource.url</code> in the settings, and one Spring AI chat model. Why, and what happens without them, is in the <a href="overview.html#requirements">AI Engine overview</a>.</li>
             <li>Model connection (provider, key, model name) follows <a href="../../install/configuration/ai.html">AI model configuration</a>; this page does not cover it.</li>
-            <li>To use step 5 (RAG), you need a vector store (a <code>VectorStore</code> bean, for example PGVector).</li>
+            <li>To use step 5 (RAG), you need the CONTEXA vector store (bean <code>contexaVectorStore</code>). With the Spring AI pgvector starter and an embedding model, CONTEXA creates it in its dedicated database (<a href="rag.html#prepare">RAG: Preparation</a>).</li>
           </ul>
 
           <h2 id="architecture">The whole flow and what you build</h2>
@@ -100,7 +100,7 @@ public class ProductRecommendationResponse extends AIResponse {
     }
 }</code></pre>
           <div class="callout callout-warning">
-            <strong>A no-argument constructor and setters are required.</strong> The no-argument constructor is used both when the model's answer is converted into this class and when a fallback response is created after a failure. Also, <code>AIResponse.withMetadata()</code> and <code>AIRequest.withParameter()</code> do not accept <code>null</code> values (they are concurrent maps and throw an exception).
+            <strong>A no-argument constructor and setters are required.</strong> The no-argument constructor and the setters are used when the model's answer is converted into this class. When a fallback response is created after a failure, a <code>(String, ExecutionStatus)</code> constructor is used if there is one, otherwise the no-argument constructor; with neither, no fallback response can be made and the call ends with an error. Also, <code>AIResponse.withMetadata()</code> and <code>AIRequest.withParameter()</code> do not accept <code>null</code> values (they are concurrent maps and throw an exception).
           </div>
 
           <h3 id="type-names">Two name tags</h3>
@@ -166,7 +166,7 @@ public class ProductPromptTemplate
           <p>To leave out the format instructions or the metadata, override <code>shouldIncludeFormatInstructions(request)</code> or <code>shouldIncludeSystemMetadata(request)</code> to return <code>false</code>. To add the format instructions at the end of the user prompt, use <code>appendFormatInstructions(prompt)</code>.</p>
 
           <h3 id="streaming-template">Streaming template</h3>
-          <p>Extend <code>AbstractStreamingPromptTemplate</code> and give an example of the result JSON (<code>getJsonSchemaExample()</code>). If you want the schema built from your response type instead, make <code>getOutputConverter()</code> return a <code>BeanOutputConverter</code> (the example is then not used).</p>
+          <p>Extend <code>AbstractStreamingPromptTemplate</code> and implement six methods: <code>getSupportedType()</code>, <code>generateDomainSystemPrompt()</code>, <code>streamingInstructions()</code>, <code>contextHeading()</code>, <code>getJsonSchemaExample()</code> and <code>generateUserPrompt()</code>. <code>getJsonSchemaExample(request)</code> gives the example of the result JSON. If you want the schema built from your response type instead, make <code>getOutputConverter()</code> return a <code>BeanOutputConverter</code> (the example is then not used).</p>
           <pre><code class="language-java">@Component
 public class ProductStreamingPromptTemplate extends AbstractStreamingPromptTemplate {
 
@@ -186,7 +186,24 @@ public class ProductStreamingPromptTemplate extends AbstractStreamingPromptTempl
     }
 
     @Override
-    protected String getJsonSchemaExample() {
+    protected String streamingInstructions(AIRequest&lt;? extends DomainContext&gt; request) {
+        // the answer's protocol, the JSON rules and the line that introduces the schema; ends with a line break
+        return """
+            Explain your analysis first, in short sentences in Korean.
+            Then write exactly one JSON object between %s and %s, and nothing after %s.
+            The JSON must follow this example:
+            """.formatted(StreamingProtocol.JSON_START_MARKER,
+                          StreamingProtocol.JSON_END_MARKER,
+                          StreamingProtocol.JSON_END_MARKER);
+    }
+
+    @Override
+    protected String contextHeading(AIRequest&lt;? extends DomainContext&gt; request) {
+        return "[Additional context]";   // the heading line put before the preprocessing step's system metadata, when there is any
+    }
+
+    @Override
+    protected String getJsonSchemaExample(AIRequest&lt;? extends DomainContext&gt; request) {
         return """
             {
               "recommendations": [
@@ -203,12 +220,11 @@ public class ProductStreamingPromptTemplate extends AbstractStreamingPromptTempl
             AIRequest&lt;? extends DomainContext&gt; request, String contextInfo) {
         ProductContext ctx = (ProductContext) request.getContext();
         return "Recommend products for category '" + ctx.getCategory()
-                + "' based on preferences: " + String.join(", ", ctx.getUserPreferences())
-                + buildUserPromptExecutionInstructions();
+                + "' based on preferences: " + String.join(", ", ctx.getUserPreferences());
     }
 }</code></pre>
           <div class="callout callout-info">
-            <strong>What a streaming template tells the model.</strong> CONTEXA adds rules to the system prompt: explain the analysis step by step <strong>in Korean only</strong>, and when finished write a single JSON object between <code>===JSON_START===</code> and <code>===JSON_END===</code>. <code>buildUserPromptExecutionInstructions()</code> repeats the same instruction at the end of the user prompt. CONTEXA handles the markers, and the browser receives plain sentences and the final JSON (<a href="streaming.html#streaming-protocol">The events that arrive</a>). <code>generateSystemPrompt()</code>, which builds the system prompt, cannot be overridden.
+            <strong>The order the system prompt is assembled in.</strong> <code>generateSystemPrompt()</code> cannot be overridden and builds the system prompt in this order: (1) <code>generateDomainSystemPrompt()</code> (2) <code>streamingInstructions()</code> (3) the JSON example between <code>===JSON_START===</code> and <code>===JSON_END===</code> (4) when the preprocessing step gave system metadata, the <code>contextHeading()</code> line and that metadata. CONTEXA adds no instructions of its own. The language and form of the narration and the instruction "write one JSON object between the markers" are all yours to write in <code>streamingInstructions()</code>. If the model does not write the markers, no final result event comes out. CONTEXA handles the markers, and the browser receives plain sentences and the final JSON (<a href="streaming.html#streaming-protocol">The events that arrive</a>). <code>StreamingProtocol</code> is in the package <code>io.contexa.contexacore.std.pipeline.streaming</code>.
           </div>
 
           <h3 id="template-helpers">Shared helpers</h3>
@@ -362,7 +378,7 @@ public class ProductRecommendationStrategy
               <tr><td><code>EXECUTION_ERROR</code>, <code>ASYNC_EXECUTION_ERROR</code>, <code>STREAM_EXECUTION_ERROR</code></td><td>Any other exception during synchronous, asynchronous or streaming execution</td></tr>
             </tbody>
           </table></div>
-          <p>On the Strategy path these errors do not reach the caller as they are. A standard call turns any cause into <code>AIOperationException("Pipeline returned unexpected response type")</code>, streaming turns it into an <code>AI_OPERATION_ERROR</code> event, and the cause is in the server log (<a href="#verify">Checking it</a>).</p>
+          <p>On the Strategy path these errors do not reach the caller as they are. A standard call arrives wrapped in <code>AIOperationException</code> (message <code>Strategy execution failed: …</code>), with the original exception still there along <code>getCause()</code>; streaming turns it into an <code>error</code> event whose <code>code</code> is <code>AI_OPERATION_ERROR</code>. The cause is also in the server log (<a href="#verify">Checking it</a>).</p>
 
           <h2 id="step-5">Step 5 (optional): Adding RAG</h2>
           <p>The retrieval step calls the retriever registered for the context type, or the default retriever if there is none. The default retriever searches the vector store with the request parameter <code>naturalLanguageQuery</code> (<code>contexa.rag.defaults.top-k</code>, <code>similarity-threshold</code>) and keeps only documents that fit the user, organization, tenant and purpose. For many features, putting this parameter in the controller is enough. Without the parameter it searches with the context's <code>toString()</code> (class name, ID and domain name) instead of a question, and the result is useless.</p>
@@ -372,7 +388,7 @@ public class ProductContextRetriever extends ContextRetriever {
 
     private final ContextRetrieverRegistry registry;
 
-    public ProductContextRetriever(VectorStore vectorStore,
+    public ProductContextRetriever(@Qualifier("contexaVectorStore") VectorStore vectorStore,
                                    ContexaRagProperties ragProperties,
                                    ContextRetrieverRegistry registry) {
         super(vectorStore, ragProperties);
@@ -406,11 +422,11 @@ public class ProductContextRetriever extends ContextRetriever {
 }</code></pre>
           <p>The returned <code>contextInfo</code> is passed unchanged to the template's <code>generateUserPrompt(request, contextInfo)</code> in the prompt step. <code>vectorOperations.searchSimilar(query)</code> with a single string searches 5 documents with no threshold, so pass a <code>SearchRequest</code> as above to use the settings.</p>
           <div class="callout callout-warning">
-            <strong>Your own retriever does not filter by authorization.</strong> Requests with the registered context type skip the default retriever's user, organization, tenant and purpose filtering and its prompt-injection check. If users may see different documents, put that into the search condition yourself. Also, this retriever cannot be created without a <code>VectorStore</code> bean, so the application does not start. The detailed retrieval rules are in <a href="rag.html">RAG and vector store</a>.
+            <strong>Your own retriever does not filter by authorization.</strong> Requests with the registered context type skip the default retriever's user, organization, tenant and purpose filtering and its prompt-injection check. If users may see different documents, put that into the search condition yourself. Also, this retriever uses the CONTEXA vector store (<code>contexaVectorStore</code>), so inject it with <code>@Qualifier("contexaVectorStore")</code>. That bean is not a default injection candidate: without the qualifier you get your application's own <code>VectorStore</code> (a store without CONTEXA's documents), or, when there is none, the application does not start. The detailed retrieval rules are in <a href="rag.html">RAG and vector store</a>.
           </div>
 
           <h2 id="step-6">Step 6: Opening it with a controller</h2>
-          <p>The controller builds an <code>AIRequest</code> and hands it to <code>StandardStreamingService</code>. Inject the AI entry point as <code>AICoreOperations&lt;context&gt;</code>, the type the bean is declared with (CONTEXA IAM does the same).</p>
+          <p>The controller builds an <code>AIRequest</code> and hands it to <code>StandardStreamingService</code>. Inject the AI entry point by its interface type <code>AICoreOperations&lt;context&gt;</code>. The auto-configuration declares the bean with this interface type (CONTEXA IAM injects it the same way).</p>
           <pre><code class="language-java">public record RecommendInput(String productId, String category, List&lt;String&gt; preferences) {
 }
 
@@ -477,7 +493,7 @@ public class MyAiApplication {
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Parameter</th><th>Meaning</th></tr></thead>
             <tbody>
-              <tr><td><code>preferredModel</code></td><td>The model name to use (<code>requestedModelId</code> and <code>runtimeModelId</code> mean the same). If it is not found, a warning is logged and the default chat model is used.</td></tr>
+              <tr><td><code>preferredModel</code></td><td>The model name to use (<code>requestedModelId</code> and <code>runtimeModelId</code> mean the same). If it is not found, the default chat model is used. The log is at debug level, and <code>modelSelectionFallbackUsed</code> in the result metadata becomes <code>true</code>.</td></tr>
               <tr><td><code>temperature</code>, <code>topP</code>, <code>seed</code></td><td>Generation options (a number or a numeric string)</td></tr>
               <tr><td><code>maxTokens</code></td><td>The maximum number of tokens in the answer</td></tr>
               <tr><td><code>disableRetries</code></td><td>With <code>true</code>, a temporary failure is not sent again (by default, up to 4 times with backoff)</td></tr>
@@ -498,17 +514,17 @@ Content-Type: application/json
 {"productId":"P-100","category":"laptop","preferences":["light","long battery"]}</code></pre>
           <ul>
             <li><strong>Standard:</strong> you get JSON with <code>recommendations</code>, <code>confidence</code> and <code>reasoning</code> filled in, and <code>metadata.selectedModelId</code> holds the model actually used. The server log shows step logs from <code>[PIPELINE] STEP 1 completed: CONTEXT_RETRIEVAL</code> to <code>STEP 6 completed: POSTPROCESSING</code>.</li>
-            <li><strong>Streaming:</strong> sending the same body to <code>/api/recommend/stream</code> (without buffering, like <code>curl -N</code>) gives Korean analysis sentences → <code>###GENERATING_RESULT###</code> → <code>###FINAL_RESPONSE###{…}</code> → <code>[DONE]</code>, in that order. Details are in <a href="streaming.html#streaming-protocol">Streaming</a>.</li>
+            <li><strong>Streaming:</strong> sending the same body to <code>/api/recommend/stream</code> (without buffering, like <code>curl -N</code>) gives analysis sentences (in the language the streaming template asks for) → <code>###GENERATING_RESULT###</code> → <code>###FINAL_RESPONSE###{…}</code> → <code>[DONE]</code>, in that order. Details are in <a href="streaming.html#streaming-protocol">Streaming</a>.</li>
           </ul>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>What you see</th><th>Meaning</th><th>What to do</th></tr></thead>
             <tbody>
               <tr><td><code>errorMessage</code> in the response JSON is <code>Pipeline execution failed: …</code></td><td>The pipeline failed and a fallback response came back (default failure policy). For example, <code>Template matching failed</code> means no template bean matches the template type name</td><td>Read the cause after the prefix. To receive it as an error, change the <a href="pipeline.html#failures">failure policy</a></td></tr>
-              <tr><td><code>AIOperationException: Pipeline returned unexpected response type</code></td><td>An error outside the pipeline on the Strategy path (input check failed, no Strategy or Lab, and so on)</td><td>Find the cause in the server log line <code>ASYNC strategy execution failed</code></td></tr>
-              <tr><td><code>StrategicOperationConflictException</code> (<code>AIOperationException</code>): <code>Strategic operation conflict: …</code></td><td>Exactly the same request (same response type, template, diagnosis type, question, user, session, organization and parameters) is already running. The lock lives in memory in standalone mode and in Redis in distributed mode, so it also applies across instances. Each run takes the lock under an owner of its own, so requests on the same server refuse each other too, and the lock is given back when the run ends, fails or is cancelled. If the server holding it stops, it is released after 30 minutes at most</td><td>Fill in the user and session in the context, or send again after the earlier request ends</td></tr>
+              <tr><td><code>AIOperationException: Strategy execution failed: …</code></td><td>A failure on the Strategy path (input check failed, no Strategy or Lab, a pipeline error when the failure policy is <code>PROPAGATE_ERROR</code>, and so on). The wrapped cause's message follows the colon</td><td>Find the cause in the server log line <code>ASYNC strategy execution failed</code></td></tr>
+              <tr><td><code>StrategicOperationConflictException</code> (<code>AIOperationException</code>): <code>Strategic operation conflict: …</code></td><td>Exactly the same request (same response type, template, diagnosis type, question text, business type of the context, user, session, organization and parameters) is already running. The lock lives in memory in standalone mode and in Redis in distributed mode, so it also applies across instances. Each run takes the lock under an owner of its own, so requests on the same server refuse each other too, and the lock is given back when the run ends, fails or is cancelled. If the server holding it stops, it is released after 30 minutes at most</td><td>Fill in the user and session in the context, or send again after the earlier request ends</td></tr>
               <tr><td><code>AIOperationException: Strategic lock unavailable: …</code></td><td>The lock store (Redis in distributed mode) could not answer. It is not a conflict, and nothing runs without the lock</td><td>Check the connection to the lock store, then send again</td></tr>
               <tr><td>Metadata <code>modelSelectionFallbackUsed</code> is <code>true</code></td><td>The requested model was not found and the default chat model was used</td><td>Check the model name and the connection settings</td></tr>
-              <tr><td>An <code>AUDIT_START</code> line on the logger <code>IAM_AUDIT</code></td><td>The audit record written when the Strategy path starts (no completion or failure record)</td><td>Use it to confirm a call came in</td></tr>
+              <tr><td>An <code>AUDIT_START</code> line on the logger <code>IAM_AUDIT</code></td><td>The audit record written when the Strategy path starts (INFO). On failure <code>AUDIT_FAILED</code> (ERROR) is written, and when the failure is a security exception or its message contains <code>access denied</code>, <code>SECURITY_EVENT</code> (ERROR) as well. Success is not written</td><td>Use it to confirm a call came in or failed</td></tr>
             </tbody>
           </table></div>
 
@@ -577,7 +593,9 @@ Content-Type: application/json
               <tr><td><code>getSupportedType()</code></td><td>This template's template type</td></tr>
               <tr><td><code>generateDomainSystemPrompt(request, systemMetadata)</code></td><td>The domain system prompt. CONTEXA adds the format instructions and the metadata</td></tr>
               <tr><td><code>generateUserPrompt(request, contextInfo)</code></td><td>The user prompt. <code>contextInfo</code> is the result of the retrieval step</td></tr>
-              <tr><td><code>getJsonSchemaExample()</code>, <code>getOutputConverter()</code></td><td>The streaming template's result JSON example and (optional) schema converter. When a converter is given, the example is not used</td></tr>
+              <tr><td><code>streamingInstructions(request)</code>, <code>contextHeading(request)</code></td><td>Abstract methods of the streaming template: the way to answer, the JSON rules and the line before the schema (ending with a line break), and the heading line before the system metadata</td></tr>
+              <tr><td><code>getJsonSchemaExample(request)</code>, <code>getOutputConverter()</code></td><td>The streaming template's result JSON example (abstract) and (optional) schema converter. When a converter is given, the example is not used</td></tr>
+              <tr><td><code>generateSystemPrompt(request, systemMetadata)</code></td><td><code>final</code> in the streaming template. Joins the results of the methods above in <a href="#streaming-template">a fixed order</a></td></tr>
             </tbody>
           </table></div>
 

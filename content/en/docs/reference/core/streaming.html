@@ -18,6 +18,10 @@
             <strong>This has nothing to do with the security decision.</strong> Streaming is a way of answering of the general-purpose AI engine that application features call. The security decision (Layer 1 and Layer 2 analysis) is not streamed; the <a href="../architecture/decision-engine.html">decision engine</a> makes it separately.
           </div>
 
+          <div class="callout callout-info">
+            <strong>Terms on this page.</strong> <strong>SSE</strong> (Server-Sent Events) is the way a server keeps one HTTP response open and sends events one after another. One event is a <code>data:</code> line (the content) and, when present, an <code>event:</code> line (the event name), and it ends with a blank line. A <strong>chunk</strong> is a piece of text the model sends at once, and a <strong>marker</strong> is an agreed string put between pieces of text to signal something such as "the result JSON starts here". A <code>Flux</code> is Reactor's asynchronous flow that emits values many times.
+          </div>
+
           <h2 id="overview">What you get</h2>
           <p>While the model analyzes, sentences appear on the screen one by one, and when the analysis ends the result JSON arrives in one piece. On the server, the controller only has to return the <code>Flux&lt;ServerSentEvent&lt;String&gt;&gt;</code> that <code>StandardStreamingService</code> gives back.</p>
           <figure class="dg">
@@ -42,7 +46,7 @@
           <ul>
             <li>Both paths need the <code>StandardStreamingService</code> bean (<code>contexa.streaming.enabled</code>, on by default) and a Spring AI chat model.</li>
             <li>Both paths use the same streaming pipeline (retrieval → preprocessing → prompt → model call) and the same event format.</li>
-            <li>Calling a Lab's <code>processStream()</code> or <code>PipelineOrchestrator.executeStream()</code> directly gives a flow of raw chunks (<code>Flux&lt;String&gt;</code>) not packaged as SSE. Grouping into sentences, <code>[DONE]</code> and the 5-minute limit are done by <code>StandardStreamingService</code>.</li>
+            <li>Calling a Lab's <code>processStream()</code> or <code>PipelineOrchestrator.executeStream()</code> directly gives a flow of raw chunks (<code>Flux&lt;String&gt;</code>) not packaged as SSE. Grouping into sentences, <code>[DONE]</code>, the 5-minute limit and the <code>error</code> event are done by <code>StandardStreamingService</code>. In a flow you take directly, a failure arrives as an error of the flow (<code>onError</code>).</li>
           </ul>
 
           <h2 id="server-side">Server code</h2>
@@ -87,7 +91,9 @@ protected Flux&lt;String&gt; doProcessStream(AIRequest&lt;ProductContext&gt; req
           <pre><code class="language-java">if (body.category() == null) {
     return streamingService.errorStream("VALIDATION_ERROR", "category is required");
 }</code></pre>
-          <p>The browser receives one event, <code>ERROR: {"error":{"code":"VALIDATION_ERROR","message":"category is required"}}</code>, with no <code>[DONE]</code> after it.</p>
+          <p>The browser receives one event named <code>error</code>, with no <code>[DONE]</code> after it. Its data is JSON with two fields, <code>code</code> and <code>message</code>. The order of the fields is not fixed, so read them by name.</p>
+          <pre><code class="language-text">event:error
+data:{"code":"VALIDATION_ERROR","message":"category is required"}</code></pre>
 
           <h2 id="streaming-protocol">The events that really arrive</h2>
           <p>Received as is, the product recommendation stream looks like this (a blank line between events).</p>
@@ -101,19 +107,20 @@ data:###FINAL_RESPONSE###{ "recommendations": [ { "productName": "…", "reason"
 
 data:[DONE]</code></pre>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>Data</th><th>Meaning</th><th>What the client does</th></tr></thead>
+            <thead><tr><th>Event received</th><th>Meaning</th><th>What the client does</th></tr></thead>
             <tbody>
               <tr><td>Text without a marker</td><td>The model's analysis, grouped into sentences</td><td>Append it to the screen</td></tr>
               <tr><td><code>###GENERATING_RESULT###</code></td><td>The narration ended and the model started writing the result JSON</td><td>Show "making the result"</td></tr>
               <tr><td><code>###FINAL_RESPONSE###</code> + JSON</td><td>The final result. Arrives in one piece after the model's stream ends</td><td>Remove the marker and read it as JSON</td></tr>
               <tr><td><code>[DONE]</code></td><td>Normal end</td><td>Finish the screen</td></tr>
-              <tr><td>Starts with <code>ERROR:</code></td><td>An error (formats in <a href="#troubleshooting">Troubleshooting</a>)</td><td>Show the error and stop</td></tr>
+              <tr><td>An event named <code>error</code></td><td>A failure. Its data is <code>{"code": …, "message": …}</code> and the stream ends with this event (codes in <a href="#troubleshooting">Checks and troubleshooting</a>)</td><td>Show the error and stop</td></tr>
             </tbody>
           </table></div>
           <ul>
+            <li><strong>A failure is told by the event name.</strong> It is not told by the first characters of the data, so narration that happens to start with "ERROR" is never taken for an error.</li>
             <li><strong>Line breaks inside the data become spaces.</strong> So one event is always a single <code>data:</code> line. Line breaks in the final JSON also become spaces, which does not affect reading it as JSON.</li>
-            <li><strong>The narration is in Korean.</strong> A streaming template tells the model to write its narration in Korean only (<a href="strategy.html#streaming-template">Streaming template</a>).</li>
-            <li><strong>If the model ends without <code>===JSON_END===</code>,</strong> the collected JSON has its brackets balanced and is sent as the final result.</li>
+            <li><strong>Your streaming template decides the language and form of the narration.</strong> The sentences that tell the model "write the narration first, then the result JSON between the markers" come from the template's <code>streamingInstructions()</code>. The base class only adds the JSON example wrapped in the markers after them (<a href="strategy.html#streaming-template">Streaming template</a>).</li>
+            <li><strong>If the model ends without <code>===JSON_END===</code>,</strong> the collected JSON has its brackets balanced and missing commas filled in, and is sent as the final result. The server then writes the error log (ERROR) <code>Stream completed without JSON_END marker</code>.</li>
             <li><strong>Text after the final result marker is not sent.</strong> Narration still waiting in the buffer is dropped too.</li>
           </ul>
 
@@ -131,7 +138,7 @@ data:[DONE]</code></pre>
           </table></div>
 
           <h2 id="client-side">Client code</h2>
-          <p>To receive a stream from a POST, read the response body with the browser's <code>fetch</code>. The key point is that <strong>data without a marker is a body sentence</strong>. Check in this order: <code>[DONE]</code> → <code>ERROR:</code> → final result → result-generation notice → sentence.</p>
+          <p>To receive a stream from a POST, read the response body with the browser's <code>fetch</code>. Two points matter. <strong>A failure arrives as an event named <code>error</code></strong>, and <strong>data without a marker is a body sentence</strong>. So look at the event name first, then check the data in this order: <code>[DONE]</code> → final result → result-generation notice → sentence.</p>
           <h3 id="client-code">Reading the stream</h3>
           <pre><code class="language-javascript">const FINAL = '###FINAL_RESPONSE###';
 const GENERATING = '###GENERATING_RESULT###';
@@ -143,35 +150,43 @@ async function streamRequest(url, body, callbacks) {
     body: JSON.stringify(body)
   });
   if (!response.ok) {
-    callbacks.onError?.('HTTP ' + response.status);
+    callbacks.onError?.({ code: 'HTTP_' + response.status, message: response.statusText });
     return;
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let eventName = null;                        // the value of the event: line; it ends at a blank line
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
     buffer = lines.pop();                      // the last line may not have fully arrived yet
-    for (const line of lines) {
+    for (const raw of lines) {
+      const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+      if (line === '') { eventName = null; continue; }   // a blank line = the end of one event
+      if (line.startsWith('event:')) { eventName = line.substring(6).trim(); continue; }
       if (!line.startsWith('data:')) continue;
-      const data = line.substring(5).trim();
-      if (data &amp;&amp; handleEvent(data, callbacks)) return;   // stop at [DONE] or an error
+      if (handleEvent(eventName, line.substring(5).trim(), callbacks)) return;   // stop at [DONE] or an error
     }
   }
   callbacks.onComplete?.();
 }
 
 // Returns true when the stream has ended
-function handleEvent(data, callbacks) {
-  if (data === '[DONE]') {
-    callbacks.onComplete?.();
+function handleEvent(eventName, data, callbacks) {
+  if (eventName === 'error') {                 // a failure: the data is {"code": …, "message": …}
+    let detail;
+    try { detail = JSON.parse(data); } catch (e) { detail = { code: 'STREAM_ERROR', message: data }; }
+    callbacks.onError?.(detail);
     return true;
   }
-  if (data.startsWith('ERROR:')) {
-    callbacks.onError?.(data.substring(6).trim());
+  if (!data) {
+    return false;
+  }
+  if (data === '[DONE]') {
+    callbacks.onComplete?.();
     return true;
   }
   if (data.startsWith(FINAL)) {
@@ -199,17 +214,17 @@ streamRequest('/api/recommend/stream',
       catch (e) { output.textContent = text; }   // keep only the narration if the JSON is broken
     },
     onComplete: () =&gt; setBusy(false),           // setBusy is your screen code (example)
-    onError: (message) =&gt; { output.textContent = 'Error: ' + message; setBusy(false); }
+    onError: (error) =&gt; { output.textContent = 'Error (' + error.code + '): ' + error.message; setBusy(false); }
   });</code></pre>
           <div class="callout callout-info">
-            <strong>The OSS core does not ship a browser streaming client.</strong> Read the stream in your own screens as above. The CONTEXA IAM admin console contains a client for its own screens (contexa-llm.bundle.js), but it is not a public API. That client also treats data without a marker as body text.
+            <strong>The OSS core does not ship a browser streaming client.</strong> Read the stream in your own screens as above. The CONTEXA IAM admin console contains a client for its own screens (contexa-llm.bundle.js), but it is not a public API. That client also tells a failure by the event name <code>error</code> and treats data without a marker as body text.
           </div>
 
           <h2 id="architecture">How it flows inside</h2>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>From the model's text to browser events</strong>It flows from top to bottom. When the client disconnects, the pipeline subscription is cancelled too.</figcaption>
             <ol class="dg-flow">
-              <li class="dg-node dg-model"><span class="dg-node-tag">AI model</span><span class="dg-node-title">Narration → JSON</span><span class="dg-node-desc">Writes Korean narration, then JSON between <code>===JSON_START===</code> … <code>===JSON_END===</code></span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">AI model</span><span class="dg-node-title">Narration → JSON</span><span class="dg-node-desc">Writes narration as the template tells it, then JSON between <code>===JSON_START===</code> … <code>===JSON_END===</code></span></li>
               <li class="dg-node"><span class="dg-node-tag">CONTEXA</span><span class="dg-node-title">JSON streaming processor (<code>JsonStreamingProcessor</code>)</span><span class="dg-node-desc">Adds <code>###STREAMING###</code> to narration chunks, emits <code>###GENERATING_RESULT###</code> when the JSON starts, and <code>###FINAL_RESPONSE###{json}</code> once the JSON is complete</span></li>
               <li class="dg-node"><span class="dg-node-tag">CONTEXA</span><span class="dg-node-title">Streaming model call step (<code>StreamingLLMExecutionStep</code>)</span><span class="dg-node-desc">Removes the <code>###STREAMING###</code> marker and passes the chunks to the streaming executor</span></li>
               <li class="dg-node"><span class="dg-node-tag">CONTEXA</span><span class="dg-node-title">Streaming service (<code>StandardStreamingService</code>)</span><span class="dg-node-desc">Groups the narration into sentences, sends the final JSON in one piece after the stream ends, turns line breaks into spaces, and adds <code>[DONE]</code> at the end</span></li>
@@ -221,15 +236,16 @@ streamRequest('/api/recommend/stream',
           <ul>
             <li>When a line ends with a period, exclamation mark, question mark or a Korean sentence ending (<code>습니다.</code>, <code>입니다.</code>, <code>다.</code>, <code>요.</code> and so on), it is sent as one sentence.</li>
             <li>If no sentence end is found and the text passes 200 characters, what has been collected so far is sent. Text left at the end of the stream is sent too.</li>
-            <li>Chunks that look like JSON (containing <code>```json</code> or <code>===JSON</code>, or starting with <code>{"</code>) are not sent.</li>
-            <li>The <code>#</code> sign (markdown headings) and control characters are removed, and pieces shorter than 3 characters or made only of punctuation are dropped.</li>
+            <li>When a chunk looks like JSON (it contains <code>```json</code> or <code>===JSON</code>, or starts with <code>{"</code>), nothing is sent from that chunk until the JSON's braces close or <code>```</code> or <code>===JSON_END===</code> appears.</li>
+            <li>The <code>#</code> sign (markdown heading marks), <code>===</code> and control characters are removed. Pieces shorter than 3 characters, made only of punctuation, or without a single letter or digit are dropped.</li>
           </ul>
 
           <h2 id="timeouts">Time limits</h2>
           <ul>
-            <li><strong>5 minutes between events:</strong> if no event leaves for the browser within 5 minutes of the previous one (for the first event, of the start), <code>StandardStreamingService</code> ends the stream and sends <code>ERROR: {"error":{"code":"TIMEOUT","message":"Request timed out"}}</code>. This also applies when finishing the result JSON after the narration takes more than 5 minutes.</li>
+            <li><strong>5 minutes between events:</strong> if no event leaves for the browser within 5 minutes of the previous one (for the first event, of the start), <code>StandardStreamingService</code> ends the stream and sends an <code>error</code> event (<code>code</code> <code>TIMEOUT</code>, <code>message</code> <code>The AI model did not answer in time.</code>). This also applies when finishing the result JSON after the narration takes more than 5 minutes.</li>
             <li><strong>No setting changes it.</strong> These 5 minutes are a constant fixed in code (<code>contexa.streaming.timeout</code> is not read).</li>
-            <li><strong>The model stream itself has no limit and no retry.</strong> The 60-second per-call limit and the up-to-4 retries of a standard call (<a href="llm-orchestrator.html#retry">Retries</a>) are not used for streaming. If you call <code>executeStream()</code> directly, there is no 5-minute limit either.</li>
+            <li><strong>The model stream itself has no time limit and no retry.</strong> The 60-second per-call limit and the up-to-4 retries of a standard call (<a href="llm-orchestrator.html#retry">Retries</a>) are not used for streaming. If you call <code>executeStream()</code> directly, there is no 5-minute limit either.</li>
+            <li><strong>A stream may wait for a place at the model server.</strong> Each model server takes a limited number of calls at once (<code>contexa.llm.gate.*</code>; by default 2 for a server you run yourself and 16 for a remote provider), and a stream holds one place from its start to its end. When no place frees up, it waits 3 minutes at most (<code>contexa.security.plane.agent.event-timeout-ms</code>, default 180000) and ends with a <code>TIMEOUT</code> error (<a href="../../install/configuration/ai.html">AI model configuration</a>).</li>
           </ul>
 
           <h2 id="configuration">Settings</h2>
@@ -252,18 +268,26 @@ streamRequest('/api/recommend/stream',
           <pre><code class="language-text">curl -N -X POST http://localhost:8080/api/recommend/stream \
   -H "Content-Type: application/json" \
   -d '{"productId":"P-100","category":"laptop","preferences":["light","long battery"]}'</code></pre>
+          <p>On failure one <code>error</code> event arrives and the stream ends. No <code>[DONE]</code> follows. The <code>code</code> follows the causing exception; the first row that matches, in this order, is used.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th><code>code</code></th><th><code>message</code></th><th>Cause</th><th>What to do</th></tr></thead>
+            <tbody>
+              <tr><td><code>AI_MODEL_UNREACHABLE</code></td><td><code>The AI model server cannot be reached.</code></td><td>The model server could not be reached (connection refused, unknown host, no route). The cause is found even through several layers of wrapping exceptions</td><td>Check the model server's address and that it is running</td></tr>
+              <tr><td><code>TIMEOUT</code></td><td><code>The AI model did not answer in time.</code></td><td>More than 5 minutes between events, no place at the model server within 3 minutes, or another time limit</td><td>Use a faster model or a smaller result JSON, and check the model server's limit of calls at once</td></tr>
+              <tr><td><code>AI_GENERATION_RUNNING</code></td><td><code>An identical request is already running.</code></td><td>On the Strategy path, exactly the same request is already running (the same-request lock)</td><td>Fill in the user and session in the context, or send again after the earlier stream ends</td></tr>
+              <tr><td><code>AI_OPERATION_ERROR</code></td><td>The exception's message as is. Any other failure on the Strategy path reads <code>Streaming strategic operation failed: strategy-…</code></td><td>A failure on the Strategy path: no Strategy found, the Strategy's or Lab's <code>supportsStreaming()</code> is <code>false</code>, an input check failed, no template found, the lock store did not answer (<code>Strategic lock unavailable: …</code>), and so on</td><td>Find the cause in the server log (ERROR)</td></tr>
+              <tr><td><code>INVALID_REQUEST</code></td><td>The exception's message as is, for example <code>Template matching failed</code></td><td>An invalid argument on the direct pipeline path. This example means no streaming template bean has the same name as the template type</td><td>Make the template's <code>getSupportedType()</code> name match the request's template type</td></tr>
+              <tr><td><code>INTERNAL_ERROR</code></td><td><code>An unexpected error occurred</code></td><td>Any failure not covered above</td><td>Find the cause in the server log <code>Streaming error occurred</code></td></tr>
+            </tbody>
+          </table></div>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>What you see</th><th>Cause</th><th>What to do</th></tr></thead>
             <tbody>
-              <tr><td><code>ERROR: {"error":{"code":"AI_OPERATION_ERROR","message":"Streaming strategic operation failed: …"}}</code>, no <code>[DONE]</code></td><td>An error outside the pipeline on the Strategy path: no Strategy found, the Strategy's or Lab's <code>supportsStreaming()</code> is <code>false</code>, an input check failed, and so on</td><td>Find the cause in the server log</td></tr>
-              <tr><td><code>ERROR: {"error":{"code":"AI_OPERATION_ERROR","message":"Strategic streaming operation conflict: …"}}</code></td><td>Exactly the same request is already streaming (the Strategy path's lock)</td><td>Fill in the user and session in the context, or send again after the earlier stream ends</td></tr>
-              <tr><td><code>ERROR: Template matching failed</code> followed by <code>[DONE]</code></td><td>An error inside the pipeline arrives as text <code>ERROR: cause</code> followed by <code>[DONE]</code>. This one means no streaming template bean has the same name as the template type</td><td>Match the template's <code>getSupportedType()</code> name</td></tr>
-              <tr><td><code>ERROR: {"error":{"code":"TIMEOUT","message":"Request timed out"}}</code></td><td>More than 5 minutes passed between events</td><td>Use a faster model or a smaller result JSON</td></tr>
-              <tr><td>Only sentences arrive, no final result</td><td>The model did not write the JSON markers</td><td>Check the streaming template's JSON example and the model</td></tr>
+              <tr><td>Only sentences arrive, no final result</td><td>The model did not write the JSON markers</td><td>Check the streaming template's instructions and JSON example, and the model</td></tr>
               <tr><td>The model or temperature put in the request is not applied</td><td>Streaming does not use request parameters and uses the default chat model</td><td>Use a standard call when you need to choose the model</td></tr>
             </tbody>
           </table></div>
-          <p>The error code follows the causing exception: <code>AI_OPERATION_ERROR</code> (AI processing error), <code>TIMEOUT</code> (timed out), <code>INVALID_REQUEST</code> (invalid argument), and <code>INTERNAL_ERROR</code> for anything else (message "An unexpected error occurred"). When the browser disconnects, the server's pipeline subscription is cancelled too.</p>
+          <p>The server writes the error log (ERROR) <code>Streaming error occurred</code> for every failure. When the browser disconnects, the server's pipeline subscription is cancelled too.</p>
 
           <h2 id="customization">Changing it yourself</h2>
           <ul>
@@ -280,7 +304,7 @@ streamRequest('/api/recommend/stream',
               <tr><td><code>stream(AIRequest&lt;C&gt; request, PipelineOrchestrator pipelineOrchestrator)</code></td><td>Direct pipeline streaming (default streaming configuration) → SSE</td></tr>
               <tr><td><code>process(request, aiProcessor, responseType)</code></td><td>Strategy path standard call (<code>Mono&lt;R&gt;</code>)</td></tr>
               <tr><td><code>process(request, pipelineOrchestrator, responseType)</code></td><td>Direct pipeline standard call (default standard configuration)</td></tr>
-              <tr><td><code>errorStream(String errorCode, String message)</code></td><td>A stream made of one error event (<code>ERROR: {"error":{…}}</code>)</td></tr>
+              <tr><td><code>errorStream(String errorCode, String message)</code></td><td>A stream made of one event named <code>error</code> whose data is <code>{"code": …, "message": …}</code></td></tr>
             </tbody>
           </table></div>
           <h3 id="api-chunk">ChunkProcessor and JsonStreamingProcessor</h3>

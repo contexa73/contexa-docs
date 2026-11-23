@@ -29,7 +29,7 @@
           <ul>
             <li>애플리케이션 클래스에 <code>@EnableAISecurity</code>, 설정에 <code>contexa.datasource.url</code>, Spring AI 채팅 모델 하나가 있어야 합니다. 이유와 없을 때의 모습은 <a href="overview.html#requirements">AI 엔진 개요</a>에 있습니다.</li>
             <li>모델 연결(공급자 · 키 · 모델 이름)은 <a href="../../install/configuration/ai.html">AI 모델 연결 설정</a>을 따릅니다. 이 페이지에서는 다루지 않습니다.</li>
-            <li>5단계(RAG)를 쓰려면 벡터 저장소(<code>VectorStore</code> 빈, 예: PGVector)가 있어야 합니다.</li>
+            <li>5단계(RAG)를 쓰려면 CONTEXA 벡터 저장소(빈 <code>contexaVectorStore</code>)가 있어야 합니다. Spring AI pgvector 스타터와 임베딩 모델이 있으면 CONTEXA가 전용 DB에 만듭니다(<a href="rag.html#prepare">RAG: 준비</a>).</li>
           </ul>
 
           <h2 id="architecture">전체 흐름과 내가 만드는 것</h2>
@@ -100,7 +100,7 @@ public class ProductRecommendationResponse extends AIResponse {
     }
 }</code></pre>
           <div class="callout callout-warning">
-            <strong>인자 없는 생성자와 setter가 반드시 있어야 합니다.</strong> 모델 답을 이 클래스로 바꿀 때와, 실패해서 대체 응답을 만들 때 둘 다 인자 없는 생성자를 씁니다. 또 <code>AIResponse.withMetadata()</code>와 <code>AIRequest.withParameter()</code>에는 <code>null</code> 값을 넣을 수 없습니다(동시성 맵이라 예외가 납니다).
+            <strong>인자 없는 생성자와 setter가 반드시 있어야 합니다.</strong> 모델 답을 이 클래스로 바꿀 때 인자 없는 생성자와 setter를 씁니다. 실패해서 대체 응답을 만들 때는 <code>(String, ExecutionStatus)</code> 생성자가 있으면 그것을, 없으면 인자 없는 생성자를 쓰고, 둘 다 없으면 대체 응답도 만들지 못해 오류가 됩니다. 또 <code>AIResponse.withMetadata()</code>와 <code>AIRequest.withParameter()</code>에는 <code>null</code> 값을 넣을 수 없습니다(동시성 맵이라 예외가 납니다).
           </div>
 
           <h3 id="type-names">이름표 두 개</h3>
@@ -166,7 +166,7 @@ public class ProductPromptTemplate
           <p>형식 지시나 메타데이터를 빼고 싶으면 <code>shouldIncludeFormatInstructions(request)</code> · <code>shouldIncludeSystemMetadata(request)</code>를 <code>false</code>로 재정의합니다. 사용자 프롬프트 끝에 형식 지시를 붙이려면 <code>appendFormatInstructions(prompt)</code>를 씁니다.</p>
 
           <h3 id="streaming-template">스트리밍 템플릿</h3>
-          <p><code>AbstractStreamingPromptTemplate</code>을 확장하고, 결과 JSON의 예(<code>getJsonSchemaExample()</code>)를 줍니다. 응답 타입에서 스키마를 만들고 싶으면 대신 <code>getOutputConverter()</code>가 <code>BeanOutputConverter</code>를 돌려주게 하면 됩니다(그러면 예시는 쓰지 않습니다).</p>
+          <p><code>AbstractStreamingPromptTemplate</code>을 확장하고 여섯 메서드를 구현합니다: <code>getSupportedType()</code>, <code>generateDomainSystemPrompt()</code>, <code>streamingInstructions()</code>, <code>contextHeading()</code>, <code>getJsonSchemaExample()</code>, <code>generateUserPrompt()</code>. 결과 JSON의 예는 <code>getJsonSchemaExample(request)</code>가 줍니다. 응답 타입에서 스키마를 만들고 싶으면 대신 <code>getOutputConverter()</code>가 <code>BeanOutputConverter</code>를 돌려주게 하면 됩니다(그러면 예시는 쓰지 않습니다).</p>
           <pre><code class="language-java">@Component
 public class ProductStreamingPromptTemplate extends AbstractStreamingPromptTemplate {
 
@@ -186,7 +186,24 @@ public class ProductStreamingPromptTemplate extends AbstractStreamingPromptTempl
     }
 
     @Override
-    protected String getJsonSchemaExample() {
+    protected String streamingInstructions(AIRequest&lt;? extends DomainContext&gt; request) {
+        // 모델이 답하는 방식, JSON 규칙, 스키마 앞 안내 문장. 줄바꿈으로 끝냅니다
+        return """
+            Explain your analysis first, in short sentences in Korean.
+            Then write exactly one JSON object between %s and %s, and nothing after %s.
+            The JSON must follow this example:
+            """.formatted(StreamingProtocol.JSON_START_MARKER,
+                          StreamingProtocol.JSON_END_MARKER,
+                          StreamingProtocol.JSON_END_MARKER);
+    }
+
+    @Override
+    protected String contextHeading(AIRequest&lt;? extends DomainContext&gt; request) {
+        return "[Additional context]";   // 전처리의 시스템 메타데이터가 있을 때 그 앞에 붙는 제목 줄
+    }
+
+    @Override
+    protected String getJsonSchemaExample(AIRequest&lt;? extends DomainContext&gt; request) {
         return """
             {
               "recommendations": [
@@ -203,12 +220,11 @@ public class ProductStreamingPromptTemplate extends AbstractStreamingPromptTempl
             AIRequest&lt;? extends DomainContext&gt; request, String contextInfo) {
         ProductContext ctx = (ProductContext) request.getContext();
         return "Recommend products for category '" + ctx.getCategory()
-                + "' based on preferences: " + String.join(", ", ctx.getUserPreferences())
-                + buildUserPromptExecutionInstructions();
+                + "' based on preferences: " + String.join(", ", ctx.getUserPreferences());
     }
 }</code></pre>
           <div class="callout callout-info">
-            <strong>스트리밍 템플릿이 모델에게 시키는 것.</strong> CONTEXA가 시스템 프롬프트에 규칙을 덧붙입니다: 분석 과정을 <strong>한국어로만</strong> 차례로 설명하고, 다 끝나면 <code>===JSON_START===</code>와 <code>===JSON_END===</code> 사이에 JSON 하나만 쓰라는 것입니다. <code>buildUserPromptExecutionInstructions()</code>는 같은 지시를 사용자 프롬프트 끝에 한 번 더 붙입니다. 표지 처리는 CONTEXA가 하며, 브라우저는 표지 없는 문장과 최종 JSON을 받습니다(<a href="streaming.html#streaming-protocol">실제로 오는 이벤트</a>). 시스템 프롬프트를 만드는 <code>generateSystemPrompt()</code>는 재정의할 수 없습니다.
+            <strong>시스템 프롬프트가 조립되는 순서.</strong> <code>generateSystemPrompt()</code>는 재정의할 수 없고, 이 순서로 시스템 프롬프트를 만듭니다: ① <code>generateDomainSystemPrompt()</code> ② <code>streamingInstructions()</code> ③ <code>===JSON_START===</code>와 <code>===JSON_END===</code> 사이에 넣은 JSON 예 ④ 전처리의 시스템 메타데이터가 있으면 <code>contextHeading()</code> 줄과 그 내용. CONTEXA는 지시문을 따로 넣지 않습니다. 서술의 언어 · 형식과 "JSON 하나를 표지 사이에 쓰라"는 지시는 모두 <code>streamingInstructions()</code>에 내가 씁니다. 모델이 표지를 쓰지 않으면 최종 결과 이벤트가 나오지 않습니다. 표지 처리는 CONTEXA가 하며, 브라우저는 표지 없는 문장과 최종 JSON을 받습니다(<a href="streaming.html#streaming-protocol">실제로 오는 이벤트</a>). <code>StreamingProtocol</code>은 <code>io.contexa.contexacore.std.pipeline.streaming</code> 패키지에 있습니다.
           </div>
 
           <h3 id="template-helpers">공통 도우미</h3>
@@ -362,7 +378,7 @@ public class ProductRecommendationStrategy
               <tr><td><code>EXECUTION_ERROR</code> · <code>ASYNC_EXECUTION_ERROR</code> · <code>STREAM_EXECUTION_ERROR</code></td><td>동기 · 비동기 · 스트리밍 실행 중 다른 예외</td></tr>
             </tbody>
           </table></div>
-          <p>Strategy 경로에서 이 오류들은 호출자에게 그대로 가지 않습니다. 표준 호출은 원인과 상관없이 <code>AIOperationException("Pipeline returned unexpected response type")</code>으로, 스트리밍은 <code>AI_OPERATION_ERROR</code> 이벤트로 바뀌고, 원인은 서버 로그에 남습니다(<a href="#verify">확인하기</a>).</p>
+          <p>Strategy 경로에서 이 오류들은 호출자에게 그대로 가지 않습니다. 표준 호출은 <code>AIOperationException</code>(메시지 <code>Strategy execution failed: …</code>)으로 감싸여 도착하며 원래 예외는 <code>getCause()</code>를 따라가면 남아 있고, 스트리밍은 <code>code</code>가 <code>AI_OPERATION_ERROR</code>인 <code>error</code> 이벤트가 됩니다. 원인은 서버 로그에도 남습니다(<a href="#verify">확인하기</a>).</p>
 
           <h2 id="step-5">5단계(선택): RAG 붙이기</h2>
           <p>검색 단계는 문맥 타입에 등록된 검색기를 부르고, 없으면 기본 검색기를 씁니다. 기본 검색기는 요청 파라미터 <code>naturalLanguageQuery</code>로 벡터 저장소를 찾고(<code>contexa.rag.defaults.top-k</code> · <code>similarity-threshold</code>), 사용자 · 조직 · 테넌트 · 목적에 맞는 문서만 남깁니다. 많은 기능은 컨트롤러에서 이 파라미터만 넣어 주면 충분합니다. 파라미터가 없으면 질문 대신 문맥의 <code>toString()</code>(클래스 이름 · ID · 도메인 이름)으로 찾으므로 결과가 쓸모없습니다.</p>
@@ -372,7 +388,7 @@ public class ProductContextRetriever extends ContextRetriever {
 
     private final ContextRetrieverRegistry registry;
 
-    public ProductContextRetriever(VectorStore vectorStore,
+    public ProductContextRetriever(@Qualifier("contexaVectorStore") VectorStore vectorStore,
                                    ContexaRagProperties ragProperties,
                                    ContextRetrieverRegistry registry) {
         super(vectorStore, ragProperties);
@@ -406,11 +422,11 @@ public class ProductContextRetriever extends ContextRetriever {
 }</code></pre>
           <p>돌려준 <code>contextInfo</code>는 프롬프트 단계에서 템플릿의 <code>generateUserPrompt(request, contextInfo)</code>로 그대로 전달됩니다. 문자열 하나만 넘기는 <code>vectorOperations.searchSimilar(query)</code>는 5건 · 임계값 없이 찾으므로, 설정값을 쓰려면 위처럼 <code>SearchRequest</code>를 넘깁니다.</p>
           <div class="callout callout-warning">
-            <strong>내 검색기는 권한 거르기를 하지 않습니다.</strong> 등록한 문맥 타입의 요청은 기본 검색기의 사용자 · 조직 · 테넌트 · 목적 거르기와 프롬프트 주입 검사를 거치지 않습니다. 사용자마다 볼 수 있는 문서가 다르면 검색 조건에 직접 넣습니다. 또 이 검색기는 <code>VectorStore</code> 빈이 없으면 만들어지지 않아 애플리케이션이 시작하지 않습니다. 자세한 검색 규칙은 <a href="rag.html">RAG와 벡터 저장소</a>에 있습니다.
+            <strong>내 검색기는 권한 거르기를 하지 않습니다.</strong> 등록한 문맥 타입의 요청은 기본 검색기의 사용자 · 조직 · 테넌트 · 목적 거르기와 프롬프트 주입 검사를 거치지 않습니다. 사용자마다 볼 수 있는 문서가 다르면 검색 조건에 직접 넣습니다. 또 이 검색기는 CONTEXA 벡터 저장소(<code>contexaVectorStore</code>)를 쓰므로 <code>@Qualifier("contexaVectorStore")</code>를 붙여 주입합니다. 이 빈은 기본 주입 후보가 아니어서 한정자가 없으면 앱 자신의 <code>VectorStore</code>(CONTEXA 문서가 없는 저장소)가 들어오거나, 그것도 없으면 애플리케이션이 시작하지 않습니다. 자세한 검색 규칙은 <a href="rag.html">RAG와 벡터 저장소</a>에 있습니다.
           </div>
 
           <h2 id="step-6">6단계: 컨트롤러로 열기</h2>
-          <p>컨트롤러는 <code>AIRequest</code>를 만들어 <code>StandardStreamingService</code>에 넘깁니다. AI 처리 진입점은 빈이 선언된 타입 그대로 <code>AICoreOperations&lt;문맥&gt;</code>으로 주입받습니다(CONTEXA IAM도 같습니다).</p>
+          <p>컨트롤러는 <code>AIRequest</code>를 만들어 <code>StandardStreamingService</code>에 넘깁니다. AI 처리 진입점은 인터페이스 타입 <code>AICoreOperations&lt;문맥&gt;</code>으로 주입받습니다. 자동 설정이 빈을 이 인터페이스 타입으로 선언합니다(CONTEXA IAM도 같은 방식으로 주입받습니다).</p>
           <pre><code class="language-java">public record RecommendInput(String productId, String category, List&lt;String&gt; preferences) {
 }
 
@@ -477,7 +493,7 @@ public class MyAiApplication {
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>파라미터</th><th>뜻</th></tr></thead>
             <tbody>
-              <tr><td><code>preferredModel</code></td><td>쓸 모델 이름(<code>requestedModelId</code> · <code>runtimeModelId</code>도 같은 뜻). 찾지 못하면 경고 로그를 남기고 기본 채팅 모델로 갑니다.</td></tr>
+              <tr><td><code>preferredModel</code></td><td>쓸 모델 이름(<code>requestedModelId</code> · <code>runtimeModelId</code>도 같은 뜻). 찾지 못하면 기본 채팅 모델로 갑니다. 이때 로그는 디버그 수준이고, 결과 메타데이터의 <code>modelSelectionFallbackUsed</code>가 <code>true</code>가 됩니다.</td></tr>
               <tr><td><code>temperature</code> · <code>topP</code> · <code>seed</code></td><td>생성 옵션(숫자 또는 숫자 문자열)</td></tr>
               <tr><td><code>maxTokens</code></td><td>답의 최대 토큰 수</td></tr>
               <tr><td><code>disableRetries</code></td><td><code>true</code>면 일시 오류에도 다시 보내지 않습니다(기본은 백오프로 최대 4번)</td></tr>
@@ -498,17 +514,17 @@ Content-Type: application/json
 {"productId":"P-100","category":"laptop","preferences":["light","long battery"]}</code></pre>
           <ul>
             <li><strong>표준:</strong> <code>recommendations</code> · <code>confidence</code> · <code>reasoning</code>이 채워진 JSON이 오고, <code>metadata.selectedModelId</code>에 실제로 쓴 모델이 있습니다. 서버 로그에는 <code>[PIPELINE] STEP 1 completed: CONTEXT_RETRIEVAL</code>부터 <code>STEP 6 completed: POSTPROCESSING</code>까지 단계 로그가 남습니다.</li>
-            <li><strong>스트리밍:</strong> <code>/api/recommend/stream</code>에 같은 본문을 보내면(<code>curl -N</code>처럼 버퍼링 없이) 한국어 분석 문장 → <code>###GENERATING_RESULT###</code> → <code>###FINAL_RESPONSE###{…}</code> → <code>[DONE]</code> 순서로 옵니다. 자세한 모습은 <a href="streaming.html#streaming-protocol">스트리밍</a>에 있습니다.</li>
+            <li><strong>스트리밍:</strong> <code>/api/recommend/stream</code>에 같은 본문을 보내면(<code>curl -N</code>처럼 버퍼링 없이) 분석 문장(언어는 스트리밍 템플릿의 지시를 따름) → <code>###GENERATING_RESULT###</code> → <code>###FINAL_RESPONSE###{…}</code> → <code>[DONE]</code> 순서로 옵니다. 자세한 모습은 <a href="streaming.html#streaming-protocol">스트리밍</a>에 있습니다.</li>
           </ul>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>보이는 것</th><th>뜻</th><th>할 일</th></tr></thead>
             <tbody>
               <tr><td>응답 JSON의 <code>errorMessage</code>가 <code>Pipeline execution failed: …</code></td><td>파이프라인이 실패해 대체 응답이 왔습니다(기본 실패 정책). 예: <code>Template matching failed</code>는 템플릿 타입 이름에 맞는 템플릿 빈이 없다는 뜻</td><td>뒤의 원인 메시지를 봅니다. 오류로 받고 싶으면 <a href="pipeline.html#failures">실패 정책</a>을 바꿉니다</td></tr>
-              <tr><td><code>AIOperationException: Pipeline returned unexpected response type</code></td><td>Strategy 경로에서 파이프라인 밖의 오류(입력 검사 실패, Strategy · Lab 없음 등)</td><td>서버 로그의 <code>ASYNC strategy execution failed</code> 줄에서 원인을 봅니다</td></tr>
-              <tr><td><code>StrategicOperationConflictException</code>(<code>AIOperationException</code>): <code>Strategic operation conflict: …</code></td><td>똑같은 요청(같은 응답 타입 · 템플릿 · 진단 타입 · 질문 · 사용자 · 세션 · 조직 · 파라미터)이 이미 돌고 있음. 잠금은 단독 모드면 메모리, 분산 모드면 Redis에 있어 여러 인스턴스 사이에서도 걸립니다. 잠금은 실행마다 자기 소유자로 잡으므로 같은 서버의 요청끼리도 걸리고, 실행이 끝나거나 실패하거나 취소되면 풀립니다. 잠금을 쥔 서버가 멈추면 최대 30분 뒤에 풀립니다</td><td>문맥에 사용자 · 세션을 채우거나, 앞 요청이 끝난 뒤 다시 보냅니다</td></tr>
+              <tr><td><code>AIOperationException: Strategy execution failed: …</code></td><td>Strategy 경로의 실패(입력 검사 실패, Strategy · Lab 없음, 실패 정책이 <code>PROPAGATE_ERROR</code>일 때의 파이프라인 오류 등). 콜론 뒤에 감싸인 원인 메시지가 이어집니다</td><td>서버 로그의 <code>ASYNC strategy execution failed</code> 줄에서 원인을 봅니다</td></tr>
+              <tr><td><code>StrategicOperationConflictException</code>(<code>AIOperationException</code>): <code>Strategic operation conflict: …</code></td><td>똑같은 요청(같은 응답 타입 · 템플릿 · 진단 타입 · 질문 문장 · 문맥의 업무 타입 · 사용자 · 세션 · 조직 · 파라미터)이 이미 실행 중임. 잠금은 단독 모드면 메모리, 분산 모드면 Redis에 있어 여러 인스턴스 사이에서도 걸립니다. 잠금은 실행마다 자기 소유자로 잡으므로 같은 서버의 요청끼리도 걸리고, 실행이 끝나거나 실패하거나 취소되면 풀립니다. 잠금을 쥔 서버가 멈추면 최대 30분 뒤에 풀립니다</td><td>문맥에 사용자 · 세션을 채우거나, 앞 요청이 끝난 뒤 다시 보냅니다</td></tr>
               <tr><td><code>AIOperationException: Strategic lock unavailable: …</code></td><td>잠금 저장소(분산 모드의 Redis)가 답하지 못했습니다. 충돌이 아니며, 잠금 없이는 실행하지 않습니다</td><td>잠금 저장소 연결을 확인한 뒤 다시 보냅니다</td></tr>
               <tr><td>메타데이터 <code>modelSelectionFallbackUsed</code>가 <code>true</code></td><td>요청한 모델을 찾지 못해 기본 채팅 모델을 썼습니다</td><td>모델 이름과 연결 설정을 확인합니다</td></tr>
-              <tr><td>로거 <code>IAM_AUDIT</code>의 <code>AUDIT_START</code> 줄</td><td>Strategy 경로가 시작될 때 남는 감사 기록(완료 · 실패 기록은 없음)</td><td>호출이 들어왔는지 확인할 때 씁니다</td></tr>
+              <tr><td>로거 <code>IAM_AUDIT</code>의 <code>AUDIT_START</code> 줄</td><td>Strategy 경로가 시작될 때 남는 감사 기록(INFO). 실패하면 <code>AUDIT_FAILED</code>(ERROR)가, 실패가 보안 예외이거나 메시지에 <code>access denied</code>가 있으면 <code>SECURITY_EVENT</code>(ERROR)도 남습니다. 성공은 기록하지 않습니다</td><td>호출이 들어왔는지, 실패했는지 확인할 때 씁니다</td></tr>
             </tbody>
           </table></div>
 
@@ -577,7 +593,9 @@ Content-Type: application/json
               <tr><td><code>getSupportedType()</code></td><td>이 템플릿의 템플릿 타입</td></tr>
               <tr><td><code>generateDomainSystemPrompt(request, systemMetadata)</code></td><td>도메인 시스템 프롬프트. 형식 지시와 메타데이터는 CONTEXA가 붙입니다</td></tr>
               <tr><td><code>generateUserPrompt(request, contextInfo)</code></td><td>사용자 프롬프트. <code>contextInfo</code>는 검색 단계의 결과입니다</td></tr>
-              <tr><td><code>getJsonSchemaExample()</code> · <code>getOutputConverter()</code></td><td>스트리밍 템플릿의 결과 JSON 예 · (선택) 스키마 변환기. 변환기가 있으면 예를 쓰지 않습니다</td></tr>
+              <tr><td><code>streamingInstructions(request)</code> · <code>contextHeading(request)</code></td><td>스트리밍 템플릿의 추상 메서드. 답하는 방식 · JSON 규칙 · 스키마 앞 안내 문장(줄바꿈으로 끝남) · 시스템 메타데이터 앞 제목 줄</td></tr>
+              <tr><td><code>getJsonSchemaExample(request)</code> · <code>getOutputConverter()</code></td><td>스트리밍 템플릿의 결과 JSON 예(추상) · (선택) 스키마 변환기. 변환기가 있으면 예를 쓰지 않습니다</td></tr>
+              <tr><td><code>generateSystemPrompt(request, systemMetadata)</code></td><td>스트리밍 템플릿에서는 <code>final</code>. 위 메서드들의 결과를 <a href="#streaming-template">정해진 순서</a>로 이어 붙입니다</td></tr>
             </tbody>
           </table></div>
 
