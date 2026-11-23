@@ -14,6 +14,10 @@
             <p class="lead">앱 코드에 직접 쓰는 CONTEXA의 어노테이션 · 판정 값 · 모드 열거형 · 확장 인터페이스를 모았습니다. 하려는 일에 맞는 타입을 찾고, 언제 쓰는지와 OSS에서 실제로 무엇이 일어나는지 확인할 수 있습니다.</p>
           </div>
 
+          <div class="callout callout-info">
+            <strong>이 페이지의 용어.</strong> <strong>판정</strong>은 요청 하나에 대해 CONTEXA가 내리는 결정입니다(허용, 추가 인증, 검토 보류, 차단). <strong>판정 엔진</strong>은 AI 모델로 요청을 분석해 판정을 만들고 저장하는 CONTEXA의 구성 요소입니다. <strong>보호 메서드</strong>는 <code>@Protectable</code>이 붙은 메서드입니다. <strong>보안 모드</strong> · <strong>인증 소유권</strong> · <strong>운영 모드</strong>는 이름이 비슷하지만 서로 다른 설정이며 <a href="#modes">아래</a>에서 구분합니다.
+          </div>
+
           <h2 id="overview">개요</h2>
           <p>아래 타입은 모두 <code>contexa-common</code> 모듈에 있습니다(운영 모드 열거형만 <code>contexa-core</code>). 스타터(<code>spring-boot-starter-contexa</code>) 하나를 넣으면 함께 들어옵니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -22,7 +26,7 @@
               <tr><td>CONTEXA 켜기</td><td><code>@EnableAISecurity</code></td><td><a href="#enable">아래</a>, <a href="../autoconfigure/ai-security.html">CONTEXA 켜기와 보안 모드 고르기</a></td></tr>
               <tr><td>분석 · 적용할 메서드 정하기</td><td><code>@Protectable</code></td><td><a href="#protectable">아래</a>, <a href="../iam/protectable.html">@Protectable</a></td></tr>
               <tr><td>판정 결과 읽기</td><td><code>ZeroTrustAction</code></td><td><a href="#actions">아래</a>, <a href="../identity/zero-trust-filters.html">요청 시점 적용</a></td></tr>
-              <tr><td>로그인을 누가 맡을지, 판정을 적용할지 고르기</td><td><code>SecurityMode</code>(둘), <code>SecurityOwnershipMode</code></td><td><a href="#modes">아래</a></td></tr>
+              <tr><td>로그인을 누가 맡을지, 판정을 적용할지 고르기</td><td><code>SecurityMode</code>, <code>SecurityOwnershipMode</code>, <code>EnforcementMode</code></td><td><a href="#modes">아래</a></td></tr>
               <tr><td>앱의 로그인 정보를 CONTEXA에 알리기</td><td><code>AuthBridge</code>, <code>ContexaAuthBridge</code></td><td><a href="bridge.html">기존 로그인과 연결하기</a></td></tr>
               <tr><td>기동 진단에 내 검사 더하기 · 캐시 바꾸기</td><td><code>CapabilityContributor</code>, <code>ContexaCacheService</code></td><td><a href="#extension">아래</a></td></tr>
               <tr><td>자동 대응(SOAR) · 도구 승인 계약 보기</td><td><code>@SoarTool</code>, <code>SecurityActionEvent</code></td><td><a href="../soar/index.html">SOAR 확장점</a></td></tr>
@@ -30,7 +34,7 @@
           </table></div>
 
           <h2 id="enable">CONTEXA 켜기: <code>@EnableAISecurity</code></h2>
-          <p>메인 클래스에 붙여 CONTEXA를 켜는 어노테이션입니다(패키지 <code>io.contexa.contexacommon.annotation</code>). 이 어노테이션은 선택기 <code>AiSecurityImportSelector</code>를 가져오고(<code>@Import</code>), 선택기가 CONTEXA 구성을 불러옵니다. 속성 없이 쓰면 보안 모드는 <code>SANDBOX</code>(앱이 로그인을 맡음)입니다.</p>
+          <p>메인 클래스에 붙여 CONTEXA를 켜는 어노테이션입니다(패키지 <code>io.contexa.contexacommon.annotation</code>). 이 어노테이션은 선택기(<code>AiSecurityImportSelector</code>)를 가져오고(<code>@Import</code>), Spring이 설정 클래스를 읽을 때 선택기가 CONTEXA 구성을 불러옵니다. 속성 없이 쓰면 보안 모드는 <code>SANDBOX</code>(앱이 로그인을 맡음)입니다.</p>
           <pre><code class="language-java">@EnableAISecurity
 @SpringBootApplication
 public class Application {
@@ -39,22 +43,23 @@ public class Application {
     }
 }</code></pre>
           <ul>
-            <li><strong>켜졌다는 표지입니다.</strong> 이 어노테이션이 설정 키들을 담은 속성 소스 <code>contexaAiSecurityAnnotation</code>을 넣고, CONTEXA는 그 속성 소스가 있을 때만 켜진 것으로 봅니다(앱 설정에 같은 키를 적어도 켜지지 않음). 어노테이션이 없으면 스타터를 넣었어도 CONTEXA 자동설정이 모두 제외됩니다.</li>
-            <li><strong>전용 DB가 필요합니다.</strong> <code>contexa.datasource.url</code>이 비어 있으면 기동이 멈춥니다.</li>
+            <li><strong>켜졌다는 표지입니다.</strong> 이 어노테이션은 설정 키들을 담은 묶음(속성 소스) <code>contexaAiSecurityAnnotation</code>을 Spring 설정(<code>Environment</code>)에 넣습니다. CONTEXA는 이 묶음이 있을 때만 켜진 것으로 봅니다. 앱 설정(YAML 등)에 같은 키를 적어도 켜지지 않습니다. 어노테이션이 없으면 스타터를 넣었어도 CONTEXA 자동설정이 모두 제외됩니다.</li>
+            <li><strong>전용 DB가 필요합니다.</strong> <code>contexa.datasource.url</code>이 비어 있으면 기동이 거부됩니다. 주소가 있어도 DB가 응답하지 않으면, 앱이 로그인을 맡는 방식(<code>HOST_OWNED</code>)에서는 ERROR 로그를 남기고 CONTEXA 없이 앱만 기동하고, CONTEXA가 로그인을 맡는 방식(<code>CONTEXA_OWNED</code>)에서는 기동에 실패합니다.</li>
+            <li><strong>그 밖의 기동 조건</strong>(Spring Boot 3.x, 서블릿 웹 스택, 앱이 직접 선언하는 Spring Security, AOT 처리 아님)과 어기면 일어나는 일은 <a href="../autoconfigure/ai-security.html#prepare">CONTEXA 켜기와 보안 모드 고르기</a>에 있습니다.</li>
             <li>속성(<code>mode</code> · <code>authObjectLocation</code> · <code>authObjectAttribute</code> · <code>authObjectType</code>)과 켜면 일어나는 일은 <a href="../autoconfigure/ai-security.html">CONTEXA 켜기와 보안 모드 고르기</a>에 있습니다.</li>
           </ul>
 
           <h2 id="protectable">분석 · 적용할 메서드 정하기: <code>@Protectable</code></h2>
-          <p>이 어노테이션이 붙은 메서드를 부르면 CONTEXA가 호출을 가로채(<code>AuthorizationManagerMethodInterceptor</code>) 메서드 인가 정책을 평가하고(<code>ProtectableMethodAuthorizationManager</code>), 판정 엔진이 그 호출을 분석합니다. 판정의 대상이 되는 단위가 이 <strong>보호 메서드</strong>입니다.</p>
+          <p>이 어노테이션이 붙은 메서드를 부르면 CONTEXA가 그 호출을 먼저 받아(<code>AuthorizationManagerMethodInterceptor</code>) 메서드 인가 정책을 평가하고(<code>ProtectableMethodAuthorizationManager</code>), 판정 엔진이 그 호출을 분석합니다. 판정의 대상이 되는 단위가 이 <strong>보호 메서드</strong>입니다.</p>
           <ul>
-            <li><strong>붙이는 곳:</strong> Spring 빈의 메서드 또는 클래스. 클래스에 붙이면 그 클래스의 메서드 모두가 대상입니다. 컨트롤러가 아니어도 됩니다.</li>
-            <li><strong>로그인이 필요합니다(<code>SHADOW</code> · <code>ENFORCE</code>, 기본은 <code>ENFORCE</code>):</strong> 호출 시점에 <code>SecurityContext</code>에 인증된 <code>Authentication</code>이 없거나 익명이면 호출이 거부됩니다. <code>DISABLED</code> · <code>OBSERVE</code>에서는 거부하지 않고 앱이 만든 그대로 진행합니다.</li>
-            <li><strong>분석은 운영 모드가 <code>SHADOW</code> · <code>ENFORCE</code>일 때만:</strong> <code>DISABLED</code> · <code>OBSERVE</code>에서는 인가 정책만 평가하고 분석 · 사건 발행을 하지 않습니다.</li>
+            <li><strong>붙이는 곳:</strong> Spring 빈의 메서드 또는 클래스. 클래스에 붙이면 그 클래스의 메서드 모두가 대상입니다. 컨트롤러가 아니어도 됩니다. 앱이 시작될 때 CONTEXA가 이 메서드들을 읽고, 관리자가 자원을 새로 고치면 관리 화면의 자원 목록(<code>ctxa_managed_resource</code> 표)에 올라갑니다. 컨트롤러의 메서드는 URL로 올라가므로 이 목록에서 빠집니다.</li>
+            <li><strong>로그인이 필요합니다(<code>SHADOW</code> · <code>ENFORCE</code>, 기본은 <code>ENFORCE</code>):</strong> 요청 안에서 호출했는데 <code>SecurityContext</code>에 인증된 <code>Authentication</code>이 없거나 익명이면 호출이 거부됩니다. 요청도 사용자도 없는 스레드(예약 작업, 보안 문맥을 넘겨받지 않는 비동기 메서드)에서 부른 호출은 판정할 사용자가 없으므로 거부하지 않고 실행하며, 사용자 없이 실행했다는 사실만 기록합니다. 사용자를 넘겨받은 스레드에서는 요청 안에서와 같이 판정합니다. <code>DISABLED</code>(옛 이름 <code>OBSERVE</code> 포함)에서는 거부하지 않고 앱이 만든 그대로 진행합니다.</li>
+            <li><strong>분석은 운영 모드가 <code>SHADOW</code> · <code>ENFORCE</code>일 때만:</strong> <code>DISABLED</code>에서는 인가 정책만 평가하고 분석 · 사건 발행을 하지 않습니다.</li>
           </ul>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>기본(나중에 판정)과 즉시 판정</strong>둘 다 같은 판정 엔진을 씁니다. 다른 것은 판정을 기다리느냐입니다.</figcaption>
             <div class="dg-compare">
-              <div class="dg-side"><p class="dg-side-title">기본: <code>@Protectable</code></p><ul><li>이 사용자에게 저장된 차단 · 추가 인증 · 검토 보류가 있으면 실행 전에 거부(<code>SHADOW</code>에서는 기록만)</li><li>메서드를 실행하고 바로 응답</li><li>실행이 끝나면 분석 사건을 내고, 판정은 뒤에서 만들어짐</li><li>그 판정은 같은 사용자의 다음 요청부터 적용</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">기본: <code>@Protectable</code></p><ul><li>이 사용자에게 저장된 차단 · 추가 인증 · 검토 보류가 있으면 실행 전에 거부(<code>SHADOW</code>에서는 기록만)</li><li>세션 · IP · 브라우저 가운데 하나가 마지막 판정 때와 달라진 사람의 호출은 새 판정이 나올 때까지 기다림</li><li>그 밖에는 메서드를 실행하고 바로 응답</li><li>실행이 끝나면 분석 사건을 내고, 판정은 뒤에서 만들어짐</li><li>그 판정은 같은 사용자의 다음 요청부터 적용</li></ul></div>
               <div class="dg-side"><p class="dg-side-title">즉시 판정: <code>@Protectable(sync = true)</code></p><ul><li>실행 전에 그 자리에서 판정</li><li>허용이면 실행</li><li>허용이 아니면 <code>ENFORCE</code>에서 거부</li><li><code>SHADOW</code>에서는 기록만 하고 실행</li></ul></div>
             </div>
           </figure>
@@ -65,13 +70,13 @@ public class Application {
             <tbody>
               <tr><td><code>sync</code></td><td><code>false</code></td><td><code>true</code>면 그 요청 안에서 즉시 판정</td><td>판정이 나오기 전에 실행되면 안 되는 메서드(대량 반출 · 권한 변경 등). 응답이 판정만큼 늦어집니다.</td></tr>
               <tr><td><code>ownerField</code></td><td><code>""</code></td><td>정책 식 <code>hasPermission(대상, 권한)</code>이 소유자를 검사할 때 대상 객체에서 읽을 필드 · 게터 이름. 그 값이 로그인 사용자 이름과 같아야 허용. 관리자는 검사를 건너뜀. 비우면 검사 없음</td><td>행 단위 소유권 검사가 필요할 때(<a href="../iam/protectable.html">@Protectable</a>)</td></tr>
-              <tr><td><code>category</code></td><td><code>""</code></td><td>자원의 업무 범주(예: <code>REPORT</code>). 역할 범위 · 위임 범위를 이 말로 비교</td><td>위임 범위와 비교해야 할 때</td></tr>
+              <tr><td><code>category</code></td><td><code>""</code></td><td>자원의 업무 범주(예: <code>REPORT</code>). 역할 범위 · 위임 범위를 이 말로 비교. 민감도를 뜻하는 단어만으로 된 값은 범주로 보지 않음</td><td>위임 범위와 비교해야 할 때</td></tr>
               <tr><td><code>sensitivity</code></td><td><code>""</code></td><td>민감도(<code>PUBLIC</code> · <code>INTERNAL</code> · <code>CONFIDENTIAL</code> · <code>RESTRICTED</code> 등). 앱이 요청에 준 값이 우선</td><td>자원의 민감도를 판정에 알릴 때</td></tr>
               <tr><td><code>actions</code></td><td><code>{}</code></td><td>메서드가 하는 작업 계열(<code>READ</code> · <code>EXPORT</code> 등). 하나만 적으면, 앱이 요청에 다른 값을 주지 않는 한 그 요청의 작업 계열이 됨</td><td>읽기와 반출을 구분해 판정받고 싶을 때</td></tr>
-              <tr><td><code>importance</code></td><td><code>UNSPECIFIED</code></td><td><code>SENSITIVE</code>: 요청이 낮출 수 없고, 자원마다 따로 판정하며, 실행 직전에 걸린 제한을 다시 확인. <code>NON_SENSITIVE</code>: 첫 판정이 나오는 동안 몇 건이 지나갈 수 있는 후보(요청에 준 민감도가 올릴 수 있음). <code>UNSPECIFIED</code>: 선언 없음</td><td>자원의 중요도를 앱이 직접 정할 때(<code>ResourceImportance</code>)</td></tr>
+              <tr><td><code>importance</code></td><td><code>UNSPECIFIED</code></td><td>메서드가 읽는지 쓰는지와 상관없이 앱이 자원에 직접 선언하는 중요도입니다. <code>UNSPECIFIED</code>(기본): 선언 없음. <code>NON_SENSITIVE</code>: 민감하지 않다는 선언으로, 첫 판정이 나오는 동안 몇 건이 지나갈 수 있는 후보가 됩니다(요청에 준 민감도가 올릴 수 있음). <code>SENSITIVE</code>: 민감하다는 선언으로, 요청이 낮출 수 없고, 자원마다 따로 판정하며, 실행 직전에 이미 적용 중인 제한을 다시 확인합니다.</td><td>자원의 중요도를 앱이 직접 정할 때(<code>ResourceImportance</code>)</td></tr>
               <tr><td><code>privileged</code></td><td><code>false</code></td><td>특권 메서드라는 선언(<code>true</code>일 때만 뜻이 있음)</td><td>관리 · 권한 변경 메서드</td></tr>
               <tr><td><code>exportSensitive</code></td><td><code>false</code></td><td>민감 데이터를 내보내는 메서드라는 선언(<code>true</code>일 때만 뜻이 있음)</td><td>내려받기 · 반출 메서드</td></tr>
-              <tr><td><code>verificationRequired</code></td><td><code>true</code></td><td>프롬프트 품질 인증 관문(<code>ProtectableResourceCertificationGate</code>)을 거칠지</td><td><strong>OSS만으로는 효과가 없습니다.</strong> 관문 구현이 OSS에 없고, 구현 빈이 있을 때만 적용됩니다.</td></tr>
+              <tr><td><code>verificationRequired</code></td><td><code>true</code></td><td>프롬프트 품질 인증 관문(<code>ProtectableResourceCertificationGate</code>)을 거칠지</td><td>인증 기본 요소나 상태 점검처럼 관문을 거치면 안 되는 예외에만 <code>false</code>. <strong>OSS만으로는 효과가 없습니다.</strong> 관문 구현이 OSS에 없고, 구현 빈이 있을 때만 적용됩니다.</td></tr>
             </tbody>
           </table></div>
           <pre><code class="language-java">import io.contexa.contexacommon.annotation.Protectable;
@@ -89,40 +94,41 @@ public class ReportService {
 }</code></pre>
 
           <h2 id="actions">판정 값: <code>ZeroTrustAction</code></h2>
-          <p>판정 엔진이 만들어 저장하는 값입니다. 값마다 HTTP 상태 · 유지 시간 · 붙는 권한이 코드에 정해져 있습니다.</p>
+          <p>판정 엔진이 만들어 저장하는 값입니다. 값마다 HTTP 상태, 유지 시간(저장된 판정이 효력을 갖는 시간), 권한(저장된 판정을 적용할 때 쓰는 역할 이름)의 기본값이 코드에 정해져 있습니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>값</th><th>쉬운 말</th><th>HTTP 상태 값</th><th>유지 시간</th><th>붙는 권한</th></tr></thead>
+            <thead><tr><th>값</th><th>쉬운 말</th><th>HTTP 상태 값</th><th>유지 시간</th><th>권한(역할 이름)</th></tr></thead>
             <tbody>
-              <tr><td><code>ALLOW</code></td><td>허용</td><td>200</td><td>15분</td><td>없음</td></tr>
+              <tr><td><code>ALLOW</code></td><td>허용</td><td>200</td><td>15분(기본, <code>contexa.security.zerotrust.allow-validity</code>로 바꿈)</td><td>없음</td></tr>
               <tr><td><code>CHALLENGE</code></td><td>추가 인증</td><td>401</td><td>1,800초(30분)</td><td><code>ROLE_MFA_REQUIRED</code></td></tr>
               <tr><td><code>ESCALATE</code></td><td>검토 보류(분석 미완료)</td><td>423</td><td>300초(5분)</td><td><code>ROLE_REVIEW_REQUIRED</code></td></tr>
               <tr><td><code>BLOCK</code></td><td>차단</td><td>403</td><td>기한 없음(해제할 때까지)</td><td><code>ROLE_BLOCKED</code></td></tr>
               <tr><td><code>PENDING_ANALYSIS</code></td><td>분석 대기(저장된 판정 없음)</td><td>503</td><td>0</td><td><code>ROLE_PENDING_ANALYSIS</code></td></tr>
             </tbody>
           </table></div>
-          <p>문자열에서 값을 읽을 때(<code>ZeroTrustAction.fromString</code>)는 대소문자를 가리지 않고 한 글자 약자(<code>A</code> · <code>B</code> · <code>C</code> · <code>E</code>)도 받습니다. 값이 없으면 분석 대기, 알 수 없는 문자열은 검토 보류로 읽습니다. 저장된 판정이 다음 요청에서 어떻게 적용되는지는 <a href="../identity/zero-trust-filters.html">요청 시점 적용</a>, 어디에 저장되는지는 <a href="../architecture/decision-engine.html#storage">판정 엔진</a>에 있습니다.</p>
+          <p>문자열에서 값을 읽을 때(<code>ZeroTrustAction.fromString</code>)는 앞뒤 공백과 대소문자를 무시하고, 한 글자 약자(<code>A</code> · <code>B</code> · <code>C</code> · <code>E</code>)도 받습니다. 값이 <code>null</code>이면 분석 대기, 알 수 없는 문자열(빈 문자열과 <code>UNBLOCK</code> 같은 값 포함)은 검토 보류로 읽습니다. 저장된 판정이 다음 요청에서 어떻게 적용되는지는 <a href="../identity/zero-trust-filters.html">요청 시점 적용</a>, 어디에 저장되는지는 <a href="../architecture/decision-engine.html#storage">판정 엔진</a>에 있습니다.</p>
 
-          <h2 id="modes">이름이 비슷한 모드 셋</h2>
-          <p><code>SecurityMode</code>라는 이름의 열거형이 두 패키지에 따로 있습니다. import할 때 패키지를 확인합니다.</p>
+          <h2 id="modes">모드 셋: 보안 모드 · 인증 소유권 · 운영 모드</h2>
+          <p>세 모드는 서로 다른 것을 정합니다. 이름이 비슷해 헷갈리기 쉬우므로 아래 표로 구분합니다. 보안 모드의 열거형 이름은 <code>SecurityMode</code>이고, 운영 모드의 열거형 이름은 <code>EnforcementMode</code>입니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>쉬운 말</th><th>타입(패키지)</th><th>값</th><th>정하는 곳</th></tr></thead>
             <tbody>
-              <tr><td>보안 모드</td><td><code>SecurityMode</code><br>(<code>io.contexa.contexacommon.security.bridge</code>)</td><td><code>SANDBOX</code>(기본) · <code>FULL</code></td><td><code>@EnableAISecurity(mode = ...)</code></td></tr>
-              <tr><td>인증 소유권</td><td><code>SecurityOwnershipMode</code><br>(<code>io.contexa.contexacommon.security.bridge</code>)</td><td><code>HOST_OWNED</code> · <code>CONTEXA_OWNED</code></td><td><code>contexa.bridge.ownership</code>(적지 않으면 <code>SANDBOX</code> → <code>HOST_OWNED</code>, <code>FULL</code> → <code>CONTEXA_OWNED</code>)</td></tr>
-              <tr><td>운영 모드</td><td><code>SecurityZeroTrustProperties.SecurityMode</code><br>(<code>io.contexa.contexacore.properties</code>)</td><td><code>DISABLED</code> · <code>OBSERVE</code> · <code>SHADOW</code> · <code>ENFORCE</code>(기본)</td><td><code>contexa.security.zerotrust.mode</code> 또는 관리 화면 시스템 설정</td></tr>
+              <tr><td>보안 모드</td><td><code>SecurityMode</code><br>(<code>io.contexa.contexacommon.security.bridge</code>)</td><td><code>SANDBOX</code>(기본) · <code>FULL</code></td><td><code>@EnableAISecurity(mode = ...)</code>. 설정 <code>contexa.ai.security.mode</code>를 적으면 그 값이 어노테이션보다 우선</td></tr>
+              <tr><td>인증 소유권</td><td><code>SecurityOwnershipMode</code><br>(<code>io.contexa.contexacommon.security.bridge</code>)</td><td><code>HOST_OWNED</code> · <code>CONTEXA_OWNED</code></td><td><code>contexa.bridge.ownership</code>(적지 않으면 <code>SANDBOX</code> → <code>HOST_OWNED</code>, <code>FULL</code> → <code>CONTEXA_OWNED</code>). 적으면 보안 모드와 맞아야 하며, 어긋나면 기동을 거부함</td></tr>
+              <tr><td>운영 모드</td><td><code>SecurityZeroTrustProperties.EnforcementMode</code><br>(<code>io.contexa.contexacore.properties</code>)</td><td><code>DISABLED</code> · <code>SHADOW</code> · <code>ENFORCE</code>(기본). 옛 이름 <code>OBSERVE</code>는 <code>DISABLED</code>로 읽힘</td><td><code>contexa.security.zerotrust.mode</code> 또는 관리 화면 시스템 설정</td></tr>
             </tbody>
           </table></div>
-          <p><code>HOST_OWNED</code>에서는 CONTEXA가 인증 체인을 만들지 않으므로 앱이 자기 Spring Security 설정을 선언해야 기존 동작이 유지됩니다. 선언이 없으면 Spring Boot 기본 보안(모든 요청에 인증 필요)이 걸리고, 앱 사용자도 없으면 기동이 거부됩니다. 세 모드가 각각 무엇을 바꾸는지와 고르는 방법은 <a href="../autoconfigure/ai-security.html#modes">CONTEXA 켜기와 보안 모드 고르기</a>에 있습니다. 인증 객체 위치 힌트 <code>AuthObjectLocation</code>(<code>AUTO</code> · <code>SESSION</code> · <code>REQUEST_ATTRIBUTE</code> · <code>HEADER</code>)도 같은 <code>io.contexa.contexacommon.security.bridge</code> 패키지에 있습니다.</p>
+          <p>운영 모드의 값은 다음을 뜻합니다. <code>DISABLED</code>는 요청을 분석하지 않습니다. <code>SHADOW</code>는 분석해 판정을 기록하지만 적용하지 않습니다. <code>ENFORCE</code>는 분석한 판정을 저장해 다음 요청부터 적용합니다. <code>OBSERVE</code>로 적으면 <code>DISABLED</code>로 읽히고, 기동할 때 경고가 한 번 남습니다.</p>
+          <p><code>HOST_OWNED</code>에서는 CONTEXA가 인증 체인을 만들지 않으므로 앱이 자기 Spring Security 설정을 선언해야 기존 동작이 유지됩니다. 선언이 없으면 Spring Boot 기본 보안(모든 요청에 인증 필요)이 걸리고, 앱 사용자(<code>UserDetailsService</code> · <code>AuthenticationProvider</code> · <code>AuthenticationManager</code> 빈)도 없으면 기동이 거부됩니다. 세 모드가 각각 무엇을 바꾸는지와 고르는 방법은 <a href="../autoconfigure/ai-security.html#modes">CONTEXA 켜기와 보안 모드 고르기</a>에 있습니다. 인증 객체 위치 힌트 <code>AuthObjectLocation</code>(<code>AUTO</code> · <code>SESSION</code> · <code>REQUEST_ATTRIBUTE</code> · <code>HEADER</code>)도 같은 <code>io.contexa.contexacommon.security.bridge</code> 패키지에 있습니다.</p>
 
           <h2 id="extension">확장 인터페이스</h2>
-          <p>아래 인터페이스의 빈을 앱이 선언하면 CONTEXA의 기본 구현이 물러나거나, 기본 구현에 더해집니다.</p>
+          <p>아래 인터페이스의 빈을 앱이 선언하면 CONTEXA의 기본 구현을 대신하거나(<code>AuthBridge</code> · <code>ContexaCacheService</code>), 기본 구현에 더해집니다(<code>CapabilityContributor</code>).</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>인터페이스</th><th>언제 구현하나</th><th>빈을 두면</th></tr></thead>
             <tbody>
               <tr><td><code>AuthBridge</code></td><td>앱만의 방법으로 요청에서 로그인 사용자를 꺼낼 때</td><td>기본 복합 브리지(세션 · 요청 속성 · 헤더)를 대신합니다(<a href="bridge.html#extension">인증 브리지 확장점</a>).</td></tr>
               <tr><td><code>ContexaAuthBridge</code>(정적 메서드 <code>handoff</code>)</td><td>로그인 코드에서 사용자를 CONTEXA에 직접 알릴 때</td><td>구현하지 않고 부릅니다. CONTEXA가 켜져 있지 않으면 <code>IllegalStateException</code>(<a href="bridge.html#handoff">직접 넘기기</a>).</td></tr>
-              <tr><td><code>CapabilityContributor</code></td><td>기동 기능 진단에 앱의 검사를 더할 때</td><td>기본 검사기와 함께 모든 기여자의 결과가 모입니다(<a href="../autoconfigure/overview.html#diagnostics">기동 진단</a>).</td></tr>
-              <tr><td><code>ContexaCacheService</code></td><td>CONTEXA 내부 캐시 구현을 바꿀 때</td><td>기본 구현(단독 모드는 메모리, 분산 모드는 Redis)이 물러납니다.</td></tr>
+              <tr><td><code>CapabilityContributor</code></td><td>기동 기능 진단에 앱의 검사를 더할 때</td><td>기본 검사기와 함께 모든 기여자의 결과가 모입니다(<a href="../autoconfigure/overview.html#diagnostics">기동 진단</a>). 구현할 메서드는 세 개입니다: <code>contributorName()</code>(기여자 이름), <code>capabilities()</code>(검사하는 기능 목록), <code>check()</code>(검사 결과).</td></tr>
+              <tr><td><code>ContexaCacheService</code></td><td>CONTEXA 내부 캐시 구현을 바꿀 때</td><td>기본 구현(단독 모드는 메모리, 분산 모드는 Redis) 대신 내 구현을 씁니다. 값은 메모리에서도 Redis에서도 JSON으로 저장되므로, 캐시에 넣는 타입은 비밀 값을 JSON에서 뺍니다(<code>@JsonIgnore</code>).</td></tr>
             </tbody>
           </table></div>
           <p>판정 저장소 · 사건 발행 · 데이터 빈처럼 자동설정이 만드는 빈을 바꾸는 방법은 <a href="../autoconfigure/overview.html#replace">자동설정: 빈 바꿔 끼우기</a>에 있습니다.</p>
@@ -133,7 +139,7 @@ public class ReportService {
             <div class="dg-layers">
               <div class="dg-layer dg-host"><span class="dg-layer-name">spring-boot-starter-contexa<small>의존성 묶음</small></span><div class="dg-chips"><span class="dg-chip">아래 다섯 모듈</span><span class="dg-chip">OAuth2 리소스 서버 · 클라이언트 · 인가 서버</span></div></div>
               <div class="dg-layer"><span class="dg-layer-name">contexa-autoconfigure<small>자동설정</small></span><div class="dg-chips"><span class="dg-chip">켜졌는지 판정</span><span class="dg-chip">조건부 빈</span><span class="dg-chip">기동 진단</span></div></div>
-              <div class="dg-layer"><span class="dg-layer-name">contexa-identity · contexa-iam<small>인증 · 인가</small></span><div class="dg-chips"><span class="dg-chip">인증 DSL · MFA</span><span class="dg-chip">요청 시점 필터</span><span class="dg-chip">인가 정책</span><span class="dg-chip"><code>@Protectable</code> 가로채기</span><span class="dg-chip">관리 콘솔</span></div></div>
+              <div class="dg-layer"><span class="dg-layer-name">contexa-identity · contexa-iam<small>인증 · 인가</small></span><div class="dg-chips"><span class="dg-chip">인증 DSL · MFA</span><span class="dg-chip">요청 시점 필터</span><span class="dg-chip">인가 정책</span><span class="dg-chip"><code>@Protectable</code> 호출 평가</span><span class="dg-chip">관리 콘솔</span></div></div>
               <div class="dg-layer"><span class="dg-layer-name">contexa-core<small>판정 엔진 · AI</small></span><div class="dg-chips"><span class="dg-chip">비동기 판정</span><span class="dg-chip">LLM · RAG</span><span class="dg-chip">봉인 증거</span></div></div>
               <div class="dg-layer dg-store"><span class="dg-layer-name">contexa-common<small>공통 계약</small></span><div class="dg-chips"><span class="dg-chip">어노테이션</span><span class="dg-chip">판정 값</span><span class="dg-chip">인증 브리지</span><span class="dg-chip">캐시</span><span class="dg-chip">기능 진단 계약</span><span class="dg-chip">SOAR · MCP 계약</span></div></div>
             </div>
