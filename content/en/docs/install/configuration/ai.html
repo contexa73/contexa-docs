@@ -12,13 +12,21 @@
               <span class="badge badge-secondary">contexa-autoconfigure</span>
             </div>
             <h1>Connecting AI Models</h1>
-            <p class="lead">How to connect the chat and embedding models CONTEXA uses for decisions and for its AI pipeline. You connect the providers, choose the primary chat model and the Layer 1 and Layer 2 models, and set up the embedding model, the vector store and the search over past records.</p>
+          <p class="lead">CONTEXA uses AI models to make a decision for each protected request. This page explains how to connect and choose those models. It covers the chat model (the model that makes decisions), the embedding model (the model that finds similar past decision records), the vector store, and the concurrency limits for model servers. You must set the provider connection and the address of the dedicated database; every other setting works with its default.</p>
           </div>
 
-          <h2 id="overview">At a glance</h2>
+          <h2 id="overview">What this page sets</h2>
           <p>CONTEXA does not call a model provider by itself. It gathers the Spring AI chat and embedding model beans of the application, names them, and at startup picks <strong>one primary chat model</strong> and <strong>one embedding model</strong>. A decision call uses the model set for its layer, or the primary chat model when none is set. This page centres on the settings; how a model is resolved is described in detail in the <a href="../../reference/core/model-provider.html">Model Provider</a> reference (<a href="../../reference/core/model-provider.html#request-order">how each request gets its model</a>).</p>
+          <p>The terms used on this page:</p>
+          <ul>
+            <li><strong>Provider:</strong> the party that supplies a model. This page covers <code>openai</code>, <code>anthropic</code> and <code>ollama</code>.</li>
+            <li><strong>Model bean:</strong> a chat model or embedding model object that Spring AI creates in the application.</li>
+            <li><strong>Chat model:</strong> the AI model that reads the facts of a request and answers with a decision: ALLOW, step-up authentication (CHALLENGE), held for review (ESCALATE) or BLOCK.</li>
+            <li><strong>Embedding model:</strong> the AI model that turns a document into an array of numbers (a vector). It is used to search for similar past decision records.</li>
+            <li><strong>Layer 1 and Layer 2 (layers):</strong> the two stages that make a decision. Layer 1 decides the request. Only a request that gets ESCALATE (an answer meaning that the facts alone cannot settle the decision) goes to Layer 2, which decides it again. This page also calls the two stages layers.</li>
+          </ul>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>How a model is connected</strong>Steps 1 to 3 happen once at startup; step 4 on every decision call.</figcaption>
+            <figcaption class="dg-caption"><strong>The order in which a model is connected</strong>Steps 1 to 3 happen once at startup; step 4 on every decision call.</figcaption>
             <ol class="dg-flow">
               <li class="dg-node dg-model"><span class="dg-node-tag">1 · Provider</span><span class="dg-node-title">Spring AI creates the model beans</span><span class="dg-node-desc">The Spring AI starters in the application and the <code>spring.ai.*</code> keys create the OpenAI, Anthropic and Ollama model beans</span></li>
               <li class="dg-node"><span class="dg-node-tag">2 · Catalog</span><span class="dg-node-title">Every model bean is named</span><span class="dg-node-desc">Each is listed so it can be found by bean name, provider and model name. <code>contexa.llm.bindings</code> corrects an entry or adds aliases</span></li>
@@ -27,11 +35,32 @@
             </ol>
           </figure>
           <div class="callout callout-info">
-            <strong>The application starts without any model.</strong> With no chat model CONTEXA starts but cannot make decisions, and users stay at pending analysis. The capability check in the startup log (<code>[ContexaCapability] llm-runtime</code> and <code>embedding-runtime</code>) names the missing model beans.
+            <strong>The application starts without a chat model.</strong> With no chat model at all, CONTEXA starts but cannot make decisions, and protected requests stay in pending analysis (PENDING_ANALYSIS). The capability check in the startup log (<code>[ContexaCapability] llm-runtime</code> and <code>embedding-runtime</code>) names the model beans that were not created. In a CONTEXA-owned application (<code>FAIL_FAST</code>) this check stops startup (<a href="../installation-guide.html#capability">Capability check</a>). How to read the log is in <a href="#startup-checks">Startup log messages and what to do</a>.
           </div>
+          <h3 id="what-to-set">What to set first, and what stays at its default</h3>
+          <p>Three things must be set. Everything else works with its default, and you change it only in the situations listed.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Group</th><th>What to set</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td>Required</td><td>The chat model provider</td><td>Add the provider's Spring AI starter and its API key to the application. With no chat model the application starts, but no decision is made (<a href="#providers">Connecting a provider</a>).</td></tr>
+              <tr><td>Required</td><td>The embedding model provider</td><td><code>contexa.llm.selection.embedding.priority</code> (default <code>openai</code>) sets it, and it is <code>openai</code> or <code>ollama</code>. To use Ollama, set it to <code>ollama</code>. Anthropic has only a chat model key, so with Anthropic you also connect the embedding model of OpenAI or Ollama (<a href="#embedding">Embedding model and vector dimension</a>).</td></tr>
+              <tr><td>Required</td><td>The dedicated database and the vector store</td><td>You need the address of the dedicated CONTEXA database (<code>contexa.datasource.url</code>), the vector store dependency and the <code>vector</code> extension in the database (<a href="../installation-guide.html">Installation Guide</a>, <a href="#vector-store">Vector store</a>).</td></tr>
+              <tr><td>Change when needed</td><td>The primary chat model</td><td>Change it when you connect more than one provider and must choose which one is used (<a href="#default-chat-model">Choosing the primary chat model</a>).</td></tr>
+              <tr><td>Change when needed</td><td>Layer 1 and Layer 2 models</td><td>Change them when the two layers should use different models (<a href="#layer-models">Layer 1 and Layer 2 models</a>, <a href="#bindings">Naming models</a>).</td></tr>
+              <tr><td>Change when needed</td><td>A self-hosted server</td><td>Change them when you use Ollama, or when the number of requests your model server runs at once differs from the defaults (2 for self-hosted, 16 for remote) (<a href="#ollama">Using a local Ollama</a>, <a href="#model-server-gate">How many calls a model server takes</a>).</td></tr>
+              <tr><td>Change when needed</td><td>Vector dimension and schema</td><td>Change them when you use an embedding model CONTEXA does not know, when the dimension is above 2000, or when migrations manage the table (<a href="#dimensions">How the dimension is decided</a>, <a href="#vector-store">Vector store</a>).</td></tr>
+              <tr><td>Rarely changed</td><td>Store retry, context search defaults, per-provider call options, per-model handling tables, advisors and streaming</td><td>Leave them at their defaults (<a href="#vector-retry">Retrying failed stores</a>, <a href="#rag">Past records and context search</a>, <a href="#provider-options">Per-provider options of decision calls</a>, <a href="#model-capabilities">Per-model handling tables</a>, <a href="#advisor-streaming">Advisors and streaming</a>).</td></tr>
+            </tbody>
+          </table></div>
 
           <h2 id="providers">Connecting a provider</h2>
-          <p>The CONTEXA starter brings no model provider. Add the Spring AI starter of each provider you use to the application's dependencies, and put the API key and model name in the Spring AI settings (<code>spring.ai.*</code>). CONTEXA has no provider keys such as <code>contexa.llm.openai.*</code>. CONTEXA is built with Spring AI 1.1.8.</p>
+          <p>You connect a provider through the application's Spring AI settings. The CONTEXA starter brings no model provider, and CONTEXA has no provider keys such as <code>contexa.llm.openai.*</code>. CONTEXA is built with Spring AI 1.1.8. Connect a provider in this order:</p>
+          <ol>
+            <li>Add the Spring AI starter of the provider you use to the application's dependencies (table below).</li>
+            <li>Put the API key and the model name in the Spring AI settings (<code>spring.ai.*</code>).</li>
+            <li>Set the address of the dedicated CONTEXA database (<code>contexa.datasource.url</code>). It is always required, whatever the model.</li>
+            <li>Start the application and read the log. Check that there is no capability ERROR (<code>[ContexaCapability]</code>) and that the INFO log shows <code>Embedding vector dimension verified</code> (how to read the log: <a href="#startup-checks">Messages and what to do</a>).</li>
+          </ol>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Provider</th><th>Dependency to add</th><th>Key CONTEXA reads as the model name</th></tr></thead>
             <tbody>
@@ -40,7 +69,7 @@
               <tr><td>Ollama</td><td><code>org.springframework.ai:spring-ai-starter-model-ollama</code>, or the <a href="#ollama">CONTEXA connection</a></td><td>Chat <code>spring.ai.ollama.chat.options.model</code>, embedding <code>spring.ai.ollama.embedding.options.model</code></td></tr>
             </tbody>
           </table></div>
-          <p>A start with OpenAI alone. <code>contexa.datasource.url</code> is the address of CONTEXA's own database, always required whatever the model.</p>
+          <p>A start with OpenAI alone. OpenAI supplies both a chat model and an embedding model, so this one setting connects both. When you set no embedding model name, Spring AI's default embedding model is used (<a href="#embedding">Embedding model and vector dimension</a>). <code>contexa.datasource.url</code> is the address of CONTEXA's own database, always required whatever the model.</p>
           <pre><code class="language-yaml">spring:
   ai:
     openai:
@@ -56,27 +85,36 @@ contexa:
     password: ${CONTEXA_DB_PASSWORD}</code></pre>
           <ul>
             <li><strong>With several providers</strong> every model is listed, and one primary chat model is picked by the rules of the <a href="#default-chat-model">next section</a>.</li>
-            <li><strong>Choosing the Spring AI model auto-configuration.</strong> When <code>contexa.llm.selection.chat.priority</code> names one provider (<code>openai</code>, <code>anthropic</code> or <code>ollama</code>), CONTEXA sets the default of <code>spring.ai.model.chat</code> to that provider, so the Spring AI chat auto-configuration of the other providers stays off. It sets <code>spring.ai.model.embedding</code> to the first provider of <code>contexa.llm.selection.embedding.priority</code> as well. When either is set, the image, speech and moderation model auto-configurations are turned off (<code>none</code>). Values the application sets for <code>spring.ai.model.*</code> win.</li>
-            <li><strong>The temperature and seed of a decision call do not come from the Spring AI settings.</strong> A decision call carries <code>contexa.security.tiered.determinism.temperature</code> (0.0 by default) and <code>seed</code> (1 by default) on every call. Change them in <a href="security.html">Enforcement Modes and Decision Tuning</a>.</li>
+            <li><strong>Choosing the Spring AI model auto-configuration.</strong> Spring AI turns on the chat auto-configuration of every starter. When <code>contexa.llm.selection.chat.priority</code> names one provider (<code>openai</code>, <code>anthropic</code> or <code>ollama</code>), CONTEXA sets the default of <code>spring.ai.model.chat</code> to that provider, so the Spring AI chat auto-configuration of the other providers stays off. It sets <code>spring.ai.model.embedding</code> to the first provider of <code>contexa.llm.selection.embedding.priority</code> as well. Values the application sets for <code>spring.ai.model.*</code> win. CONTEXA does not turn off the image, speech and moderation model auto-configurations; to turn them off, the application sets <code>none</code> on the matching keys.</li>
+            <li><strong>The temperature and seed of a decision call do not come from the Spring AI settings.</strong> The temperature sets how random an answer is, and the seed is the starting number that makes the same input give the same answer. A decision call carries <code>contexa.security.tiered.determinism.temperature</code> (0.0 by default) and <code>seed</code> (1 by default) on every call. Change them in <a href="security.html">Operating Modes and Decision Tuning</a>.</li>
             <li><code>contexa.llm.enabled: false</code> turns off the whole CONTEXA LLM auto-configuration.</li>
           </ul>
 
           <h2 id="default-chat-model">Choosing the primary chat model</h2>
-          <p>At startup CONTEXA makes one chat model the <strong>primary chat model</strong> (bean name <code>primaryChatModel</code>). Decisions with no layer model and the calls of CONTEXA's AI pipeline use it. <code>contexa.llm.selection.chat.mode</code> sets how it is picked.</p>
+          <p>At startup CONTEXA makes one chat model the <strong>primary chat model</strong> (bean name <code>primaryChatModel</code>). Decisions with no layer model and the calls of CONTEXA's AI pipeline use it. <code>contexa.llm.selection.chat.mode</code> sets how it is picked. With one provider, keep the default (<code>dynamic-priority</code>). With more than one provider, choose one of the three methods below.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Value</th><th>How it picks</th><th>When startup stops</th></tr></thead>
             <tbody>
-              <tr><td><code>dynamic-priority</code> (default)</td><td>Goes through the providers of the <code>priority</code> list in order and picks the first model whose bean can be created. When no model of a listed provider exists, it tries the other providers' models in turn.</td><td>Model beans exist but none can be created</td></tr>
+              <tr><td><code>dynamic-priority</code> (default)</td><td>Goes through the providers of the <code>priority</code> list in order and picks the first model whose bean can be created. When no model of a listed provider can be used, it tries the models of providers not in the list in turn (<a href="#priority-rules">selection order</a>).</td><td>Model beans exist but none can be created</td></tr>
               <tr><td><code>fixed</code></td><td>Uses only the models of the one provider in <code>priority</code>. It never moves to another provider.</td><td><code>priority</code> names more than one provider, or that provider has no model</td></tr>
               <tr><td><code>spring-primary</code></td><td>The one model marked primary (<code>primary: true</code> in a <a href="#bindings">binding</a>, or a <code>@Primary</code> bean). With a single model, that model.</td><td>More than one primary, or several models and no primary</td></tr>
             </tbody>
           </table></div>
           <p>Among models of the same provider, the one marked primary comes first, then name order.</p>
+          <h3 id="priority-rules">How dynamic-priority picks the model</h3>
+          <p>The default, <code>dynamic-priority</code>, picks the primary chat model in this order:</p>
+          <ol>
+            <li>It splits the <code>priority</code> value at commas, turns it to lower case and merges repeated providers. The default is <code>openai,anthropic,ollama</code>.</li>
+            <li>Starting with the first provider in the list, it tries to create the model beans classified under that provider, one by one. The primary-marked bean comes first, then name order (the binding key or the bean name). The first model that can be created becomes the primary chat model.</li>
+            <li>A bean that cannot be created is skipped with the WARN log <code>LLM runtime provider '&lt;provider&gt;' binding '&lt;bean&gt;' is not ready: ...</code>. It continues with the next bean of the same provider, then the next provider. The end of the log line is the reason it was skipped (a missing API key, a wrong address and so on).</li>
+            <li>When no model of a listed provider is obtained, it tries every model bean, including providers not in the list, the same way (primary first, then provider name, then binding key). The WARN log of this step is <code>LLM runtime binding '&lt;bean&gt;' is not ready: ...</code>.</li>
+            <li>When no bean can be created, startup stops with the error of the first bean that failed.</li>
+          </ol>
           <div class="callout callout-warning">
-            <strong>Write the <code>mode</code> value in lower case with hyphens.</strong> Write <code>dynamic-priority</code>, <code>fixed</code> or <code>spring-primary</code>. CONTEXA compares this text as written to create the primary chat model bean, so a name with underscores such as <code>DYNAMIC_PRIORITY</code> leaves the primary chat model uncreated, with no error.
+            <strong>Write the <code>mode</code> value in lower case with hyphens.</strong> Write <code>dynamic-priority</code>, <code>fixed</code> or <code>spring-primary</code>. CONTEXA uses this value as a condition to create the primary chat model bean. A name with underscores such as <code>DYNAMIC_PRIORITY</code> matches no condition, so the primary chat model is not created, with no error. When model beans exist but the Missing beans line of the capability check names <code>UnifiedLLMOrchestrator</code>, check the spelling of the <code>mode</code> value first.
           </div>
           <ul>
-            <li><strong>The choice is made once, at startup.</strong> When a provider call fails while running, CONTEXA does not call another model instead. Transient errors such as a dropped connection, 429 or 503 are retried on the same model up to 4 times. What happens to a decision that never gets an answer is in <a href="../../reference/architecture/decision-engine.html#overrides">Decision Engine</a>.</li>
+            <li><strong>The choice is made once, at startup.</strong> When a provider call fails while running, CONTEXA does not call another model instead. Transient errors such as a dropped connection, 429 or 503 are retried on the same model up to 4 times. Each retry writes a WARN log (<code>Retry #number - RequestId: ...</code>), and when all fail an ERROR log (<code>failed after 4 retries</code>) is written. What happens to a decision that never gets an answer is in <a href="../../reference/architecture/decision-engine.html#overrides">Decision Engine</a>.</li>
             <li>The old setting <code>contexa.llm.chat-model-priority</code> is used only when <code>priority</code> is set to an empty value.</li>
           </ul>
           <pre><code class="language-yaml"># Anthropic models only (added to your existing settings)
@@ -89,14 +127,14 @@ contexa:
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.llm.enabled</code></td><td><code>true</code></td><td>The whole CONTEXA LLM auto-configuration</td></tr>
-              <tr><td><code>contexa.llm.selection.chat.mode</code></td><td><code>dynamic-priority</code></td><td>How the primary chat model is picked (table above)</td></tr>
-              <tr><td><code>contexa.llm.selection.chat.priority</code></td><td><code>openai,anthropic,ollama</code></td><td>Provider order. With <code>fixed</code>, name one provider only</td></tr>
+              <tr><td><code>contexa.llm.enabled</code></td><td><code>true</code></td><td>Turns the whole CONTEXA LLM auto-configuration on or off</td></tr>
+              <tr><td><code>contexa.llm.selection.chat.mode</code></td><td><code>dynamic-priority</code></td><td>How the primary chat model is picked (table above). Change it when you connect more than one provider</td></tr>
+              <tr><td><code>contexa.llm.selection.chat.priority</code></td><td><code>openai,anthropic,ollama</code></td><td>Provider order. The first provider is used first. With <code>fixed</code>, name one provider only. Change it to choose the provider or the order</td></tr>
             </tbody>
           </table></div>
 
           <h2 id="layer-models">Layer 1 and Layer 2 models</h2>
-          <p>Most decisions end at Layer 1; only requests where Layer 1 answers ESCALATE go to Layer 2 (<a href="../../reference/architecture/decision-engine.html#layers">Decision Engine</a>). Each layer can use its own model, for example a fast and cheap model for Layer 1 and a more careful one for Layer 2.</p>
+          <p>Most decisions end at Layer 1; only requests where Layer 1 answers ESCALATE go to Layer 2 (<a href="../../reference/architecture/decision-engine.html#layers">Decision Engine</a>). Each layer can use its own model, for example a fast, low-cost model for Layer 1 and a more careful one for Layer 2. When you set none, both layers use the primary chat model.</p>
           <pre><code class="language-yaml"># When the primary chat model is OpenAI (added to your existing settings)
 contexa:
   security:
@@ -116,10 +154,18 @@ contexa:
               <li class="dg-node dg-model"><span class="dg-node-tag">3</span><span class="dg-node-title">The primary chat model</span><span class="dg-node-desc"><code>primaryChatModel</code></span></li>
             </ol>
           </figure>
+          <p>A layer model name becomes a real model in this order:</p>
+          <ol>
+            <li><strong>Look for a model with the same name.</strong> When the name equals a name of a listed model (bean name, binding key, model name or alias), that model is used.</li>
+            <li><strong>When no model has the name, copy the primary chat model.</strong> The copy differs only in the model name. The copy works for the OpenAI chat model (<code>mutate()</code>) and for the Anthropic chat model (CONTEXA builds the copy again with the same client and default options). The Ollama chat model cannot be copied. To use such models per layer, name them with a <a href="#bindings">binding</a> (for Ollama, <a href="#ollama-layer-models">see below</a>).</li>
+            <li><strong>When both fail, the layer model cannot be used.</strong> Startup goes on and one ERROR line is written (below).</li>
+          </ol>
+          <p>For each layer model that cannot be used, one ERROR line is written at startup. Its format:</p>
+          <pre><code class="language-text">[TieredLayerModel] contexa.security.tiered.llm.layer2.model '&lt;the name you set&gt;' cannot be used, so layer 2 runs on '&lt;the model used instead&gt;': no chat runtime binding has this model id and the primary chat model cannot be copied with it. Bind a chat model with contexa.llm.bindings.chat to run it.</code></pre>
           <ul>
-            <li><strong>How a model name is resolved.</strong> When the name equals a name of a listed model (bean name, binding key, model name or alias), that model is used.</li>
-            <li><strong>When no model has the name</strong>, the primary chat model is copied with only the model name changed. The copy works for the OpenAI chat model (<code>mutate()</code>) and for the Anthropic chat model (CONTEXA builds the copy again with the same client and default options). The Ollama chat model cannot be copied. To use such models per layer, name them with a <a href="#bindings">binding</a> (for Ollama, <a href="#ollama-layer-models">see below</a>).</li>
-            <li><strong>Startup goes on when a layer model cannot be made.</strong> At startup one ERROR line names the layer, the model that was set and the model that runs in its place (the backup model, else the primary chat model). When you see it, give that name to a model as a <a href="#bindings">binding</a> alias or model name. The check runs when there is a primary chat model.</li>
+            <li><strong>The model used instead</strong> is the layer's backup model, or the model name of the primary chat model when the backup cannot be used either. With no chat model at all the line says <code>no chat model</code>.</li>
+            <li>When you see this line, give the name you set to a model as a <a href="#bindings">binding</a> alias or model name.</li>
+            <li>The check runs only when the operating mode is shadow mode (SHADOW) or enforcement mode (ENFORCE). In off (DISABLED) neither layer runs, so no line is written.</li>
             <li><strong>A backup model</strong> is used only when the layer model is set, and it is not checked at startup. When the backup cannot be made at call time either, the primary chat model is used.</li>
           </ul>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -133,10 +179,10 @@ contexa:
               <tr><td><code>contexa.security.tiered.llm.tiered.layer2.timeout-ms</code></td><td>none</td><td>Time limit (ms) of a Layer 2 <strong>streaming</strong> call. Empty: 60000; above 120000: 120000</td></tr>
             </tbody>
           </table></div>
-          <p>The last two settings apply to streaming calls only and do not change decision time. The time limits of Layer 1 and Layer 2 and of a single model call are set in <a href="security.html">Enforcement Modes and Decision Tuning</a>.</p>
+          <p>The last two settings apply to streaming calls (calls whose answer arrives in pieces) only and do not change decision time. The time limits of Layer 1 and Layer 2 and of a single model call are set in <a href="security.html">Operating Modes and Decision Tuning</a>.</p>
 
           <h2 id="bindings">Naming models (bindings)</h2>
-          <p>CONTEXA lists every chat and embedding model bean of the application by itself. With no setting, a model can be found by its bean name, its provider (inferred from the bean class and name) and its model name (the provider's <code>spring.ai.…options.model</code>, else the bean name). <code>contexa.llm.bindings</code> corrects an entry of this list or adds aliases.</p>
+          <p>CONTEXA lists every chat and embedding model bean of the application by itself. An entry of the list (a binding) consists of a bean name, a provider, a model name, aliases and a primary mark. With no setting, a model can be found by its bean name, its provider (inferred from the bean class and name) and its model name (the provider's <code>spring.ai.…options.model</code>, else the bean name). <code>contexa.llm.bindings</code> corrects an entry of this list or adds aliases (more names that a layer model setting can use). When the application has one model bean, or no name needs to change, set nothing.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
             <tbody>
@@ -150,9 +196,10 @@ contexa:
           </table></div>
           <p>For embedding models, write the same fields under <code>contexa.llm.bindings.embedding.&lt;name&gt;.…</code>. The providers whose embedding model name is read from a key are OpenAI and Ollama only.</p>
           <ul>
-            <li><strong>Overlapping names stop startup.</strong> No bean name, binding key, model name or alias may belong to two different models. Two model beans of the same provider that both take their model name from the same key can overlap; give them different <code>model-id</code> values.</li>
+            <li><strong>Overlapping names stop startup.</strong> No bean name, binding key or alias may belong to two different models. The log is <code>Duplicate chat runtime selector '&lt;name&gt;' is mapped by multiple bindings: ...</code> (<code>embedding</code> for embedding models). Give the models different names.</li>
+            <li><strong>When only the model name overlaps.</strong> Two model beans of the same provider that both take their model name from the same key have the same model name. That alone does not stop startup. But when you name a layer model with that model name, CONTEXA cannot tell which bean is meant and raises an error (<code>... is the model of several of the application's beans ...</code>). Give the two beans different <code>model-id</code> values, and refer to a model by its bean name or binding key.</li>
             <li><strong>An alias is a name to pick by.</strong> An OpenAI or Anthropic model picked by an alias is still called with the model set on its bean. Only for Ollama does the alias become the model of the call (<a href="#ollama-layer-models">below</a>).</li>
-            <li>When <code>bean-name</code> names a bean that does not exist, a warning is logged and the setting is skipped.</li>
+            <li>When <code>bean-name</code> names a bean that does not exist, a WARN log (<code>Configured LLM binding '&lt;key&gt;' references missing bean '&lt;bean&gt;'</code>) is written and the setting is skipped.</li>
           </ul>
           <p>Example: keep OpenAI as the primary chat model and run only Layer 2 on an Anthropic model. <code>anthropicChatModel</code> is the bean name the Spring AI Anthropic starter creates.</p>
           <pre><code class="language-yaml"># Added to your existing settings
@@ -174,7 +221,7 @@ contexa:
           model: expert</code></pre>
 
           <h2 id="ollama">Using a local Ollama</h2>
-          <p>Ollama can be connected in two ways. Choose one.</p>
+          <p>Ollama is a self-hosted provider: it runs models on a server that you operate. It can be connected to CONTEXA in two ways. Choose one.</p>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>Two ways to connect Ollama</strong>Both use models pulled into one Ollama server.</figcaption>
             <div class="dg-compare">
@@ -182,7 +229,7 @@ contexa:
               <div class="dg-side"><p class="dg-side-title">The CONTEXA connection</p><ul><li>Dependency <code>spring-ai-ollama</code> (the library only)</li><li>Address and model in <code>contexa.llm.chat.ollama.*</code></li><li>Chat bean <code>contexaOllamaChatModel</code> (<code>qwen3:8b</code> by default), embedding bean <code>contexaSharedOllamaEmbeddingModel</code> (<code>mxbai-embed-large</code> by default)</li></ul></div>
             </div>
           </figure>
-          <p>The CONTEXA connection is on when <code>contexa.llm.chat.ollama.base-url</code> is set (with the Ollama library in the application). Chat and embedding use the same Ollama server. A start with Ollama alone:</p>
+          <p>The CONTEXA connection is on when <code>contexa.llm.chat.ollama.base-url</code> is set (with the Ollama library in the application). Chat and embedding use the same Ollama server, and with no model set chat uses <code>qwen3:8b</code> and embedding uses <code>mxbai-embed-large</code>. The example below sets both the chat and the embedding provider to <code>ollama</code> (the two <code>priority</code> keys). A start with Ollama alone:</p>
           <pre><code class="language-yaml">contexa:
   datasource:
     url: jdbc:postgresql://localhost:5432/contexa
@@ -211,9 +258,9 @@ contexa:
               <tr><td><code>contexa.llm.model-capabilities.ollama.disable-thinking-patterns</code></td><td>none</td><td>Patterns of Ollama model names whose thinking is turned off (regular expressions, comma separated). Calls to a matching model turn thinking off</td></tr>
             </tbody>
           </table></div>
-          <p>With both the chat server address and the dedicated embedding server there are two embedding beans (shared and dedicated), and by name order the dedicated one is picked first.</p>
+          <p>With both the chat server address and the dedicated embedding server there are two embedding model beans (shared and dedicated), and by name order the dedicated one is picked first.</p>
           <h3 id="ollama-layer-models">Different models per layer on one Ollama server</h3>
-          <p>An Ollama chat model cannot be copied, so name the layer models as aliases of the Ollama chat bean. An Ollama call sends the picked name as its model, so another model of the same server is used. Pull that model into the Ollama server first.</p>
+          <p>An Ollama chat model cannot be copied, so name the layer models as aliases of the Ollama chat bean. An Ollama call sends the picked name as its model, so another model of the same server is used. Download that model to the Ollama server first.</p>
           <pre><code class="language-yaml"># Added to the Ollama example above
 contexa:
   llm:
@@ -230,12 +277,12 @@ contexa:
           model: qwen3:14b</code></pre>
 
           <h2 id="model-server-gate">How many calls a model server takes</h2>
-          <p>Every call CONTEXA makes to a model server passes one gate per server (provider and address): the decisions of both layers, the AI pipelines and the embeddings of the vector store. A call waits in line at the gate instead of piling up at the server.</p>
+          <p>A model server can process only a set number of requests at once. To stay within that limit, CONTEXA passes every call it makes to a model server through one concurrency limiter per server (the gate). A server is a provider and an address. The decisions of both layers, the AI pipelines and the embeddings of the vector store all pass the gate. A call over the limit waits at the gate instead of piling up at the server.</p>
           <ul>
-            <li>A self-hosted server (Ollama, or an address on this host or a private network) runs 2 calls at once and one model at a time: a call for another model, such as an embedding while decisions run, goes in when the running calls are done. A remote provider runs 16 calls at once.</li>
+            <li>A self-hosted server (Ollama, or an address on this host or a private network) runs 2 calls at once and one model at a time, because CONTEXA assumes the server holds only one model in memory. A call for another model, such as an embedding while decisions run, goes in when the running calls are done. A remote provider runs 16 calls at once.</li>
             <li>Embeddings go in before waiting decision calls. A call that is in is never cut.</li>
-            <li>The time limits of model calls and of vector store writes and searches count from the moment the call goes in. The wait in line is bounded by the event's budget (<code>contexa.security.plane.agent.event-timeout-ms</code>); a call that gets no turn within it ends as <code>MODEL_SERVER_BUSY</code>.</li>
-            <li>After a rate limit (429), an overload (529) or a server that is unavailable for a while (503), the server is left alone for 2 s, then 4, 8 and 12 s while it keeps answering so, and the call is sent again when its turn comes.</li>
+            <li>The time limits of model calls and of vector store writes and searches count from the moment the call passes the gate. The wait at the gate is bounded by the event processing limit (<code>contexa.security.plane.agent.event-timeout-ms</code>); a call that gets no turn within it ends as <code>MODEL_SERVER_BUSY</code>. This is recorded as a defined outcome, not as a server failure. When it appears often, check whether the server can really run more requests in parallel, and if so set the concurrency in the table below to that number.</li>
+            <li>After a rate limit (429), an overload (529) or a server that is unavailable for a while (503), calls to that server pause for 2 s, then 4, 8 and 12 s while it keeps answering so, and the call is sent again when its turn comes.</li>
           </ul>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
@@ -260,7 +307,12 @@ contexa:
           one-model-at-a-time: false</code></pre>
 
           <h2 id="embedding">Embedding model and vector dimension</h2>
-          <p>The embedding model turns documents such as past decision records into vectors to store and search. The stored vectors must have the model's dimension, so <strong>embedding is fixed to one provider</strong>.</p>
+          <p>The embedding model turns documents such as past decision records into vectors (arrays of numbers) to store and search. The length of a vector is its dimension, and each model has its own. The stored vectors must have the model's dimension, so <strong>embedding is fixed to one provider</strong>. The embedding provider is <code>openai</code> or <code>ollama</code>. The embedding model is picked in this order (<code>fixed</code>, the default):</p>
+          <ol>
+            <li>It reads <code>contexa.llm.selection.embedding.priority</code>. The default is <code>openai</code>. Startup stops when the value does not name exactly one provider.</li>
+            <li>It uses the first embedding model bean of that provider that can be created. The primary-marked bean comes first, then name order.</li>
+            <li>When that provider has no embedding model, it uses the first other embedding model bean that can be created.</li>
+          </ol>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
             <tbody>
@@ -271,6 +323,7 @@ contexa:
             </tbody>
           </table></div>
           <h3 id="dimensions">How the dimension is decided</h3>
+          <p>CONTEXA decides the vector dimension in the order below. The first item that has a value wins.</p>
           <ol>
             <li>The value of <code>contexa.vectorstore.pgvector.dimensions</code>, when you set it</li>
             <li>The value of <code>contexa.llm.embedding.dimensions</code>, when you set it</li>
@@ -278,20 +331,27 @@ contexa:
             <li>The model's value when CONTEXA knows the model: 1536 for OpenAI <code>text-embedding-ada-002</code> and <code>text-embedding-3-small</code>, 3072 for <code>text-embedding-3-large</code>, 1024 for Ollama <code>mxbai-embed-large</code> and <code>bge-m3</code></li>
             <li>For an unknown model with none of the values above, startup stops. Set that model's dimension in both <code>contexa.llm.embedding.dimensions</code> and <code>contexa.vectorstore.pgvector.dimensions</code>.</li>
           </ol>
-          <p>CONTEXA puts no default on <code>spring.ai.openai.embedding.options.model</code> or <code>dimensions</code>; it follows your application's embedding model. OpenAI with no model named is Spring AI's default <code>text-embedding-ada-002</code> (1536 dimensions), and a <code>dimensions</code> value you set is used as it is. An OpenAI installation by <code>contexa init</code> writes <code>text-embedding-3-small</code> (1536) into the settings file. With no provider named in <code>contexa.llm.selection.embedding.priority</code> or <code>spring.ai.model.embedding</code>, CONTEXA takes the provider for OpenAI only when your application has the OpenAI embedding model class.</p>
+          <p>The embedding model and dimension for OpenAI:</p>
+          <ul>
+            <li>CONTEXA puts no default on <code>spring.ai.openai.embedding.options.model</code> or <code>dimensions</code>; it follows your application's embedding model.</li>
+            <li>OpenAI with no model named is Spring AI's default <code>text-embedding-ada-002</code> (1536 dimensions), and a <code>dimensions</code> value you set is used as it is.</li>
+            <li>An OpenAI installation by <code>contexa init</code> writes <code>text-embedding-3-small</code> (1536) into the settings file.</li>
+            <li>With no provider named in <code>contexa.llm.selection.embedding.priority</code> or <code>spring.ai.model.embedding</code>, CONTEXA takes the provider for OpenAI only when your application has the OpenAI embedding model class.</li>
+          </ul>
+          <p>Three cases change what startup does:</p>
           <ul>
             <li><strong>A new database:</strong> the vector column is created with the size of the model in use.</li>
-            <li><strong>Above 2000 dimensions:</strong> a pgvector HNSW index holds up to 2000, so startup is refused and says what to do. Configure a smaller output (for example <code>spring.ai.openai.embedding.options.dimensions=1536</code> with <code>text-embedding-3-large</code>), or create the table yourself and set <code>contexa.vectorstore.pgvector.initialize-schema=false</code>.</li>
-            <li><strong>An OpenAI installation from an earlier version:</strong> its table has 1024 dimensions, so startup is refused. With the two lines below it stays as it is, with nothing embedded again.</li>
+            <li><strong>Above 2000 dimensions:</strong> a pgvector HNSW index holds up to 2000, so startup is refused (when <code>initialize-schema</code> is <code>true</code> and the index is <code>HNSW</code>). The log begins with <code>The vector store cannot create its index: an HNSW index holds at most 2000 dimensions ...</code> and says what to do. Configure a smaller output (for example <code>spring.ai.openai.embedding.options.dimensions=1536</code> with <code>text-embedding-3-large</code>), or create the table yourself and set <code>contexa.vectorstore.pgvector.initialize-schema=false</code>.</li>
+            <li><strong>An OpenAI installation from an earlier version:</strong> its table has 1024 dimensions, so startup is refused, and the dimension mismatch log ends with <code>A store made by an earlier Contexa keeps its vectors with ...</code>. With the two lines below it stays as it is, with nothing embedded again.</li>
           </ul>
           <pre><code class="language-text">spring.ai.openai.embedding.options.model=text-embedding-3-small
 spring.ai.openai.embedding.options.dimensions=1024</code></pre>
           <div class="callout callout-warning">
-            <strong>A changed dimension no longer fits the stored vectors.</strong> At startup CONTEXA compares the dimension of the embedding model in use, the configured vector store dimension and the dimension of an existing vector table (<code>ctxa_vector_store</code> by default), and stops when any differs. To change the dimension, create the table again or embed the documents again. When they match, the startup log shows <code>Embedding vector dimension verified: provider=…, model=…, dimension=…</code>.
+            <strong>A changed dimension no longer fits the stored vectors.</strong> At startup CONTEXA compares the dimension of the embedding model in use, the configured vector store dimension and the dimension of an existing vector table (<code>ctxa_vector_store</code> by default), and stops when any differs. To change the dimension, create the table again or embed the documents again. When they match, the startup log shows the INFO line <code>Embedding vector dimension verified: provider=…, model=…, dimension=…</code>. The real line ends with an extra <code>source=…</code> (what decided the dimension).
           </div>
 
           <h2 id="vector-store">Vector store (pgvector)</h2>
-          <p>Vectors are stored in the vector store bean (<code>contexaVectorStore</code>) that CONTEXA builds itself on the dedicated CONTEXA database (<code>contexaJdbcTemplate</code>). It does not use your application's <code>VectorStore</code> bean, and CONTEXA creates nothing in your application's database (dependencies in <a href="../installation-guide.html">Installation Guide</a>). Write its settings as <code>contexa.vectorstore.pgvector.*</code>. CONTEXA's store reads only these keys; <code>spring.ai.vectorstore.pgvector.*</code> belongs to your application's own Spring AI store and does not reach CONTEXA's.</p>
+          <p>The vector store holds embedding vectors with their documents and searches for similar documents by similarity. CONTEXA builds it on the pgvector extension of PostgreSQL. Vectors are stored in the vector store bean (<code>contexaVectorStore</code>) that CONTEXA builds itself on the dedicated CONTEXA database (<code>contexaJdbcTemplate</code>). It does not use your application's <code>VectorStore</code> bean, and CONTEXA creates nothing in your application's database (dependencies in <a href="../installation-guide.html">Installation Guide</a>). Write its settings as <code>contexa.vectorstore.pgvector.*</code>. CONTEXA's store reads only these keys; <code>spring.ai.vectorstore.pgvector.*</code> belongs to your application's own Spring AI store and does not apply to CONTEXA's.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
             <tbody>
@@ -310,7 +370,7 @@ spring.ai.openai.embedding.options.dimensions=1024</code></pre>
               <tr><td><code>contexa.vectorstore.pgvector.hnsw.ef-search</code></td><td><code>100</code></td><td>HNSW search breadth set on every similarity search (<code>hnsw.ef_search</code>). Larger is more exact and slower</td></tr>
             </tbody>
           </table></div>
-          <p><strong>Creating the table at first start.</strong> CONTEXA sets the default of <code>contexa.vectorstore.pgvector.initialize-schema</code> to <code>true</code> (Spring AI's own default is <code>false</code>). So the first start creates, in the dedicated CONTEXA database, the vector extension, the <code>ctxa_vector_store</code> table, its HNSW index and the metadata index for per-user searches. For a database whose schema is managed by migrations, turn it off and create the table and both indexes yourself.</p>
+          <p><strong>Creating the table at first start.</strong> CONTEXA sets the default of <code>contexa.vectorstore.pgvector.initialize-schema</code> to <code>true</code> (Spring AI's own default is <code>false</code>). So the first start creates, in the dedicated CONTEXA database, the vector extension, the <code>ctxa_vector_store</code> table, its HNSW index and the metadata index for per-user searches. When the account has no right to create the extension, create it first as described in <a href="../troubleshooting.html#vector-extension">Troubleshooting</a>. For a database whose schema is managed by migrations, turn this setting off and create the table and both indexes yourself.</p>
           <pre><code class="language-yaml"># Added to your existing settings
 contexa:
   vectorstore:
@@ -332,7 +392,7 @@ contexa:
           </table></div>
 
           <h2 id="rag">Past records and context search (RAG)</h2>
-          <p><code>contexa.rag.*</code> sets the defaults the AI pipeline and the AI Lab services use when they search the vector store, and how long past decision records are kept. How many past records Layer 1 and Layer 2 of the decision engine look up, and at what similarity, is set in <a href="security.html">Enforcement Modes and Decision Tuning</a>.</p>
+          <p>RAG (Retrieval-Augmented Generation) searches for related documents before a question is sent to the model and sends them along with it. CONTEXA searches similar past decision records this way. <code>contexa.rag.*</code> sets the defaults the AI pipeline and the AI Lab services (behavior analysis, policy generation) use when they search the vector store, and how long past decision records are kept. How many past records Layer 1 and Layer 2 of the decision engine look up, and at what similarity, is set in <a href="security.html">Operating Modes and Decision Tuning</a>. The defaults work as they are; check that the retention period (<code>retention-days</code>) matches your organization's retention policy.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
             <tbody>
@@ -355,7 +415,7 @@ contexa:
           </table></div>
 
           <h2 id="provider-options">Per-provider options of decision calls</h2>
-          <p>Options Layer 1 and Layer 2 attach when they call a model. They apply only when the layer's model is of that provider. For Layer 2, write the same names under <code>layer2</code>.</p>
+          <p>Options Layer 1 and Layer 2 attach when they call a model. They apply only when the layer's model is of that provider. For Layer 2, write the same names under <code>layer2</code>. The defaults are enough; change them only when you must adjust how a model reasons or thinks.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
             <tbody>
@@ -370,7 +430,7 @@ contexa:
             </tbody>
           </table></div>
           <div class="callout callout-info">
-            <strong>Anthropic thinking settings are checked at startup.</strong> With the Anthropic library in the application, startup stops and says why when a budget is below 1024, when a value cannot be sent by Spring AI 1.1 (<code>ADAPTIVE</code>, <code>anthropic-effort</code>), or when the layer's Claude model refuses the value. Turning thinking off also changes the model's decisions.
+            <strong>Anthropic thinking settings are checked at startup.</strong> With the Anthropic library in the application, startup stops and says why when a budget is below 1024, when a value cannot be sent by Spring AI 1.1 (<code>ADAPTIVE</code>, <code>anthropic-effort</code>), or when the layer's Claude model refuses the value. The log begins with <code>The Anthropic thinking settings cannot be used:</code> and lists each item. Warnings that do not stop startup are written as WARN logs <code>[AnthropicThinking] ...</code>. Turning thinking off also changes the model's decisions.
           </div>
           <h3 id="model-capabilities">Per-model handling tables</h3>
           <p>Models take different options, so CONTEXA adjusts the call options. The default tables are in the code; set these only to fit a new model.</p>
@@ -386,7 +446,7 @@ contexa:
           </table></div>
 
           <h2 id="advisor-streaming">Advisors and streaming</h2>
-          <p>The ChatClient CONTEXA calls models with carries advisors, and a streamed answer is searched for the marker where the final answer starts. How they work is in the <a href="../../reference/core/advisor.html">Advisor</a> and <a href="../../reference/core/streaming.html">Streaming</a> references.</p>
+          <p>An advisor is a component that adds processing before and after the Spring AI ChatClient calls a model. The ChatClient CONTEXA calls models with carries advisors, and a streamed answer is searched for the marker where the final answer starts. Leave most of these settings at their defaults; to refuse calls with no user ID, turn on <code>contexa.advisor.security.require-authentication</code>. How they work is in the <a href="../../reference/core/advisor.html">Advisor</a> and <a href="../../reference/core/streaming.html">Streaming</a> references.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
             <tbody>
@@ -399,29 +459,53 @@ contexa:
             </tbody>
           </table></div>
 
-          <h2 id="startup-checks">When startup stops</h2>
-          <p>When the model settings do not fit, CONTEXA stops at startup instead of quietly using another model in production. Match the log message to the table below.</p>
+          <h2 id="startup-checks">Startup log messages and what to do</h2>
+          <p>When the model settings do not fit, CONTEXA stops at startup instead of quietly using another model in production. In some cases it goes on and only writes an ERROR or WARN log. Find the start of the message in the log and read its meaning and the action in the tables below.</p>
+          <h3 id="startup-stop">When startup stops</h3>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>Situation</th><th>Fix</th></tr></thead>
+            <thead><tr><th>Log message (beginning)</th><th>Meaning</th><th>Fix</th></tr></thead>
             <tbody>
-              <tr><td>Chat <code>mode: fixed</code> with more than one provider in <code>priority</code>, or no model of that provider</td><td>Name one provider and add its Spring AI starter</td></tr>
-              <tr><td>Embedding <code>mode: dynamic-priority</code></td><td>Change it to <code>fixed</code></td></tr>
-              <tr><td>More than one provider in the embedding <code>priority</code></td><td>Name one</td></tr>
-              <tr><td>A model name or alias belongs to two models</td><td>Make the names different</td></tr>
-              <tr><td><code>spring-primary</code> with more than one primary, or several models and no primary</td><td>Mark one with <code>primary: true</code></td></tr>
-              <tr><td>An unknown embedding model with no dimension set</td><td>Set <code>contexa.llm.embedding.dimensions</code> and <code>contexa.vectorstore.pgvector.dimensions</code> to that model's dimension</td></tr>
-              <tr><td>Dimensions differ (model, settings, existing table)</td><td>Make them equal, and create the table again or embed again</td></tr>
-              <tr><td>A 1024-dimension table from an earlier OpenAI installation</td><td>Add the two lines in <a href="#dimensions">How the dimension is decided</a>; nothing is embedded again</td></tr>
-              <tr><td>Above 2000 dimensions while CONTEXA creates the table</td><td>Configure a smaller output, or create the table yourself and set <code>contexa.vectorstore.pgvector.initialize-schema=false</code> (<a href="#dimensions">How the dimension is decided</a>)</td></tr>
-              <tr><td>The dedicated Ollama embedding server is on with no address</td><td>Set <code>contexa.llm.embedding.ollama.base-url</code></td></tr>
-              <tr><td>Anthropic thinking settings refused</td><td>Fix the setting the message names (<a href="#provider-options">table above</a>)</td></tr>
+              <tr><td><code>Fixed chat runtime selection requires exactly one provider.</code></td><td>Chat <code>mode: fixed</code> with a <code>priority</code> that does not name exactly one provider</td><td>Name one provider</td></tr>
+              <tr><td><code>No chat runtime binding could be resolved for fixed provider '&lt;provider&gt;'.</code></td><td>That provider has no chat model, or none can be created. When a model cannot be created, the reason is in the WARN <code>... is not ready: ...</code> line just before</td><td>Add that provider's Spring AI starter and check the key and address</td></tr>
+              <tr><td>WARN <code>LLM runtime ... is not ready: ...</code> followed by a stop</td><td>Model beans exist but none can be created (<code>dynamic-priority</code>). Startup stops with the error of the first bean that failed</td><td>Fix the reason at the end of the WARN line (API key, address)</td></tr>
+              <tr><td><code>Multiple chat runtime bindings are marked primary: ...</code> or <code>... are available but none is marked primary: ...</code></td><td><code>spring-primary</code> with more than one primary, or several models and no primary</td><td>Mark one with <code>primary: true</code></td></tr>
+              <tr><td><code>Dynamic priority embedding selection is not supported ...</code></td><td>Embedding <code>mode: dynamic-priority</code> cannot be used. Vectors need a fixed provider and dimension</td><td>Change it to <code>fixed</code></td></tr>
+              <tr><td><code>Embedding runtime must be fixed to exactly one provider ...</code> or <code>Embedding runtime must use exactly one fixed provider. ...</code></td><td>More than one provider in the embedding <code>priority</code></td><td>Name one</td></tr>
+              <tr><td><code>Duplicate chat runtime selector '&lt;name&gt;' is mapped by multiple bindings: ...</code> (<code>embedding</code> for embedding models)</td><td>A model name or alias belongs to two models</td><td>Make the names different</td></tr>
+              <tr><td><code>Unknown embedding model dimension. ...</code></td><td>An embedding model CONTEXA does not know, with no dimension set</td><td>Set <code>contexa.llm.embedding.dimensions</code> and <code>contexa.vectorstore.pgvector.dimensions</code> to that model's dimension</td></tr>
+              <tr><td><code>Embedding dimension mismatch before vector storage starts. ...</code></td><td>The configured vector store dimension differs from the dimension the embedding settings give</td><td>Make them equal, and create the table again or embed again</td></tr>
+              <tr><td><code>The embedding model's vectors do not fit the vector store. ...</code></td><td>The dimension of the vectors the model produces differs from the vector store dimension</td><td>Set the vector store dimension to the model's output, or configure the model to produce that dimension</td></tr>
+              <tr><td><code>Existing vector_store table dimension does not match active embedding profile. ...</code></td><td>The dimension of the existing vector table differs from the current embedding settings</td><td>Create the table again or embed the documents again</td></tr>
+              <tr><td>The same message ending with <code>A store made by an earlier Contexa keeps its vectors with ...</code></td><td>A 1024-dimension table from an earlier OpenAI installation</td><td>Add the two lines in <a href="#dimensions">How the dimension is decided</a>; nothing is embedded again</td></tr>
+              <tr><td><code>The vector store cannot create its index: an HNSW index holds at most 2000 dimensions ...</code></td><td>Above 2000 dimensions while CONTEXA creates the table</td><td>Configure a smaller output, or create the table yourself and set <code>contexa.vectorstore.pgvector.initialize-schema=false</code> (<a href="#dimensions">How the dimension is decided</a>)</td></tr>
+              <tr><td><code>contexa.llm.embedding.ollama.base-url must be configured when dedicated embedding runtime is enabled</code></td><td>The dedicated Ollama embedding server is on with no address</td><td>Set <code>contexa.llm.embedding.ollama.base-url</code></td></tr>
+              <tr><td><code>The Anthropic thinking settings cannot be used:</code></td><td>Anthropic thinking settings refused</td><td>Fix the setting the message names (<a href="#provider-options">table above</a>)</td></tr>
             </tbody>
           </table></div>
-          <p>The other way round, some cases start but produce no decisions: no chat model at all, or a <code>mode</code> value written with underscores so that no primary chat model was created.</p>
+          <h3 id="startup-continue">When startup goes on and a log line is written</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Log</th><th>Meaning</th><th>What to do</th></tr></thead>
+            <tbody>
+              <tr><td>ERROR <code>[ContexaCapability] llm-runtime status=... required=...</code> (<code>embedding-runtime</code> has the same form)</td><td>A model bean the decisions need was not created. The <code>Missing beans</code> line names it and <code>Recommended actions</code> gives the action. With the default settings the line is written only when the capability is required</td><td>Check the provider starter and key (<a href="../troubleshooting.html#capability-missing">Troubleshooting</a>). When there is no line, read the same result from the Actuator endpoint <code>contexacapabilities</code> (<a href="../installation-guide.html#capability">Capability check</a>)</td></tr>
+              <tr><td>ERROR <code>[TieredLayerModel] contexa.security.tiered.llm.layerN.model '...' cannot be used ...</code></td><td>The layer model you set cannot be made, so the backup model or the primary chat model runs in its place</td><td>Give that name to a model as a <a href="#bindings">binding</a> alias or model name (<a href="#layer-models">Layer 1 and Layer 2 models</a>)</td></tr>
+              <tr><td>WARN <code>LLM runtime provider '...' binding '...' is not ready: ...</code></td><td>That bean cannot be created, so the next candidate was tried. Another model may have become the primary chat model</td><td>When it is not the provider you meant, fix the reason at the end of the line (key, address)</td></tr>
+              <tr><td>WARN <code>Configured LLM binding '...' references missing bean '...'</code></td><td>The <code>bean-name</code> of a binding names no bean, so the setting was skipped</td><td>Check the bean name (<a href="#bindings">Naming models</a>)</td></tr>
+              <tr><td>WARN <code>[AnthropicThinking] ...</code></td><td>A warning about the Anthropic thinking settings. It does not stop startup</td><td>Check the setting the message names (<a href="#provider-options">Per-provider options of decision calls</a>)</td></tr>
+              <tr><td>INFO <code>Embedding vector dimension verified: ...</code></td><td>The dimensions of the embedding model, the settings and the vector table all match</td><td>Nothing</td></tr>
+              <tr><td>WARN <code>... Retry #N - RequestId: ...</code>, ERROR <code>... failed after 4 retries</code> (while running)</td><td>A transient provider error was retried, and all 4 retries failed</td><td>Check the provider status, key and limits. For a rate limit (429), see the <a href="#model-server-gate">concurrency gate</a></td></tr>
+            </tbody>
+          </table></div>
+          <p>The other way round, some cases start but produce no decisions: no chat model at all, or a <code>mode</code> value written with underscores so that no primary chat model was created. When models are not connected, check in this order:</p>
+          <ol>
+            <li>Find the ERROR <code>[ContexaCapability]</code> in the startup log and read <code>Missing beans</code>.</li>
+            <li>When no chat model bean exists, check the provider starter and the <code>spring.ai.*</code> keys. When model beans exist but <code>UnifiedLLMOrchestrator</code> is missing, check the spelling of the <code>mode</code> value.</li>
+            <li>When you set a layer model, check for the ERROR <code>[TieredLayerModel]</code>.</li>
+            <li>For a vector store error, read the dimension message and check the <code>vector</code> extension (<a href="../troubleshooting.html#vector-extension">Troubleshooting</a>).</li>
+          </ol>
 
           <h2 id="related">Settings not on this page</h2>
           <ul>
-            <li>Time limits of Layer 1 and Layer 2, how much goes into the prompt, determinism, the prompt version setting, the decision engine's past-record search and cache, trusted proxies: <a href="security.html">Enforcement Modes and Decision Tuning</a></li>
+            <li>Time limits of Layer 1 and Layer 2, how much goes into the prompt, determinism, the prompt version setting, the decision engine's past-record search and cache, trusted proxies: <a href="security.html">Operating Modes and Decision Tuning</a></li>
             <li>How a decision is made: <a href="../../reference/architecture/decision-engine.html">Decision Engine</a></li>
             <li>Moving keys written with an older prefix to today's keys: <a href="../configuration.html">Configuration guide</a></li>
             <li>Inside LLM calls and model selection: <a href="../../reference/core/llm-orchestrator.html">LLM Orchestrator</a>, <a href="../../reference/core/model-provider.html">Model Provider</a>, <a href="../../reference/core/rag.html">RAG</a></li>
@@ -434,6 +518,6 @@ contexa:
             </a>
             <a href="security.html" class="docs-nav-link next">
               <span class="docs-nav-label">Next</span>
-              <span class="docs-nav-title">Enforcement Modes and Decision Tuning</span>
+              <span class="docs-nav-title">Operating Modes and Decision Tuning</span>
             </a>
           </div>

@@ -12,18 +12,143 @@
               <span class="badge badge-secondary">Configuration</span>
             </div>
             <h1>Configuration Guide</h1>
-            <p class="lead">Find the settings page for what you want to do, and start from a minimal configuration that boots as written. The tables at the end of this page tell you what a setting name you saw in older documents or examples is called today.</p>
+            <p class="lead">This page is the entry point for finding a CONTEXA setting by what you want to do. It first separates the settings you must set from the settings whose defaults are enough, then points each task to the page and section that explains it. The tables at the end of the page give today's name for a setting name you saw in older documents or examples.</p>
           </div>
 
+          <h2 id="required">Settings you must set and settings whose defaults are enough</h2>
+          <p>Most CONTEXA settings work with their defaults. To start, you must have the four items below. If one is missing, CONTEXA does not turn on, the start stops, or no decisions are made. A decision is the conclusion the AI model reaches about a user's request: ALLOW, step-up authentication (CHALLENGE), held for review (ESCALATE) or BLOCK. Step-up authentication is a decision that asks for MFA.</p>
+
+          <h3 id="must-set">What you must set</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Item</th><th>What to set</th><th>If you leave it out</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td>Turning CONTEXA on</td><td><code>@EnableAISecurity</code> on the main class, and the <code>spring-boot-starter-security</code> dependency, which your application declares itself</td><td>With only the starter dependency, CONTEXA does not turn on and the application runs unchanged. With the annotation but without Spring Security, the start is refused.</td><td><a href="configuration/infrastructure.html#enable">Turning it on</a></td></tr>
+              <tr><td>Dedicated database</td><td><code>contexa.datasource.url</code>. If the database requires an account, also set <code>contexa.datasource.username</code> and <code>contexa.datasource.password</code>.</td><td>The start stops. An address equal to the application's own database (<code>spring.datasource.url</code>) is refused by default.</td><td><a href="configuration/infrastructure.html#database">Dedicated CONTEXA database (required)</a></td></tr>
+              <tr><td>AI model and vector store</td><td>The Spring AI starter of a chat model provider and its keys (<code>spring.ai.*</code>), an embedding model, and the pgvector vector store starter</td><td>The application starts but makes no decisions. Protected requests stay in analysis pending (<code>PENDING_ANALYSIS</code>), and the <code>[ContexaCapability]</code> lines in the startup log name what is missing.</td><td><a href="configuration/ai.html#providers">Connecting a provider</a></td></tr>
+              <tr><td>The application's sign-in (default mode)</td><td>A <code>SecurityFilterChain</code> of the application, or application users (<code>UserDetailsService</code> · <code>AuthenticationProvider</code> · <code>AuthenticationManager</code> beans)</td><td>With neither, the start is refused. With users but no chain, Spring Boot's default security turns on and every request requires authentication. Declare one of them, or leave sign-in to CONTEXA with <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>.</td><td><a href="spring-boot.html#host-owned">When your application owns sign-in (default)</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="before-production">What to decide before production</h3>
+          <p>The settings below start with their defaults. In a production environment the defaults may not match your requirements. Decide the value before deployment, or confirm that the default is right.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>Why to decide it</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>The default stores decisions and applies them from the next request. When you first adopt CONTEXA, start in shadow mode (<code>SHADOW</code>). Shadow mode records decisions but blocks no request, so you can see how many false positives it produces (decisions that treat a normal user's request as a risk) before you switch to <code>ENFORCE</code>.</td><td><a href="configuration/security.html#mode">Choosing the operating mode</a> · <a href="shadow-mode.html">Start Safely in Shadow Mode</a></td></tr>
+              <tr><td><code>contexa.security.evidence.signing.keys</code></td><td>None</td><td>Without a key, CONTEXA signs with a temporary key, and signatures made with it cannot be verified after a restart. To verify decision records and sealed evidence (the signed audit trail of what a decision was based on) after a restart, set a key.</td><td><a href="../reference/architecture/evidence.html#settings">Sealed evidence settings</a></td></tr>
+              <tr><td><code>contexa.infrastructure.mode</code></td><td><code>standalone</code></td><td>Standalone mode keeps decisions and learning state in the memory of the application process. After a restart the behavioral baseline (the record of a user's usage pattern: hours, network, device) is gone, and several instances do not share decisions. If either matters, switch to <code>distributed</code>.</td><td><a href="configuration/infrastructure.html#modes">Choosing standalone or distributed</a></td></tr>
+              <tr><td><code>contexa.iam.seed.admin.password</code></td><td>None</td><td>The admin console (<code>/contexa/admin</code>) needs a CONTEXA administrator account. When you set this value, CONTEXA creates one administrator at start.</td><td><a href="configuration/iam.html#seed">First start: schema and default data</a></td></tr>
+              <tr><td><code>contexa.iam.seed.accounts.enabled</code></td><td>None</td><td>The five sample accounts share one password. If you set neither this value nor the administrator password, they are created in a dedicated database that has no user account yet. In production, set <code>false</code> explicitly so that they are not created.</td><td><a href="configuration/iam.html#seed">First start: schema and default data</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="defaults-ok">Settings whose defaults are enough</h3>
+          <p>These areas work without any setting. Adjust them only when you see a problem or have a requirement of your own.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Area</th><th>What it sets</th><th>When to adjust</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td>Decision time limits and throughput</td><td>The longest one analysis may take, the size of the analysis queue, how many analyses run at once</td><td>When the model is slow and analyses end by timeout, or when many concurrent users fill the queue</td><td><a href="configuration/security.html#timeouts">Decision time limits</a> · <a href="configuration/security.html#throughput">Throughput and queues</a></td></tr>
+              <tr><td>Decision prompt</td><td>How much information goes to the AI model, and the prompt version</td><td>To lower cost and response time by sending less, or to give the decision more evidence</td><td><a href="configuration/security.html#prompt">Tuning the decision prompt</a></td></tr>
+              <tr><td>Minimum-action rules</td><td>A floor on the model's answer: when the facts of a decision match a condition, the answer must be at least that action. The default <code>OBSERVE</code> only records a violation.</td><td>To enforce the floor (<code>ENFORCE</code>)</td><td><a href="configuration/security.html#minimum-action">Minimum-action rules</a></td></tr>
+              <tr><td>Behavioral baseline learning</td><td>How fast usage patterns are learned per user, how long they are kept, and how many learned requests a baseline needs before it is stable</td><td>When a baseline becomes stable too late or too early, or your retention policy differs</td><td><a href="configuration/security.html#baseline">Behavioral baseline learning</a></td></tr>
+              <tr><td>Cache and scheduled jobs</td><td>The type and lifetime of the CONTEXA cache, and the lock that runs a scheduled job once across several instances</td><td>When every instance must see a changed policy at once in distributed mode, or when you move the database</td><td><a href="configuration/infrastructure.html#cache">Cache</a> · <a href="configuration/infrastructure.html#scheduler-lock">Scheduled jobs across instances</a></td></tr>
+              <tr><td>Turning features on and off, capability checks</td><td>The keys that switch the auto-configuration of each feature, and how the start checks the required parts</td><td>To turn off a feature you do not use, or to stop the start when a required part is missing</td><td><a href="configuration/infrastructure.html#switches">Turning features on and off</a> · <a href="configuration/infrastructure.html#capability">Capability checks</a></td></tr>
+              <tr><td>Model bindings and the call gate</td><td>How models get names and aliases, and how many calls a model server accepts at once</td><td>When a model name you wrote does not match a model in the list, or calls queue up on a self-hosted server</td><td><a href="configuration/ai.html#bindings">Naming models (bindings)</a> · <a href="configuration/ai.html#model-server-gate">How many calls a model server takes</a></td></tr>
+            </tbody>
+          </table></div>
+
           <h2 id="tasks">Find settings by task</h2>
-          <p>Every CONTEXA setting goes where Spring Boot reads settings (<code>application.yml</code>, environment variables and so on). Pick the page below for what you want to change. Each setting is explained in detail on one page only; other pages link to it.</p>
+          <p>Every CONTEXA setting goes where Spring Boot reads settings (<code>application.yml</code>, environment variables and so on). Find what you want to do in the tables below and go to the section in the right-hand column. Each setting is explained in detail on one page only; other pages link to it.</p>
+
+          <h3 id="tasks-start">First start and checking</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What you want to do</th><th>Settings to change</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td>Turn CONTEXA on for the first time and check that decisions come out</td><td><code>@EnableAISecurity</code>, <code>contexa.datasource.url</code>, <code>spring.ai.*</code> keys</td><td><a href="#minimal">Minimal configuration example</a> · <a href="installation-guide.html">Installation Guide</a></td></tr>
+              <tr><td>Check that it is on, or no decisions come out</td><td><code>contexa.capability.mode</code>, the <code>[ContexaCapability]</code> lines of the startup log</td><td><a href="configuration/infrastructure.html#capability">Capability checks</a> · <a href="configuration/infrastructure.html#check">Checking that it is connected</a> · <a href="troubleshooting.html#decisions-pending">No decisions come out</a></td></tr>
+              <tr><td>The start stops</td><td>The cause (Description) and the action (Action) that the startup log gives</td><td><a href="installation-guide.html#startup-errors">Common errors on the first start</a> · <a href="troubleshooting.html#startup-errors">Application startup errors</a></td></tr>
+              <tr><td>Create an account for the admin console</td><td><code>contexa.iam.seed.admin.password</code>, <code>contexa.iam.seed.accounts.enabled</code></td><td><a href="configuration/iam.html#seed">First start: schema and default data</a> · <a href="installation-guide.html#admin-console">Look in the admin console</a></td></tr>
+              <tr><td>Turn off a feature you do not use</td><td><code>contexa.enabled</code>, <code>contexa.llm.enabled</code> and the other feature keys</td><td><a href="configuration/infrastructure.html#switches">Turning features on and off</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="tasks-model">AI models</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What you want to do</th><th>Settings to change</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td>Change or add a model provider (OpenAI · Anthropic · Ollama)</td><td><code>spring.ai.*</code> keys, <code>contexa.llm.selection.chat.priority</code></td><td><a href="configuration/ai.html#providers">Connecting a provider</a> · <a href="configuration/ai.html#default-chat-model">Choosing the primary chat model</a></td></tr>
+              <tr><td>Use different models for Layer 1 (the first analysis of a request) and Layer 2 (the second analysis of a request that Layer 1 held for review)</td><td><code>contexa.security.tiered.llm.layer1.model</code>, <code>contexa.security.tiered.llm.layer2.model</code></td><td><a href="configuration/ai.html#layer-models">Layer 1 and Layer 2 models</a></td></tr>
+              <tr><td>Use a local Ollama server</td><td><code>contexa.llm.chat.ollama.base-url</code></td><td><a href="configuration/ai.html#ollama">Using a local Ollama</a></td></tr>
+              <tr><td>Change the embedding model or the vector dimension. If the dimension differs from the vectors already stored, the start stops.</td><td><code>contexa.llm.selection.embedding.priority</code>, <code>contexa.llm.embedding.dimensions</code></td><td><a href="configuration/ai.html#embedding">Embedding model and vector dimension</a></td></tr>
+              <tr><td>You reach the per-minute call limit of a provider</td><td><code>contexa.security.plane.llm-provider-throttle.*</code>, <code>contexa.llm.gate.*</code></td><td><a href="configuration/security.html#provider-throttle">Throttling provider calls</a> · <a href="configuration/ai.html#model-server-gate">How many calls a model server takes</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="tasks-mode">Operating mode and decision tuning</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What you want to do</th><th>Settings to change</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td>Start in shadow mode. It records decisions but blocks no request. A call without sign-in is still refused in shadow mode.</td><td><code>contexa.security.zerotrust.mode: SHADOW</code></td><td><a href="configuration/security.html#mode">Choosing the operating mode</a> · <a href="shadow-mode.html">Start Safely in Shadow Mode</a></td></tr>
+              <tr><td>Move from shadow mode to enforcement mode</td><td><code>contexa.security.zerotrust.mode: ENFORCE</code></td><td><a href="shadow-mode.html#go-enforce">Moving to <code>ENFORCE</code></a> · <a href="shadow-mode.html#rollback">Rolling back</a></td></tr>
+              <tr><td>Change the mode while the application runs, without a restart</td><td>The admin console's system settings (<code>/contexa/admin/system-settings</code>)</td><td><a href="configuration/security.html#mode-console">Changing it in the admin console</a> · <a href="#precedence">Which value wins</a></td></tr>
+              <tr><td>Turn decisions off</td><td><code>contexa.security.zerotrust.mode: DISABLED</code></td><td><a href="configuration/security.html#mode">Choosing the operating mode</a></td></tr>
+              <tr><td>Normal users are often asked for step-up authentication. First look at the decision records for the cause. When the model call fails or times out, the decision ends in step-up authentication, and a request that Layer 2 also cannot decide gets a fallback action.</td><td><code>contexa.security.tiered.layer1.timeout.llm-ms</code>, <code>contexa.security.tiered.layer2.escalate-fallback-action</code></td><td><a href="shadow-mode.html#where-to-look">Where to look at the results</a> · <a href="configuration/security.html#timeouts">Decision time limits</a> · <a href="configuration/security.html#escalate">When a decision cannot be made</a></td></tr>
+              <tr><td>Tune or turn off behavioral baseline learning</td><td><code>contexa.security.zerotrust.baseline.learning.enabled</code>, <code>contexa.security.zerotrust.baseline.retention</code></td><td><a href="configuration/security.html#baseline">Behavioral baseline learning</a></td></tr>
+              <tr><td>Receive risk signals from outside systems (off by default)</td><td><code>contexa.security.zerotrust.risk-signals.receiver-enabled</code></td><td><a href="configuration/security.html#risk-signals">Receiving outside risk signals (off by default)</a></td></tr>
+              <tr><td>Read the client IP correctly behind a proxy or a load balancer</td><td><code>contexa.security.tiered.security.trusted-proxies</code></td><td><a href="configuration/security.html#trusted-proxies">Client IP and trusted proxies</a></td></tr>
+              <tr><td>Set the call limits, the confirmation by the accountable person and the scope narrowing for AI agents</td><td>The agent limit settings</td><td><a href="../reference/agent/controls.html#settings">Agent Limits</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="tasks-login">Sign-in and authorization</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What you want to do</th><th>Settings to change</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td>Connect the sign-in your application already has to CONTEXA</td><td><code>contexa.bridge.*</code></td><td><a href="../reference/common/bridge.html#settings">Connecting Your Existing Login settings</a> · <a href="spring-boot.html#host-owned">When your application owns sign-in (default)</a> · <a href="installation-guide.html#legacy-integration">Connect your existing sign-in</a></td></tr>
+              <tr><td>Let CONTEXA own sign-in. The mode of the annotation and the ownership setting must agree. If they do not, the start is refused.</td><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code> or <code>contexa.bridge.ownership: CONTEXA_OWNED</code></td><td><a href="spring-boot.html#full-changes">Before you choose <code>FULL</code></a> · <a href="configuration/identity.html#when">When these settings apply</a></td></tr>
+              <tr><td>When CONTEXA owns sign-in, set the signed-in state (session or token) and the token lifetime</td><td><code>contexa.auth.state-type</code>, <code>contexa.auth.access-token-validity</code></td><td><a href="configuration/identity.html#state">Signed-in state: session or OAuth2 token</a> · <a href="configuration/identity.html#tokens">Token lifetimes and concurrent sign-ins</a></td></tr>
+              <tr><td>When CONTEXA owns sign-in, set the MFA time limits and the sign-in addresses. Some keys have no effect, so check <a href="#unused-keys">Settings that have no effect</a> first.</td><td><code>contexa.auth.mfa.*</code>, <code>contexa.auth.urls.*</code></td><td><a href="configuration/identity.html#mfa">MFA time limits and retries</a> · <a href="configuration/identity.html#urls">Sign-in and MFA addresses</a></td></tr>
+              <tr><td>Let CONTEXA issue tokens</td><td><code>contexa.auth.oauth2.*</code></td><td><a href="configuration/identity.html#issuer">When CONTEXA issues tokens (authorization server)</a></td></tr>
+              <tr><td>Decide what happens when several policies (authorization rules created in the admin console) match, or when none does</td><td><code>contexa.policy.combining-algorithm</code>, <code>contexa.policy.no-matching-url-policy-decision</code>, <code>contexa.policy.missing-method-policy-decision</code></td><td><a href="configuration/iam.html#decisions">When several policies match, and when none does</a> · <a href="#precedence">Which value wins</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="tasks-deploy">Deployment, performance and evidence</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>What you want to do</th><th>Settings to change</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td>Deploy several instances, or keep the learning state across restarts. If any of <code>spring-boot-starter-data-redis</code>, <code>org.redisson:redisson</code> and <code>spring-statemachine-data-redis</code> is missing, the start is refused.</td><td><code>contexa.infrastructure.mode: distributed</code>, the Redis and Kafka connection settings</td><td><a href="configuration/infrastructure.html#distributed">Moving to distributed mode</a> · <a href="configuration/infrastructure.html#modes">Choosing standalone or distributed</a> · <a href="installation-guide.html#distributed">Moving to a distributed deployment</a></td></tr>
+              <tr><td>Make every instance see a changed policy at once in distributed mode</td><td><code>contexa.cache.type</code></td><td><a href="configuration/infrastructure.html#cache">Cache</a></td></tr>
+              <tr><td>Responses are slow</td><td><code>sync</code> of <code>@Protectable</code>, the Layer 1 model, the time limits</td><td><a href="#slow">When responses are slow</a></td></tr>
+              <tr><td>Send tracing (OpenTelemetry) to a collector</td><td><code>contexa.opentelemetry.*</code></td><td><a href="configuration/infrastructure.html#opentelemetry">Tracing (OpenTelemetry)</a></td></tr>
+              <tr><td>Set the signing keys and the retention of decision records and sealed evidence</td><td><code>contexa.security.evidence.signing.keys</code>, <code>contexa.pqa.oss.sealed-evidence.retention.period</code></td><td><a href="../reference/architecture/evidence.html#settings">Sealed evidence settings</a></td></tr>
+              <tr><td>Send decisions to CONTEXA SaaS (optional)</td><td>The CONTEXA SaaS settings</td><td><a href="../reference/core/saas.html#settings">CONTEXA SaaS</a></td></tr>
+              <tr><td>Find the default of a setting and the page that explains it by its name</td><td>—</td><td><a href="configuration/index-all.html">Settings index</a></td></tr>
+              <tr><td>A setting name from an older document or example has no effect</td><td>—</td><td><a href="#moved-keys">Moved keys · removed keys</a></td></tr>
+              <tr><td>You changed a value and nothing changed</td><td>—</td><td><a href="#precedence">Which value wins</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="slow">When responses are slow</h3>
+          <p>By default CONTEXA analyzes a request after the response has left, so the analysis time is not added to the response time of that request. A response is slow when the request has to wait for a decision. Check in this order.</p>
+          <ol>
+            <li>Check whether the slow request is a <code>@Protectable(sync = true)</code> method. <code>sync = true</code> waits for the decision inside the request, before the method runs. The default is <code>false</code>, so use <code>sync = true</code> only for a method that needs the decision at once (<a href="../reference/iam/protectable.html"><code>@Protectable</code></a>).</li>
+            <li>Check whether the request comes from a new session, a new IP address or a new browser. A person's request whose session, address or browser changed since the user's last decision waits for the decision of that request, even for a default (asynchronous) method. The wait does not exceed <code>contexa.security.zerotrust.agent.flight.wait</code> (default <code>40s</code>) (<a href="../reference/agent/controls.html#flight">Decision merging</a>). For requests from the same session, address and browser, an ALLOW decision is reused without a new analysis for <code>contexa.security.zerotrust.allow-validity</code> (default <code>15m</code>) (<a href="configuration/security.html#mode">Choosing the operating mode</a>).</li>
+            <li>Check whether the analysis itself takes long. If the model is slow, set a faster model for Layer 1 (<code>contexa.security.tiered.llm.layer1.model</code>, <a href="configuration/ai.html#layer-models">Layer 1 and Layer 2 models</a>). The time limit of the whole Layer 1 analysis is <code>contexa.security.tiered.layer1.timeout.llm-ms</code> (default <code>90000</code> ms) (<a href="configuration/security.html#timeouts">Decision time limits</a>).</li>
+            <li>Check how long a decision made inside the request waits for the search of past decision records. The default is <code>contexa.security.tiered.layer1.timeout.interactive-rag-wait-ms</code> (<code>600</code> ms) (<a href="configuration/security.html#timeouts">Decision time limits</a>).</li>
+            <li>A self-hosted model server such as Ollama takes only a limited number of calls at once. The default is <code>2</code> (<code>contexa.llm.gate.self-hosted-max-concurrent</code>). Set it to the number of requests the server can process at once (<a href="configuration/ai.html#model-server-gate">How many calls a model server takes</a>).</li>
+          </ol>
+
+          <h3 id="areas">All settings pages</h3>
+          <p>Settings are spread over the five settings pages below and the settings sections of the feature pages.</p>
+
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>Settings pages by task</strong>"Settings" is a configuration page, "Feature" is the settings section of a feature page. Click a title to go there.</figcaption>
+            <figcaption class="dg-caption"><strong>Settings pages and the settings sections of feature pages</strong>The tag "Settings" marks a configuration page, and "Feature" marks the settings section of a feature page. Click a title to go there.</figcaption>
             <div class="dg-grid">
               <div class="dg-node"><span class="dg-node-tag">Settings</span><span class="dg-node-title"><a href="configuration/infrastructure.html">First Start and Deployment</a></span><span class="dg-node-desc">Dependencies, <code>@EnableAISecurity</code>, the dedicated database (required), capability checks, standalone · distributed (Redis · Kafka), cache, tracing</span></div>
               <div class="dg-node"><span class="dg-node-tag">Settings</span><span class="dg-node-title"><a href="configuration/ai.html">Connecting AI Models</a></span><span class="dg-node-desc">Choosing the chat and embedding models, the models for Layer 1 and Layer 2, the vector store</span></div>
-              <div class="dg-node"><span class="dg-node-tag">Settings</span><span class="dg-node-title"><a href="configuration/security.html">Enforcement Modes and Decision Tuning</a></span><span class="dg-node-desc">Disabled · Shadow · Enforce, request-time enforcement, decision time and throughput, the decision prompt, minimum-action rules, behavioral baseline learning</span></div>
-              <div class="dg-node"><span class="dg-node-tag">Settings</span><span class="dg-node-title"><a href="configuration/identity.html">When CONTEXA Owns Login</a></span><span class="dg-node-desc">Login · MFA · tokens when CONTEXA owns authentication (<code>CONTEXA_OWNED</code>)</span></div>
+              <div class="dg-node"><span class="dg-node-tag">Settings</span><span class="dg-node-title"><a href="configuration/security.html">Operating Modes and Decision Tuning</a></span><span class="dg-node-desc">Operating mode (Disabled · Shadow · Enforce), request-time enforcement, decision time and throughput, the decision prompt, minimum-action rules, behavioral baseline learning</span></div>
+              <div class="dg-node"><span class="dg-node-tag">Settings</span><span class="dg-node-title"><a href="configuration/identity.html">Authentication and Sign-in</a></span><span class="dg-node-desc">Login · MFA · tokens when CONTEXA owns authentication (<code>CONTEXA_OWNED</code>)</span></div>
               <div class="dg-node"><span class="dg-node-tag">Settings</span><span class="dg-node-title"><a href="configuration/iam.html">Authorization Policies</a></span><span class="dg-node-desc">Policy combining, the decision when no policy matches, the admin console</span></div>
               <div class="dg-node"><span class="dg-node-tag">Feature</span><span class="dg-node-title"><a href="../reference/agent/controls.html#settings">Agent Limits</a></span><span class="dg-node-desc">Call limits, confirmation by the accountable person, scope narrowing, decision merging</span></div>
               <div class="dg-node"><span class="dg-node-tag">Feature</span><span class="dg-node-title"><a href="../reference/architecture/evidence.html#settings">Evidence · inspection</a></span><span class="dg-node-desc">Signing keys of sealed evidence, sealing rate, retention</span></div>
@@ -32,16 +157,16 @@
             </div>
           </figure>
 
-          <h2 id="where">Where settings act</h2>
-          <p>CONTEXA works in two streams. When a request comes in, it applies the decision already stored (request time). After the response has left, it analyzes that request and makes the decision for the next request (asynchronous decision). The two streams meet at the decision store. Each box names the settings page that controls that point.</p>
+          <h2 id="where">Where settings apply</h2>
+          <p>CONTEXA works in two stages. First, when a request comes in, it applies the decision already stored (request time). Second, after the response has left, it analyzes that request and makes the decision for the same user's next request (asynchronous decision). The two stages are linked through the decision store. Each box in the figure names the settings page that controls that point.</p>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>Two streams and their settings pages</strong>A new decision applies from the same user's next request. What you decide once at start-up (the dedicated database · standalone/distributed · capability checks) is in <a href="configuration/infrastructure.html">First Start and Deployment</a>.</figcaption>
+            <figcaption class="dg-caption"><strong>Two stages and their settings pages</strong>A new decision applies from the same user's next request. The settings you decide once at start-up (the dedicated database · standalone/distributed · capability checks) are in <a href="configuration/infrastructure.html">First Start and Deployment</a>.</figcaption>
             <div class="dg-lanes">
               <section class="dg-lane"><h4 class="dg-lane-title">Request time<span class="dg-lane-sub">while the user waits</span></h4>
                 <ol class="dg-flow">
                   <li class="dg-node dg-request"><span class="dg-node-title">Request arrives</span></li>
-                  <li class="dg-node dg-host"><span class="dg-node-title">Login check</span><span class="dg-node-desc">By default the application's Spring Security does it (<a href="../reference/common/bridge.html#settings">Connecting Your Existing Login</a>). When CONTEXA owns login, <a href="configuration/identity.html">login settings</a></span></li>
-                  <li class="dg-node"><span class="dg-node-title">Authorization policy and stored decision</span><span class="dg-node-desc">Stored decisions at the URL step and before <code>@Protectable</code> methods, in both ownerships; authorization policies before <code>@Protectable</code> methods, and at the URL step when a security chain connects them. <a href="configuration/iam.html">Authorization Policies</a> · <a href="configuration/security.html">Enforcement Modes and Decision Tuning</a></span></li>
+                  <li class="dg-node dg-host"><span class="dg-node-title">Login check</span><span class="dg-node-desc">By default the application's Spring Security checks the sign-in (<a href="../reference/common/bridge.html#settings">Connecting Your Existing Login</a>). When CONTEXA owns login, CONTEXA checks it, and the settings are in <a href="configuration/identity.html">login settings</a>.</span></li>
+                  <li class="dg-node"><span class="dg-node-title">Authorization policy and stored decision</span><span class="dg-node-desc">Stored decisions apply at the URL request step and before <code>@Protectable</code> methods, whichever side owns sign-in. Authorization policies apply before <code>@Protectable</code> methods, and also at the URL request step when the security chain connects CONTEXA's policy manager. <a href="configuration/iam.html">Authorization Policies</a> · <a href="configuration/security.html">Operating Modes and Decision Tuning</a></span></li>
                   <li class="dg-node dg-host"><span class="dg-node-title">Run and respond</span></li>
                 </ol>
               </section>
@@ -52,9 +177,9 @@
               </div>
               <section class="dg-lane"><h4 class="dg-lane-title">Asynchronous decision<span class="dg-lane-sub">after the response has left</span></h4>
                 <ol class="dg-flow">
-                  <li class="dg-node"><span class="dg-node-title">Analysis queue</span><span class="dg-node-desc">Throughput · time limits. <a href="configuration/security.html">Enforcement Modes and Decision Tuning</a></span></li>
-                  <li class="dg-node dg-model"><span class="dg-node-title">AI model decides</span><span class="dg-node-desc">Which model is asked. <a href="configuration/ai.html">Connecting AI Models</a></span></li>
-                  <li class="dg-node"><span class="dg-node-title">Store the decision and learn</span><span class="dg-node-desc">Whether to store it (operating mode), what is learned. <a href="configuration/security.html">Enforcement Modes and Decision Tuning</a></span></li>
+                  <li class="dg-node"><span class="dg-node-title">Analysis queue</span><span class="dg-node-desc">Throughput · time limits. <a href="configuration/security.html">Operating Modes and Decision Tuning</a></span></li>
+                  <li class="dg-node dg-model"><span class="dg-node-title">AI model decides</span><span class="dg-node-desc">Decides which model is used for the analysis. <a href="configuration/ai.html">Connecting AI Models</a></span></li>
+                  <li class="dg-node"><span class="dg-node-title">Store the decision and learn</span><span class="dg-node-desc">Decides whether the decision is stored (operating mode) and what is learned. <a href="configuration/security.html">Operating Modes and Decision Tuning</a></span></li>
                   <li class="dg-node dg-store"><span class="dg-node-title">Seal evidence and write the audit record</span><span class="dg-node-desc"><a href="../reference/architecture/evidence.html#settings">Evidence · inspection</a></span></li>
                 </ol>
               </section>
@@ -62,8 +187,8 @@
             <div class="dg-legend"><span class="dg-request">Request</span><span class="dg-host">Application</span><span class="dg-contexa">CONTEXA</span><span class="dg-store">Store</span><span class="dg-model">AI model</span></div>
           </figure>
 
-          <h2 id="minimal">Minimal configuration that boots</h2>
-          <p>The smallest setup that adds CONTEXA to a Spring Boot application with sign-in of its own and runs decisions. It uses one OpenAI model and one PostgreSQL database that can use the pgvector extension. For other models (Anthropic · Ollama), see <a href="configuration/ai.html">Connecting AI Models</a>.</p>
+          <h2 id="minimal">Minimal configuration example</h2>
+          <p>The smallest setup that adds CONTEXA to a Spring Boot application that already has sign-in and runs decisions. It uses one OpenAI model and one PostgreSQL database that can use the pgvector extension. For other models (Anthropic · Ollama), see <a href="configuration/ai.html">Connecting AI Models</a>.</p>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>Three steps to turn it on</strong>With only the starter dependency, CONTEXA stays off. It turns on when you add <code>@EnableAISecurity</code>.</figcaption>
             <ol class="dg-flow">
@@ -100,18 +225,18 @@ spring:
   ai:
     openai:
       api-key: ${OPENAI_API_KEY}</code></pre>
-          <p>Starting with this configuration settles the following.</p>
+          <p>Starting with this configuration works as follows.</p>
           <ul>
-            <li>On the first start CONTEXA creates its tables and default data in the dedicated database (<code>contexa.iam.seed.enabled</code>, default <code>true</code>), and the pgvector extension and vector table (the default CONTEXA adds, <code>contexa.vectorstore.pgvector.initialize-schema=true</code>).</li>
-            <li>The decision model is the OpenAI chat model; embeddings use OpenAI <code>text-embedding-ada-002</code> (1536 dimensions), Spring AI's default when no model is named. CONTEXA follows your application's embedding model and does not set one.</li>
-            <li>The operating mode is <code>ENFORCE</code> (decisions are stored and applied from the next request), the infrastructure mode is standalone (decision and learning state kept in memory).</li>
-            <li>The application owns login (<code>HOST_OWNED</code>). CONTEXA analyzes calls to methods marked <code>@Protectable</code>, and a decision it stores is enforced on every path, by filters that run right after the application's security chain and again before <code>@Protectable</code> methods. You choose what to protect with <a href="../reference/iam/protectable.html"><code>@Protectable</code></a>.</li>
+            <li>On the first start CONTEXA creates its own tables and default data in the dedicated database (<code>contexa.iam.seed.enabled</code>, default <code>true</code>). At the same time it creates the pgvector extension and the vector table (the default CONTEXA adds, <code>contexa.vectorstore.pgvector.initialize-schema=true</code>).</li>
+            <li>Decisions use the OpenAI chat model. No embedding model is named, so embeddings use Spring AI's default, OpenAI <code>text-embedding-ada-002</code> (1536 dimensions). CONTEXA follows your application's embedding model and does not set one.</li>
+            <li>The operating mode is <code>ENFORCE</code>: decisions are stored and applied from the next request. The infrastructure mode is standalone: decision and learning state stay in memory.</li>
+            <li>The application owns sign-in (<code>HOST_OWNED</code>). CONTEXA analyzes calls to methods marked <code>@Protectable</code>. It applies a stored decision in two places: a filter that runs right after the application's security chain applies it on every path, and a check applies it once more before a <code>@Protectable</code> method runs. You choose what to protect with <a href="../reference/iam/protectable.html"><code>@Protectable</code></a>.</li>
           </ul>
           <div class="callout callout-warning">
-            <strong>Set <code>contexa-owned-application: true</code> only when the application has no database of its own.</strong> It makes the application's default <code>DataSource</code> · <code>JdbcTemplate</code> the CONTEXA database too. Spring AI's pgvector auto-configuration builds the vector store on the application's default <code>JdbcTemplate</code>, so in a new application this line puts the vector table in the CONTEXA database. An application with its own database leaves this line out; the vector store then uses the application's default database (which must be able to use pgvector). To keep the vector store in the CONTEXA database, declare your own <code>VectorStore</code> bean built on <code>contexaDataSource</code>; Spring AI's auto-configuration then backs off. Details are in <a href="configuration/infrastructure.html#database">Dedicated database</a>.
+            <strong>Set <code>contexa-owned-application: true</code> only when the application has no database of its own.</strong> This value makes the application's default <code>DataSource</code> · <code>JdbcTemplate</code> the CONTEXA database too. Spring AI's pgvector auto-configuration builds the vector store on the application's default <code>JdbcTemplate</code>. So in a new application this line puts the vector table in the CONTEXA database. An application with its own database leaves this line out. The vector store then uses the application's default database, which must be able to use pgvector. To keep the vector store in the CONTEXA database, declare your own <code>VectorStore</code> bean built on <code>contexaDataSource</code>. Spring AI's auto-configuration then does not apply. Details are in <a href="configuration/infrastructure.html#database">Dedicated database</a>.
           </div>
           <div class="callout callout-info">
-            <strong>This setup needs a <code>SecurityFilterChain</code> or users of the application's own.</strong> With neither, the start is refused and says what to do: declare one of them, or use <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>. With users but no chain, Spring Boot's default security turns on, every request requires authentication, and one WARN line appears in the start-up log. For using CONTEXA with an application's existing security settings, see <a href="spring-boot.html">Adding CONTEXA to a Spring Boot application</a>.
+            <strong>This setup needs a <code>SecurityFilterChain</code> or users of the application's own.</strong> With neither, the start is refused and the message says what to do. Declare one of them, or use <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>. With users but no chain, Spring Boot's default security turns on, every request requires authentication, and one WARN line appears in the start-up log. For using CONTEXA with an application's existing security settings, see <a href="spring-boot.html">Adding CONTEXA to a Spring Boot application</a>.
           </div>
 
           <h2 id="precedence">Which value wins</h2>
@@ -119,20 +244,26 @@ spring:
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Case</th><th>The value that wins</th></tr></thead>
             <tbody>
-              <tr><td>With <code>@EnableAISecurity</code></td><td>A <code>contexa.ai.security.*</code> value written in your application settings wins over the annotation attributes (<code>mode</code> and so on), which are the defaults for what you did not write. The authentication ownership <code>contexa.bridge.ownership</code> and <code>contexa.datasource.isolation.contexa-owned-application</code> follow <code>mode</code> only when you did not write them (<code>FULL</code> gives <code>CONTEXA_OWNED</code> · <code>true</code>), and an ownership you wrote that disagrees with <code>mode</code> refuses the start.</td></tr>
+              <tr><td>With <code>@EnableAISecurity</code></td><td>A <code>contexa.ai.security.*</code> value written in your application settings wins over the annotation attributes (<code>mode</code> and so on). The annotation attributes are the defaults for what you did not write. The authentication ownership <code>contexa.bridge.ownership</code> and <code>contexa.datasource.isolation.contexa-owned-application</code> follow <code>mode</code> only when you did not write them (<code>FULL</code> gives <code>CONTEXA_OWNED</code> · <code>true</code>). An ownership you wrote that disagrees with <code>mode</code> refuses the start.</td></tr>
               <tr><td>Standalone mode (default)</td><td><code>contexa.cache.type</code> is <code>LOCAL</code> whatever you write.</td></tr>
-              <tr><td>An operating mode saved in the admin console's system settings (<code>/contexa/admin/system-settings</code>)</td><td>The saved mode wins over <code>contexa.security.zerotrust.mode</code>. It applies as soon as it is saved, and at every start-up (<a href="configuration/security.html#mode-console">Operating mode</a>).</td></tr>
-              <tr><td>Policy decision values stored in the admin console's system settings</td><td>The policy combining algorithm and the decision for a method with no policy win over <code>contexa.policy.*</code>; the decision for a URL with no policy wins once an operator has saved one (until then <code>contexa.policy.no-matching-url-policy-decision</code> applies, <code>AUTHENTICATED</code> by default). The default seed writes this row from the start (<a href="configuration/iam.html">Authorization Policies</a>).</td></tr>
-              <tr><td>A key written with a legacy prefix</td><td>It is not read. The aliases of the legacy prefixes are gone, and only the new name is read (<a href="#legacy-prefixes">Legacy prefixes</a>).</td></tr>
-              <tr><td>Defaults CONTEXA adds</td><td>The pgvector table name · dimensions · automatic table creation (<code>contexa.vectorstore.pgvector.*</code>) and, when one chat or embedding provider is named, the Spring AI defaults that pick that provider (<code>spring.ai.model.chat</code> · <code>spring.ai.model.embedding</code>) have the lowest priority; a value you write is used instead. Of these defaults, those outside <code>contexa.*</code> are visible only when CONTEXA is turned on with <code>@EnableAISecurity</code>.</td></tr>
+              <tr><td>An operating mode saved in the admin console's system settings (<code>/contexa/admin/system-settings</code>)</td><td>The saved mode wins over <code>contexa.security.zerotrust.mode</code>. It applies as soon as it is saved, and again at every start-up (<a href="configuration/security.html#mode-console">Operating mode</a>).</td></tr>
+              <tr><td>Policy decision values stored in the admin console's system settings</td><td>The saved values win over <code>contexa.policy.*</code> for the policy combining algorithm and for the decision on a method with no policy. For a URL with no policy, the saved value wins only after an operator has saved one. Until then <code>contexa.policy.no-matching-url-policy-decision</code> applies (<code>AUTHENTICATED</code> by default). The default seed (the default data written on the first start) writes this settings row from the start (<a href="configuration/iam.html">Authorization Policies</a>).</td></tr>
+              <tr><td>A key written with a legacy prefix</td><td>It is not read. The aliases of the legacy prefixes are gone, so only the new name is read (<a href="#legacy-prefixes">Legacy prefixes</a>).</td></tr>
+              <tr><td>Defaults CONTEXA adds</td><td>The pgvector table name · dimensions · automatic table creation (<code>contexa.vectorstore.pgvector.*</code>) and, when one chat or embedding provider is named, the Spring AI defaults that pick that provider (<code>spring.ai.model.chat</code> · <code>spring.ai.model.embedding</code>) have the lowest priority; a value you write is used instead. Of these defaults, those outside <code>contexa.*</code> are read as settings only while CONTEXA is on through <code>@EnableAISecurity</code>.</td></tr>
             </tbody>
           </table></div>
 
           <h2 id="moved-keys">Moved keys · removed keys</h2>
-          <p>If a name you saw in an older document or example is below, change it to today's name. Documents outside these tables do not use the old names.</p>
+          <p>If a setting name you saw in an older document or example is in a table of this section, change it to today's name. Outside these tables this documentation does not use the old names. There are four tables.</p>
+          <ol>
+            <li><a href="#legacy-prefixes">Legacy prefixes</a>: keys whose prefix changed. There is no alias, so the old name is not read.</li>
+            <li><a href="#renamed-keys">Keys that were named wrongly</a>: names that were written wrongly in older documents.</li>
+            <li><a href="#removed-keys">Removed keys</a>: names that were removed from the code or never existed in it.</li>
+            <li><a href="#unused-keys">Settings that have no effect</a>: keys that exist in a settings class but whose value no code reads.</li>
+          </ol>
 
           <h3 id="legacy-prefixes">Legacy prefixes (no alias, not read)</h3>
-          <p>Keys written under the legacy prefixes below have no effect: no alias under the new name is created, and nothing is logged at start-up either. The old names are the application's own settings, so CONTEXA neither reads nor moves them. If your application still uses them, write the new names.</p>
+          <p>A key written under an old name in the right-hand column has no effect. CONTEXA creates no alias under the new name, and it logs nothing at start-up either. The old names are the application's own settings, so CONTEXA neither reads nor moves them. If your application still uses them, write the new names from the left-hand column.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Name today</th><th>Legacy name</th></tr></thead>
             <tbody>
@@ -210,7 +341,7 @@ spring:
               <tr><td><code>contexa.security.tiered.prompt-bundle.selector</code> · <code>contexa.security.tiered.layer1.prompt.max-similar-events</code> · <code>contexa.security.tiered.layer1.prompt.include-event-id</code> · <code>contexa.security.tiered.layer1.prompt.include-raw-timestamp</code></td><td>The code that read them left with the earlier prompt bundles. The version decisions use is chosen on the screen or by <code>contexa.security.tiered.prompt-bundle.active</code> (<a href="../reference/architecture/prompt-versions.html#resolve">How a decision's version is chosen</a>).</td></tr>
               <tr><td><code>contexa.security.session.create.allowed</code> · <code>contexa.security.session.hijack.*</code> · <code>contexa.security.session.threat.*</code></td><td>Under this prefix only the names for finding the session ID (<code>cookie.name</code> · <code>header.name</code> · <code>bearer.enabled</code>) are read.</td></tr>
               <tr><td><code>contexa.security.stepup.*</code></td><td>—</td></tr>
-              <tr><td><code>contexa.auth.factor-selection-type</code> · <code>contexa.auth.internal.login-uri</code> · <code>contexa.auth.internal.logout-uri</code> · <code>contexa.auth.refresh-rotate-threshold</code> · <code>contexa.auth.roles-claim</code> · <code>contexa.auth.scopes-claim</code> · <code>contexa.auth.token-issuer</code> · <code>contexa.auth.token-prefix</code></td><td>Login settings are in <a href="configuration/identity.html">When CONTEXA Owns Login</a>.</td></tr>
+              <tr><td><code>contexa.auth.factor-selection-type</code> · <code>contexa.auth.internal.login-uri</code> · <code>contexa.auth.internal.logout-uri</code> · <code>contexa.auth.refresh-rotate-threshold</code> · <code>contexa.auth.roles-claim</code> · <code>contexa.auth.scopes-claim</code> · <code>contexa.auth.token-issuer</code> · <code>contexa.auth.token-prefix</code></td><td>Login settings are in <a href="configuration/identity.html">Authentication and Sign-in</a>.</td></tr>
               <tr><td><code>contexa.auth.mfa.account-lockout-duration-ms</code> · <code>contexa.auth.mfa.audit-logging-enabled</code> · <code>contexa.auth.mfa.cache-ttl</code> · <code>contexa.auth.mfa.detailed-logging-enabled</code> · <code>contexa.auth.mfa.device-remember-duration-ms</code> · <code>contexa.auth.mfa.inactivity-timeout</code> · <code>contexa.auth.mfa.otp-token-length</code> · <code>contexa.auth.mfa.session-refresh-interval-ms</code> · <code>contexa.auth.mfa.state-machine-timeout-ms</code></td><td>—</td></tr>
               <tr><td><code>contexa.auth.urls.single.login-failure</code> · <code>contexa.auth.urls.single.ott.code-sent</code> · <code>contexa.auth.urls.single.ott.login-failure</code> · <code>contexa.auth.urls.single.passkey.login-page</code> · <code>contexa.auth.urls.single.passkey.login-failure</code></td><td>Nothing calls the methods that read these addresses.</td></tr>
               <tr><td><code>contexa.identity.statemachine.operation-timeout-seconds</code> · <code>contexa.identity.statemachine.persistence.enable-fallback</code></td><td>—</td></tr>

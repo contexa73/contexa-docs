@@ -12,18 +12,143 @@
               <span class="badge badge-secondary">설정</span>
             </div>
             <h1>설정 길잡이</h1>
-            <p class="lead">하려는 일에 맞는 설정 쪽을 찾고, 그대로 기동하는 최소 설정으로 시작합니다. 옛 문서 · 예제에서 본 설정 이름이 지금 무엇인지도 이 쪽 끝의 표에서 확인합니다.</p>
+            <p class="lead">CONTEXA의 설정을 하려는 일을 기준으로 찾는 안내 페이지입니다. 반드시 정해야 하는 설정과 기본값으로 충분한 설정을 먼저 구분하고, 하려는 일마다 어느 설정 페이지의 어느 소절을 보면 되는지 안내합니다. 옛 문서나 예제에서 본 설정 이름이 지금 무엇인지는 이 페이지 뒤쪽의 표에서 확인합니다.</p>
           </div>
 
-          <h2 id="tasks">할 일별로 찾기</h2>
-          <p>CONTEXA 설정은 모두 Spring Boot가 읽는 곳(<code>application.yml</code>, 환경 변수 등)에 적습니다. 무엇을 바꾸려는지에 따라 아래 쪽을 확인합니다. 한 설정은 한 쪽에서만 자세히 설명하고, 다른 쪽은 그 쪽으로 링크합니다.</p>
+          <h2 id="required">반드시 정할 설정과 기본값으로 충분한 설정</h2>
+          <p>CONTEXA 설정의 대부분은 기본값으로 동작합니다. 기동하려면 아래 네 가지를 갖춰야 합니다. 하나라도 없으면 CONTEXA가 켜지지 않거나, 기동이 멈추거나, 판정이 나오지 않습니다. 판정(Decision)은 AI 모델이 사용자의 요청을 분석해 내리는 결론이며, 허용(ALLOW) · 추가 인증(CHALLENGE) · 검토 보류(ESCALATE) · 차단(BLOCK) 중 하나입니다. 추가 인증은 MFA를 요구하는 판정입니다.</p>
+
+          <h3 id="must-set">반드시 정할 것</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>항목</th><th>정할 내용</th><th>정하지 않으면</th><th>설명</th></tr></thead>
+            <tbody>
+              <tr><td>CONTEXA 켜기</td><td>메인 클래스의 <code>@EnableAISecurity</code>, 그리고 앱이 직접 선언하는 <code>spring-boot-starter-security</code> 의존성</td><td>스타터 의존성만 있으면 CONTEXA는 켜지지 않고 앱은 그대로 동작합니다. 어노테이션을 붙였는데 Spring Security 의존성이 없으면 기동이 거부됩니다.</td><td><a href="configuration/infrastructure.html#enable">켜기</a></td></tr>
+              <tr><td>전용 DB</td><td><code>contexa.datasource.url</code>. DB가 계정을 요구하면 <code>contexa.datasource.username</code>과 <code>contexa.datasource.password</code>도 적습니다.</td><td>기동이 멈춥니다. 앱의 DB(<code>spring.datasource.url</code>)와 같은 주소를 적어도 기본으로 거부됩니다.</td><td><a href="configuration/infrastructure.html#database">CONTEXA 전용 DB(필수)</a></td></tr>
+              <tr><td>AI 모델과 벡터 저장소</td><td>채팅 모델 공급자의 Spring AI 스타터와 그 키(<code>spring.ai.*</code>), 임베딩 모델, pgvector 벡터 저장소 스타터</td><td>앱은 기동하지만 판정이 나오지 않습니다. 보호된 요청은 분석 대기(<code>PENDING_ANALYSIS</code>)로 남고, 기동 로그의 <code>[ContexaCapability]</code> 줄이 없는 부품을 알려 줍니다.</td><td><a href="configuration/ai.html#providers">공급자 붙이기</a></td></tr>
+              <tr><td>앱의 로그인(기본 방식)</td><td>앱의 <code>SecurityFilterChain</code> 또는 앱 사용자(<code>UserDetailsService</code> · <code>AuthenticationProvider</code> · <code>AuthenticationManager</code> 빈)</td><td>둘 다 없으면 기동이 거부됩니다. 사용자는 있고 체인이 없으면 Spring Boot 기본 보안이 켜져 모든 요청이 인증을 요구합니다. 둘 중 하나를 선언하거나 <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>로 로그인을 CONTEXA에 맡깁니다.</td><td><a href="spring-boot.html#host-owned">앱이 로그인을 맡을 때</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="before-production">운영 환경으로 옮기기 전에 정할 것</h3>
+          <p>아래 설정은 기본값으로도 기동합니다. 다만 운영 환경(production)에서는 기본값이 요구사항과 맞지 않을 수 있습니다. 배포 전에 값을 정하거나 기본값이 맞는지 확인해야 합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>정해야 하는 이유</th><th>설명</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>기본값은 판정을 저장하고 다음 요청부터 실제로 적용합니다. 처음 도입할 때는 관찰 모드(<code>SHADOW</code>)로 시작합니다. 관찰 모드는 판정을 기록하지만 요청을 막지 않으므로, 정상 사용자의 요청을 위험으로 판정하는 오탐이 얼마나 나오는지 확인한 뒤 <code>ENFORCE</code>로 바꿀 수 있습니다.</td><td><a href="configuration/security.html#mode">운영 모드 고르기</a> · <a href="shadow-mode.html">관찰 모드로 안전하게 시작하기</a></td></tr>
+              <tr><td><code>contexa.security.evidence.signing.keys</code></td><td>없음</td><td>키가 없으면 CONTEXA는 임시 키로 서명하고, 그 서명은 재시작 뒤 검증할 수 없습니다. 판정 기록과 봉인 증거(판정의 근거를 서명해 저장한 감사 증적)를 재시작 뒤에도 검증하려면 키를 정해야 합니다.</td><td><a href="../reference/architecture/evidence.html#settings">봉인 증거 설정</a></td></tr>
+              <tr><td><code>contexa.infrastructure.mode</code></td><td><code>standalone</code></td><td>단독 모드는 판정과 학습 상태를 앱 프로세스의 메모리에 둡니다. 재시작하면 행위 기준선(사용자별 접속 시간대 · 네트워크 · 단말 같은 사용 패턴의 기록)이 사라지고, 인스턴스가 여러 개이면 서로 판정을 공유하지 않습니다. 이 둘이 문제가 되면 <code>distributed</code>로 바꿉니다.</td><td><a href="configuration/infrastructure.html#modes">단독과 분산 고르기</a></td></tr>
+              <tr><td><code>contexa.iam.seed.admin.password</code></td><td>없음</td><td>관리 화면(<code>/contexa/admin</code>)에는 CONTEXA 관리자 계정이 필요합니다. 이 값을 정하면 기동할 때 관리자 한 명을 만듭니다.</td><td><a href="configuration/iam.html#seed">첫 기동: 스키마와 기본 데이터</a></td></tr>
+              <tr><td><code>contexa.iam.seed.accounts.enabled</code></td><td>없음</td><td>예시 계정 다섯은 공용 비밀번호를 씁니다. 이 값도 관리자 비밀번호도 정하지 않으면, 사용자 계정이 아직 없는 전용 DB에 예시 계정이 만들어집니다. 운영 환경에서는 <code>false</code>를 명시해 만들지 않도록 합니다.</td><td><a href="configuration/iam.html#seed">첫 기동: 스키마와 기본 데이터</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="defaults-ok">기본값으로 충분한 설정</h3>
+          <p>아래 영역은 설정하지 않아도 동작합니다. 증상이 있거나 조직의 요구사항이 있을 때만 조정합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>영역</th><th>정하는 것</th><th>조정하는 경우</th><th>설명</th></tr></thead>
+            <tbody>
+              <tr><td>판정 시간 제한과 처리량</td><td>분석 한 건이 걸릴 수 있는 최대 시간, 분석 대기열의 크기, 동시에 도는 분석의 수</td><td>모델이 느려 분석이 시간 초과로 끝나거나, 동시 사용자가 많아 대기열이 찰 때</td><td><a href="configuration/security.html#timeouts">판정 시간 제한</a> · <a href="configuration/security.html#throughput">처리량과 대기열</a></td></tr>
+              <tr><td>판정 프롬프트</td><td>AI 모델에 보내는 정보의 양과 프롬프트 버전</td><td>입력 크기를 줄여 비용과 응답 시간을 낮추거나, 판정 근거를 더 많이 전달할 때</td><td><a href="configuration/security.html#prompt">판정 프롬프트 다듬기</a></td></tr>
+              <tr><td>최소 대응 규칙</td><td>판정 사실이 조건에 맞으면 모델의 답이 적어도 그 대응이어야 한다는 하한. 기본값 <code>OBSERVE</code>는 하한을 어긴 것을 기록만 합니다.</td><td>하한을 강제해야 할 때(<code>ENFORCE</code>)</td><td><a href="configuration/security.html#minimum-action">최소 대응 규칙</a></td></tr>
+              <tr><td>행위 기준선 학습</td><td>사용자별 사용 패턴을 학습하는 속도, 보관 기간, 기준선이 안정되는 데 필요한 최소 학습 수</td><td>기준선이 너무 늦게 또는 너무 빨리 안정되거나, 보관 정책이 다를 때</td><td><a href="configuration/security.html#baseline">행위 기준선 학습</a></td></tr>
+              <tr><td>캐시와 예약 작업</td><td>CONTEXA 캐시의 종류와 유지 시간, 여러 인스턴스에서 예약 작업을 한 번만 실행하게 하는 잠금</td><td>분산 모드에서 변경한 정책을 인스턴스마다 바로 반영해야 하거나, DB를 옮길 때</td><td><a href="configuration/infrastructure.html#cache">캐시</a> · <a href="configuration/infrastructure.html#scheduler-lock">여러 인스턴스의 예약 작업</a></td></tr>
+              <tr><td>기능 켜고 끄기와 기능 진단</td><td>기능별 자동설정을 켜고 끄는 키, 기동할 때 필수 부품을 검사하는 방식</td><td>쓰지 않는 기능을 끄거나, 필수 부품이 없으면 기동을 멈추게 할 때</td><td><a href="configuration/infrastructure.html#switches">기능 켜고 끄기</a> · <a href="configuration/infrastructure.html#capability">기능 진단</a></td></tr>
+              <tr><td>모델 바인딩과 호출 관문</td><td>모델에 이름과 별칭을 붙이는 방법, 모델 서버가 한 번에 받는 호출 수</td><td>적은 모델 이름이 목록의 모델과 연결되지 않거나, 자체 호스팅 서버에서 호출이 대기열에 쌓일 때</td><td><a href="configuration/ai.html#bindings">모델에 이름 붙이기</a> · <a href="configuration/ai.html#model-server-gate">모델 서버가 한 번에 받는 호출 수</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="tasks">하려는 일별로 찾기</h2>
+          <p>CONTEXA 설정은 모두 Spring Boot가 읽는 곳(<code>application.yml</code>, 환경 변수 등)에 적습니다. 아래 표에서 하려는 일을 찾아 오른쪽 열의 소절로 이동합니다. 한 설정은 한 페이지에서만 자세히 설명하고, 다른 페이지는 그 소절로 링크합니다.</p>
+
+          <h3 id="tasks-start">처음 켜기와 확인</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>하려는 일</th><th>바꾸는 설정</th><th>설명</th></tr></thead>
+            <tbody>
+              <tr><td>처음 켜고 판정이 나오는지 확인하기</td><td><code>@EnableAISecurity</code>, <code>contexa.datasource.url</code>, <code>spring.ai.*</code> 키</td><td><a href="#minimal">최소 설정 예시</a> · <a href="installation-guide.html">설치 가이드</a></td></tr>
+              <tr><td>켜졌는지 확인하기, 또는 판정이 나오지 않을 때</td><td><code>contexa.capability.mode</code>, 기동 로그의 <code>[ContexaCapability]</code> 줄</td><td><a href="configuration/infrastructure.html#capability">기능 진단</a> · <a href="configuration/infrastructure.html#check">잘 붙었는지 확인하기</a> · <a href="troubleshooting.html#decisions-pending">판정이 계속 나오지 않음</a></td></tr>
+              <tr><td>기동이 멈출 때</td><td>기동 로그가 알려 주는 원인(Description)과 조치(Action)</td><td><a href="installation-guide.html#startup-errors">처음 기동할 때 자주 나는 오류</a> · <a href="troubleshooting.html#startup-errors">앱 기동 오류</a></td></tr>
+              <tr><td>관리 화면에 로그인할 계정 만들기</td><td><code>contexa.iam.seed.admin.password</code>, <code>contexa.iam.seed.accounts.enabled</code></td><td><a href="configuration/iam.html#seed">첫 기동: 스키마와 기본 데이터</a> · <a href="installation-guide.html#admin-console">관리 화면에서 보기</a></td></tr>
+              <tr><td>쓰지 않는 기능 끄기</td><td><code>contexa.enabled</code>, <code>contexa.llm.enabled</code> 등 기능별 키</td><td><a href="configuration/infrastructure.html#switches">기능 켜고 끄기</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="tasks-model">AI 모델</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>하려는 일</th><th>바꾸는 설정</th><th>설명</th></tr></thead>
+            <tbody>
+              <tr><td>모델 공급자 바꾸기 또는 더하기(OpenAI · Anthropic · Ollama)</td><td><code>spring.ai.*</code> 키, <code>contexa.llm.selection.chat.priority</code></td><td><a href="configuration/ai.html#providers">공급자 붙이기</a> · <a href="configuration/ai.html#default-chat-model">기본 채팅 모델 고르기</a></td></tr>
+              <tr><td>1차 분석(요청을 처음 분석하는 단계)과 2차 분석(1차 분석이 검토 보류로 정한 요청을 다시 분석하는 단계)에 서로 다른 모델 쓰기</td><td><code>contexa.security.tiered.llm.layer1.model</code>, <code>contexa.security.tiered.llm.layer2.model</code></td><td><a href="configuration/ai.html#layer-models">1차 · 2차 분석 모델</a></td></tr>
+              <tr><td>로컬 Ollama 서버 쓰기</td><td><code>contexa.llm.chat.ollama.base-url</code></td><td><a href="configuration/ai.html#ollama">로컬 Ollama 쓰기</a></td></tr>
+              <tr><td>임베딩 모델이나 벡터 차원 바꾸기. 이미 저장된 벡터의 차원과 다르면 기동이 멈춥니다.</td><td><code>contexa.llm.selection.embedding.priority</code>, <code>contexa.llm.embedding.dimensions</code></td><td><a href="configuration/ai.html#embedding">임베딩 모델과 벡터 차원</a></td></tr>
+              <tr><td>공급자의 분당 호출 한도에 도달했을 때</td><td><code>contexa.security.plane.llm-provider-throttle.*</code>, <code>contexa.llm.gate.*</code></td><td><a href="configuration/security.html#provider-throttle">공급자 호출 속도 조절</a> · <a href="configuration/ai.html#model-server-gate">모델 서버가 한 번에 받는 호출 수</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="tasks-mode">운영 모드와 판정 조정</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>하려는 일</th><th>바꾸는 설정</th><th>설명</th></tr></thead>
+            <tbody>
+              <tr><td>관찰 모드로 시작하기. 판정은 기록하지만 요청은 막지 않습니다. 로그인하지 않은 호출은 관찰 모드에서도 거부됩니다.</td><td><code>contexa.security.zerotrust.mode: SHADOW</code></td><td><a href="configuration/security.html#mode">운영 모드 고르기</a> · <a href="shadow-mode.html">관찰 모드로 안전하게 시작하기</a></td></tr>
+              <tr><td>관찰 모드에서 적용 모드로 전환하기</td><td><code>contexa.security.zerotrust.mode: ENFORCE</code></td><td><a href="shadow-mode.html#go-enforce"><code>ENFORCE</code>로 넘기기</a> · <a href="shadow-mode.html#rollback">되돌리기</a></td></tr>
+              <tr><td>재시작 없이 운영 중에 모드 바꾸기</td><td>관리 화면 시스템 설정(<code>/contexa/admin/system-settings</code>)</td><td><a href="configuration/security.html#mode-console">관리 화면에서 바꾸기</a> · <a href="#precedence">값이 정해지는 순서</a></td></tr>
+              <tr><td>판정 기능 끄기</td><td><code>contexa.security.zerotrust.mode: DISABLED</code></td><td><a href="configuration/security.html#mode">운영 모드 고르기</a></td></tr>
+              <tr><td>정상 사용자에게 추가 인증이 자주 요구될 때. 먼저 판정 기록에서 원인을 확인합니다. 모델 호출이 실패하거나 시간 초과가 되면 판정이 추가 인증이 되고, 2차 분석도 정하지 못한 요청에는 대체 대응이 적용됩니다.</td><td><code>contexa.security.tiered.layer1.timeout.llm-ms</code>, <code>contexa.security.tiered.layer2.escalate-fallback-action</code></td><td><a href="shadow-mode.html#where-to-look">결과 보는 곳</a> · <a href="configuration/security.html#timeouts">판정 시간 제한</a> · <a href="configuration/security.html#escalate">판정을 정하지 못할 때</a></td></tr>
+              <tr><td>행위 기준선 학습 조정하기 또는 끄기</td><td><code>contexa.security.zerotrust.baseline.learning.enabled</code>, <code>contexa.security.zerotrust.baseline.retention</code></td><td><a href="configuration/security.html#baseline">행위 기준선 학습</a></td></tr>
+              <tr><td>외부 시스템이 보내는 위험 신호 받기(기본 꺼짐)</td><td><code>contexa.security.zerotrust.risk-signals.receiver-enabled</code></td><td><a href="configuration/security.html#risk-signals">외부 위험 신호 받기</a></td></tr>
+              <tr><td>프록시나 로드 밸런서 뒤에서 클라이언트 IP를 정확히 읽기</td><td><code>contexa.security.tiered.security.trusted-proxies</code></td><td><a href="configuration/security.html#trusted-proxies">클라이언트 IP와 믿을 프록시</a></td></tr>
+              <tr><td>AI 에이전트의 호출 상한 · 책임자 확인 · 범위 축소 정하기</td><td>에이전트 제한 설정</td><td><a href="../reference/agent/controls.html#settings">에이전트 제한</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="tasks-login">로그인과 인가</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>하려는 일</th><th>바꾸는 설정</th><th>설명</th></tr></thead>
+            <tbody>
+              <tr><td>앱이 이미 가진 로그인과 CONTEXA 연결하기</td><td><code>contexa.bridge.*</code></td><td><a href="../reference/common/bridge.html#settings">기존 로그인 연결 설정</a> · <a href="spring-boot.html#host-owned">앱이 로그인을 맡을 때</a> · <a href="installation-guide.html#legacy-integration">기존 로그인과 연결하기</a></td></tr>
+              <tr><td>로그인을 CONTEXA에 맡기기. 어노테이션의 모드와 소유권 설정은 서로 맞아야 하며, 어긋나면 기동이 거부됩니다.</td><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code> 또는 <code>contexa.bridge.ownership: CONTEXA_OWNED</code></td><td><a href="spring-boot.html#full-changes"><code>FULL</code>을 고르기 전에</a> · <a href="configuration/identity.html#when">이 설정이 쓰일 때</a></td></tr>
+              <tr><td>CONTEXA가 로그인을 맡을 때 로그인 상태(세션 또는 토큰)와 토큰 수명 정하기</td><td><code>contexa.auth.state-type</code>, <code>contexa.auth.access-token-validity</code></td><td><a href="configuration/identity.html#state">로그인 상태</a> · <a href="configuration/identity.html#tokens">토큰 수명과 동시 로그인</a></td></tr>
+              <tr><td>CONTEXA가 로그인을 맡을 때 MFA 제한 시간과 로그인 주소 정하기. 일부 키는 효과가 없으므로 <a href="#unused-keys">효과가 없는 설정</a>을 먼저 확인합니다.</td><td><code>contexa.auth.mfa.*</code>, <code>contexa.auth.urls.*</code></td><td><a href="configuration/identity.html#mfa">MFA 제한 시간과 재시도</a> · <a href="configuration/identity.html#urls">로그인 · MFA 주소</a></td></tr>
+              <tr><td>CONTEXA가 토큰을 발급하게 하기</td><td><code>contexa.auth.oauth2.*</code></td><td><a href="configuration/identity.html#issuer">CONTEXA가 토큰을 발급할 때</a></td></tr>
+              <tr><td>정책(관리 콘솔에서 만드는 인가 규칙)이 여럿 맞거나 하나도 맞지 않을 때의 결정 정하기</td><td><code>contexa.policy.combining-algorithm</code>, <code>contexa.policy.no-matching-url-policy-decision</code>, <code>contexa.policy.missing-method-policy-decision</code></td><td><a href="configuration/iam.html#decisions">정책이 여럿 맞을 때와 하나도 없을 때</a> · <a href="#precedence">값이 정해지는 순서</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="tasks-deploy">배포, 성능, 증적</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>하려는 일</th><th>바꾸는 설정</th><th>설명</th></tr></thead>
+            <tbody>
+              <tr><td>여러 인스턴스로 배포하기, 또는 재시작 뒤에도 학습 상태 유지하기. <code>spring-boot-starter-data-redis</code>, <code>org.redisson:redisson</code>, <code>spring-statemachine-data-redis</code> 중 하나라도 없으면 기동이 거부됩니다.</td><td><code>contexa.infrastructure.mode: distributed</code>, Redis · Kafka 연결 설정</td><td><a href="configuration/infrastructure.html#distributed">분산 모드로 옮기기</a> · <a href="configuration/infrastructure.html#modes">단독과 분산 고르기</a> · <a href="installation-guide.html#distributed">분산 배포로 넘어가기</a></td></tr>
+              <tr><td>분산 모드에서 변경한 정책을 모든 인스턴스가 바로 보게 하기</td><td><code>contexa.cache.type</code></td><td><a href="configuration/infrastructure.html#cache">캐시</a></td></tr>
+              <tr><td>응답이 느릴 때</td><td><code>@Protectable</code>의 <code>sync</code>, 1차 분석 모델, 시간 제한</td><td><a href="#slow">응답이 느릴 때</a></td></tr>
+              <tr><td>추적(OpenTelemetry)을 수집기로 보내기</td><td><code>contexa.opentelemetry.*</code></td><td><a href="configuration/infrastructure.html#opentelemetry">추적(OpenTelemetry)</a></td></tr>
+              <tr><td>판정 기록과 봉인 증거의 서명 키와 보관 기간 정하기</td><td><code>contexa.security.evidence.signing.keys</code>, <code>contexa.pqa.oss.sealed-evidence.retention.period</code></td><td><a href="../reference/architecture/evidence.html#settings">봉인 증거 설정</a></td></tr>
+              <tr><td>판정을 CONTEXA SaaS로 보내기(선택)</td><td>CONTEXA SaaS 설정</td><td><a href="../reference/core/saas.html#settings">CONTEXA SaaS</a></td></tr>
+              <tr><td>설정 이름으로 기본값과 설명 위치 찾기</td><td>—</td><td><a href="configuration/index-all.html">설정 색인</a></td></tr>
+              <tr><td>옛 문서나 예제의 설정 이름이 적용되지 않을 때</td><td>—</td><td><a href="#moved-keys">옮겨 간 키 · 없어진 키</a></td></tr>
+              <tr><td>값을 바꿨는데 동작이 그대로일 때</td><td>—</td><td><a href="#precedence">값이 정해지는 순서</a></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3 id="slow">응답이 느릴 때</h3>
+          <p>기본 방식에서는 요청을 응답이 나간 뒤에 분석하므로, 분석 시간이 그 요청의 응답 시간에 더해지지 않습니다. 응답이 느려지는 경우는 요청 안에서 판정을 기다려야 할 때입니다. 아래 순서로 확인합니다.</p>
+          <ol>
+            <li>느린 요청이 <code>@Protectable(sync = true)</code> 메서드인지 확인합니다. <code>sync = true</code>는 메서드를 실행하기 전에 그 요청 안에서 판정을 기다립니다. 기본값은 <code>false</code>이므로, 즉시 판정이 반드시 필요한 메서드에만 <code>sync = true</code>를 씁니다(<a href="../reference/iam/protectable.html"><code>@Protectable</code></a>).</li>
+            <li>요청이 새 세션, 새 IP 주소, 새 브라우저에서 왔는지 확인합니다. 사용자의 마지막 판정 뒤에 세션 · 주소 · 브라우저가 바뀐 사람의 요청은 기본(비동기) 메서드에서도 그 요청의 판정을 기다립니다. 이 대기는 <code>contexa.security.zerotrust.agent.flight.wait</code>(기본 <code>40s</code>)를 넘지 않습니다(<a href="../reference/agent/controls.html#flight">판정 통합</a>). 같은 세션 · 주소 · 브라우저의 요청에는 허용(ALLOW) 판정이 <code>contexa.security.zerotrust.allow-validity</code>(기본 <code>15m</code>) 동안 새 분석 없이 쓰입니다(<a href="configuration/security.html#mode">운영 모드 고르기</a>).</li>
+            <li>분석 자체가 오래 걸리는지 확인합니다. 모델이 느리면 1차 분석 모델을 더 빠른 모델로 지정합니다(<code>contexa.security.tiered.llm.layer1.model</code>, <a href="configuration/ai.html#layer-models">1차 · 2차 분석 모델</a>). 1차 분석 전체의 제한 시간은 <code>contexa.security.tiered.layer1.timeout.llm-ms</code>(기본 <code>90000</code> ms)입니다(<a href="configuration/security.html#timeouts">판정 시간 제한</a>).</li>
+            <li>요청 안에서 판정할 때 과거 판정 기록 검색을 기다리는 시간을 확인합니다. 기본은 <code>contexa.security.tiered.layer1.timeout.interactive-rag-wait-ms</code>(<code>600</code> ms)입니다(<a href="configuration/security.html#timeouts">판정 시간 제한</a>).</li>
+            <li>Ollama 같은 자체 호스팅 모델 서버를 쓰면 서버가 한 번에 받는 호출 수가 제한됩니다. 기본은 <code>2</code>(<code>contexa.llm.gate.self-hosted-max-concurrent</code>)이며, 서버가 동시에 처리하는 요청 수에 맞춥니다(<a href="configuration/ai.html#model-server-gate">모델 서버가 한 번에 받는 호출 수</a>).</li>
+          </ol>
+
+          <h3 id="areas">설정 페이지 전체 목록</h3>
+          <p>설정은 아래 다섯 개의 설정 페이지와, 기능 페이지의 설정 소절에 나뉘어 있습니다.</p>
+
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>할 일별 설정 쪽</strong>"설정"은 설정 문서, "기능"은 기능 페이지의 설정 절입니다. 제목을 누르면 그 쪽으로 갑니다.</figcaption>
+            <figcaption class="dg-caption"><strong>설정 페이지와 기능 페이지의 설정 소절</strong>"설정"은 설정 문서, "기능"은 기능 페이지의 설정 소절입니다. 제목을 누르면 해당 페이지로 이동합니다.</figcaption>
             <div class="dg-grid">
-              <div class="dg-node"><span class="dg-node-tag">설정</span><span class="dg-node-title"><a href="configuration/infrastructure.html">처음 켜기와 배포</a></span><span class="dg-node-desc">의존성, <code>@EnableAISecurity</code>, 전용 DB(필수), 기능 진단, 단독 · 분산(Redis · Kafka), 캐시, 관측</span></div>
+              <div class="dg-node"><span class="dg-node-tag">설정</span><span class="dg-node-title"><a href="configuration/infrastructure.html">처음 켜기와 배포</a></span><span class="dg-node-desc">의존성, <code>@EnableAISecurity</code>, 전용 DB(필수), 기능 진단, 단독 · 분산(Redis · Kafka), 캐시, 추적</span></div>
               <div class="dg-node"><span class="dg-node-tag">설정</span><span class="dg-node-title"><a href="configuration/ai.html">AI 모델 연결</a></span><span class="dg-node-desc">채팅 · 임베딩 모델 고르기, 1차 · 2차 분석에 쓸 모델, 벡터 저장소</span></div>
-              <div class="dg-node"><span class="dg-node-tag">설정</span><span class="dg-node-title"><a href="configuration/security.html">운영 모드와 판정 조정</a></span><span class="dg-node-desc">끔 · 관찰 · 적용, 요청 시점 적용, 판정 시간 · 처리량, 판정 프롬프트, 최소 대응 규칙, 행위 기준선 학습</span></div>
-              <div class="dg-node"><span class="dg-node-tag">설정</span><span class="dg-node-title"><a href="configuration/identity.html">CONTEXA가 로그인을 맡을 때</a></span><span class="dg-node-desc">CONTEXA가 인증을 소유할 때(<code>CONTEXA_OWNED</code>)의 로그인 · MFA · 토큰</span></div>
+              <div class="dg-node"><span class="dg-node-tag">설정</span><span class="dg-node-title"><a href="configuration/security.html">운영 모드와 판정 조정</a></span><span class="dg-node-desc">운영 모드(끔 · 관찰 · 적용), 요청 시점 적용, 판정 시간 · 처리량, 판정 프롬프트, 최소 대응 규칙, 행위 기준선 학습</span></div>
+              <div class="dg-node"><span class="dg-node-tag">설정</span><span class="dg-node-title"><a href="configuration/identity.html">인증과 로그인</a></span><span class="dg-node-desc">CONTEXA가 인증을 소유할 때(<code>CONTEXA_OWNED</code>)의 로그인 · MFA · 토큰</span></div>
               <div class="dg-node"><span class="dg-node-tag">설정</span><span class="dg-node-title"><a href="configuration/iam.html">인가 정책</a></span><span class="dg-node-desc">정책 결합, 정책이 없을 때의 결정, 관리 콘솔</span></div>
               <div class="dg-node"><span class="dg-node-tag">기능</span><span class="dg-node-title"><a href="../reference/agent/controls.html#settings">에이전트 제한</a></span><span class="dg-node-desc">호출 상한, 책임자 확인, 범위 축소, 판정 통합</span></div>
               <div class="dg-node"><span class="dg-node-tag">기능</span><span class="dg-node-title"><a href="../reference/architecture/evidence.html#settings">증거 · 검수</a></span><span class="dg-node-desc">봉인 증거 서명 키, 봉인 비율, 보관 기간</span></div>
@@ -32,16 +157,16 @@
             </div>
           </figure>
 
-          <h2 id="where">설정이 작용하는 자리</h2>
-          <p>CONTEXA는 두 줄기로 일합니다. 요청이 들어오면 이미 저장된 판정을 적용하고(요청 시점), 응답이 나간 뒤에는 그 요청을 분석해 다음 요청에 쓸 판정을 만듭니다(비동기 판정). 두 줄기는 판정 저장소에서 만납니다. 상자마다 그 자리를 정하는 설정 쪽을 적었습니다.</p>
+          <h2 id="where">설정이 적용되는 지점</h2>
+          <p>CONTEXA는 두 단계로 동작합니다. 첫째, 요청이 들어오면 이미 저장된 판정을 그 요청에 적용합니다(요청 시점). 둘째, 응답이 나간 뒤에 그 요청을 분석해 같은 사용자의 다음 요청에 쓸 판정을 만듭니다(비동기 판정). 두 단계는 판정 저장소를 통해 이어집니다. 아래 그림의 각 상자에는 그 지점을 정하는 설정 페이지를 적었습니다.</p>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>두 줄기와 설정 쪽</strong>새 판정은 같은 사용자의 다음 요청부터 적용됩니다. 기동할 때 한 번 정하는 것(전용 DB · 단독/분산 · 기능 진단)은 <a href="configuration/infrastructure.html">처음 켜기와 배포</a>에 있습니다.</figcaption>
+            <figcaption class="dg-caption"><strong>두 단계와 설정 페이지</strong>새 판정은 같은 사용자의 다음 요청부터 적용됩니다. 기동할 때 한 번 정하는 설정(전용 DB · 단독/분산 · 기능 진단)은 <a href="configuration/infrastructure.html">처음 켜기와 배포</a>에 있습니다.</figcaption>
             <div class="dg-lanes">
               <section class="dg-lane"><h4 class="dg-lane-title">요청 시점<span class="dg-lane-sub">사용자가 기다리는 동안</span></h4>
                 <ol class="dg-flow">
                   <li class="dg-node dg-request"><span class="dg-node-title">요청 도착</span></li>
-                  <li class="dg-node dg-host"><span class="dg-node-title">로그인 확인</span><span class="dg-node-desc">기본은 앱의 Spring Security가 합니다(<a href="../reference/common/bridge.html#settings">기존 로그인 연결</a>). CONTEXA가 로그인을 맡으면 <a href="configuration/identity.html">로그인 설정</a></span></li>
-                  <li class="dg-node"><span class="dg-node-title">인가 정책과 저장된 판정 확인</span><span class="dg-node-desc">저장된 판정은 두 소유 방식 모두 URL 단계와 <code>@Protectable</code> 메서드 앞에서, 인가 정책은 <code>@Protectable</code> 메서드 앞과 보안 체인이 연결했을 때 URL 단계에서. <a href="configuration/iam.html">인가 정책</a> · <a href="configuration/security.html">운영 모드와 판정 조정</a></span></li>
+                  <li class="dg-node dg-host"><span class="dg-node-title">로그인 확인</span><span class="dg-node-desc">기본은 앱의 Spring Security가 로그인을 확인합니다(<a href="../reference/common/bridge.html#settings">기존 로그인 연결</a>). CONTEXA가 로그인을 맡으면 CONTEXA가 확인하며, 설정은 <a href="configuration/identity.html">로그인 설정</a>에 있습니다.</span></li>
+                  <li class="dg-node"><span class="dg-node-title">인가 정책과 저장된 판정 확인</span><span class="dg-node-desc">저장된 판정은 로그인을 앱이 맡든 CONTEXA가 맡든 URL 요청 단계와 <code>@Protectable</code> 메서드 앞에서 적용됩니다. 인가 정책은 <code>@Protectable</code> 메서드 앞에서 적용되고, 보안 체인이 CONTEXA의 정책 매니저를 연결한 경우에는 URL 요청 단계에서도 적용됩니다. <a href="configuration/iam.html">인가 정책</a> · <a href="configuration/security.html">운영 모드와 판정 조정</a></span></li>
                   <li class="dg-node dg-host"><span class="dg-node-title">실행과 응답</span></li>
                 </ol>
               </section>
@@ -53,8 +178,8 @@
               <section class="dg-lane"><h4 class="dg-lane-title">비동기 판정<span class="dg-lane-sub">응답이 나간 뒤</span></h4>
                 <ol class="dg-flow">
                   <li class="dg-node"><span class="dg-node-title">분석 대기열</span><span class="dg-node-desc">처리량 · 시간 제한. <a href="configuration/security.html">운영 모드와 판정 조정</a></span></li>
-                  <li class="dg-node dg-model"><span class="dg-node-title">AI 모델 판정</span><span class="dg-node-desc">어떤 모델로 묻는지. <a href="configuration/ai.html">AI 모델 연결</a></span></li>
-                  <li class="dg-node"><span class="dg-node-title">판정 저장과 학습</span><span class="dg-node-desc">저장할지(운영 모드), 무엇을 배우는지. <a href="configuration/security.html">운영 모드와 판정 조정</a></span></li>
+                  <li class="dg-node dg-model"><span class="dg-node-title">AI 모델 판정</span><span class="dg-node-desc">분석에 쓸 모델을 정합니다. <a href="configuration/ai.html">AI 모델 연결</a></span></li>
+                  <li class="dg-node"><span class="dg-node-title">판정 저장과 학습</span><span class="dg-node-desc">판정을 저장할지(운영 모드)와 무엇을 학습할지를 정합니다. <a href="configuration/security.html">운영 모드와 판정 조정</a></span></li>
                   <li class="dg-node dg-store"><span class="dg-node-title">증거 봉인과 감사 기록</span><span class="dg-node-desc"><a href="../reference/architecture/evidence.html#settings">증거 · 검수</a></span></li>
                 </ol>
               </section>
@@ -62,10 +187,10 @@
             <div class="dg-legend"><span class="dg-request">요청</span><span class="dg-host">앱</span><span class="dg-contexa">CONTEXA</span><span class="dg-store">저장소</span><span class="dg-model">AI 모델</span></div>
           </figure>
 
-          <h2 id="minimal">그대로 기동하는 최소 설정</h2>
-          <p>자기 로그인이 있는 Spring Boot 앱에 CONTEXA를 붙여 판정까지 돌려 보는 가장 작은 구성입니다. OpenAI 모델 하나와, pgvector 확장을 쓸 수 있는 PostgreSQL 하나를 씁니다. 다른 모델(Anthropic · Ollama)은 <a href="configuration/ai.html">AI 모델 연결</a>을 참고합니다.</p>
+          <h2 id="minimal">최소 설정 예시</h2>
+          <p>로그인 기능이 이미 있는 Spring Boot 앱에 CONTEXA를 붙여 판정까지 실행하는 가장 작은 구성입니다. OpenAI 모델 하나와 pgvector 확장을 쓸 수 있는 PostgreSQL 하나를 사용합니다. 다른 모델(Anthropic · Ollama)은 <a href="configuration/ai.html">AI 모델 연결</a>을 참고합니다.</p>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>켜기 세 단계</strong>스타터 의존성만 넣으면 CONTEXA는 꺼져 있습니다. <code>@EnableAISecurity</code>를 붙여야 켜집니다.</figcaption>
+            <figcaption class="dg-caption"><strong>켜는 순서 세 단계</strong>스타터 의존성만 추가하면 CONTEXA는 꺼져 있습니다. <code>@EnableAISecurity</code>를 붙여야 켜집니다.</figcaption>
             <ol class="dg-flow">
               <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">의존성</span><span class="dg-node-desc">CONTEXA 스타터, Spring Security, 채팅 모델 스타터, pgvector 벡터 저장소 스타터</span></div></li>
               <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title"><code>@EnableAISecurity</code></span><span class="dg-node-desc">메인 클래스에 붙입니다</span></div></li>
@@ -100,39 +225,45 @@ spring:
   ai:
     openai:
       api-key: ${OPENAI_API_KEY}</code></pre>
-          <p>이 구성으로 기동하면 다음이 정해집니다.</p>
+          <p>이 구성으로 기동하면 다음과 같이 동작합니다.</p>
           <ul>
-            <li>첫 기동에 CONTEXA 전용 DB에 CONTEXA의 표와 기본 데이터를 만들고(<code>contexa.iam.seed.enabled</code>, 기본 <code>true</code>), pgvector 확장 · 벡터 표를 만듭니다(CONTEXA가 넣는 기본값 <code>contexa.vectorstore.pgvector.initialize-schema=true</code>).</li>
-            <li>판정 모델은 OpenAI 채팅 모델, 임베딩은 모델을 적지 않았을 때의 Spring AI 기본값인 OpenAI <code>text-embedding-ada-002</code>(1536차원)입니다. CONTEXA는 앱의 임베딩 모델을 따르고 따로 정하지 않습니다.</li>
-            <li>운영 모드는 <code>ENFORCE</code>(판정을 저장하고 다음 요청부터 적용), 인프라 모드는 단독(판정 · 학습 상태를 메모리에 둠)입니다.</li>
-            <li>로그인은 앱이 맡습니다(<code>HOST_OWNED</code>). CONTEXA는 <code>@Protectable</code>을 붙인 메서드 호출을 분석하고, 저장된 판정은 앱 보안 체인 바로 뒤에서 도는 필터로 모든 경로에서, 그리고 <code>@Protectable</code> 메서드 앞에서 한 번 더 적용합니다. 무엇을 보호할지는 <a href="../reference/iam/protectable.html"><code>@Protectable</code></a>에서 정합니다.</li>
+            <li>첫 기동에서 CONTEXA는 전용 DB에 CONTEXA의 표와 기본 데이터를 만듭니다(<code>contexa.iam.seed.enabled</code>, 기본 <code>true</code>). 같은 시점에 pgvector 확장과 벡터 표도 만듭니다(CONTEXA가 넣는 기본값 <code>contexa.vectorstore.pgvector.initialize-schema=true</code>).</li>
+            <li>판정에는 OpenAI 채팅 모델을 씁니다. 임베딩 모델은 따로 적지 않았으므로 Spring AI 기본값인 OpenAI <code>text-embedding-ada-002</code>(1536차원)입니다. CONTEXA는 앱의 임베딩 모델을 따르며 따로 정하지 않습니다.</li>
+            <li>운영 모드는 <code>ENFORCE</code>입니다. 판정을 저장하고 다음 요청부터 적용합니다. 인프라 모드는 단독이며, 판정과 학습 상태를 메모리에 둡니다.</li>
+            <li>로그인은 앱이 맡습니다(<code>HOST_OWNED</code>). CONTEXA는 <code>@Protectable</code>을 붙인 메서드 호출을 분석합니다. 저장된 판정은 두 곳에서 적용합니다. 앱 보안 체인 바로 뒤에서 도는 필터가 모든 경로에 적용하고, <code>@Protectable</code> 메서드를 실행하기 전에 한 번 더 적용합니다. 무엇을 보호할지는 <a href="../reference/iam/protectable.html"><code>@Protectable</code></a>에서 정합니다.</li>
           </ul>
           <div class="callout callout-warning">
-            <strong><code>contexa-owned-application: true</code>는 앱에 자기 DB가 없을 때만 넣습니다.</strong> 이 값을 켜면 앱의 기본 <code>DataSource</code> · <code>JdbcTemplate</code>까지 CONTEXA DB가 됩니다. Spring AI의 pgvector 자동설정은 앱의 기본 <code>JdbcTemplate</code>으로 벡터 저장소를 만들기 때문에, 새 앱에서는 이 줄로 벡터 표가 CONTEXA DB에 생깁니다. 자기 DB가 있는 앱은 이 줄을 뺍니다. 그러면 벡터 저장소는 앱의 기본 DB를 씁니다(그 DB가 pgvector를 쓸 수 있어야 함). 벡터 저장소를 CONTEXA DB에 두려면 <code>contexaDataSource</code>를 쓰는 <code>VectorStore</code> 빈을 직접 선언합니다. 그러면 Spring AI의 자동설정이 물러납니다. 자세한 내용은 <a href="configuration/infrastructure.html#database">전용 DB</a>에 있습니다.
+            <strong><code>contexa-owned-application: true</code>는 앱에 자기 DB가 없을 때만 넣습니다.</strong> 이 값을 켜면 앱의 기본 <code>DataSource</code> · <code>JdbcTemplate</code>까지 CONTEXA DB가 됩니다. Spring AI의 pgvector 자동설정은 앱의 기본 <code>JdbcTemplate</code>으로 벡터 저장소를 만듭니다. 따라서 새 앱에서는 이 줄로 벡터 표가 CONTEXA DB에 생깁니다. 자기 DB가 있는 앱은 이 줄을 넣지 않습니다. 그러면 벡터 저장소는 앱의 기본 DB를 사용하며, 그 DB가 pgvector를 쓸 수 있어야 합니다. 벡터 저장소를 CONTEXA DB에 두려면 <code>contexaDataSource</code>를 쓰는 <code>VectorStore</code> 빈을 직접 선언합니다. 그러면 Spring AI의 자동설정이 적용되지 않습니다. 자세한 내용은 <a href="configuration/infrastructure.html#database">전용 DB</a>에 있습니다.
           </div>
           <div class="callout callout-info">
-            <strong>이 구성에는 앱의 <code>SecurityFilterChain</code>이나 앱 사용자가 있어야 합니다.</strong> 둘 다 없으면 기동이 거부되고 할 일을 알려 줍니다. 둘 중 하나를 선언하거나 <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>을 씁니다. 사용자는 있는데 체인이 없으면 Spring Boot 기본 보안이 켜져 모든 요청이 인증을 요구하고, 기동 로그에 WARN 한 줄이 남습니다. 기존 앱의 보안 설정과 함께 쓰는 방법은 <a href="spring-boot.html">Spring Boot 앱에 붙이기</a>를 참고합니다.
+            <strong>이 구성에는 앱의 <code>SecurityFilterChain</code>이나 앱 사용자가 있어야 합니다.</strong> 둘 다 없으면 기동이 거부되고, 해야 할 일이 함께 출력됩니다. 둘 중 하나를 선언하거나 <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>을 사용합니다. 사용자는 있는데 체인이 없으면 Spring Boot 기본 보안이 켜져 모든 요청이 인증을 요구하고, 기동 로그에 WARN 한 줄이 남습니다. 기존 앱의 보안 설정과 함께 쓰는 방법은 <a href="spring-boot.html">Spring Boot 앱에 붙이기</a>를 참고합니다.
           </div>
 
           <h2 id="precedence">값이 정해지는 순서</h2>
-          <p>대부분의 설정은 <code>application.yml</code>에 적은 값이 그대로 쓰입니다. 다만 아래 경우에는 다른 곳의 값이 이깁니다. 값을 바꿨는데 동작이 그대로라면 먼저 이 표를 확인합니다.</p>
+          <p>대부분의 설정은 <code>application.yml</code>에 적은 값이 그대로 적용됩니다. 아래 경우에는 다른 곳의 값이 우선합니다. 값을 바꿨는데 동작이 달라지지 않으면 먼저 이 표를 확인합니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>경우</th><th>이기는 값</th></tr></thead>
+            <thead><tr><th>경우</th><th>우선하는 값</th></tr></thead>
             <tbody>
-              <tr><td><code>@EnableAISecurity</code>를 붙였을 때</td><td>앱 설정에 적은 <code>contexa.ai.security.*</code> 값이 어노테이션 속성(<code>mode</code> 등)보다 우선하고, 어노테이션 속성은 적지 않았을 때의 기본값입니다. 인증 소유권 <code>contexa.bridge.ownership</code>과 <code>contexa.datasource.isolation.contexa-owned-application</code>은 직접 적지 않았을 때만 <code>mode</code>로 정해지고(<code>FULL</code>이면 <code>CONTEXA_OWNED</code> · <code>true</code>), 적은 소유권이 <code>mode</code>와 어긋나면 기동을 거부합니다.</td></tr>
+              <tr><td><code>@EnableAISecurity</code>를 붙였을 때</td><td>앱 설정에 적은 <code>contexa.ai.security.*</code> 값이 어노테이션 속성(<code>mode</code> 등)보다 우선합니다. 어노테이션 속성은 설정을 적지 않았을 때의 기본값입니다. 인증 소유권 <code>contexa.bridge.ownership</code>과 <code>contexa.datasource.isolation.contexa-owned-application</code>은 직접 적지 않았을 때만 <code>mode</code>를 따릅니다(<code>FULL</code>이면 <code>CONTEXA_OWNED</code> · <code>true</code>). 직접 적은 소유권이 <code>mode</code>와 어긋나면 기동을 거부합니다.</td></tr>
               <tr><td>단독 모드(기본)</td><td><code>contexa.cache.type</code>은 무엇을 적어도 <code>LOCAL</code>입니다.</td></tr>
-              <tr><td>관리 화면 시스템 설정(<code>/contexa/admin/system-settings</code>)에서 운영 모드를 저장했을 때</td><td>저장한 모드가 <code>contexa.security.zerotrust.mode</code>를 이깁니다. 저장하는 즉시, 그리고 기동할 때마다 적용됩니다(<a href="configuration/security.html#mode-console">운영 모드</a>).</td></tr>
-              <tr><td>관리 화면 시스템 설정에 정책 판정 값이 저장되어 있을 때</td><td>정책 결합 방법과 정책이 없는 메서드의 결정이 <code>contexa.policy.*</code>보다 우선하고, 정책이 없는 URL의 결정은 운영자가 저장한 뒤에야 우선합니다(그 전에는 <code>contexa.policy.no-matching-url-policy-decision</code>이 적용되며 기본은 <code>AUTHENTICATED</code>). 기본 시드가 이 행을 처음부터 넣습니다(<a href="configuration/iam.html">인가 정책</a>).</td></tr>
-              <tr><td>옛 접두사로 적은 키</td><td>읽히지 않습니다. 옛 접두사의 별칭은 없어졌고 새 이름만 읽습니다(<a href="#legacy-prefixes">옛 접두사</a>).</td></tr>
-              <tr><td>CONTEXA가 넣는 기본값</td><td>pgvector 표 이름 · 차원 · 표 자동 생성(<code>contexa.vectorstore.pgvector.*</code>)과, 채팅 · 임베딩 공급자를 하나로 정했을 때 그 공급자를 고르는 Spring AI 기본값(<code>spring.ai.model.chat</code> · <code>spring.ai.model.embedding</code>)은 가장 낮은 우선순위입니다. 직접 적으면 그 값이 쓰입니다. 이 기본값 가운데 <code>contexa.*</code>가 아닌 것은 <code>@EnableAISecurity</code>로 켜졌을 때만 보입니다.</td></tr>
+              <tr><td>관리 화면 시스템 설정(<code>/contexa/admin/system-settings</code>)에서 운영 모드를 저장했을 때</td><td>저장한 모드가 <code>contexa.security.zerotrust.mode</code>보다 우선합니다. 저장하는 즉시 적용되고, 이후 기동할 때마다 다시 적용됩니다(<a href="configuration/security.html#mode-console">운영 모드</a>).</td></tr>
+              <tr><td>관리 화면 시스템 설정에 정책 판정 값이 저장되어 있을 때</td><td>정책 결합 방법과 정책이 없는 메서드의 결정은 <code>contexa.policy.*</code>보다 저장된 값이 우선합니다. 정책이 없는 URL의 결정은 운영자가 저장한 뒤에야 저장된 값이 우선하며, 그 전에는 <code>contexa.policy.no-matching-url-policy-decision</code>이 적용됩니다(기본 <code>AUTHENTICATED</code>). 기본 시드(첫 기동에서 넣는 기본 데이터)가 이 설정 행을 처음부터 넣습니다(<a href="configuration/iam.html">인가 정책</a>).</td></tr>
+              <tr><td>옛 접두사로 적은 키</td><td>읽히지 않습니다. 옛 접두사의 별칭이 없으므로 새 이름만 읽습니다(<a href="#legacy-prefixes">옛 접두사</a>).</td></tr>
+              <tr><td>CONTEXA가 넣는 기본값</td><td>pgvector 표 이름 · 차원 · 표 자동 생성(<code>contexa.vectorstore.pgvector.*</code>)과, 채팅 · 임베딩 공급자를 하나로 정했을 때 그 공급자를 고르는 Spring AI 기본값(<code>spring.ai.model.chat</code> · <code>spring.ai.model.embedding</code>)은 우선순위가 가장 낮습니다. 직접 적은 값이 있으면 그 값이 쓰입니다. 이 기본값 가운데 <code>contexa.*</code>가 아닌 것은 <code>@EnableAISecurity</code>로 CONTEXA가 켜져 있는 동안에만 설정 값으로 읽힙니다.</td></tr>
             </tbody>
           </table></div>
 
           <h2 id="moved-keys">옮겨 간 키 · 없어진 키</h2>
-          <p>옛 문서나 예제에서 본 이름이 아래에 있으면 지금 이름으로 바꿉니다. 이 표 밖의 문서에는 옛 이름을 쓰지 않습니다.</p>
+          <p>옛 문서나 예제에서 본 설정 이름이 이 절의 표에 있으면 지금 이름으로 바꿔 적습니다. 이 절의 표 밖에서는 이 문서가 옛 이름을 쓰지 않습니다. 표는 네 가지입니다.</p>
+          <ol>
+            <li><a href="#legacy-prefixes">옛 접두사</a>: 접두사가 바뀐 키입니다. 별칭이 없어 옛 이름은 읽히지 않습니다.</li>
+            <li><a href="#renamed-keys">이름이 틀렸던 키</a>: 옛 문서에 잘못 적혀 있던 이름입니다.</li>
+            <li><a href="#removed-keys">없어진 키</a>: 코드에서 제거되었거나 코드에 없는 이름입니다.</li>
+            <li><a href="#unused-keys">효과가 없는 설정</a>: 설정 클래스에는 있지만 코드가 값을 읽지 않는 키입니다.</li>
+          </ol>
 
           <h3 id="legacy-prefixes">옛 접두사(별칭 없음, 읽히지 않음)</h3>
-          <p>아래 옛 접두사로 적은 키는 새 이름의 별칭이 만들어지지 않아 효과가 없고, 기동 로그에도 알림이 남지 않습니다. 옛 이름은 앱 자신의 설정이므로 CONTEXA가 읽거나 옮기지 않습니다. 옛 이름을 쓰던 앱은 새 이름으로 바꿔 적습니다.</p>
+          <p>이 표의 옛 이름(오른쪽 열)으로 적은 키는 효과가 없습니다. CONTEXA는 새 이름의 별칭을 만들지 않고, 기동 로그에도 알림을 남기지 않습니다. 옛 이름은 앱 자신의 설정이므로 CONTEXA는 이를 읽거나 옮기지 않습니다. 옛 이름을 쓰던 앱은 왼쪽 열의 새 이름으로 바꿔 적어야 합니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>지금 이름</th><th>옛 이름</th></tr></thead>
             <tbody>
@@ -155,12 +286,12 @@ spring:
             </tbody>
           </table></div>
           <ul>
-            <li>접두사만 바꾸면 되지 않는 키가 있습니다. 예를 들어 옛 <code>spring.ai.security.tiered.layer1.timeout-ms</code>의 접두사만 바꾼 <code>contexa.security.tiered.layer1.timeout-ms</code>는 없는 키입니다. 1차 분석 시간 제한은 <code>contexa.security.tiered.layer1.timeout.llm-ms</code>입니다.</li>
-            <li><code>spring.ai.vectorstore.pgvector.*</code>는 앱 자신의 Spring AI 벡터 저장소를 위한 키 이름입니다. CONTEXA의 벡터 저장소는 <code>contexa.vectorstore.pgvector.*</code>만 읽으니 CONTEXA 쪽 설정은 그 키로 적습니다. 그 값은 Spring AI의 같은 이름으로 복사되지 않습니다.</li>
+            <li>접두사만 바꾸어서는 맞지 않는 키가 있습니다. 예를 들어 옛 <code>spring.ai.security.tiered.layer1.timeout-ms</code>의 접두사만 바꾼 <code>contexa.security.tiered.layer1.timeout-ms</code>는 존재하지 않는 키입니다. 1차 분석 시간 제한은 <code>contexa.security.tiered.layer1.timeout.llm-ms</code>입니다.</li>
+            <li><code>spring.ai.vectorstore.pgvector.*</code>는 앱 자신의 Spring AI 벡터 저장소를 위한 키 이름입니다. CONTEXA의 벡터 저장소는 <code>contexa.vectorstore.pgvector.*</code>만 읽으므로, CONTEXA 쪽 설정은 이 키로 적습니다. 그 값은 Spring AI의 같은 이름으로 복사되지 않습니다.</li>
           </ul>
 
           <h3 id="renamed-keys">이름이 틀렸던 키(별칭 없음)</h3>
-          <p>옛 문서에 잘못 적혀 있던 이름입니다. 별칭이 없어 그대로 적으면 아무 효과가 없습니다.</p>
+          <p>옛 문서에 잘못 적혀 있던 이름입니다. 별칭이 없으므로 옛 이름 그대로 적으면 아무 효과가 없습니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>옛 문서의 이름</th><th>지금 이름</th></tr></thead>
             <tbody>
@@ -190,7 +321,7 @@ spring:
           </table></div>
 
           <h3 id="unused-keys">값을 바꿔도 효과가 없는 설정</h3>
-          <p>아래 이름은 설정 클래스에 있어 써도 오류는 나지 않지만, 지금 코드에서 그 값을 읽는 곳이 없어 바꿔도 아무것도 달라지지 않습니다. 같은 일을 하는 설정이 따로 있으면 오른쪽에 적었습니다.</p>
+          <p>아래 이름은 설정 클래스에 있어 적어도 오류는 나지 않지만, 현재 코드에서 그 값을 읽는 곳이 없어 바꿔도 동작이 달라지지 않습니다. 같은 일을 하는 다른 설정이 있으면 오른쪽 열에 적었습니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>설정</th><th>대신 쓰는 것 · 메모</th></tr></thead>
             <tbody>
@@ -210,7 +341,7 @@ spring:
               <tr><td><code>contexa.security.tiered.prompt-bundle.selector</code> · <code>contexa.security.tiered.layer1.prompt.max-similar-events</code> · <code>contexa.security.tiered.layer1.prompt.include-event-id</code> · <code>contexa.security.tiered.layer1.prompt.include-raw-timestamp</code></td><td>이 값을 읽던 코드는 옛 프롬프트 묶음과 함께 없어졌습니다. 판정에 쓸 버전은 화면에서 고르거나 <code>contexa.security.tiered.prompt-bundle.active</code> 로 정합니다(<a href="../reference/architecture/prompt-versions.html#resolve">판정의 버전이 정해지는 순서</a>).</td></tr>
               <tr><td><code>contexa.security.session.create.allowed</code> · <code>contexa.security.session.hijack.*</code> · <code>contexa.security.session.threat.*</code></td><td>이 접두사에서 읽히는 것은 세션 ID를 찾는 이름(<code>cookie.name</code> · <code>header.name</code> · <code>bearer.enabled</code>)뿐입니다.</td></tr>
               <tr><td><code>contexa.security.stepup.*</code></td><td>—</td></tr>
-              <tr><td><code>contexa.auth.factor-selection-type</code> · <code>contexa.auth.internal.login-uri</code> · <code>contexa.auth.internal.logout-uri</code> · <code>contexa.auth.refresh-rotate-threshold</code> · <code>contexa.auth.roles-claim</code> · <code>contexa.auth.scopes-claim</code> · <code>contexa.auth.token-issuer</code> · <code>contexa.auth.token-prefix</code></td><td>로그인 설정은 <a href="configuration/identity.html">CONTEXA가 로그인을 맡을 때</a>에 있습니다.</td></tr>
+              <tr><td><code>contexa.auth.factor-selection-type</code> · <code>contexa.auth.internal.login-uri</code> · <code>contexa.auth.internal.logout-uri</code> · <code>contexa.auth.refresh-rotate-threshold</code> · <code>contexa.auth.roles-claim</code> · <code>contexa.auth.scopes-claim</code> · <code>contexa.auth.token-issuer</code> · <code>contexa.auth.token-prefix</code></td><td>로그인 설정은 <a href="configuration/identity.html">인증과 로그인</a>에 있습니다.</td></tr>
               <tr><td><code>contexa.auth.mfa.account-lockout-duration-ms</code> · <code>contexa.auth.mfa.audit-logging-enabled</code> · <code>contexa.auth.mfa.cache-ttl</code> · <code>contexa.auth.mfa.detailed-logging-enabled</code> · <code>contexa.auth.mfa.device-remember-duration-ms</code> · <code>contexa.auth.mfa.inactivity-timeout</code> · <code>contexa.auth.mfa.otp-token-length</code> · <code>contexa.auth.mfa.session-refresh-interval-ms</code> · <code>contexa.auth.mfa.state-machine-timeout-ms</code></td><td>—</td></tr>
               <tr><td><code>contexa.auth.urls.single.login-failure</code> · <code>contexa.auth.urls.single.ott.code-sent</code> · <code>contexa.auth.urls.single.ott.login-failure</code> · <code>contexa.auth.urls.single.passkey.login-page</code> · <code>contexa.auth.urls.single.passkey.login-failure</code></td><td>이 주소를 읽는 메서드를 부르는 곳이 없습니다.</td></tr>
               <tr><td><code>contexa.identity.statemachine.operation-timeout-seconds</code> · <code>contexa.identity.statemachine.persistence.enable-fallback</code></td><td>—</td></tr>
@@ -228,10 +359,10 @@ spring:
           </table></div>
 
           <h2 id="index">모든 설정 이름 찾기</h2>
-          <p>이름으로 설정을 찾으려면 <a href="configuration/index-all.html">설정 색인</a>을 참고합니다. 모든 설정의 기본값과 그 설정을 설명하는 쪽이 있습니다.</p>
+          <p>이름으로 설정을 찾으려면 <a href="configuration/index-all.html">설정 색인</a>을 참고합니다. 설정 색인에는 모든 설정의 기본값과 그 설정을 설명하는 페이지가 있습니다.</p>
 
           <h3 id="classes">코드에서 설정 값을 읽을 때</h3>
-          <p>아래 설정 클래스는 CONTEXA가 켜져 있으면 빈으로 등록됩니다. 앱 코드에서 주입하면 지금 쓰이는 값을 읽을 수 있습니다(관리 화면에서 바꾼 운영 모드도 <code>SecurityZeroTrustProperties</code>에 반영됩니다).</p>
+          <p>아래 설정 클래스는 CONTEXA가 켜져 있으면 빈으로 등록됩니다. 앱 코드에 주입하면 현재 적용 중인 값을 읽을 수 있습니다. 관리 화면에서 바꾼 운영 모드도 <code>SecurityZeroTrustProperties</code>에 반영됩니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>접두사</th><th>설정 클래스</th><th>모듈</th></tr></thead>
             <tbody>

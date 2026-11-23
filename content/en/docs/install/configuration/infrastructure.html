@@ -12,24 +12,32 @@
               <span class="badge badge-secondary">Configuration</span>
             </div>
             <h1>First Start and Deployment (Standalone · Distributed)</h1>
-            <p class="lead">The settings you need to add CONTEXA to an application and start it (the dedicated database · capability checks · turning features on and off), and the settings for moving from standalone mode on one machine to distributed mode where several machines share state (Redis · Kafka). Cache, scheduled-job locking and tracing are here too.</p>
+            <p class="lead">This page covers the infrastructure settings you make when you add CONTEXA to an application, start it, and deploy it to production. One thing is required: the dedicated CONTEXA database. The infrastructure mode, cache, scheduled-job locking and feature switches can start on their defaults. When you run several instances, or need learning state to survive a restart, switch to distributed mode (Redis · Kafka).</p>
           </div>
 
-          <h2 id="overview">At a glance</h2>
-          <p>Turning CONTEXA on goes in the order below. After steps 1–3 it starts; from step 4 on you do what you need.</p>
+          <h2 id="overview">Overview</h2>
+          <p>CONTEXA is turned on and deployed in the order below. After steps 1–3 the application starts. From step 4 on, you do each step when you need it.</p>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>Order of turning on and deploying</strong>With only the starter dependency, CONTEXA stays off.</figcaption>
             <ol class="dg-flow">
               <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title">Dependency and <code>@EnableAISecurity</code></span><span class="dg-node-desc">CONTEXA's auto-configuration turns on only with the annotation (<a href="#enable">Turning it on</a>)</span></div></li>
               <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node dg-store"><span class="dg-node-title">Dedicated CONTEXA database</span><span class="dg-node-desc"><code>contexa.datasource.url</code> is required (<a href="#database">Dedicated database</a>)</span></div></li>
               <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node dg-model"><span class="dg-node-title">Connect AI models</span><span class="dg-node-desc">Chat and embedding models and the vector store (<a href="ai.html">Connecting AI Models</a>)</span></div></li>
-              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">Check the start-up log</span><span class="dg-node-desc">Capability checks tell you which parts are missing (<a href="#capability">Capability checks</a>, <a href="#check">Checking</a>)</span></div></li>
-              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">Choose standalone or distributed</span><span class="dg-node-desc">Distributed to run several machines or to keep learning state across restarts (<a href="#modes">Standalone and distributed</a>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">Check the start-up log</span><span class="dg-node-desc">Capability checks name the parts that are missing (<a href="#capability">Capability checks</a>, <a href="#check">Checking the connection</a>)</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">Choose standalone or distributed</span><span class="dg-node-desc">Use distributed mode to run several instances or to keep learning state across restarts (<a href="#modes">Standalone and distributed</a>)</span></div></li>
             </ol>
           </figure>
+          <p>This page uses three terms. A decision is the conclusion CONTEXA reaches after analyzing a user's request: ALLOW, CHALLENGE (additional authentication), ESCALATE (held for review) or BLOCK. A behavioral baseline is the record of a user's normal behavior patterns, which CONTEXA consults in later decisions. An instance is one JVM process running the application.</p>
+          <p>The settings on this page fall into four groups.</p>
+          <ul>
+            <li><strong>Required.</strong> The address and account of the dedicated CONTEXA database (<a href="#database">Dedicated database</a>). Without the address, start-up stops.</li>
+            <li><strong>Chosen by deployment.</strong> The infrastructure mode (<a href="#modes">Choosing standalone or distributed</a>). The default <code>standalone</code> keeps state in JVM memory, so it suits development and a single instance. With two or more instances, use <code>distributed</code> and connect Redis (required) and Kafka (optional).</li>
+            <li><strong>Turn off only what you do not use.</strong> The feature switches (<a href="#switches">Turning features on and off</a>), the admin console WebSocket and tracing (<a href="#opentelemetry">OpenTelemetry</a>). Do not turn off a feature you use.</li>
+            <li><strong>Keep the defaults.</strong> The database connection pool, cache lifetimes and scheduled-job locking. Change them only when you observe a problem.</li>
+          </ul>
 
           <h2 id="enable">Turning it on</h2>
-          <p>The dependency is one starter, <code>ai.ctxa:spring-boot-starter-contexa</code>. What it brings and what it leaves to the application:</p>
+          <p>The application declares one CONTEXA dependency, the starter <code>ai.ctxa:spring-boot-starter-contexa</code>. The table shows what the starter brings and what the application adds itself.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Part</th><th>Contents</th></tr></thead>
             <tbody>
@@ -38,14 +46,14 @@
               <tr><td>Spring Boot</td><td>3.x. CONTEXA is built on 3.5.4 and refuses to start on 4.x.</td></tr>
             </tbody>
           </table></div>
-          <p>CONTEXA turns on when you put <code>@EnableAISecurity</code> on the main class. Without it, all of CONTEXA's auto-configuration is left out and it does not touch the application. With it, <code>contexa.enabled: false</code> makes the annotation import nothing, so everything is off again.</p>
+          <p>CONTEXA turns on when you put <code>@EnableAISecurity</code> on the main class. Without it, none of CONTEXA's auto-configuration applies, so the application is not affected by CONTEXA. With the annotation, setting <code>contexa.enabled: false</code> makes the annotation import nothing, and CONTEXA is off again.</p>
           <pre><code class="language-java">@SpringBootApplication
 @EnableAISecurity                       // default mode = SecurityMode.SANDBOX
 public class MyApplication { }</code></pre>
-          <p>The annotation's <code>mode</code> sets the default for who owns login. The default <code>SANDBOX</code> leaves login to the application (<code>HOST_OWNED</code>); <code>FULL</code> gives it to CONTEXA (<code>CONTEXA_OWNED</code>). <code>FULL</code> also turns on <a href="#database-owned">CONTEXA taking over the application's database</a> below. The difference between the two is in <a href="../spring-boot.html">Adding CONTEXA to a Spring Boot Application</a>; the hint attributes for finding the login object are in <a href="../../reference/common/bridge.html">Connecting Your Existing Login</a>.</p>
+          <p>The annotation's <code>mode</code> sets the default for who owns login. The default <code>SANDBOX</code> leaves login to the application (<code>HOST_OWNED</code>). <code>FULL</code> gives login to CONTEXA (<code>CONTEXA_OWNED</code>). When the application does not set <code>spring.datasource.url</code>, <code>FULL</code> also turns on <a href="#database-owned">CONTEXA taking over the application's database</a> below. The difference between the two is in <a href="../spring-boot.html">Adding CONTEXA to a Spring Boot Application</a>. The hint attributes for finding the login object are in <a href="../../reference/common/bridge.html">Connecting Your Existing Login</a>.</p>
 
           <h2 id="database">Dedicated CONTEXA database (required)</h2>
-          <p>CONTEXA keeps its own data, such as policies, decision records and evidence, in a PostgreSQL database separate from the application's. If <code>contexa.datasource.url</code> is empty, start-up stops with an <code>IllegalStateException</code> ("contexa.datasource.url must be configured for @EnableAISecurity").</p>
+          <p>CONTEXA keeps its own data, such as policies, decision records, audit records and sealed evidence, in a PostgreSQL database separate from the application's. Sealed evidence is the audit trail that stores the basis of a decision as a sealed evidence package. If <code>contexa.datasource.url</code> is empty, start-up stops with an <code>IllegalStateException</code> ("contexa.datasource.url must be configured for @EnableAISecurity").</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
@@ -53,52 +61,64 @@ public class MyApplication { }</code></pre>
               <tr><td><code>contexa.datasource.username</code></td><td>none</td><td>Database account</td><td>Always set it</td></tr>
               <tr><td><code>contexa.datasource.password</code></td><td>none</td><td>Database password</td><td>Pass it through an environment variable</td></tr>
               <tr><td><code>contexa.datasource.driver-class-name</code></td><td>none</td><td>JDBC driver. Left empty, it is derived from the URL</td><td>To choose the driver yourself</td></tr>
-              <tr><td><code>contexa.datasource.isolation.allow-shared-application-datasource</code></td><td><code>false</code></td><td>Allow the same URL as the application database (<code>spring.datasource.url</code>)</td><td>When one database is shared for a trial (both of these needed)</td></tr>
-              <tr><td><code>contexa.datasource.isolation.shared-application-datasource-risk-accepted</code></td><td><code>false</code></td><td>Marks that the risk of the above was accepted</td><td>Same as above</td></tr>
-              <tr><td><code>contexa.datasource.isolation.contexa-owned-application</code></td><td><code>false</code></td><td>CONTEXA also takes over the application's default database (<code>true</code> automatically with <code>FULL</code>)</td><td>When the application has no database of its own (<a href="#database-owned">below</a>)</td></tr>
+              <tr><td><code>contexa.datasource.isolation.allow-shared-application-datasource</code></td><td><code>false</code></td><td>Allows the same URL as the application database (<code>spring.datasource.url</code>)</td><td>When one database is shared for a trial (both of these are needed)</td></tr>
+              <tr><td><code>contexa.datasource.isolation.shared-application-datasource-risk-accepted</code></td><td><code>false</code></td><td>Records that the risk of the setting above was accepted</td><td>Same as above</td></tr>
+              <tr><td><code>contexa.datasource.isolation.contexa-owned-application</code></td><td><code>false</code></td><td>CONTEXA also takes over the application's default database. It becomes <code>true</code> automatically with <code>FULL</code> when the application sets no <code>spring.datasource.url</code>, or sets the same URL as the CONTEXA database</td><td>When the application has no database of its own (<a href="#database-owned">below</a>)</td></tr>
               <tr><td><code>contexa.datasource.hikari.maximum-pool-size</code></td><td><code>48</code></td><td>Maximum connection pool size</td><td>To fit within PostgreSQL's connection limit</td></tr>
-              <tr><td><code>contexa.datasource.hikari.minimum-idle</code></td><td><code>8</code></td><td>Minimum idle connections (cut to the maximum size)</td><td>Same as above</td></tr>
+              <tr><td><code>contexa.datasource.hikari.minimum-idle</code></td><td><code>8</code></td><td>Minimum idle connections (reduced to the maximum size when higher)</td><td>Same as above</td></tr>
               <tr><td><code>contexa.datasource.hikari.connection-timeout-ms</code></td><td><code>60000</code></td><td>How long to wait for a connection (ms)</td><td>When the database is far or slow</td></tr>
-              <tr><td><code>contexa.datasource.hikari.validation-timeout-ms</code></td><td><code>5000</code></td><td>Time limit of a connection check (ms)</td><td>Rarely</td></tr>
-              <tr><td><code>contexa.datasource.hikari.idle-timeout-ms</code></td><td><code>600000</code></td><td>Until an idle connection is closed (ms)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.datasource.hikari.validation-timeout-ms</code></td><td><code>1000</code></td><td>Time limit of a connection check (ms)</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.datasource.hikari.idle-timeout-ms</code></td><td><code>600000</code></td><td>How long an idle connection stays open (ms)</td><td>Rarely</td></tr>
               <tr><td><code>contexa.datasource.hikari.max-lifetime-ms</code></td><td><code>1800000</code></td><td>Longest life of one connection (ms)</td><td>When the database or a proxy closes connections first</td></tr>
             </tbody>
           </table></div>
-          <p>On the first start CONTEXA creates its tables and default data in this database (<code>contexa.iam.seed.enabled</code>, default <code>true</code>). If only some of the tables exist, start-up stops. Sample accounts are added only with <code>contexa.iam.seed.accounts.enabled: true</code> (<a href="iam.html">Authorization Policies</a>).</p>
+          <p>The database account must be able to create the PostgreSQL extension <code>vector</code>. Unless you turn off automatic vector table creation (<code>contexa.vectorstore.pgvector.initialize-schema</code>, default <code>true</code>), it must also create <code>hstore</code> and <code>uuid-ossp</code>. On most servers only a database administrator can create extensions, so the administrator must run <code>CREATE EXTENSION</code> before deployment.</p>
+          <p>At start-up CONTEXA connects to the dedicated database and checks this permission. If the database does not answer, CONTEXA retries once a second for 5 seconds. If it answers but the account lacks the permission, CONTEXA does not retry and treats it as a failure at once. The result of a failure depends on who owns login.</p>
+          <ul>
+            <li>When the application owns login, the default (<code>HOST_OWNED</code>), the application starts without CONTEXA and logs an ERROR (<code>Contexa's database cannot be used</code>). CONTEXA turns on only after you fix the cause and restart the application.</li>
+            <li>When CONTEXA owns login (<code>CONTEXA_OWNED</code>), nobody could sign in without CONTEXA, so start-up fails.</li>
+          </ul>
+          <p>On the first start CONTEXA creates its tables and default data in this database (<code>contexa.iam.seed.enabled</code>, default <code>true</code>). A database with only some of the tables is refused. Sample accounts are on even with no setting. In a database that has no user account at all, five sample accounts with a shared password are added. They are not added in either of these cases. In a database that already has user accounts they are not added even when you state <code>contexa.iam.seed.accounts.enabled: true</code>.</p>
+          <ul>
+            <li>You set an administrator password with <code>contexa.iam.seed.admin.password</code>.</li>
+            <li>You set <code>contexa.iam.seed.accounts.enabled: false</code>.</li>
+          </ul>
+          <p>In production, set an administrator password or turn the sample accounts off with <code>contexa.iam.seed.accounts.enabled: false</code>, so that accounts with a shared password are never created. When the sample accounts are created, the start-up log shows a WARN. Details are in <a href="iam.html">Authorization Policies</a>.</p>
 
           <h3 id="database-shared">Using the same URL as the application database</h3>
-          <p>The default is a separate database. When <code>contexa.datasource.url</code> equals <code>spring.datasource.url</code>, start-up succeeds only if both conditions below hold; if either is missing, start-up stops.</p>
+          <p>The default is a CONTEXA database separate from the application database. When <code>contexa.datasource.url</code> and <code>spring.datasource.url</code> are the same string, start-up succeeds only if both conditions below hold. If either fails, start-up stops. When the two URLs differ as strings, this check does not run, even if they point to the same database.</p>
           <ul>
-            <li><code>allow-shared-application-datasource</code> and <code>shared-application-datasource-risk-accepted</code> are both <code>true</code></li>
-            <li>No active profile is <code>prod</code> · <code>production</code> (sharing is not allowed in production profiles)</li>
+            <li><code>allow-shared-application-datasource</code> and <code>shared-application-datasource-risk-accepted</code> are both <code>true</code>.</li>
+            <li>No active profile is <code>prod</code> · <code>production</code>. In production profiles sharing is refused whatever the two settings say.</li>
           </ul>
 
           <h3 id="database-owned">CONTEXA taking over the application's database</h3>
-          <p><code>contexa-owned-application: true</code> (or <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>) is for the case where CONTEXA runs the whole application. With it on:</p>
+          <p><code>contexa-owned-application: true</code> (or <code>@EnableAISecurity(mode = SecurityMode.FULL)</code> for an application with no database URL of its own) is for the case where CONTEXA runs the whole application. With it on:</p>
           <ul>
-            <li>If the application did not create its own <code>DataSource</code> bean, the application's default <code>DataSource</code> becomes the CONTEXA database. The default <code>JdbcTemplate</code> · <code>TransactionTemplate</code> also use the CONTEXA database.</li>
+            <li>If the application did not create its own <code>DataSource</code> bean, the CONTEXA database becomes the application's default <code>DataSource</code>. The default <code>JdbcTemplate</code> · <code>TransactionTemplate</code> also use the CONTEXA database.</li>
             <li>The sharing check above is skipped even when the URLs are the same.</li>
             <li>The default behavior of <a href="#capability">capability checks</a> becomes "stop start-up when a required part is missing" (<code>FAIL_FAST</code>).</li>
+            <li>If the application sets its own <code>spring.datasource.url</code> and you still state <code>true</code>, the application's <code>spring.datasource</code> is not used. The start-up log shows one WARN.</li>
           </ul>
           <div class="callout callout-warning">
-            <strong>Do not turn it on for an existing application with its own database.</strong> The CONTEXA database may become the application's default database instead of its <code>spring.datasource.*</code>.
+            <strong>Do not turn it on for an existing application with its own database.</strong> Even when the application sets its own database URL, stating <code>true</code> makes the CONTEXA database the application's default database instead of its <code>spring.datasource.*</code>.
           </div>
 
           <h3 id="vector-store">Which database the vector store uses</h3>
-          <p>The vector store that holds past decision records is created by Spring AI's pgvector auto-configuration. That auto-configuration uses the application's <strong>default</strong> <code>JdbcTemplate</code>. The dedicated database's <code>contexaJdbcTemplate</code> is not a default candidate, so it is not used there. Therefore:</p>
+          <p>The vector store that holds past decision records is always created in the dedicated CONTEXA database. It is the <code>VectorStore</code> bean (<code>contexaVectorStore</code>) that CONTEXA builds itself on the <code>contexaJdbcTemplate</code>, which is made from the dedicated database connection (<code>contexaDataSource</code>). It does not use the application's default <code>JdbcTemplate</code>, which Spring AI's pgvector auto-configuration uses. Therefore:</p>
           <ul>
-            <li>With <code>contexa-owned-application: true</code>, the default <code>JdbcTemplate</code> is the CONTEXA database, so the vector table is created in the CONTEXA database too.</li>
-            <li>Otherwise the vector table is created in the application's default database, which must be able to use pgvector.</li>
-            <li>To leave the application database as it is and keep only the vector table in the CONTEXA database, declare your own <code>VectorStore</code> bean built on <code>contexaDataSource</code>. When a bean of that type exists, Spring AI's auto-configuration backs off.</li>
+            <li>With <code>contexa-owned-application: true</code> or with <code>false</code>, the vector table is created in the CONTEXA database. This holds even when the application's default <code>JdbcTemplate</code> is the CONTEXA database.</li>
+            <li>CONTEXA creates no vector table in the application database.</li>
+            <li>If the application uses its own <code>VectorStore</code> through a pgvector starter, that store belongs to the application. CONTEXA's decision records do not go to it.</li>
           </ul>
           <p>The pgvector table name · dimensions · automatic table creation are in <a href="ai.html#vector-store">Connecting AI Models</a>.</p>
 
           <h2 id="capability">Capability checks</h2>
-          <p>Capability checks are not switches that turn features on. When start-up finishes, they check that the parts a decision needs (chat model · embedding model · vector store · learning · decision engine · bridge) were all created, and report a missing one as an ERROR log starting with <code>[ContexaCapability] …</code> or stop start-up.</p>
+          <p>Capability checks are not switches that turn features on. When start-up finishes, they check that the parts a decision needs (chat model · embedding model · vector store · learning · decision engine · bridge) were all created. A missing part is reported as an ERROR log starting with <code>[ContexaCapability] …</code>, or start-up stops. The mode below decides which.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th><code>contexa.capability.mode</code></th><th>What it does</th></tr></thead>
             <tbody>
-              <tr><td><code>AUTO</code> (default)</td><td>Behaves as <code>FAIL_FAST</code> when CONTEXA runs the application (<code>contexa-owned-application: true</code>, or <code>spring.application.name</code> starts with <code>contexa-</code>), and as <code>WARN</code> for any other application.</td></tr>
+              <tr><td><code>AUTO</code> (default)</td><td>Behaves like <code>FAIL_FAST</code> when CONTEXA runs the application (<code>contexa-owned-application: true</code>, or <code>spring.application.name</code> starts with <code>contexa-</code>), and like <code>WARN</code> for any other application.</td></tr>
               <tr><td><code>WARN</code></td><td>Reports missing required parts only as ERROR logs. Start-up continues.</td></tr>
               <tr><td><code>FAIL_FAST</code></td><td>Stops start-up when a required part is missing.</td></tr>
               <tr><td><code>STRICT</code></td><td>Also reports problems of parts that are not required, and stops start-up when a required part is missing.</td></tr>
@@ -108,22 +128,22 @@ public class MyApplication { }</code></pre>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.capability.mode</code></td><td><code>AUTO</code></td><td>Table above</td><td><code>FAIL_FAST</code> to stop a production start with missing parts</td></tr>
-              <tr><td><code>contexa.capability.required.&lt;capability&gt;</code></td><td>none</td><td>Overrides whether one capability is required. Capability names: <code>llm-runtime</code> · <code>embedding-runtime</code> · <code>rag-vector</code> · <code>security-learning</code> · <code>autonomous-decision</code> · <code>bridge</code>. A name this version does not have (such as <code>pqa-engine</code>, removed) decides nothing: the start logs one warning and goes on</td><td>To silence a capability you do not use, or to make one you need required</td></tr>
+              <tr><td><code>contexa.capability.mode</code></td><td><code>AUTO</code></td><td>Table above</td><td><code>FAIL_FAST</code> to stop a production start that has missing parts</td></tr>
+              <tr><td><code>contexa.capability.required.&lt;capability&gt;</code></td><td>none</td><td>Overrides whether one capability is required. Capability names: <code>llm-runtime</code> · <code>embedding-runtime</code> · <code>rag-vector</code> · <code>security-learning</code> · <code>autonomous-decision</code> · <code>bridge</code>. A name this version does not have (such as <code>pqa-engine</code>, which was removed) decides nothing. The start logs one warning and goes on</td><td>To silence a capability you do not use, or to make one you need required</td></tr>
               <tr><td><code>contexa.capability.expose-diagnostics-endpoint</code></td><td><code>true</code></td><td>With Actuator, creates the diagnostics endpoint (<code>contexacapabilities</code>)</td><td><code>false</code> to leave the endpoint out</td></tr>
             </tbody>
           </table></div>
-          <p>With Actuator, <code>GET /actuator/contexacapabilities</code> shows the same result. Whether it is exposed over the web is decided by Spring Boot's <code>management.endpoints.web.exposure.include</code>.</p>
+          <p>With Actuator, <code>GET /actuator/contexacapabilities</code> shows the same result. Spring Boot's <code>management.endpoints.web.exposure.include</code> decides whether it is exposed over the web.</p>
 
           <h2 id="switches">Turning features on and off</h2>
-          <p>All keys below default to <code>true</code>; set to <code>false</code>, the whole auto-configuration group of that feature is left out. The keys further down do not appear in IDE completion (settings metadata), but the code reads them. The detailed settings of each feature are on its own page (<a href="ai.html">Connecting AI Models</a> · <a href="identity.html">When CONTEXA Owns Login</a> · <a href="iam.html">Authorization Policies</a>).</p>
+          <p>All keys below default to <code>true</code>. Set to <code>false</code>, the whole auto-configuration group of that feature does not apply. The keys further down do not appear in IDE completion (settings metadata), but the code reads them. The detailed settings of each feature are on its own page (<a href="ai.html">Connecting AI Models</a> · <a href="identity.html">When CONTEXA Owns Login</a> · <a href="iam.html">Authorization Policies</a>).</p>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>Setting</th><th>Default</th><th>Left out when false</th></tr></thead>
+            <thead><tr><th>Setting</th><th>Default</th><th>Turned off by <code>false</code></th></tr></thead>
             <tbody>
               <tr><td><code>contexa.enabled</code></td><td><code>true</code></td><td>All of CONTEXA (<code>@EnableAISecurity</code> imports nothing)</td></tr>
               <tr><td><code>contexa.llm.enabled</code></td><td><code>true</code></td><td>AI model connection (choosing the default chat · embedding model, the model call layer)</td></tr>
               <tr><td><code>contexa.rag.enabled</code></td><td><code>true</code></td><td>Past record search (RAG)</td></tr>
-              <tr><td><code>contexa.autonomous.enabled</code></td><td><code>true</code></td><td>The whole asynchronous decision engine (analysis · storing decisions · learning, stopping agents). When it is not <code>true</code>, all of CONTEXA goes off, not only the decisions (the application starts without CONTEXA when it owns sign-in; the start is refused when CONTEXA owns it). To turn off only the decisions, use <code>contexa.security.zerotrust.mode: DISABLED</code></td></tr>
+              <tr><td><code>contexa.autonomous.enabled</code></td><td><code>true</code></td><td>The whole asynchronous decision engine (analysis · storing decisions · learning, stopping agents). When it is not <code>true</code>, all of CONTEXA goes off, not only the decisions. The application starts without CONTEXA when it owns login, and the start is refused when CONTEXA owns login. To turn off only the decisions, use <code>contexa.security.zerotrust.mode: DISABLED</code></td></tr>
               <tr><td><code>contexa.prompt-inspection.enabled</code></td><td><code>true</code></td><td>The evidence audit of sealed packages and the sealed evidence screen (<a href="../../reference/architecture/evidence.html#audit">Sealed Evidence</a>)</td></tr>
               <tr><td><code>contexa.cache.enabled</code></td><td><code>true</code></td><td>CONTEXA cache (<a href="#cache">Cache</a>)</td></tr>
               <tr><td><code>contexa.advisor.enabled</code></td><td><code>true</code></td><td>Registry of AI call advisors</td></tr>
@@ -136,14 +156,14 @@ public class MyApplication { }</code></pre>
               <tr><td><code>contexa.identity.service.enabled</code></td><td><code>true</code></td><td>Authentication services</td></tr>
               <tr><td><code>contexa.identity.handler.enabled</code></td><td><code>true</code></td><td>Authentication success · failure handlers (created only with <code>CONTEXA_OWNED</code>)</td></tr>
               <tr><td><code>contexa.iam.seed.enabled</code></td><td><code>true</code></td><td>Creating tables · default data on the first start</td></tr>
-              <tr><td><code>contexa.iam.websocket.enabled</code></td><td><code>true</code></td><td>Admin console WebSocket</td></tr>
+              <tr><td><code>contexa.iam.websocket.enabled</code></td><td><code>true</code></td><td>Admin console WebSocket (<code>/ws-soar</code>). If the application has a bean named like one of Spring's message broker beans, this WebSocket does not start and CONTEXA logs a WARN. Set <code>false</code> to remove that log</td></tr>
               <tr><td><code>contexa.jpa.repositories.enabled</code></td><td><code>true</code></td><td>Registering CONTEXA JPA repositories</td></tr>
-              <tr><td><code>contexa.security.async.enabled</code></td><td><code>true</code></td><td>Passing the security context to asynchronous work</td></tr>
+              <tr><td><code>contexa.security.async.enabled</code></td><td><code>true</code></td><td>The part that hands the login information of the original request to asynchronous work. It keeps it in memory in standalone mode and in Redis in distributed mode</td></tr>
               <tr><td><code>contexa.prompt.governance.enabled</code></td><td><code>true</code></td><td>Prompt version screens, trials, registry, release gate and rollback (<a href="../../reference/architecture/prompt-versions.html">Prompt Versions</a>), and the prompt quality screens, measurements and quality gate (<a href="../../reference/architecture/prompt-quality.html">Prompt Quality Assurance</a>)</td></tr>
             </tbody>
           </table></div>
           <div class="callout callout-info">
-            <strong>Do not turn on <code>contexa.enterprise.enabled</code> (default <code>false</code>) in the OSS.</strong> It is for when the enterprise module is present. Set to <code>true</code> in the OSS, it does not turn on enterprise features; instead the OSS sealed evidence parts (sealing, the evidence audit and replay) are not created, and prompt versions cannot be measured.
+            <strong>Do not turn on <code>contexa.enterprise.enabled</code> (default <code>false</code>) in the OSS.</strong> The setting is for when the enterprise module is present. In the OSS, <code>true</code> does not turn on enterprise features. Instead, the OSS sealed evidence parts (sealing, the evidence audit and replay) are not created, and prompt versions cannot be measured.
           </div>
 
           <h2 id="modes">Choosing standalone or distributed</h2>
@@ -151,36 +171,58 @@ public class MyApplication { }</code></pre>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>Standalone and distributed</strong>The values are <code>standalone</code> (default) · <code>distributed</code>.</figcaption>
             <div class="dg-compare">
-              <div class="dg-side"><p class="dg-side-title">Standalone (default)</p><ul><li>Decisions · baselines · context are kept in this JVM's memory</li><li>Learning state is lost on restart (one WARN line at start-up)</li><li>No Redis · Kafka needed</li><li>For development and single-machine operation</li></ul></div>
-              <div class="dg-side dg-store"><p class="dg-side-title">Distributed</p><ul><li>Decisions · baselines · context are kept in Redis</li><li>Events to analyze are spread through Kafka</li><li>Several machines see the same decisions</li><li>The application adds Redis · Kafka · Redisson</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Standalone (default)</p><ul><li>Decisions · baselines · context are kept in this JVM's memory</li><li>Learning state is lost on restart (a WARN at start-up)</li><li>No Redis · Kafka needed</li><li>For development and a single instance</li></ul></div>
+              <div class="dg-side dg-store"><p class="dg-side-title">Distributed</p><ul><li>Decisions · baselines · context are kept in Redis</li><li>Events to analyze are spread through Kafka</li><li>Several instances see the same decisions</li><li>The application adds Redis · Redisson, and Kafka is optional</li></ul></div>
             </div>
           </figure>
+          <p>The table shows what is stored where in each mode.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>What</th><th>Standalone</th><th>Distributed</th></tr></thead>
             <tbody>
               <tr><td>User decision store</td><td>Memory (with a user count limit)</td><td>Redis</td></tr>
               <tr><td>Behavioral baseline · decision context · threat score · re-entry records · distributed lock</td><td>Memory</td><td>Redis (needs a Redis template bean)</td></tr>
-              <tr><td>Passing events to analyze</td><td>Handed over directly inside the same JVM</td><td>Kafka (when Spring Kafka and a <code>KafkaTemplate</code> bean are present)</td></tr>
-              <tr><td>Telling in-flight responses about a BLOCK</td><td>Inside the same JVM</td><td>Across nodes when Redisson is present</td></tr>
+              <tr><td>Passing events to analyze</td><td>Handed over directly inside the same JVM</td><td>Kafka (when <code>spring-kafka</code> is present). Without it, handed over directly inside the same JVM</td></tr>
+              <tr><td>The signal that cuts a response in flight when a decision is BLOCK</td><td>Inside the same JVM</td><td>Passed between instances through Redisson</td></tr>
+              <tr><td>Telling other instances about a policy or admin console change (IP access rules · menus · system settings)</td><td>Not sent (one instance is assumed)</td><td>Redisson tells every instance</td></tr>
               <tr><td>MFA session</td><td>HTTP session (even if the application has Redis)</td><td>Redis (when a string Redis template is present)</td></tr>
+              <tr><td>Options the additional authentication screen hands out · progress of unblock MFA</td><td>Memory</td><td>Redis (when a string Redis template is present)</td></tr>
               <tr><td>CONTEXA cache</td><td>Local cache (<code>contexa.cache.type</code> is always <code>LOCAL</code>)</td><td>Redis cache (<a href="#cache">Cache</a>)</td></tr>
-              <tr><td>Login MFA state machine (when CONTEXA owns login)</td><td>Memory</td><td>Redis (when a Redisson bean and <code>spring-statemachine-data-redis</code> are present)</td></tr>
-              <tr><td>Redis · Kafka auto-configuration</td><td>CONTEXA's are left out. The application's Redis auto-configuration is also left out unless the application writes its connection address (<code>spring.data.redis.host</code> and so on) or one of its classes names Spring Data Redis or Redisson. The application's Kafka auto-configuration is kept</td><td>All kept</td></tr>
+              <tr><td>Login MFA state machine (when CONTEXA owns login)</td><td>Memory</td><td>Redis (when CONTEXA's Redisson client and <code>spring-statemachine-data-redis</code> are present)</td></tr>
+              <tr><td>Redis · Kafka auto-configuration</td><td>CONTEXA's auto-configuration does not apply. The application's Redis auto-configuration does not apply either unless the application sets its connection address (<code>spring.data.redis.host</code> and so on) or one of its classes names Spring Data Redis or Redisson. The application's Kafka auto-configuration is kept</td><td>All kept</td></tr>
             </tbody>
           </table></div>
           <p>If the application declares store beans itself (<code>ZeroTrustActionRepository</code>, <code>BaselineDataStore</code>, <code>SecurityContextDataStore</code> and so on), those implementations are used instead of memory even in standalone mode. When the application provides both the baseline store and the context store (<code>SecurityContextDataStore</code>), the standalone WARN does not appear either.</p>
+          <p>When you restart an application in standalone mode, the following happens. In the operating modes that analyze decisions (<code>SHADOW</code> · <code>ENFORCE</code>), two WARN lines at start-up announce this.</p>
+          <ul>
+            <li>The behavioral baselines and decision context are lost, so each user's learning starts again from the beginning.</li>
+            <li>ALLOW · CHALLENGE · ESCALATE decisions held in memory are lost, and the next request is analyzed again.</li>
+            <li>A BLOCK survives only when the CONTEXA database's blocked-user record (<code>ctxa_blocked_user</code>) still holds it in force. The restart stores it again. A block that is not in that record ends with the server.</li>
+          </ul>
 
           <h3 id="standalone-limits">Memory limits in standalone mode</h3>
+          <p>Standalone mode keeps decision and learning state in the JVM heap, so it has limits. Past a limit, the oldest entries are released first.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.security.zerotrust.standalone.max-decision-users</code></td><td><code>0</code></td><td>How many users the in-memory decision store keeps. 0 or less derives it from the maximum heap (a twentieth of it at 2 KiB a user, 1,000–1,000,000 users). Past it, users whose decision was written longest ago go first, but never a user with a restricting decision (BLOCK · a CHALLENGE or ESCALATE in force)</td><td>When there are so many users that memory runs short, or memory is left over</td></tr>
-              <tr><td><code>contexa.security.zerotrust.standalone.max-held-learning-bytes</code></td><td><code>0</code></td><td>Total size (bytes) of requests held in memory while waiting for verification · promotion learning. 0 or less is a tenth of the heap (16 MiB–1 GiB). Past it, the requests held longest are released first (no decision changes; only that learning is lost)</td><td>Same as above</td></tr>
+              <tr><td><code>contexa.security.zerotrust.standalone.max-decision-users</code></td><td><code>0</code></td><td>How many users the in-memory decision store keeps. 0 or less derives it from the maximum heap (a twentieth of it at 2 KiB a user, 1,000–1,000,000 users). Past the limit, users whose decision was written longest ago go first. A user with a restricting decision (BLOCK · a CHALLENGE or ESCALATE in force) and a user whose decision is still within its validity period are never released</td><td>When there are so many users that memory runs short, or memory is left over</td></tr>
+              <tr><td><code>contexa.security.zerotrust.standalone.max-held-learning-bytes</code></td><td><code>0</code></td><td>Total size (bytes) of requests held in memory while waiting for verification · promotion learning. 0 or less is a tenth of the heap (16 MiB–1 GiB). Past the limit, the requests held longest are released first. No decision changes; only that learning is not done</td><td>Same as above</td></tr>
             </tbody>
           </table></div>
 
           <h2 id="distributed">Moving to distributed mode</h2>
-          <p>The CONTEXA starter does not bring Redis, Redisson, the state machine Redis store or Kafka, so the application adds them. Without the first three, <code>distributed</code> is refused at start.</p>
+          <p>Distributed mode (<code>contexa.infrastructure.mode: distributed</code>) keeps decision and learning state in Redis and spreads events to analyze through Kafka. The move needs libraries, connection settings and an application name. The CONTEXA starter does not bring the libraries, so the application adds them.</p>
+
+          <h3 id="distributed-libraries">Required libraries and what happens without them</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Library</th><th>Where CONTEXA uses it</th><th>If it is missing</th></tr></thead>
+            <tbody>
+              <tr><td><code>spring-boot-starter-data-redis</code></td><td>The Redis connection and templates. Decisions · behavioral baselines · decision context · distributed locks · cache are kept in Redis</td><td>Start-up is refused</td></tr>
+              <tr><td><code>org.redisson:redisson</code></td><td>CONTEXA's own Redisson client. It carries BLOCK signals, policy and admin console change notices, and the locks and clean-up of MFA flows</td><td>Start-up is refused</td></tr>
+              <tr><td><code>spring-statemachine-data-redis</code></td><td>Stores the MFA state machine in Redis when CONTEXA owns login</td><td>Start-up is refused</td></tr>
+              <tr><td><code>spring-kafka</code></td><td>Spreads events to analyze between instances</td><td>The application starts. Events are handled inside the same JVM and are not spread between instances</td></tr>
+            </tbody>
+          </table></div>
+          <p>If any of the first three libraries is missing, <code>distributed</code> is refused at start. The console names the missing libraries and what to do. Add the libraries, or set <code>contexa.infrastructure.mode=standalone</code> again.</p>
           <pre><code class="language-groovy">dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'   // Lettuce
     implementation 'org.redisson:redisson:3.48.0'                              // the version Contexa is built with
@@ -206,74 +248,120 @@ spring:
       port: 6379
   kafka:
     bootstrap-servers: kafka.internal:9092</code></pre>
+          <div class="callout callout-warning">
+            <strong>Redisson brings a JCache provider with it.</strong> An application whose cache goes through JCache (<code>javax.cache</code>) may then fail to start. In that case, name the application's cache yourself, for example <code>spring.cache.type=caffeine</code>. If the application has a JCache provider of its own, name it with <code>spring.cache.jcache.provider</code>. CONTEXA does not change the application's cache settings. When the start fails, it prints the cause and what to set in the start-up log.
+          </div>
+
+          <h3 id="distributed-redis">The Redis connection</h3>
           <ul>
-            <li><strong>CONTEXA creates the Redis connection.</strong> In distributed mode CONTEXA builds a single-server Redis connection itself from <code>spring.data.redis.host</code> · <code>port</code> · <code>password</code>, and this connection becomes the application's default Redis connection. It uses <code>contexa.security.zerotrust.redis.timeout</code>, in <strong>milliseconds</strong>, as the connect · command · pool-wait time limit.</li>
-            <li><strong>Redisson.</strong> If the application declares no <code>RedissonClient</code> bean, CONTEXA builds a single-server client from <code>spring.data.redis.host</code> · <code>port</code>. That client uses no password and no database number (database 0). For a Redis with a password, declare your own <code>RedissonClient</code> bean.</li>
-            <li><strong>The Kafka connection</strong> uses Spring's <code>spring.kafka.*</code>. Events to analyze go to the topic <code>ctxa.&lt;application name&gt;.security.events.&lt;category&gt;.&lt;type&gt;</code> (for example <code>ctxa.order-service.security.events.authorization.method</code>), and events that could not be handled go to the DLQ topic. The application name is <code>spring.application.name</code>, lower-cased, with any character other than <code>a-z</code>, <code>0-9</code> and <code>-</code> written as <code>_</code> and the hex of its bytes; without a name the prefix is just <code>ctxa.</code> (<code>ctxa.security.events.authorization.method</code>). At start CONTEXA makes only the topics it uses: the three event topics (<code>authentication.mfa</code>, <code>authentication.success</code>, <code>authorization.method</code>) and the DLQ topic. Topics an earlier version made are not deleted. A failed event is retried 3 times, 1 second apart.</li>
+            <li><strong>CONTEXA uses the application's Redis connection as it is.</strong> CONTEXA's Redis templates attach to the connection that <code>spring-boot-starter-data-redis</code> builds from <code>spring.data.redis.host</code> · <code>port</code> and the rest of <code>spring.data.redis.*</code>. The address, user name, password, database number, TLS, Sentinel, pool and time limits all apply unchanged.</li>
+            <li><strong>Access on a request has a time limit.</strong> When an application request reads Redis (a single server or Sentinel with Lettuce), a CONTEXA client of its own, made from the same connection settings, waits about one second. The application's own Redis client settings are not changed.</li>
+            <li><strong>CONTEXA builds a connection only when the application has none.</strong> If there is no <code>RedisConnectionFactory</code> bean, CONTEXA builds a single-server connection from <code>spring.data.redis.host</code> · <code>port</code> · <code>username</code> · <code>password</code> · <code>database</code>. Only then does it use <code>contexa.security.zerotrust.redis.timeout</code> (default <code>5000</code>), in <strong>milliseconds</strong>, as the connect · command · pool-wait time limit. When the application has set up its connection, this connection is not built.</li>
+            <li><strong>Redisson uses a CONTEXA client of its own.</strong> Whether or not the application declares a <code>RedissonClient</code> bean, CONTEXA builds and uses its own client (<code>contexaRedissonClient</code>). If the application declares its own <code>RedissonClient</code>, CONTEXA does not use it, so you do not need to declare one for a Redis with a password. CONTEXA's client reads the user name, password, database number, TLS, single-server and Sentinel settings from <code>spring.data.redis.*</code>. It connects on first use, so a Redis that is down at start-up does not stop the application from starting. Its wait is the shorter of <code>spring.data.redis.timeout</code> and one second, and it does not retry.</li>
+            <li><strong>Only a single server and Sentinel are supported.</strong> Redis Cluster is not supported in this release. With a cluster, the start-up log shows one ERROR (<code>Redis Cluster is not supported in this release</code>) and start-up goes on. Decisions are written by scripts over several keys, which a cluster can refuse, and a decision that is not stored is not applied.</li>
+            <li><strong>Start-up checks that Redis answers.</strong> CONTEXA tries to connect to a single-server Redis once a second for 5 seconds. If there is still no answer and the application owns login (<code>HOST_OWNED</code>, the default), the application starts without CONTEXA and logs an ERROR (<code>Contexa's Redis cannot be reached</code>). CONTEXA turns on only after you restore Redis and restart the application. With Sentinel this check is not made.</li>
           </ul>
+
+          <h3 id="distributed-kafka">The Kafka connection and topics</h3>
+          <ul>
+            <li><strong>The connection settings</strong> are Spring's <code>spring.kafka.*</code>. CONTEXA builds its own producer, consumer and template (<code>contexaKafkaTemplate</code>) from them and does not change the application's Kafka beans. So the application does not need to declare a <code>KafkaTemplate</code> bean. The producer waits for all replicas to confirm (<code>acks=all</code>) and waits only a few seconds for a send.</li>
+            <li><strong>Topic names.</strong> Events to analyze go to the topic <code>ctxa.&lt;application name&gt;.security.events.&lt;category&gt;.&lt;type&gt;</code> (for example <code>ctxa.order-service.security.events.authorization.method</code>), and events that could not be handled go to the DLQ topic. The application name is <code>spring.application.name</code>, lower-cased, with any character other than <code>a-z</code>, <code>0-9</code> and <code>-</code> written as <code>_</code> and the hex of its bytes. Without a name the prefix is just <code>ctxa.</code> (<code>ctxa.security.events.authorization.method</code>).</li>
+            <li><strong>Topic creation.</strong> At start CONTEXA makes only the topics it uses: the three event topics (<code>authentication.mfa</code>, <code>authentication.success</code>, <code>authorization.method</code>) and the DLQ topic. An event topic has 3 partitions and a 7-day retention, and its replica count follows the broker default. The DLQ topic has 1 partition, 1 replica and a 30-day retention. Topics an earlier version made are not deleted.</li>
+            <li><strong>When a topic cannot be made.</strong> If <code>spring.kafka.admin.auto-create: false</code> is set, or the broker does not answer so that CONTEXA cannot make or check a topic, the start-up log shows one ERROR (<code>[ContexaKafkaTopics] Kafka topics Contexa needs are missing</code>) and start-up goes on. Until the topic exists, its events are not published and reach no analysis. In that case, create the topics beforehand.</li>
+            <li><strong>Failed handling.</strong> When handling an event fails, CONTEXA retries 3 times, 1 second apart, and also sends the event to the DLQ topic. Each event carries the name of the application that sent it, so CONTEXA skips events of other applications and does not analyze them.</li>
+          </ul>
+
+          <h3 id="distributed-namespace">Sharing Redis and Kafka with other applications</h3>
+          <p>CONTEXA tells its own data apart by <code>spring.application.name</code>. With a name, Redis keys start with <code>ctxa:&lt;name&gt;:</code>, Kafka topics follow the <code>ctxa.&lt;application name&gt;.</code> rule above, and the Kafka listener group carries the name. The instances of one application use the same name, so they see the same state.</p>
+          <p>Without a name, CONTEXA uses keys with no prefix and a shared listener group. Another application on the same Redis and Kafka then sees this application's blocks and events, and the reverse. The start-up log shows one INFO line about it. If you share Redis or Kafka with another application, you must set <code>spring.application.name</code>. With a Redis and Kafka of its own, nothing needs to change.</p>
+
+          <h3 id="distributed-settings">Distributed mode settings</h3>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.infrastructure.mode</code></td><td><code>STANDALONE</code></td><td><code>standalone</code> or <code>distributed</code> (case does not matter)</td><td>To run several machines</td></tr>
-              <tr><td><code>contexa.security.zerotrust.redis.timeout</code></td><td><code>5000</code></td><td>Connect · command · pool-wait time limit of the Redis connection in distributed mode (<strong>milliseconds</strong>). Writing <code>5</code> means 5 milliseconds</td><td>When Redis is far or slow</td></tr>
+              <tr><td><code>contexa.infrastructure.mode</code></td><td><code>STANDALONE</code></td><td><code>standalone</code> or <code>distributed</code> (case does not matter)</td><td>To run several instances</td></tr>
+              <tr><td><code>contexa.security.zerotrust.redis.timeout</code></td><td><code>5000</code></td><td>Connect · command · pool-wait time limit of the Redis connection that CONTEXA builds itself when the application has none (<strong>milliseconds</strong>). Writing <code>5</code> means 5 milliseconds</td><td>When Redis is far or slow</td></tr>
               <tr><td><code>contexa.security.kafka.topic.dlq</code></td><td><code>ctxa.&lt;application name&gt;.security-events-dlq</code> (<code>ctxa.security-events-dlq</code> without an application name)</td><td>Topic for events that could not be handled. A name set here is used exactly as it is set, with no prefix added, and that topic is the one made at start</td><td>When you have topic naming rules</td></tr>
-              <tr><td><code>security.plane.kafka.group-id</code></td><td><code>security-plane-consumer</code></td><td>Base name of the group of the Kafka listener that receives events. An application with a name joins <code>security-plane-consumer.&lt;identifier&gt;</code>, where the identifier is <code>spring.application.name</code> lower-cased, with any character other than <code>a-z</code>, <code>0-9</code>, <code>.</code>, <code>_</code> and <code>-</code> written as <code>~</code> and the hex of its bytes (a name that makes it longer than 48 characters is cut and ends in a digest); without a name the group is this value as it is. The name does not start with <code>contexa</code></td><td>When the same Kafka is shared with another CONTEXA group</td></tr>
+              <tr><td><code>security.plane.kafka.group-id</code></td><td><code>security-plane-consumer</code></td><td>Base name of the group of the Kafka listener that receives events. An application with a name joins <code>security-plane-consumer.&lt;identifier&gt;</code>. The identifier is <code>spring.application.name</code> lower-cased, with any character other than <code>a-z</code>, <code>0-9</code>, <code>.</code>, <code>_</code> and <code>-</code> written as <code>~</code> and the hex of its bytes. A name that makes it longer than 48 characters is cut and ends in a digest. Without a name the group is this value as it is. This key does not start with <code>contexa</code></td><td>When the same Kafka is shared with another CONTEXA group</td></tr>
             </tbody>
           </table></div>
           <div class="callout callout-info">
-            <strong>The Kafka listener group reads <code>security.plane.kafka.group-id</code>.</strong> This key is the exception that is read under its old name (not through an alias: the listener reads that name directly, and nothing is logged at start-up). The value is the base name of the listener group, and when the application has a name, <code>.</code> and its identifier (see the table above) are added after it. <code>contexa.security.plane.kafka.group-id</code> is read by nothing and has no effect.
+            <strong>The Kafka listener group reads <code>security.plane.kafka.group-id</code>.</strong> This key is the exception that is read under its old name. It is not an alias: the listener reads that name directly, so nothing is logged at start-up. The value is the base name of the listener group, and when the application has a name, <code>.</code> and its identifier (see the table above) are added after it. <code>contexa.security.plane.kafka.group-id</code> is read by nothing and has no effect.
           </div>
-          <p>Decision engine throughput, such as the analysis queue · thread counts · time limits, is in <a href="security.html#throughput">Enforcement Modes and Decision Tuning</a>.</p>
+          <p>Decision engine throughput, such as the analysis queue · thread counts · time limits, is in <a href="security.html#throughput">Operating Modes and Decision Tuning</a>.</p>
+
+          <h3 id="store-outage">When Redis or the database does not answer</h3>
+          <p>CONTEXA does not stop the application because a store is down. If Redis or the CONTEXA database does not answer while the application runs, this happens.</p>
+          <ol>
+            <li>The first request that meets the outage waits about one second. After that, requests go on without waiting for the store.</li>
+            <li>CONTEXA logs one ERROR (<code>[Contexa] Redis does not answer</code> or <code>[Contexa] Contexa's database does not answer</code>), and while the outage lasts it logs an ERROR with the time without an answer every minute.</li>
+            <li>Calls to protected methods (<code>@Protectable</code>) can go on without a decision. CONTEXA logs the number of calls that went on without a decision as an ERROR every minute, and writes it to the audit records when the database is back. A call to a sensitive resource whose policies could not be read is the exception: it is refused and requires additional authentication.</li>
+            <li>When the store answers again, CONTEXA notices within a second and recovers by itself. You do not need to restart the application.</li>
+          </ol>
+          <p>While a store is down, decision control is weaker. Put the ERROR logs above on an alert. In distributed mode, running Redis with Sentinel helps keep it available.</p>
 
           <h2 id="cache">Cache</h2>
-          <p>The CONTEXA cache is used when policy decisions look up user information (the <code>users</code> domain) and policies (the <code>policies</code> domain). Standalone mode always uses a local cache inside this JVM; the Redis and invalidation settings below matter only in distributed mode.</p>
+          <p>The CONTEXA cache is used when policy decisions look up user information (the <code>users</code> domain) and policies (the <code>policies</code> domain). Standalone mode always uses a local cache inside this JVM. The Redis and invalidation settings below matter only in distributed mode.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.cache.type</code></td><td><code>REDIS</code></td><td><code>LOCAL</code> · <code>REDIS</code> · <code>HYBRID</code>. In standalone mode it is <code>LOCAL</code> whatever you write. In distributed mode <code>HYBRID</code> tells other nodes when an entry is removed</td><td><code>HYBRID</code> so that every node sees a changed policy at once in distributed mode</td></tr>
+              <tr><td><code>contexa.cache.type</code></td><td><code>REDIS</code></td><td><code>LOCAL</code> · <code>REDIS</code> · <code>HYBRID</code>. In standalone mode it is <code>LOCAL</code> whatever you write. In distributed mode <code>HYBRID</code> tells other instances when an entry is removed</td><td><code>HYBRID</code> so that every instance sees a changed policy at once in distributed mode</td></tr>
               <tr><td><code>contexa.cache.local.max-size</code></td><td><code>1000</code></td><td>Maximum entries of the local cache</td><td>When there are many users · policies</td></tr>
               <tr><td><code>contexa.cache.local.default-ttl-seconds</code></td><td><code>60</code></td><td>Local lifetime (seconds) of an entry with no domain</td><td>Rarely</td></tr>
               <tr><td><code>contexa.cache.redis.default-ttl-seconds</code></td><td><code>60</code></td><td>Redis lifetime (seconds) of an entry with no domain</td><td>Rarely</td></tr>
-              <tr><td><code>contexa.cache.redis.key-prefix</code></td><td><code>contexa:cache:</code></td><td>Prefix of Redis keys</td><td>When the same Redis is shared with another application</td></tr>
-              <tr><td><code>contexa.cache.pubsub.enabled</code></td><td><code>true</code></td><td>Send invalidation notices with <code>HYBRID</code></td><td>To turn the notices off</td></tr>
-              <tr><td><code>contexa.cache.pubsub.channel</code></td><td><code>contexa:cache:invalidation</code></td><td>Invalidation notice channel</td><td>When you have channel naming rules</td></tr>
-              <tr><td><code>contexa.cache.domains.users.local-ttl-seconds</code></td><td><code>3600</code></td><td>Local lifetime (seconds) of user information. The Redis side is <code>redis-ttl-seconds</code> (same default)</td><td>Lower it to see authority changes sooner</td></tr>
-              <tr><td><code>contexa.cache.domains.policies.local-ttl-seconds</code></td><td><code>30</code></td><td>Local lifetime (seconds) of policies. The Redis side <code>redis-ttl-seconds</code> is also 30, so both modes see a changed policy after the same time</td><td>You may raise it if policies rarely change</td></tr>
+              <tr><td><code>contexa.cache.redis.key-prefix</code></td><td><code>contexa:cache:</code></td><td>Prefix of Redis keys. When the application has a name, <code>ctxa:&lt;application name&gt;:</code> is added before it</td><td>When the same Redis is shared with another application</td></tr>
+              <tr><td><code>contexa.cache.pubsub.enabled</code></td><td><code>true</code></td><td>Sends invalidation notices with <code>HYBRID</code></td><td>To turn the notices off</td></tr>
+              <tr><td><code>contexa.cache.pubsub.channel</code></td><td><code>contexa:cache:invalidation</code></td><td>Invalidation notice channel (with <code>ctxa:&lt;application name&gt;:</code> before it when the application has a name)</td><td>When you have channel naming rules</td></tr>
+              <tr><td><code>contexa.cache.domains.users.local-ttl-seconds</code></td><td><code>3600</code></td><td>Local lifetime (seconds) of user information. The Redis side is <code>redis-ttl-seconds</code> (same default)</td><td>Lower it to apply authority changes sooner</td></tr>
+              <tr><td><code>contexa.cache.domains.policies.local-ttl-seconds</code></td><td><code>30</code></td><td>Local lifetime (seconds) of policies. The Redis side <code>redis-ttl-seconds</code> is also 30, so both modes show a changed policy after the same time</td><td>You may raise it if policies rarely change</td></tr>
             </tbody>
           </table></div>
           <p>Values for <code>contexa.cache.domains.roles</code> · <code>permissions</code> · <code>groups</code> · <code>soar</code> exist too, but no OSS code calls the CONTEXA cache with those domains today (Spring caches such as <code>@Cacheable("roles")</code> are separate).</p>
 
           <h2 id="scheduler-lock">Scheduled jobs across instances</h2>
-          <p>So that scheduled jobs, such as deleting records past their retention, run only once across instances, CONTEXA locks them with the <code>ctxa_shedlock</code> table in the CONTEXA database (ShedLock). It does no harm with one instance. CONTEXA brings ShedLock itself; locking turns on when the CONTEXA database is present.</p>
+          <p>Scheduled jobs, such as deleting records past their retention, must run only once even when there are several instances. For this, CONTEXA locks them with the <code>ctxa_shedlock</code> table in the CONTEXA database (ShedLock). The lock does no harm with one instance. CONTEXA brings ShedLock itself, and locking turns on when the CONTEXA database is present.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.scheduler.lock.enabled</code></td><td><code>true</code></td><td>Turn scheduled-job locking on. The longest a lock is held is fixed at 5 minutes</td><td>To turn it off briefly during a database migration</td></tr>
-              <tr><td><code>contexa.scheduler.lock.use-database-time</code></td><td><code>true</code></td><td>Use the database clock for lock times (<code>false</code> uses the JVM clock)</td><td>Test environments where the database and JVM time zones differ</td></tr>
+              <tr><td><code>contexa.scheduler.lock.enabled</code></td><td><code>true</code></td><td>Turns scheduled-job locking on. The longest a lock is held is fixed at 5 minutes</td><td>To turn it off briefly during a database migration</td></tr>
+              <tr><td><code>contexa.scheduler.lock.use-database-time</code></td><td><code>true</code></td><td>Uses the database clock for lock times (<code>false</code> uses the JVM clock)</td><td>Test environments where the database and JVM time zones differ</td></tr>
             </tbody>
           </table></div>
 
           <h2 id="opentelemetry">Tracing (OpenTelemetry)</h2>
-          <p>CONTEXA creates an OpenTelemetry SDK that exports traces (spans) over OTLP gRPC and registers it globally. There is no metrics export. <strong>It is on by default</strong>, so it tries to send to <code>localhost:4317</code> even when there is no collector. Turn it off if you run no collector.</p>
+          <p>CONTEXA can create an OpenTelemetry SDK that exports traces (spans) over OTLP gRPC and register it for the whole JVM. There is no metrics export. <strong>It is off by default.</strong> It is off so that CONTEXA does not collide with an OpenTelemetry agent or SDK the application already has. Two things turn it on.</p>
+          <ol>
+            <li>The application adds <code>io.opentelemetry:opentelemetry-sdk</code> and <code>io.opentelemetry:opentelemetry-exporter-otlp</code> to its dependencies. The starter does not bring them, and without the classes this setting does not apply.</li>
+            <li>Set <code>contexa.opentelemetry.enabled: true</code> and write the collector address. If you write no address, CONTEXA tries to send to <code>localhost:4317</code>, so a collector must be listening there.</li>
+          </ol>
+          <p>The global OpenTelemetry can be registered only once per JVM. If one is already registered, CONTEXA logs one ERROR, leaves the global instance as it is, and uses only its own bean.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.opentelemetry.enabled</code></td><td><code>true</code></td><td><code>false</code> gives an empty SDK that exports nothing</td><td>When there is no collector</td></tr>
+              <tr><td><code>contexa.opentelemetry.enabled</code></td><td><code>false</code></td><td><code>true</code> exports traces to an OTLP gRPC collector. <code>false</code> gives an empty SDK that exports nothing</td><td><code>true</code> when you run a collector and need CONTEXA traces</td></tr>
               <tr><td><code>contexa.opentelemetry.service-name</code></td><td><code>contexa-core</code></td><td>Service name attached to traces</td><td>To tell applications apart</td></tr>
               <tr><td><code>contexa.opentelemetry.exporter-endpoint</code></td><td><code>http://localhost:4317</code></td><td>OTLP <strong>gRPC</strong> collector address (HTTP on 4318 does not fit)</td><td>Collector address</td></tr>
               <tr><td><code>contexa.opentelemetry.sampling-probability</code></td><td><code>1.0</code></td><td>Share of traces kept (0–1)</td><td>To reduce it under heavy traffic</td></tr>
             </tbody>
           </table></div>
 
-          <h2 id="check">Checking that it is connected</h2>
+          <h2 id="check">Checking the connection</h2>
+          <p>When you meet one of these in the start-up log or on a screen, find its meaning and what to do in this table.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Start-up log · screen</th><th>Meaning and what to do</th></tr></thead>
             <tbody>
               <tr><td><code>contexa.datasource.url must be configured for @EnableAISecurity</code></td><td>The dedicated database URL is missing. Set the <a href="#database">dedicated database</a>.</td></tr>
               <tr><td><code>contexa.datasource must not share …</code></td><td>The URL equals the application database. See <a href="#database-shared">the conditions for sharing</a>.</td></tr>
+              <tr><td><code>Contexa's database cannot be used</code> (ERROR)</td><td>The dedicated database cannot be reached, or its account cannot create the extensions. When the application owns login (the default), it has started without CONTEXA. Fix the cause the log names and restart the application.</td></tr>
               <tr><td><code>[ContexaCapability] …</code> (ERROR)</td><td>A part a decision needs is missing. Add the part the log names (chat model · vector store and so on).</td></tr>
-              <tr><td><code>[Contexa] contexa.infrastructure.mode is standalone …</code> (WARN)</td><td>A notice that learning state is in memory in standalone mode. Fine to leave as it is during development.</td></tr>
-              <tr><td><code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared …</code> (WARN)</td><td>The application owns login but declares no <code>SecurityFilterChain</code>, so Spring Boot's default security is on. Declare one; the <code>anyRequest().permitAll()</code> the log suggests is safe for CONTEXA's paths, because CONTEXA protects its admin console itself (<a href="../spring-boot.html">Adding CONTEXA to a Spring Boot Application</a>).</td></tr>
+              <tr><td><code>[Contexa] contexa.infrastructure.mode is standalone …</code> (WARN)</td><td>A notice that learning state (behavioral baselines · decision context) or the decisions in force are kept in memory in standalone mode. Two lines can appear. Fine to leave as it is during development.</td></tr>
+              <tr><td><code>contexa.infrastructure.mode is distributed, and the Redis client is not on the class path</code></td><td>Distributed mode was refused because a Redis library is missing. Add the library the log names, or go back to <code>standalone</code>. See <a href="#distributed-libraries">Required libraries</a> above.</td></tr>
+              <tr><td><code>Contexa's Redis cannot be reached</code> (ERROR)</td><td>The Redis of distributed mode cannot be reached. When the application owns login (the default), it has started without CONTEXA. Restore Redis and restart the application.</td></tr>
+              <tr><td><code>[Contexa] Redis Cluster is not supported in this release</code> (ERROR)</td><td>The application uses Redis Cluster. Switch to a single server or Sentinel.</td></tr>
+              <tr><td><code>[ContexaKafkaTopics] Kafka topics Contexa needs are missing</code> (ERROR)</td><td>A Kafka topic could not be made or checked. Create the topics beforehand, or fix the broker connection. See <a href="#distributed-kafka">The Kafka connection and topics</a>.</td></tr>
+              <tr><td><code>[Contexa] Redis does not answer</code> · <code>[Contexa] Contexa's database does not answer</code> (ERROR)</td><td>A store does not answer while the application runs. See <a href="#store-outage">When Redis or the database does not answer</a>.</td></tr>
+              <tr><td><code>[Contexa] spring.application.name is not set …</code> (INFO)</td><td>The application has no name, so its Redis and Kafka names are shared. If you share the infrastructure with another application, set the name. See <a href="#distributed-namespace">Sharing Redis and Kafka with other applications</a>.</td></tr>
+              <tr><td><code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared …</code> (WARN)</td><td>The application owns login but declares no <code>SecurityFilterChain</code>, so Spring Boot's default security is on. Declare one. The <code>anyRequest().permitAll()</code> the log suggests is safe for CONTEXA's paths, because CONTEXA protects its admin console itself (<a href="../spring-boot.html">Adding CONTEXA to a Spring Boot Application</a>). If the application has neither a chain nor login users, start-up is refused instead of showing this WARN.</td></tr>
               <tr><td><code>GET /actuator/contexacapabilities</code></td><td>Capability check results (with Actuator).</td></tr>
             </tbody>
           </table></div>
@@ -284,7 +372,7 @@ spring:
             <li>Agent registration · agent tokens: <a href="../../reference/agent/overview.html#settings">Agents as Security Subjects</a></li>
             <li>Delegation records · objective contracts: <a href="../../reference/agent/delegation.html#settings">Delegation and Objective Contracts</a></li>
             <li>Call limits · confirmation by the accountable person · scope narrowing: <a href="../../reference/agent/controls.html#settings">Stop, Confirm, Limit</a></li>
-            <li>Operating mode and decision engine throughput: <a href="security.html">Enforcement Modes and Decision Tuning</a></li>
+            <li>Operating mode and decision engine throughput: <a href="security.html">Operating Modes and Decision Tuning</a></li>
             <li>Settings that have no effect (<code>contexa.infrastructure.redis.enabled</code> and others): <a href="../configuration.html#unused-keys">Configuration Guide</a></li>
           </ul>
           <!-- Navigation Footer -->
