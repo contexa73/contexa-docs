@@ -18,6 +18,10 @@
             <strong>This is a feature for when CONTEXA owns login (<code>CONTEXA_OWNED</code>).</strong> With the default <code>HOST_OWNED</code>, your application's Spring Security handles login and no CONTEXA MFA flow is built; a CHALLENGE is answered by CONTEXA's verification-only step-up instead (<a href="zero-trust-filters.html#host-step-up">The step-up under HOST_OWNED</a>). To keep your application's own login and MFA and tell CONTEXA the result, see <a href="../common/bridge.html#mfa">Connecting Your Existing Login</a>. With <code>@EnableAISecurity(mode = SecurityMode.FULL)</code> and no <code>PlatformConfig</code> defined, one MFA flow (form + passkey + one-time code) is on by default.
           </div>
 
+          <div class="callout callout-info">
+            <strong>Terms on this page.</strong> <strong>MFA</strong> (multi-factor authentication) is a login that asks for one or more checks after the password. The <strong>primary login</strong> is the first login, by form or REST, and a <strong>second factor</strong> is a method checked after it (an emailed one-time code or a passkey). The <strong>MFA policy</strong> is the rule that decides whether this login needs MFA, and an <strong>evaluator</strong> is the code that computes that rule. A <strong>challenge</strong> (<code>CHALLENGE</code>) is the CONTEXA decision "ask for more authentication", and <strong>step-up</strong> is asking a user who is already logged in for MFA again. The <strong>SDK</strong> is the JavaScript library a page uses to call the MFA server addresses. Terms such as flow, chain and state are in <a href="authentication.html">Login Methods</a>.
+          </div>
+
           <h2 id="overview">Overview</h2>
           <p>When the primary login succeeds, the MFA policy decides whether this user needs MFA. If so, CONTEXA opens the page of the first second factor right away, and the user can pick a remaining factor with "another method". The login finishes once the required number of factors is done.</p>
           <figure class="dg">
@@ -48,10 +52,10 @@
             <li>CONTEXA generates the login page <code>GET /mfa/login</code> and the factor pages. The primary login is processed at <code>POST /mfa/login</code>.</li>
             <li>The flow is named <code>mfa</code>, its default order is 200, and the chain bean is named like <code>contexamfaSecurityFilterChain1</code> (the number counts across all flows).</li>
             <li>The primary login is one of <code>formLogin</code> and <code>restLogin</code> (<code>.primaryAuthentication(...)</code> is required).</li>
-            <li>Without any second factor, startup fails. Calling <code>.form()</code> or <code>.rest()</code> inside <code>.mfa()</code> throws <code>UnsupportedOperationException</code>. Writing the same factor twice makes the later one replace the earlier one.</li>
+            <li>Without any second factor, startup fails. Calling <code>.form()</code> or <code>.rest()</code> inside <code>.mfa()</code> throws <code>UnsupportedOperationException</code>. Writing the same factor twice (two <code>.ott(...)</code> calls, for example) stops the application from starting.</li>
           </ul>
           <div class="callout callout-warning">
-            <strong>The one-time code factor needs mail settings.</strong> The code is sent with Spring mail (<code>spring.mail.*</code>); without a mail sender, issuing a code fails as <code>contexa.auth.ott.fail-on-email-error</code> (default <code>true</code>) says (<a href="authentication.html#ott">One-time code</a>).
+            <strong>The one-time code factor needs mail settings.</strong> The code is sent with Spring mail (<code>spring.mail.*</code>); without a mail sender, issuing a code fails as <code>contexa.auth.ott.fail-on-email-error</code> (default <code>true</code>) says. A code inside MFA has 6 digits and is valid for <code>contexa.auth.mfa.otp-token-validity-seconds</code> (default 300 seconds). To one address only one mail goes out per <code>contexa.auth.mfa.email-resend-interval-seconds</code> (default 120 seconds), so a request inside that time uses the code received earlier. With a development profile the code is also written to the log (<a href="authentication.html#ott">One-time code</a>).
           </div>
           <h3 id="mfa-verify">Checking it</h3>
           <ul>
@@ -67,7 +71,7 @@
               <tr><td>Not set</td><td>Every registered factor must be completed</td></tr>
               <tr><td>1</td><td>Any one factor. The first factor opens automatically, and the "another method" link lets the user pick a remaining one (completed factors drop out of the list)</td></tr>
               <tr><td>N</td><td>N factors must be completed. When one is done, the next follows automatically</td></tr>
-              <tr><td>More than the factors</td><td>Can never complete. It is not checked at startup, so take care</td></tr>
+              <tr><td>More than the factors</td><td>Can never complete. It is not checked at startup, so take care. The exception: when the passkey library (webauthn4j) is missing, the passkey factor is left out, and the remaining factors cannot reach the count, the application does not start</td></tr>
             </tbody>
           </table></div>
           <pre><code class="language-java">registry
@@ -144,7 +148,7 @@
               <tr><td>Hidden input names</td><td><code>_csrf</code> (CSRF token), <code>mfaSessionId</code> (MFA session). Pages CONTEXA generates add both automatically</td></tr>
               <tr><td>Form ids</td><td><code>ottRequestForm</code>, <code>verifyForm</code>, <code>resendForm</code></td></tr>
               <tr><td>Button ids</td><td><code>loginButton</code>, <code>sendCodeButton</code>, <code>verifyButton</code>, <code>resendButton</code>, <code>authButton</code></td></tr>
-              <tr><td>Factor selection page</td><td>There is no page script for it. The page loads the SDK and calls <code>mfa.selectFactor('MFA_OTT')</code> or <code>mfa.selectFactor('MFA_PASSKEY')</code> (the names in <code>availableFactors</code> of the primary login's answer), then moves to the answer's <code>nextStepUrl</code>; with <code>autoRedirect</code> on, the SDK moves by itself</td></tr>
+              <tr><td>Factor selection page</td><td>There is no page script for it. The page loads the SDK and calls <code>mfa.selectFactor('MFA_OTT')</code> or <code>mfa.selectFactor('MFA_PASSKEY')</code> (the names in <code>availableFactors</code> of the primary login's answer), then the page script moves to the answer's <code>nextStepUrl</code> itself. The SDK's <code>selectFactor</code> only returns the result and does not move pages</td></tr>
             </tbody>
           </table></div>
           <ul>
@@ -161,7 +165,7 @@
             <thead><tr><th>Evaluator</th><th>Priority</th><th>Users it covers</th><th>Decision</th></tr></thead>
             <tbody>
               <tr><td><code>AgentAccountMfaPolicyEvaluator</code></td><td>1000</td><td>Accounts of approved agents</td><td>Never sends them to factors made for people; follows only CONTEXA's decision</td></tr>
-              <tr><td><code>ZeroTrustPolicyEvaluator</code></td><td>100</td><td>Every other user</td><td>A stored ALLOW still requires MFA at a new sign-in: it was reached for the context (session, IP, browser) of another request and says nothing about who holds the password now. CHALLENGE → MFA. BLOCK → blocked. ESCALATE → held for review (blocked). No decision (PENDING_ANALYSIS) → MFA, even when the last verified decision was ALLOW (that value is kept for the audit only). No decision record, or an old one (<code>contexa.security.zerotrust.analysis.max-age-ms</code>, 1 hour) → MFA. A BLOCK or an ESCALATE stays in force however old it is</td></tr>
+              <tr><td><code>ZeroTrustPolicyEvaluator</code></td><td>100</td><td>Every other user</td><td>A stored ALLOW still requires MFA at a new sign-in: it was reached for the context (session, IP, browser) of another request and says nothing about who holds the password now. CHALLENGE → MFA (blocked when the account cannot be found or no factor is available). BLOCK → blocked. ESCALATE → held for review (blocked). No decision (PENDING_ANALYSIS) → MFA, even when the last verified decision was ALLOW (that value is kept for the audit only). No decision record, or an old one (<code>contexa.security.zerotrust.analysis.max-age-ms</code>, 1 hour) → MFA. A BLOCK or an ESCALATE stays in force however old it is</td></tr>
               <tr><td><code>DefaultMfaPolicyEvaluator</code></td><td>-100</td><td>A fallback for when an earlier evaluator throws</td><td>Asks for MFA in an MFA flow. The built-in evaluators turn their own errors into "MFA needed", so it is rarely used</td></tr>
             </tbody>
           </table></div>
@@ -313,7 +317,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
             <thead><tr><th>Constructor option</th><th>Default</th><th>Meaning</th></tr></thead>
             <tbody>
               <tr><td><code>autoInit</code></td><td><code>true</code></td><td>Restores the stored MFA progress and tokens</td></tr>
-              <tr><td><code>autoRedirect</code></td><td><code>true</code></td><td>Moves between pages automatically for each MFA step</td></tr>
+              <tr><td><code>autoRedirect</code></td><td><code>true</code></td><td>Not read in the current version. Moving between MFA step pages is done by the calling page, with the answer's <code>nextStepUrl</code> or <code>redirectUrl</code></td></tr>
               <tr><td><code>tokenPersistence</code></td><td><code>'memory'</code></td><td>Token storage: <code>'memory'</code> (gone on reload), <code>'sessionStorage'</code>, <code>'localStorage'</code></td></tr>
               <tr><td><code>attachAuthorization</code></td><td>none</td><td>When on, the SDK attaches the access token to <code>fetch</code> and <code>XMLHttpRequest</code> requests</td></tr>
             </tbody>
@@ -326,7 +330,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td><code>verifyOtt(code, username)</code></td><td>Checks a one-time code (without <code>username</code>, the SDK's stored value)</td></tr>
               <tr><td><code>verifyPasskey()</code></td><td>Passkey check: gets the options → <code>navigator.credentials.get()</code> → server check, in order</td></tr>
               <tr><td><code>performWebAuthnAuthentication(headers, contextPath)</code></td><td>Low-level passkey flow for embedded pages</td></tr>
-              <tr><td><code>handleAuthenticationResult(result)</code></td><td>Stores tokens and moves pages for a completed response</td></tr>
+              <tr><td><code>handleAuthenticationResult(result)</code></td><td>Puts the response's CSRF token into the page, stores the tokens, and resets the progress state for a completed response. It does not move pages</td></tr>
               <tr><td><code>persistTokensToStorage(result)</code></td><td>Stores tokens as <code>tokenPersistence</code> says</td></tr>
               <tr><td><code>logout()</code></td><td>Logs out and clears the client state and tokens</td></tr>
               <tr><td><code>clearClientState()</code> · <code>clearPersistedTokens()</code></td><td>Clears the in-memory state or the stored tokens without a server call</td></tr>
@@ -378,6 +382,8 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td><code>contexa.auth.mfa.challenge-timeout-ms</code></td><td><code>300000</code></td><td>Time limit of one factor's check (ms). Used for the expiry time in responses, and a factor submitted after it is refused with 403 <code>MFA_SESSION_EXPIRED</code></td></tr>
               <tr><td><code>contexa.auth.mfa.max-retry-attempts</code></td><td><code>5</code></td><td>Attempt limit of a factor check. The <code>maxAttempts</code> of failure responses. Below 1 stops startup</td></tr>
               <tr><td><code>contexa.auth.mfa.minimum-delay-ms</code></td><td><code>500</code></td><td>Minimum delay of login failure responses (ms)</td></tr>
+              <tr><td><code>contexa.auth.mfa.otp-token-validity-seconds</code></td><td><code>300</code></td><td>How long a one-time code inside MFA is valid (seconds)</td></tr>
+              <tr><td><code>contexa.auth.mfa.email-resend-interval-seconds</code></td><td><code>120</code></td><td>How long to wait before a code mail goes to the same address again (seconds)</td></tr>
               <tr><td><code>contexa.identity.mfa.enabled</code></td><td><code>true</code></td><td>Off turns off the MFA policy auto-configuration</td></tr>
             </tbody>
           </table></div>

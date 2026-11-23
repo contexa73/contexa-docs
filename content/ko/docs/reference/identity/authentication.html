@@ -11,14 +11,68 @@
               <span class="badge badge-info">contexa-identity</span>
             </div>
             <h1>로그인 방법</h1>
-            <p class="lead">CONTEXA가 로그인을 맡을 때 쓰는 단일 로그인 방법 네 가지(폼 · REST · 일회용 코드 · 패스키)를 켜고, 주소를 바꾸고, 결과를 확인하는 방법을 설명합니다. 로그인 성공 · 실패를 누가 처리하는지와 로그인 정보를 어디에 저장하는지도 다룹니다.</p>
+            <p class="lead">CONTEXA가 로그인을 맡을 때 쓰는 단일 인증 방법 네 가지(폼 · REST · 일회용 코드 · 패스키)의 설정, 처리 주소, 동작 확인 방법을 설명합니다. 로그인 성공 · 실패 응답을 만드는 처리기와 로그인 정보를 보관하는 위치도 다룹니다.</p>
           </div>
 
           <div class="callout callout-info">
-            <strong>CONTEXA가 로그인을 맡을 때(<code>CONTEXA_OWNED</code>)의 기능입니다.</strong> 기본값 <code>HOST_OWNED</code>에서는 앱의 Spring Security가 로그인을 맡고 이 페이지의 흐름은 만들어지지 않습니다. 앱의 기존 로그인을 그대로 쓰려면 <a href="../common/bridge.html">기존 로그인과 연결하기</a>를 참고합니다. 흐름을 적는 방법과 공통 옵션은 <a href="dsl.html">인증 DSL</a>에 있습니다.
+            <strong>이 페이지는 CONTEXA가 로그인을 맡을 때(<code>CONTEXA_OWNED</code>)만 적용됩니다.</strong> 기본값 <code>HOST_OWNED</code>에서는 앱의 Spring Security가 로그인을 맡으며, 이 페이지의 인증 흐름은 만들어지지 않습니다. 앱의 기존 로그인을 그대로 쓰려면 <a href="../common/bridge.html">기존 로그인과 연결하기</a>를 봅니다. 로그인을 CONTEXA에 맡기는 방법은 아래 <a href="#before-you-start">시작하기 전에</a>에 있습니다.
           </div>
 
+          <div class="callout callout-info">
+            <strong>이 페이지의 용어.</strong> <strong>인증</strong>은 요청한 사람이 누구인지 확인하는 일이고, <strong>자격 증명</strong>은 그 사람임을 증명하는 값(비밀번호, 일회용 코드, 패스키)입니다. <strong>인증 흐름</strong>(flow)은 인증 방법 하나와 인증 상태 하나를 묶은 설정 단위입니다. 흐름 하나마다 <strong>보안 필터 체인</strong>(요청을 검사하는 Spring Security 필터 묶음) 하나가 만들어지고, <code>order</code> 값이 작은 체인이 요청을 먼저 받습니다. <strong>단일 인증</strong>은 자격 증명 하나로 끝나는 로그인이고, <strong>다단계 인증</strong>(MFA)은 비밀번호 다음에 두 번째 <strong>인증 요소</strong>(일회용 코드나 패스키)를 더 확인하는 로그인입니다. <strong>인증 상태</strong>는 로그인한 사용자 정보를 보관하는 방식입니다. 세션 상태(<code>.session()</code>)는 서버의 HTTP 세션에 두고, 토큰 상태(<code>.oauth2()</code>)는 클라이언트가 요청마다 보내는 접근 토큰에 둡니다. <strong>보안 컨텍스트</strong>(<code>SecurityContext</code>)는 로그인한 사용자 정보를 담은 객체이고, <strong>처리기</strong>(handler)는 로그인 성공 · 실패 때 응답을 만드는 코드입니다. 설정 문법은 <a href="dsl.html">인증 DSL</a>, 인증 상태는 <a href="state-management.html">상태 관리</a>에 있습니다.
+          </div>
+
+          <h2 id="before-you-start">시작하기 전에: 세 가지 준비</h2>
+          <p>CONTEXA가 로그인을 처리하려면 아래 세 가지가 모두 갖춰져야 합니다.</p>
+          <h3 id="owned-mode">1. 로그인을 CONTEXA에 맡긴다고 선언합니다</h3>
+          <pre><code class="language-java">@SpringBootApplication
+@EnableAISecurity(mode = SecurityMode.FULL)
+public class MyApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(MyApplication.class, args);
+    }
+}</code></pre>
+          <ul>
+            <li><code>mode = SecurityMode.FULL</code>이면 인증 소유 방식이 <code>CONTEXA_OWNED</code>가 됩니다. 모드를 적지 않으면 기본값 <code>SANDBOX</code>이고, 이때 소유 방식은 <code>HOST_OWNED</code>입니다.</li>
+            <li>설정 <code>contexa.ai.security.mode: FULL</code>로도 정할 수 있습니다. 설정 값은 코드에 적은 값보다 우선합니다.</li>
+            <li>모드를 <code>SANDBOX</code>로 둔 채 <code>contexa.bridge.ownership: CONTEXA_OWNED</code>만 적으면 두 값이 서로 맞지 않아 애플리케이션이 시작하지 않습니다. 시작 오류는 <code>contexa.bridge.ownership</code>을 지우거나 <code>@EnableAISecurity(mode = FULL)</code>을 쓰라고 안내합니다.</li>
+          </ul>
+          <h3 id="flows-bean">2. 인증 흐름을 빈 하나에 적습니다</h3>
+          <p>로그인 방법은 <code>PlatformConfig</code> 빈 하나에 적습니다. 빈 메서드는 <code>IdentityDslRegistry&lt;HttpSecurity&gt;</code>를 받아 인증 방법(<code>.form()</code> 등), 인증 상태(<code>.session()</code> 또는 <code>.oauth2()</code>), <code>build()</code> 순서로 적습니다. 이 페이지에 나오는 짧은 예제(<code>registry ...</code>)는 모두 이 메서드의 본문입니다.</p>
+          <pre><code class="language-java">@Configuration
+public class LoginFlowsConfig {
+
+    @Bean
+    public PlatformConfig platformDslConfig(IdentityDslRegistry&lt;HttpSecurity&gt; registry) throws Exception {
+        return registry
+                .form(form -&gt; form.defaultSuccessUrl("/home"))
+                .session(Customizer.withDefaults())
+                .build();
+    }
+}</code></pre>
+          <p>설정 클래스에는 <code>@Configuration</code>을 반드시 붙입니다. 빈을 두지 않았을 때 쓰이는 기본 구성과 모든 흐름에 공통인 옵션은 <a href="dsl.html#default-config">인증 DSL</a>에 있습니다.</p>
+          <h3 id="accounts">3. 로그인할 계정은 CONTEXA 계정 저장소에 있습니다</h3>
+          <ul>
+            <li>모든 단일 로그인과 MFA의 1차 로그인은 CONTEXA DB의 사용자 표 <code>ctxa_users</code>에서 계정을 찾습니다(빈 <code>contexaUnifiedUserDetailsService</code>). 권한은 그 계정에 직접 준 역할과 소속 그룹의 역할로 계산합니다.</li>
+            <li>앱이 자기 <code>UserDetailsService</code> 빈을 두어도 CONTEXA의 로그인에는 쓰이지 않습니다. 앱에만 있는 사용자는 없는 이름과 같이 로그인이 거부됩니다.</li>
+            <li>잠긴 계정, 비활성 계정, 계정 유효 기간이 지난 계정은 비밀번호 · 일회용 코드 · 패스키 어느 방법으로도 로그인할 수 없습니다. 브리지가 앱의 로그인에서 옮겨 온 외부 계정(<code>externalAuthOnly</code>)도 CONTEXA 로그인에는 쓸 수 없습니다(<a href="../common/bridge.html">기존 로그인과 연결하기</a>).</li>
+            <li><strong>첫 계정:</strong> <code>contexa.iam.seed.admin.password</code>를 정하면 시작할 때 관리자 계정 하나(기본 이름 <code>admin</code>)를 만듭니다. 정하지 않으면 사용자 계정이 하나도 없는 DB에 예시 계정 다섯 개를 만듭니다. 예시 계정은 같은 비밀번호를 함께 쓰므로, 운영 환경에서는 <code>contexa.iam.seed.accounts.enabled: false</code>로 만들지 않게 합니다(<a href="../../install/configuration/iam.html#seed">첫 기동과 기본 데이터</a>).</li>
+          </ul>
+
+          <h2 id="request-flow">로그인 요청 한 건이 처리되는 순서</h2>
+          <p>폼 로그인을 세션 상태로 쓰는 경우, 사용자가 로그인 화면에서 제출한 요청은 다음 순서로 처리됩니다.</p>
+          <ol>
+            <li><strong>요청 도착:</strong> 브라우저가 <code>POST /login</code>으로 <code>username</code> · <code>password</code>를 보냅니다.</li>
+            <li><strong>체인 선택:</strong> 흐름마다 만든 보안 필터 체인 가운데 이 주소를 받는 체인이 요청을 처리합니다. 여러 체인이 받을 수 있으면 <code>order</code> 값이 작은 체인이 먼저입니다.</li>
+            <li><strong>계정 조회:</strong> CONTEXA 계정 저장소에서 같은 이름의 계정을 찾습니다. 계정이 없으면 로그인은 실패합니다.</li>
+            <li><strong>자격 증명 확인:</strong> 먼저 계정 상태(잠김 · 비활성 · 계정 유효 기간)를 검사하고, 통과한 계정만 보낸 비밀번호를 저장된 비밀번호와 비교합니다. 비밀번호가 맞으면 마지막으로 비밀번호 유효 기간을 확인합니다.</li>
+            <li><strong>성공 처리:</strong> 로그인 정보를 담은 보안 컨텍스트를 HTTP 세션에 저장하고, 세션 ID를 새 값으로 바꿉니다(세션 고정 공격 방지). 그다음 원래 가려던 주소나 <code>defaultSuccessUrl</code>로 이동시킵니다.</li>
+            <li><strong>다음 요청:</strong> 브라우저가 세션 쿠키를 보내면 CONTEXA 저장소가 세션에서 보안 컨텍스트를 꺼내고, 그 사용자에게 저장된 Zero Trust 판정을 적용합니다(<a href="#context-storage">로그인 정보 저장</a>).</li>
+          </ol>
+          <p>실패하면 Spring 기본 처리기가 <code>/login?error</code>로 이동시킵니다. 다른 로그인 방법이나 토큰 상태에서 달라지는 점은 아래 각 절과 <a href="#handlers">성공 · 실패 처리</a>에 있습니다.</p>
+
           <h2 id="choose">어떤 방법을 언제 쓰나</h2>
+          <p>처음 고를 때는 클라이언트 종류로 정합니다. 서버가 화면을 그리는 웹 애플리케이션은 폼과 세션 상태, SPA · 모바일 앱 · API 클라이언트는 REST와 토큰 상태가 기본 조합입니다. 비밀번호 없이 로그인하게 하려면 일회용 코드(운영에는 메일 서버가 필요)나 패스키(HTTPS 도메인이 필요, 개발 중에는 <code>localhost</code>)를 더합니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>방법</th><th>쓰는 곳</th><th>기본 order</th><th>로그인 처리 기본 주소</th></tr></thead>
             <tbody>
@@ -28,9 +82,9 @@
               <tr><td>패스키 <code>.passkey()</code></td><td>비밀번호 없는 로그인(WebAuthn)</td><td>400</td><td><code>POST /login/webauthn</code></td></tr>
             </tbody>
           </table></div>
-          <p>각 방법은 자기 체인 하나가 되고, order가 낮은 체인이 먼저 요청을 비교합니다. <code>order</code> · <code>rawHttp</code> · <code>disableCsrf</code> 같은 공통 옵션은 <a href="dsl.html#flow-options">흐름 옵션</a>에 있습니다.</p>
+          <p>각 방법은 자기 체인 하나가 됩니다. <code>order</code> · <code>rawHttp</code> · <code>disableCsrf</code> 같은 공통 옵션은 <a href="dsl.html#flow-options">흐름 옵션</a>에 있습니다.</p>
           <h3 id="single-vs-mfa">단일 로그인과 MFA 안의 요소</h3>
-          <p>같은 방법을 MFA 흐름 안에서 2차 요소로 쓰면 주소 · 구현 · 진행 관리가 달라집니다. MFA는 <a href="mfa.html">적응형 MFA</a>를 참고합니다. 패스키를 예로 들면:</p>
+          <p>같은 방법을 MFA 흐름 안에서 2차 요소로 쓰면 주소 · 구현 · 진행 관리가 달라집니다. MFA는 <a href="mfa.html">적응형 MFA</a>를 참고합니다. 패스키를 예로 들면 다음과 같습니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>항목</th><th>단일 패스키</th><th>MFA 안의 패스키</th></tr></thead>
             <tbody>
@@ -56,7 +110,7 @@
               <tr><td><code>defaultSuccessUrl(String)</code>, <code>defaultSuccessUrl(String, boolean)</code></td><td>없음</td><td>로그인 뒤 이동할 주소. <code>true</code>면 원래 가려던 주소 대신 늘 이 주소로</td></tr>
               <tr><td><code>failureUrl(String)</code></td><td>없음(Spring 기본 <code>/login?error</code>)</td><td>실패 뒤 이동할 주소</td></tr>
               <tr><td><code>permitAll()</code></td><td>꺼짐</td><td>로그인 화면 · 처리 주소를 인증 없이 열어야 할 때</td></tr>
-              <tr><td><code>rawFormLogin(...)</code></td><td>없음</td><td>Spring <code>FormLoginConfigurer</code>를 직접 만질 때. 여러 번 부르면 마지막 것만 남습니다. MFA 1차 로그인에서는 쓸 수 없고 기동이 멈춥니다</td></tr>
+              <tr><td><code>rawFormLogin(...)</code></td><td>없음</td><td>Spring <code>FormLoginConfigurer</code>를 직접 만질 때. 여러 번 부르면 마지막 것만 남습니다. MFA의 1차 로그인에 쓰면 애플리케이션이 시작하지 않습니다</td></tr>
             </tbody>
           </table></div>
           <div class="callout callout-warning">
@@ -79,7 +133,7 @@
           </ul>
 
           <h2 id="rest">REST 로그인</h2>
-          <p>JSON 본문으로 로그인합니다. 토큰 상태와 함께 쓰는 경우가 많지만 세션 상태도 됩니다.</p>
+          <p>JSON 본문으로 로그인합니다. 주로 토큰 상태와 함께 쓰며, 세션 상태와도 함께 쓸 수 있습니다.</p>
           <pre><code class="language-java">registry
         .rest(rest -&gt; rest.defaultSuccessUrl("/app"))
         .oauth2(Customizer.withDefaults())
@@ -98,8 +152,8 @@ Content-Type: application/json
           <ul>
             <li>로그인 처리 주소는 <code>POST</code>만 받습니다. 같은 주소의 <code>GET /api/login</code>에는 기본 로그인 화면이 나옵니다. <code>loginProcessingUrl</code>로 주소를 바꾸면 화면도 그 주소에 있습니다.</li>
             <li><code>.session()</code>에서는 브라우저가 로그인으로 보내지기 전에 요청했던 페이지가 있으면 <code>redirectUrl</code>이 그 페이지입니다(경로와 쿼리). <code>defaultSuccessUrl(url, true)</code>면 언제나 <code>url</code>입니다.</li>
-            <li>실패하면 401 JSON을 돌려주며, 실패 응답은 최소 <code>contexa.auth.mfa.minimum-delay-ms</code>(기본 500ms)가 지난 뒤 나갑니다. 비밀번호 추측의 속도를 늦추기 위해서입니다.</li>
-            <li><code>.oauth2()</code>가 이미 상태 없음(<code>STATELESS</code>)으로 구성하므로 <code>rawHttp</code>로 따로 지정할 필요가 없습니다. <code>.oauth2()</code>를 쓰면 <code>contexa.auth.oauth2.client-secret</code>이 반드시 있어야 합니다(<a href="state-management.html#oauth2-required">토큰 상태에 반드시 필요한 설정</a>).</li>
+            <li>로그인에 실패하면 401 상태와 JSON 본문으로 응답합니다. 실패 응답은 요청을 받고 최소 <code>contexa.auth.mfa.minimum-delay-ms</code>(기본 500ms)가 지나야 나갑니다. 비밀번호를 연속으로 바꿔 넣는 무차별 대입 공격의 속도를 늦추기 위해서입니다.</li>
+            <li><code>.oauth2()</code>가 세션을 만들지 않는 구성(<code>STATELESS</code>)을 이미 적용하므로 <code>rawHttp</code>로 따로 지정할 필요가 없습니다. <code>.oauth2()</code>를 쓰면 <code>contexa.auth.oauth2.client-secret</code>이 반드시 있어야 합니다(<a href="state-management.html#oauth2-required">토큰 상태에 반드시 필요한 설정</a>).</li>
           </ul>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>옵션</th><th>기본값</th><th>언제 바꾸나</th></tr></thead>
@@ -132,10 +186,12 @@ Authorization: Bearer &lt;accessToken&gt;</code></pre>
           <ul>
             <li><strong>발송 서비스:</strong> 기본 <code>OneTimeTokenService</code> 빈은 <code>EmailOneTimeTokenService</code>입니다. 코드를 CONTEXA DB의 <code>ctxa_one_time_tokens</code> 표에 두고 Spring 메일(<code>spring.mail.*</code>)로 보냅니다.</li>
             <li><strong>받는 주소:</strong> 사용자 표(<code>ctxa_users</code>)의 메일 주소입니다. 주소가 없으면 사용자 이름을 주소로 씁니다. 요청의 <code>email</code>이 등록된 주소와 다르면 거부합니다.</li>
-            <li><strong>계정 상태:</strong> 잠기거나 비활성인 계정에는 코드를 보내지 않습니다. 코드 로그인은 비밀번호를 쓰지 않으므로, 비밀번호가 만료된 계정도 코드로 로그인합니다.</li>
+            <li><strong>메일을 보내지 않는 경우:</strong> 계정이 없거나, 잠기거나 비활성이거나 만료된 계정이면 코드를 만들지도 메일을 보내지도 않습니다. 이때 응답은 정상 발급과 같아 보이므로, 코드를 요청해서 계정이 있는지 알아낼 수 없습니다. 코드 로그인은 비밀번호를 쓰지 않으므로, 비밀번호가 만료된 계정도 코드로 로그인할 수 있습니다.</li>
+            <li><strong>재발송 간격:</strong> 같은 주소로는 <code>contexa.auth.mfa.email-resend-interval-seconds</code>(기본 120초)에 메일 한 통만 보냅니다. 그 안에 다시 요청하면 새 코드를 만들지 않고 먼저 받은 코드가 그대로 유효합니다. 메일 주소는 대소문자와 공백이 달라도 같은 주소로 봅니다.</li>
             <li><strong>메일을 보내지 못하면:</strong> <code>contexa.auth.ott.fail-on-email-error</code>(기본 <code>true</code>)이면 발급이 실패합니다. <code>false</code>면 코드는 만들고 경고 로그만 남깁니다.</li>
             <li><strong>발송 제한:</strong> 한 번에 보내는 메일은 <code>contexa.auth.ott.email-max-concurrent-sends</code>(기본 64)통까지입니다. 요청은 여유가 생길 때까지 <code>contexa.auth.ott.email-send-wait-seconds</code>(기본 5)초 기다리고, 그래도 자리가 없으면 메일을 보내지 못한 때와 같이 실패합니다. <code>contexa.auth.ott.email-smtp-timeout-seconds</code>(기본 0, 정하지 않음)는 SMTP 연결 · 읽기 · 쓰기의 제한 시간입니다. 값을 주면 <code>spring.mail.properties.mail.smtp.*timeout</code>이 정하지 않은 항목에 한해 앱의 메일 발송기에 써넣으므로, 그 발송기로 보내는 앱의 다른 메일에도 적용됩니다.</li>
-            <li><strong>유효 시간:</strong> 코드는 만든 뒤 5분 동안 유효합니다(Spring 기본값). <code>contexa.auth.mfa.otp-token-validity-seconds</code>(기본 300)는 메일 안내 문구의 분 수에만 쓰입니다.</li>
+            <li><strong>유효 시간:</strong> 단일 일회용 코드 로그인의 코드는 만든 뒤 5분 동안 유효합니다(Spring 기본값). MFA 안의 일회용 코드는 6자리이며 <code>contexa.auth.mfa.otp-token-validity-seconds</code>(기본 300초) 동안 유효합니다. 메일 안내 문구의 분 수는 두 경우 모두 이 설정에서 옵니다.</li>
+            <li><strong>개발 · 시험 때의 코드 확인:</strong> 개발 프로파일(<code>local</code> · <code>dev</code> · <code>development</code> · <code>test</code>)이 켜져 있거나 메일 서버가 설정되지 않았으면, 코드를 메일과 함께 로그(WARN)에도 남깁니다. 메일 서버 없이도 로그인을 끝낼 수 있게 하기 위해서이며, 이때는 메일을 보내지 못해도 로그인이 실패하지 않습니다. 운영 환경에서는 메일로만 보냅니다. <code>contexa.auth.ott.code-to-console</code>로 직접 정할 수 있습니다(<code>true</code> · <code>false</code>).</li>
           </ul>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>옵션</th><th>기본값</th><th>언제 바꾸나</th></tr></thead>
@@ -144,7 +200,7 @@ Authorization: Bearer &lt;accessToken&gt;</code></pre>
               <tr><td><code>defaultSubmitPageUrl(String)</code></td><td><code>/login/ott/verify</code></td><td>코드 입력 화면 주소를 바꿀 때</td></tr>
               <tr><td><code>showDefaultSubmitPage(boolean)</code></td><td><code>true</code></td><td>코드 입력 화면을 앱이 직접 만들 때 <code>false</code></td></tr>
               <tr><td><code>loginProcessingUrl(String)</code></td><td><code>/login/ott</code></td><td>코드 확인 주소를 바꿀 때</td></tr>
-              <tr><td><code>tokenGenerationSuccessHandler(...)</code></td><td><code>oneTimeTokenCreationSuccessHandler</code> 빈</td><td>코드를 만든 뒤 응답을 바꿀 때. 기본 처리기는 코드 입력 화면(<code>defaultSubmitPageUrl</code>)으로 이동시킵니다. <code>contexa.auth.urls.factors.ott.code-sent</code>를 기본값(<code>/mfa/ott/code-sent</code>)이 아닌 주소로 정했을 때만 그 주소로 이동시키며, 쿼리에 <code>email</code>, <code>type=code_sent</code>, <code>flow=ott_single</code>, <code>repository</code>를 붙입니다</td></tr>
+              <tr><td><code>tokenGenerationSuccessHandler(...)</code></td><td><code>contexaOneTimeTokenCreationSuccessHandler</code> 빈</td><td>코드를 만든 뒤 응답을 바꿀 때. 기본 처리기는 코드 입력 화면(<code>defaultSubmitPageUrl</code>)으로 이동시킵니다. <code>contexa.auth.urls.factors.ott.code-sent</code>를 기본값(<code>/mfa/ott/code-sent</code>)이 아닌 주소로 정했을 때만 그 주소로 이동시키며, 쿼리에 <code>email</code>, <code>type=code_sent</code>, <code>flow=ott_single</code>, <code>repository</code>를 붙입니다</td></tr>
               <tr><td><code>tokenService(...)</code></td><td><code>OneTimeTokenService</code> 빈</td><td>아래 주의를 확인합니다</td></tr>
             </tbody>
           </table></div>
@@ -159,7 +215,7 @@ public OneTimeTokenService oneTimeTokenService() {
 }</code></pre>
 
           <h2 id="passkey">패스키</h2>
-          <p>WebAuthn 패스키로 비밀번호 없이 로그인합니다. 패스키는 브라우저가 서비스 이름(<code>rpId</code>)과 접속한 출처(origin)를 확인하므로, 이 두 값을 운영 주소에 맞춰야 합니다.</p>
+          <p>WebAuthn 패스키로 비밀번호 없이 로그인합니다. 패스키는 서비스의 도메인(신뢰 당사자 ID, <code>rpId</code>)에 묶여 만들어지고, 브라우저는 로그인할 때 이 도메인과 접속한 출처(origin, 프로토콜 · 호스트 · 포트)를 확인합니다. 그래서 두 값을 운영 주소에 맞춰야 합니다.</p>
           <pre><code class="language-java">registry
         .passkey(Customizer.withDefaults())
         .session(Customizer.withDefaults())
@@ -175,16 +231,16 @@ public OneTimeTokenService oneTimeTokenService() {
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>옵션</th><th>기본값</th><th>언제 바꾸나</th></tr></thead>
             <tbody>
-              <tr><td><code>rpId(String)</code></td><td><code>localhost</code></td><td>운영 도메인으로. 설정 <code>contexa.auth.urls.factors.passkey.rp-id</code>가 기본값의 출처</td></tr>
+              <tr><td><code>rpId(String)</code></td><td><code>localhost</code></td><td>운영 도메인으로 바꿉니다. 기본값은 설정 <code>contexa.auth.urls.factors.passkey.rp-id</code>에서 옵니다</td></tr>
               <tr><td><code>rpName(String)</code></td><td><code>contexa-identity</code></td><td>사용자에게 보이는 서비스 이름</td></tr>
               <tr><td><code>allowedOrigins(...)</code></td><td><code>http://localhost:</code> + <code>server.port</code>(없으면 8080)</td><td>브라우저가 접속하는 출처. 설정 <code>allowed-origins</code>(쉼표로 여러 개)가 있으면 그 값</td></tr>
               <tr><td><code>assertionOptionsEndpoint(String)</code> · <code>loginProcessingUrl(String)</code></td><td><code>/webauthn/authenticate/options</code> · <code>/login/webauthn</code></td><td>단일 패스키 흐름에서는 반영되지 않고 Spring 기본 주소를 씁니다</td></tr>
             </tbody>
           </table></div>
           <ul>
-            <li>세션 상태의 패스키 흐름에서는 <code>successHandler</code> · <code>failureHandler</code> 옵션이 쓰이지 않습니다. 토큰 상태와 MFA의 패스키 요소에서는 다른 방법처럼 불립니다(<a href="#handlers">성공 · 실패 처리</a>).</li>
+            <li>세션 상태의 패스키 흐름에서는 <code>successHandler</code> · <code>failureHandler</code> 옵션이 쓰이지 않습니다. 토큰 상태와 MFA의 패스키 요소에서는 다른 방법과 같이 호출됩니다(<a href="#handlers">성공 · 실패 처리</a>).</li>
             <li>패스키 로그인은 그 패스키가 속한 CONTEXA 계정의 로그인이며, 비밀번호 로그인과 같은 계정입니다. 이를 위해 계정을 따로 만들지 않습니다.</li>
-            <li><code>rpId</code>가 비어 있으면 시작할 때 검사기가 오류 로그를 남기지만 시작은 막지 않습니다.</li>
+            <li><code>rpId</code>가 비어 있으면 시작할 때 설정 검사기가 오류 로그를 남깁니다. 시작은 막지 않습니다.</li>
             <li>CONTEXA DB가 있으면(<code>contexaJdbcTemplate</code> 빈) 패스키 정보를 저장하는 Spring JDBC 저장소(<code>JdbcUserCredentialRepository</code>, <code>JdbcPublicKeyCredentialUserEntityRepository</code>)가 자동 등록됩니다.</li>
           </ul>
           <h3 id="passkey-register">패스키 등록</h3>
@@ -209,7 +265,7 @@ public OneTimeTokenService oneTimeTokenService() {
           </table></div>
 
           <h2 id="handlers">성공 · 실패 처리</h2>
-          <p><code>successHandler</code> · <code>failureHandler</code>를 주지 않으면 CONTEXA가 흐름 종류와 상태에 맞는 처리기를 고릅니다. 여기서 <strong>단일</strong>은 MFA가 아닌 흐름, <strong>MFA 1차</strong>는 MFA의 첫 로그인, <strong>MFA 2차 요소</strong>는 그 뒤의 일회용 코드 · 패스키입니다.</p>
+          <p><code>successHandler</code> · <code>failureHandler</code>를 주지 않으면 CONTEXA가 흐름 종류와 상태에 맞는 처리기를 고릅니다. 표에서 <strong>단일</strong>은 MFA가 아닌 흐름, <strong>MFA 1차</strong>는 MFA의 첫 로그인, <strong>MFA 2차 요소</strong>는 그 뒤의 일회용 코드 · 패스키입니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>흐름</th><th>상태</th><th>성공</th><th>실패</th></tr></thead>
             <tbody>
@@ -224,10 +280,10 @@ public OneTimeTokenService oneTimeTokenService() {
           <ul>
             <li>CONTEXA 처리기는 요청이 <code>Accept</code> · <code>Content-Type</code>에 JSON을 담았거나 경로에 <code>/api/</code>가 있으면 JSON으로, 아니면 이동(redirect)으로 답합니다.</li>
             <li>토큰 상태에서도 단일 흐름의 화면 로그인은 세션 상태처럼 로그인으로 보내지기 전에 요청했던 페이지로 갑니다(<code>defaultSuccessUrl(url, true)</code>면 언제나 <code>url</code>). 실패한 화면 로그인은 흐름의 <code>failureUrl</code>, 없으면 세션 상태처럼 그 흐름의 로그인 화면에 <code>?error</code>를 붙인 주소(<code>/login?error</code>)로 갑니다.</li>
-            <li>비밀번호는 맞고 만료됐으면 REST 흐름, 토큰 상태의 form 흐름, MFA 1차 로그인은 브라우저를 <code>/contexa/password-change?expired=true</code>로 보내고, 스크립트에는 401 <code>CREDENTIALS_EXPIRED</code>와 <code>nextStepUrl</code>(그 화면)로 답합니다. 계정 이름은 세션에 담아 그 화면에 넘깁니다. 세션 상태의 form 흐름은 기존 방식의 실패로 답합니다. 일회용 코드 · 패스키 로그인은 비밀번호를 쓰지 않습니다(<a href="#ott">일회용 코드</a>).</li>
+            <li>비밀번호는 맞지만 유효 기간이 지났을 때, REST 흐름 · 토큰 상태의 폼 흐름 · MFA 1차 로그인은 비밀번호 변경 화면으로 안내합니다. 브라우저는 <code>/contexa/password-change?expired=true</code>로 이동시키고, 스크립트 요청에는 401 <code>CREDENTIALS_EXPIRED</code>와 그 화면 주소 <code>nextStepUrl</code>로 응답합니다. 계정 이름은 세션에 담아 변경 화면에 넘깁니다. 세션 상태의 폼 흐름은 일반 로그인 실패로 응답합니다. 일회용 코드 · 패스키 로그인은 비밀번호를 쓰지 않습니다(<a href="#ott">일회용 코드</a>).</li>
             <li><strong>폼 · REST 흐름</strong>에 <code>successHandler</code>를 주면 자동 처리기 대신 그 처리기가 바로 붙습니다. 토큰 상태라도 CONTEXA가 토큰을 발급하지 않으므로 응답은 그 처리기가 책임집니다.</li>
-            <li><strong>일회용 코드 흐름</strong>은 자동 처리기가 있으면 그것이 우선입니다. 토큰 상태에서는 준 처리기가 토큰 발급 뒤에 먼저 불리고, 그 처리기가 응답을 쓰지 않으면 CONTEXA가 씁니다.</li>
-            <li><strong>MFA 흐름</strong>에서는 1차 로그인이나 요소에 준 <code>successHandler</code>가 로그인이 그 단계에서 끝날 때 불립니다. 정책이 요소를 요구하지 않으면 1차 로그인의 것, 아니면 로그인을 끝낸 요소의 것입니다. <code>failureHandler</code>는 자기 단계의 실패에 불립니다. 저마다 자기 흐름의 자기 단계에서만 불리며, 처리기가 응답을 쓰지 않았으면 CONTEXA가 이어서 씁니다.</li>
+            <li><strong>일회용 코드 흐름</strong>은 자동 처리기가 있으면 그것이 우선입니다. 토큰 상태에서는 준 처리기가 토큰 발급 뒤에 먼저 호출되고, 그 처리기가 응답을 쓰지 않으면 CONTEXA가 씁니다.</li>
+            <li><strong>MFA 흐름</strong>에서는 1차 로그인이나 요소에 준 <code>successHandler</code>가 로그인이 그 단계에서 끝날 때 호출됩니다. 정책이 요소를 요구하지 않으면 1차 로그인의 것이, 요소를 요구했으면 로그인을 끝낸 요소의 것이 호출됩니다. <code>failureHandler</code>는 자기 단계의 실패에 호출됩니다. 각 처리기는 자기 흐름의 자기 단계에서만 호출되며, 처리기가 응답을 쓰지 않았으면 CONTEXA가 이어서 씁니다.</li>
             <li>MFA의 결과 처리는 <a href="mfa.html#results">MFA 결과 처리</a>를 참고합니다.</li>
           </ul>
 
@@ -247,12 +303,14 @@ public OneTimeTokenService oneTimeTokenService() {
             <tbody>
               <tr><td><code>contexa.auth.urls.single.form-login-processing</code></td><td><code>/login</code></td><td>단일 폼 로그인 처리 주소</td></tr>
               <tr><td><code>contexa.auth.urls.single.rest-login-processing</code></td><td><code>/api/login</code></td><td>단일 REST 로그인 처리 주소</td></tr>
-              <tr><td><code>contexa.auth.urls.factors.passkey.rp-id</code></td><td><code>localhost</code></td><td>패스키 서비스 이름. 운영 도메인으로 바꿉니다</td></tr>
+              <tr><td><code>contexa.auth.urls.factors.passkey.rp-id</code></td><td><code>localhost</code></td><td>패스키가 묶이는 도메인(신뢰 당사자 ID). 운영 도메인으로 바꿉니다</td></tr>
               <tr><td><code>contexa.auth.urls.factors.passkey.allowed-origins</code></td><td>없음</td><td>패스키를 받을 출처(쉼표로 여러 개). 없으면 <code>http://localhost:</code> + 서버 포트</td></tr>
               <tr><td><code>contexa.auth.ott.fail-on-email-error</code></td><td><code>true</code></td><td>메일을 보내지 못하면 코드 발급을 실패시킬지</td></tr>
               <tr><td><code>contexa.auth.ott.email-max-concurrent-sends</code></td><td><code>64</code></td><td>한 번에 보내는 로그인 메일 수</td></tr>
               <tr><td><code>contexa.auth.ott.email-send-wait-seconds</code></td><td><code>5</code></td><td>보내는 메일 사이에 여유가 생길 때까지 요청이 기다리는 시간(초). 넘으면 실패합니다</td></tr>
               <tr><td><code>contexa.auth.ott.email-smtp-timeout-seconds</code></td><td><code>0</code></td><td>SMTP 연결 · 읽기 · 쓰기의 제한 시간(초). <code>0</code>이면 정하지 않습니다</td></tr>
+              <tr><td><code>contexa.auth.mfa.email-resend-interval-seconds</code></td><td><code>120</code></td><td>같은 주소로 코드 메일을 다시 보내기까지 기다리는 시간(초)</td></tr>
+              <tr><td><code>contexa.auth.ott.code-to-console</code></td><td>개발 프로파일이거나 메일 서버가 없으면 <code>true</code></td><td>코드를 로그에도 남길지. 운영에서는 <code>false</code>로 둡니다</td></tr>
             </tbody>
           </table></div>
           <p>로그인 관련 설정 전체(<code>contexa.auth.urls.*</code> 포함)는 <a href="../../install/configuration/identity.html">인증과 로그인 설정</a>에 있습니다.</p>

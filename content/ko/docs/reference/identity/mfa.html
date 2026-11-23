@@ -18,6 +18,10 @@
             <strong>CONTEXA가 로그인을 맡을 때(<code>CONTEXA_OWNED</code>)의 기능입니다.</strong> 기본값 <code>HOST_OWNED</code>에서는 앱의 Spring Security가 로그인을 맡고 CONTEXA MFA 흐름은 만들어지지 않습니다. 이때 CHALLENGE는 CONTEXA의 확인 전용 추가 인증으로 처리됩니다(<a href="zero-trust-filters.html#host-step-up">HOST_OWNED의 추가 인증</a>). 앱의 기존 로그인 · MFA를 쓰면서 그 결과를 CONTEXA에 알리려면 <a href="../common/bridge.html#mfa">기존 로그인과 연결하기</a>를 참고합니다. <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>이고 <code>PlatformConfig</code>를 정의하지 않으면 MFA 흐름 하나(폼 + 패스키 + 일회용 코드)가 기본으로 켜집니다.
           </div>
 
+          <div class="callout callout-info">
+            <strong>이 페이지의 용어.</strong> <strong>MFA</strong>(다단계 인증)는 비밀번호 뒤에 확인을 한 가지 이상 더 요구하는 로그인입니다. <strong>1차 로그인</strong>은 폼이나 REST로 하는 첫 로그인이고, <strong>2차 요소</strong>(factor)는 그 뒤에 확인하는 방법(메일 일회용 코드, 패스키)입니다. <strong>MFA 정책</strong>은 이 로그인에 MFA가 필요한지 정하는 규칙이고, <strong>평가기</strong>는 그 규칙을 계산하는 코드입니다. <strong>챌린지</strong>(<code>CHALLENGE</code>)는 CONTEXA 판정 가운데 "추가 인증을 요구함"이고, <strong>단계 상승</strong>(step-up)은 이미 로그인한 사용자에게 MFA를 다시 요구하는 것입니다. <strong>SDK</strong>는 화면의 스크립트가 MFA 서버 주소를 부를 때 쓰는 자바스크립트 라이브러리입니다. 흐름 · 체인 · 상태 같은 용어는 <a href="authentication.html">로그인 방법</a>에 있습니다.
+          </div>
+
           <h2 id="overview">개요</h2>
           <p>1차 로그인이 성공하면 MFA 정책이 이 사용자에게 MFA가 필요한지 정합니다. 필요하면 CONTEXA가 첫 2차 요소의 화면을 바로 열고, 사용자는 "다른 방법"으로 남은 요소를 고를 수도 있습니다. 필요한 개수만큼 요소를 마치면 로그인이 끝납니다.</p>
           <figure class="dg">
@@ -48,10 +52,10 @@
             <li>CONTEXA가 로그인 화면 <code>GET /mfa/login</code>과 요소 화면을 만들어 줍니다. 1차 로그인 처리는 <code>POST /mfa/login</code>입니다.</li>
             <li>흐름 이름은 <code>mfa</code>, 기본 order는 200, 체인 빈은 <code>contexamfaSecurityFilterChain1</code>처럼 붙습니다(순번은 흐름 전체에서 센 값).</li>
             <li>1차 로그인은 <code>formLogin</code>과 <code>restLogin</code> 가운데 하나입니다(<code>.primaryAuthentication(...)</code> 필수).</li>
-            <li>2차 요소가 하나도 없으면 시작이 실패합니다. <code>.mfa()</code> 안에서 <code>.form()</code> · <code>.rest()</code>를 부르면 <code>UnsupportedOperationException</code>이 납니다. 같은 요소를 두 번 적으면 뒤의 것이 앞의 것을 바꿉니다.</li>
+            <li>2차 요소가 하나도 없으면 시작이 실패합니다. <code>.mfa()</code> 안에서 <code>.form()</code> · <code>.rest()</code>를 부르면 <code>UnsupportedOperationException</code>이 납니다. 같은 요소를 두 번 적으면(<code>.ott(...)</code> 두 번 등) 애플리케이션이 시작하지 않습니다.</li>
           </ul>
           <div class="callout callout-warning">
-            <strong>일회용 코드 요소에는 메일 발송 설정이 필요합니다.</strong> 코드는 Spring 메일(<code>spring.mail.*</code>)로 보내며, 발송기가 없으면 <code>contexa.auth.ott.fail-on-email-error</code>(기본 <code>true</code>)에 따라 코드 발급이 실패합니다(<a href="authentication.html#ott">일회용 코드</a>).
+            <strong>일회용 코드 요소에는 메일 발송 설정이 필요합니다.</strong> 코드는 Spring 메일(<code>spring.mail.*</code>)로 보내며, 발송기가 없으면 <code>contexa.auth.ott.fail-on-email-error</code>(기본 <code>true</code>)에 따라 코드 발급이 실패합니다. MFA 안의 코드는 6자리이며 <code>contexa.auth.mfa.otp-token-validity-seconds</code>(기본 300초) 동안 유효합니다. 같은 주소로는 <code>contexa.auth.mfa.email-resend-interval-seconds</code>(기본 120초)에 메일 한 통만 보내므로, 그 안에 다시 요청하면 먼저 받은 코드를 씁니다. 개발 프로파일에서는 코드가 로그에도 남습니다(<a href="authentication.html#ott">일회용 코드</a>).
           </div>
           <h3 id="mfa-verify">확인하기</h3>
           <ul>
@@ -67,7 +71,7 @@
               <tr><td>정하지 않음</td><td>등록한 요소를 모두 마쳐야 합니다</td></tr>
               <tr><td>1</td><td>아무 요소 하나. 첫 요소가 자동으로 열리고 "다른 방법" 링크로 남은 요소를 고를 수 있습니다(마친 요소는 목록에서 빠짐)</td></tr>
               <tr><td>N</td><td>N개를 마쳐야 합니다. 하나를 마치면 다음 요소가 자동으로 이어집니다</td></tr>
-              <tr><td>요소 수보다 큼</td><td>끝까지 완료할 수 없습니다. 시작할 때 검사하지 않으므로 주의해야 합니다</td></tr>
+              <tr><td>요소 수보다 큼</td><td>끝까지 완료할 수 없습니다. 시작할 때 검사하지 않으므로 주의해야 합니다. 예외로, 패스키 라이브러리(webauthn4j)가 없어 패스키 요소가 빠지고 남은 요소로 개수를 채울 수 없으면 시작이 멈춥니다</td></tr>
             </tbody>
           </table></div>
           <pre><code class="language-java">registry
@@ -144,7 +148,7 @@
               <tr><td>숨은 입력 이름</td><td><code>_csrf</code>(CSRF 토큰), <code>mfaSessionId</code>(MFA 세션). CONTEXA가 만든 화면은 이 둘을 자동으로 넣습니다</td></tr>
               <tr><td>폼 id</td><td><code>ottRequestForm</code>, <code>verifyForm</code>, <code>resendForm</code></td></tr>
               <tr><td>버튼 id</td><td><code>loginButton</code>, <code>sendCodeButton</code>, <code>verifyButton</code>, <code>resendButton</code>, <code>authButton</code></td></tr>
-              <tr><td>요소 선택 화면</td><td>화면 스크립트가 따로 없습니다. 화면은 SDK를 올리고 <code>mfa.selectFactor('MFA_OTT')</code> 또는 <code>mfa.selectFactor('MFA_PASSKEY')</code>(1차 로그인 응답의 <code>availableFactors</code>에 있는 이름)를 부른 뒤 응답의 <code>nextStepUrl</code>로 이동합니다. <code>autoRedirect</code>가 켜져 있으면 SDK가 직접 이동합니다</td></tr>
+              <tr><td>요소 선택 화면</td><td>화면 스크립트가 따로 없습니다. 화면은 SDK를 올리고 <code>mfa.selectFactor('MFA_OTT')</code> 또는 <code>mfa.selectFactor('MFA_PASSKEY')</code>(1차 로그인 응답의 <code>availableFactors</code>에 있는 이름)를 부른 뒤, 화면 스크립트가 응답의 <code>nextStepUrl</code>로 직접 이동합니다. SDK의 <code>selectFactor</code>는 결과만 돌려주고 화면을 옮기지 않습니다</td></tr>
             </tbody>
           </table></div>
           <ul>
@@ -161,7 +165,7 @@
             <thead><tr><th>평가기</th><th>우선순위</th><th>맡는 사용자</th><th>결정</th></tr></thead>
             <tbody>
               <tr><td><code>AgentAccountMfaPolicyEvaluator</code></td><td>1000</td><td>승인된 에이전트의 계정</td><td>사람용 요소로 보내지 않고 CONTEXA 판정만 따릅니다</td></tr>
-              <tr><td><code>ZeroTrustPolicyEvaluator</code></td><td>100</td><td>그 밖의 모든 사용자</td><td>저장된 판정이 ALLOW여도 새 로그인에는 MFA를 요구합니다. 저장된 허용은 다른 요청의 맥락(세션 · IP · 브라우저)에서 만든 것이라 지금 비밀번호를 쥔 사람을 보증하지 않기 때문입니다. CHALLENGE → MFA. BLOCK → 차단. ESCALATE → 검토 보류(차단). 판정 없음(PENDING_ANALYSIS) → 마지막 확인 판정이 ALLOW여도 MFA(그 값은 감사 기록에만 남음). 판정 기록이 없거나 오래되면(<code>contexa.security.zerotrust.analysis.max-age-ms</code>, 1시간) MFA. 차단 · 검토 보류는 오래돼도 그대로 적용합니다</td></tr>
+              <tr><td><code>ZeroTrustPolicyEvaluator</code></td><td>100</td><td>그 밖의 모든 사용자</td><td>저장된 판정이 ALLOW여도 새 로그인에는 MFA를 요구합니다. 저장된 허용은 다른 요청의 맥락(세션 · IP · 브라우저)에서 만든 것이라 지금 비밀번호를 쥔 사람을 보증하지 않기 때문입니다. CHALLENGE → MFA(계정을 찾지 못하거나 쓸 수 있는 요소가 없으면 차단). BLOCK → 차단. ESCALATE → 검토 보류(차단). 판정 없음(PENDING_ANALYSIS) → 마지막 확인 판정이 ALLOW여도 MFA(그 값은 감사 기록에만 남음). 판정 기록이 없거나 오래되면(<code>contexa.security.zerotrust.analysis.max-age-ms</code>, 1시간) MFA. 차단 · 검토 보류는 오래돼도 그대로 적용합니다</td></tr>
               <tr><td><code>DefaultMfaPolicyEvaluator</code></td><td>-100</td><td>앞의 평가기가 예외를 던졌을 때의 대비용</td><td>MFA 흐름이면 MFA를 요구합니다. 내장 평가기는 평가 중 오류를 스스로 "MFA 필요"로 바꾸므로 보통은 쓰이지 않습니다</td></tr>
             </tbody>
           </table></div>
@@ -313,7 +317,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
             <thead><tr><th>생성자 옵션</th><th>기본값</th><th>뜻</th></tr></thead>
             <tbody>
               <tr><td><code>autoInit</code></td><td><code>true</code></td><td>저장된 MFA 진행 상태와 토큰을 되살림</td></tr>
-              <tr><td><code>autoRedirect</code></td><td><code>true</code></td><td>MFA 단계에 따라 자동으로 화면 이동</td></tr>
+              <tr><td><code>autoRedirect</code></td><td><code>true</code></td><td>현재 버전에서는 읽히지 않습니다. MFA 단계 사이의 화면 이동은 호출한 화면이 응답의 <code>nextStepUrl</code> · <code>redirectUrl</code>로 직접 합니다</td></tr>
               <tr><td><code>tokenPersistence</code></td><td><code>'memory'</code></td><td>토큰 보관: <code>'memory'</code>(새로 고치면 사라짐) · <code>'sessionStorage'</code> · <code>'localStorage'</code></td></tr>
               <tr><td><code>attachAuthorization</code></td><td>없음</td><td>켜면 SDK가 <code>fetch</code>와 <code>XMLHttpRequest</code> 요청에 접근 토큰을 붙임</td></tr>
             </tbody>
@@ -326,7 +330,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td><code>verifyOtt(code, username)</code></td><td>일회용 코드 확인(<code>username</code>을 빼면 SDK가 가진 값)</td></tr>
               <tr><td><code>verifyPasskey()</code></td><td>패스키 확인: 옵션 받기 → <code>navigator.credentials.get()</code> → 서버 확인을 차례로 함</td></tr>
               <tr><td><code>performWebAuthnAuthentication(headers, contextPath)</code></td><td>화면에 넣은 패스키 확인의 낮은 단계 흐름</td></tr>
-              <tr><td><code>handleAuthenticationResult(result)</code></td><td>완료 응답에 맞춰 토큰 보관 · 화면 이동</td></tr>
+              <tr><td><code>handleAuthenticationResult(result)</code></td><td>응답의 CSRF 토큰을 화면에 반영하고, 토큰을 보관하고, 완료 응답이면 진행 상태를 초기화합니다. 화면을 옮기지는 않습니다</td></tr>
               <tr><td><code>persistTokensToStorage(result)</code></td><td><code>tokenPersistence</code>에 따라 토큰 보관</td></tr>
               <tr><td><code>logout()</code></td><td>로그아웃하고 클라이언트 상태 · 토큰 정리</td></tr>
               <tr><td><code>clearClientState()</code> · <code>clearPersistedTokens()</code></td><td>서버 호출 없이 메모리 상태 · 보관한 토큰 지우기</td></tr>
@@ -365,7 +369,7 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
           <h2 id="results">결과 처리 바꾸기</h2>
           <ul>
             <li><code>.mfa()</code>의 <code>mfaSuccessHandler</code> · <code>mfaFailureHandler</code>는 값을 받기만 하고 쓰이지 않습니다.</li>
-            <li>1차 로그인이나 요소에 준 <code>successHandler</code> · <code>failureHandler</code>는 그 흐름의 그 단계에서 불립니다(<a href="authentication.html#handlers">성공 · 실패 처리</a>).</li>
+            <li>1차 로그인이나 요소에 준 <code>successHandler</code> · <code>failureHandler</code>는 그 흐름의 그 단계에서 호출됩니다(<a href="authentication.html#handlers">성공 · 실패 처리</a>).</li>
             <li>MFA 응답을 만드는 처리기(<code>PrimaryAuthenticationSuccessHandler</code>, <code>MfaFactorProcessingSuccessHandler</code>, <code>UnifiedAuthenticationFailureHandler</code>)는 상속할 수 없는(final) 클래스입니다.</li>
             <li>그래서 MFA 결과는 위 <a href="#responses">응답 형식</a>의 JSON · 이동을 받아 화면이나 SDK에서 처리합니다. 단일 로그인 흐름의 처리기는 <a href="authentication.html#handlers">성공 · 실패 처리</a>를 참고합니다.</li>
           </ul>
@@ -378,6 +382,8 @@ public MfaPolicyEvaluator adminFlowAlwaysMfa() {
               <tr><td><code>contexa.auth.mfa.challenge-timeout-ms</code></td><td><code>300000</code></td><td>요소 하나의 확인 제한 시간(ms). 응답의 만료 시각에 쓰이고, 이 시간이 지난 뒤 제출한 요소는 403 <code>MFA_SESSION_EXPIRED</code>로 거부됩니다</td></tr>
               <tr><td><code>contexa.auth.mfa.max-retry-attempts</code></td><td><code>5</code></td><td>요소 확인 시도 한도. 실패 응답의 <code>maxAttempts</code>. 1보다 작으면 기동이 멈춤</td></tr>
               <tr><td><code>contexa.auth.mfa.minimum-delay-ms</code></td><td><code>500</code></td><td>로그인 실패 응답의 최소 지연(ms)</td></tr>
+              <tr><td><code>contexa.auth.mfa.otp-token-validity-seconds</code></td><td><code>300</code></td><td>MFA 안의 일회용 코드가 유효한 시간(초)</td></tr>
+              <tr><td><code>contexa.auth.mfa.email-resend-interval-seconds</code></td><td><code>120</code></td><td>같은 주소로 코드 메일을 다시 보내기까지 기다리는 시간(초)</td></tr>
               <tr><td><code>contexa.identity.mfa.enabled</code></td><td><code>true</code></td><td>끄면 MFA 정책 자동 구성이 꺼집니다</td></tr>
             </tbody>
           </table></div>

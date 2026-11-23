@@ -18,6 +18,10 @@
             <strong>This is a feature for when CONTEXA owns login (<code>CONTEXA_OWNED</code>).</strong> With the default <code>HOST_OWNED</code>, your application's Spring Security handles sessions and tokens, and CONTEXA's authorization server and resource server configuration are not built. To keep your application's existing login, see <a href="../common/bridge.html">Connecting Your Existing Login</a>.
           </div>
 
+          <div class="callout callout-info">
+            <strong>Terms on this page.</strong> An <strong>access token</strong> is the proof a logged-in user or application sends when it calls an API, and a <strong>refresh token</strong> is the proof used to get a new access token when it has expired. A <strong>JWT</strong> is a token format that carries a signature, so a server can verify it without storing it. The <strong>authorization server</strong> issues tokens, the <strong>resource server</strong> verifies tokens and protects the API, and a <strong>client</strong> is an application that asks for tokens. A <strong>grant</strong> is a way of getting a token. The <strong>state</strong> is where the login is kept after login. <strong>CSRF</strong> is an attack in which another site forges a request by relying on the browser sending cookies automatically. Terms such as flow and chain are in <a href="dsl.html">Identity DSL</a>.
+          </div>
+
           <h2 id="choose">Choosing between sessions and tokens</h2>
           <p>Each flow picks one state after its authentication method (<a href="dsl.html#flows">Choosing methods and states</a>). Each flow can pick differently.</p>
           <pre><code class="language-java">registry
@@ -45,7 +49,7 @@
           <ul>
             <li>Changes the session ID at login (<code>changeSessionId</code>), unless <code>sessionManagement(...)</code> in global or in the flow option sets another session fixation policy (such as <code>sessionFixation(fixation -&gt; fixation.none())</code>), which is then used. This holds for every login that ends in a session: form, REST, one-time code, passkey, and MFA (when the factors are completed, or at the primary login when no factor is required). Login also replaces the CSRF token, so a page that logs in with REST and stays open reads the token again before its next request.</li>
             <li>The logout address is <code>/logout</code>; for an MFA flow with a prefix it is <code>&lt;prefix&gt;/logout</code>. The address is fixed: a <code>logoutUrl(...)</code> written in global or in the flow option <code>logout(...)</code> is not used, because the request-time access control and the MFA-in-progress access control let a restricted session through to exactly this address.</li>
-            <li>Logout invalidates the session and clears the login, and CONTEXA's logout handler (<code>compositeLogoutHandler</code>) does CONTEXA's cleanup and clears token cookies.</li>
+            <li>Logout invalidates the session and clears the login, and CONTEXA's logout handler (<code>CompositeLogoutHandler</code>, bean <code>contexaCompositeLogoutHandler</code>) does CONTEXA's cleanup and clears token cookies.</li>
             <li>After logout: an MFA flow with a prefix goes to <code>&lt;prefix&gt;/mfa/login</code>; every other session flow goes to <code>/contexa/admin/login</code>. These are defaults: a <code>logoutSuccessUrl(...)</code> or <code>logoutSuccessHandler(...)</code> written in global or in the flow option <code>logout(...)</code> is used instead.</li>
           </ul>
           <p>The configurer passed to <code>.session(...)</code> has no options to change. Session settings such as the number of concurrent sessions go in the flow option <code>sessionManagement(...)</code>.</p>
@@ -66,15 +70,16 @@
           <ul>
             <li><strong>Conditions:</strong> <code>CONTEXA_OWNED</code>, the CONTEXA database (the <code>contexaJdbcTemplate</code> and <code>contexaTransactionTemplate</code> beans), and Spring Authorization Server on the class path.</li>
             <li><strong><code>contexa.auth.oauth2.client-secret</code>:</strong> required when there is at least one token flow and the server mode includes the authorization server (default <code>COMBINED</code>). When empty, startup fails. The old default value (<code>173f8245-…</code>) is refused, and startup also fails when a client already stored in the database has a secret that does not match this value. Keep the same value across restarts.</li>
-            <li><strong>Signing key store:</strong> without <code>contexa.auth.oauth2.jwk-key-store-path</code>, tokens are signed with a temporary RSA key that changes at every start, so a restart invalidates every existing token (an error is logged at startup). The path is looked up on the class path; for a file, prefix <code>file:</code>. The key store format is PKCS12, and a missing file makes startup fail.</li>
+            <li><strong>Signing key store:</strong> without <code>contexa.auth.oauth2.jwk-key-store-path</code>, tokens are signed with a temporary RSA key that changes at every start, so a restart invalidates every existing token (a warning is logged at startup). The path is looked up on the class path; for a file, prefix <code>file:</code>. The key store format is PKCS12, and a missing file makes startup fail.</li>
           </ul>
           <pre><code class="language-yaml">contexa:
   datasource:
     url: jdbc:postgresql://localhost:5432/contexa
     username: contexa
     password: contexa
-  bridge:
-    ownership: CONTEXA_OWNED
+  ai:
+    security:
+      mode: FULL   # CONTEXA owns login (same as @EnableAISecurity(mode = FULL))
   auth:
     oauth2:
       client-secret: replace-with-a-long-random-secret
@@ -100,7 +105,7 @@
             </tbody>
           </table></div>
           <div class="callout callout-warning">
-            <strong>Use the <code>COOKIE</code> transport for server-rendered pages.</strong> With the <code>HEADER</code> or <code>HEADER_COOKIE</code> transport and in-memory token storage (<code>contexa.auth.token-persistence: memory</code>, default), the browser's page navigations carry no access token, so pages after login look logged out. CONTEXA reports this combination with an error log at startup.
+            <strong>Use the <code>COOKIE</code> transport for server-rendered pages.</strong> With the <code>HEADER</code> or <code>HEADER_COOKIE</code> transport and in-memory token storage (<code>contexa.auth.token-persistence: memory</code>, default), the browser's page navigations carry no access token, so pages after login look logged out. CONTEXA reports this combination with a warning log at startup.
           </div>
           <h3 id="authenticated-user-grant">Tokens after login</h3>
           <p>There is a grant, <code>urn:ietf:params:oauth:grant-type:authenticated-user</code>, that gives tokens to a user who finished form, REST or MFA login. When a login succeeds, CONTEXA requests this grant with its internal client inside the same application, receives the tokens and puts them in the success response. It is configured when the <code>contexaTransactionTemplate</code> bean exists.</p>
@@ -196,6 +201,7 @@ grant_type=urn:ietf:params:oauth:grant-type:token-exchange
               <tr><td><code>contexa.auth.token-transport-type</code></td><td><code>HEADER</code></td><td>Token transport. <code>COOKIE</code> for server-rendered pages</td></tr>
               <tr><td><code>contexa.auth.oauth2-server-mode</code></td><td><code>COMBINED</code></td><td>When this application only issues or only validates tokens</td></tr>
               <tr><td><code>contexa.auth.oauth2.token-exchange-enabled</code></td><td><code>false</code></td><td>To turn on the agent's delegated token exchange</td></tr>
+              <tr><td><code>contexa.auth.oauth2.issuer-uri</code></td><td><code>http://localhost:9000</code></td><td>The issuer (<code>iss</code>) address of the tokens. Change it to the address other systems know when they check the issuer of these tokens</td></tr>
             </tbody>
           </table></div>
           <p>All settings, including token lifetimes, cookies, issuer and audiences, are in <a href="../../install/configuration/identity.html">Authentication and sign-in settings</a>.</p>

@@ -18,6 +18,10 @@
             <strong>CONTEXA가 로그인을 맡을 때(<code>CONTEXA_OWNED</code>)의 기능입니다.</strong> 기본값 <code>HOST_OWNED</code>에서는 앱의 Spring Security가 세션 · 토큰을 맡고, CONTEXA 인가 서버와 리소스 서버 구성은 만들어지지 않습니다. 앱의 기존 로그인을 그대로 쓰려면 <a href="../common/bridge.html">기존 로그인과 연결하기</a>를 참고합니다.
           </div>
 
+          <div class="callout callout-info">
+            <strong>이 페이지의 용어.</strong> <strong>접근 토큰</strong>은 로그인한 사용자나 앱이 API를 부를 때 실어 보내는 증표이고, <strong>갱신 토큰</strong>은 만료된 접근 토큰을 새로 받는 데 쓰는 증표입니다. <strong>JWT</strong>는 서명이 들어 있어 서버가 따로 저장하지 않고도 검증할 수 있는 토큰 형식입니다. <strong>인가 서버</strong>는 토큰을 발급하는 쪽이고, <strong>리소스 서버</strong>는 토큰을 검증해 API를 보호하는 쪽이며, <strong>클라이언트</strong>는 토큰을 요청하는 앱입니다. <strong>그랜트</strong>(grant)는 토큰을 받는 방법의 종류입니다. <strong>상태</strong>는 로그인 뒤 로그인 정보를 두는 곳입니다. <strong>CSRF</strong>는 브라우저가 쿠키를 자동으로 보내는 점을 이용해 다른 사이트가 요청을 위조하는 공격입니다. 흐름 · 체인 같은 용어는 <a href="dsl.html">인증 DSL</a>에 있습니다.
+          </div>
+
           <h2 id="choose">세션과 토큰 중 고르기</h2>
           <p>흐름마다 인증 방법 다음에 상태를 하나 고릅니다(<a href="dsl.html#flows">인증 방법과 상태 고르기</a>). 흐름마다 다르게 고를 수 있습니다.</p>
           <pre><code class="language-java">registry
@@ -45,7 +49,7 @@
           <ul>
             <li>로그인할 때 세션 ID를 바꿉니다(<code>changeSessionId</code>). 다만 global이나 흐름 옵션의 <code>sessionManagement(...)</code>가 다른 세션 고정 정책(예: <code>sessionFixation(fixation -&gt; fixation.none())</code>)을 주면 그 정책을 씁니다. 세션에 로그인이 남는 모든 로그인이 그렇습니다: 폼, REST, 일회용 코드, 패스키, 그리고 MFA(요소 확인을 모두 마쳤을 때, 또는 요소가 필요 없어 1차 로그인에서 끝날 때). 로그인하면 CSRF 토큰도 바뀌므로, REST로 로그인하고 화면을 그대로 쓰는 페이지는 다음 요청 전에 토큰을 다시 읽습니다.</li>
             <li>로그아웃 주소는 <code>/logout</code>입니다. 접두사가 있는 MFA 흐름은 <code>&lt;접두사&gt;/logout</code>입니다. 이 주소는 고정입니다. global이나 흐름 옵션 <code>logout(...)</code>에 쓴 <code>logoutUrl(...)</code>은 쓰이지 않습니다. 요청 시점 접근 제어와 MFA 진행 중 접근 제어가 제한된 세션을 바로 이 주소로는 통과시키기 때문입니다.</li>
-            <li>로그아웃하면 세션을 무효화하고 로그인을 지운 뒤, CONTEXA 로그아웃 처리기(<code>compositeLogoutHandler</code>)가 CONTEXA 쪽 정리와 토큰 쿠키 지우기를 합니다.</li>
+            <li>로그아웃하면 세션을 무효화하고 로그인을 지운 뒤, CONTEXA 로그아웃 처리기(<code>CompositeLogoutHandler</code>, 빈 <code>contexaCompositeLogoutHandler</code>)가 CONTEXA 쪽 정리와 토큰 쿠키 지우기를 합니다.</li>
             <li>로그아웃 뒤 이동: 접두사가 있는 MFA 흐름은 <code>&lt;접두사&gt;/mfa/login</code>, 그 밖의 세션 흐름은 <code>/contexa/admin/login</code>입니다. 이 주소들은 기본값입니다. global이나 흐름 옵션 <code>logout(...)</code>에 <code>logoutSuccessUrl(...)</code> 또는 <code>logoutSuccessHandler(...)</code>를 쓰면 그것이 쓰입니다.</li>
           </ul>
           <p><code>.session(...)</code>에 넘기는 구성자에는 바꿀 옵션이 없습니다. 동시 세션 수 같은 세션 설정은 흐름 옵션 <code>sessionManagement(...)</code>로 합니다.</p>
@@ -66,15 +70,16 @@
           <ul>
             <li><strong>조건:</strong> <code>CONTEXA_OWNED</code>, CONTEXA DB(<code>contexaJdbcTemplate</code> · <code>contexaTransactionTemplate</code> 빈), 클래스패스의 Spring Authorization Server.</li>
             <li><strong><code>contexa.auth.oauth2.client-secret</code>:</strong> 토큰 흐름이 하나라도 있고 서버 모드가 인가 서버를 포함하면(기본 <code>COMBINED</code>) 반드시 있어야 합니다. 비어 있으면 시작이 실패합니다. 예전 기본값(<code>173f8245-…</code>)은 거부되고, DB에 이미 저장된 클라이언트의 비밀값이 이 값과 맞지 않아도 시작이 실패합니다. 재시작 뒤에도 같은 값을 씁니다.</li>
-            <li><strong>서명 키스토어:</strong> <code>contexa.auth.oauth2.jwk-key-store-path</code>를 두지 않으면 시작할 때마다 바뀌는 임시 RSA 키로 서명하므로, 재시작하면 기존 토큰이 모두 무효가 됩니다(시작 때 오류 로그). 경로는 클래스패스에서 찾고, 파일이면 <code>file:</code>을 붙입니다. 키스토어 형식은 PKCS12이고, 파일이 없으면 시작이 실패합니다.</li>
+            <li><strong>서명 키스토어:</strong> <code>contexa.auth.oauth2.jwk-key-store-path</code>를 두지 않으면 시작할 때마다 바뀌는 임시 RSA 키로 서명하므로, 재시작하면 기존 토큰이 모두 무효가 됩니다(시작 때 경고 로그). 경로는 클래스패스에서 찾고, 파일이면 <code>file:</code>을 붙입니다. 키스토어 형식은 PKCS12이고, 파일이 없으면 시작이 실패합니다.</li>
           </ul>
           <pre><code class="language-yaml">contexa:
   datasource:
     url: jdbc:postgresql://localhost:5432/contexa
     username: contexa
     password: contexa
-  bridge:
-    ownership: CONTEXA_OWNED
+  ai:
+    security:
+      mode: FULL   # 로그인을 CONTEXA에 맡김(@EnableAISecurity(mode = FULL)과 같음)
   auth:
     oauth2:
       client-secret: replace-with-a-long-random-secret
@@ -100,7 +105,7 @@
             </tbody>
           </table></div>
           <div class="callout callout-warning">
-            <strong>서버가 그리는 화면에는 <code>COOKIE</code> 전송을 씁니다.</strong> <code>HEADER</code> · <code>HEADER_COOKIE</code> 전송에 토큰 보관이 메모리(<code>contexa.auth.token-persistence: memory</code>, 기본)이면, 브라우저가 화면을 이동할 때 접근 토큰이 실리지 않아 로그인 뒤 화면이 로그인 안 된 상태로 보입니다. CONTEXA는 시작할 때 이 조합을 오류 로그로 알립니다.
+            <strong>서버가 그리는 화면에는 <code>COOKIE</code> 전송을 씁니다.</strong> <code>HEADER</code> · <code>HEADER_COOKIE</code> 전송에 토큰 보관이 메모리(<code>contexa.auth.token-persistence: memory</code>, 기본)이면, 브라우저가 화면을 이동할 때 접근 토큰이 실리지 않아 로그인 뒤 화면이 로그인 안 된 상태로 보입니다. CONTEXA는 시작할 때 이 조합을 경고 로그로 알립니다.
           </div>
           <h3 id="authenticated-user-grant">로그인 뒤 토큰 발급</h3>
           <p>폼 · REST · MFA 로그인을 마친 사용자에게 토큰을 주는 그랜트 <code>urn:ietf:params:oauth:grant-type:authenticated-user</code>가 있습니다. 로그인이 성공하면 CONTEXA가 같은 앱 안에서 내부 클라이언트로 이 그랜트를 요청해 토큰을 받고, 성공 응답에 싣습니다. <code>contexaTransactionTemplate</code> 빈이 있을 때 구성됩니다.</p>
@@ -193,6 +198,7 @@ grant_type=urn:ietf:params:oauth:grant-type:token-exchange
             <tbody>
               <tr><td><code>contexa.auth.oauth2.client-secret</code></td><td>없음</td><td>토큰 흐름이 있으면 반드시 적어야 함. 재시작 뒤에도 같은 값</td></tr>
               <tr><td><code>contexa.auth.oauth2.jwk-key-store-path</code></td><td>없음</td><td>토큰 서명 키스토어. 운영과 여러 서버에서는 반드시 지정</td></tr>
+              <tr><td><code>contexa.auth.oauth2.issuer-uri</code></td><td><code>http://localhost:9000</code></td><td>토큰의 발급자(<code>iss</code>) 주소. 다른 시스템이 이 토큰의 발급자를 확인한다면 그 시스템이 아는 주소로 바꿉니다</td></tr>
               <tr><td><code>contexa.auth.token-transport-type</code></td><td><code>HEADER</code></td><td>토큰 전달 방식. 서버가 그리는 화면은 <code>COOKIE</code></td></tr>
               <tr><td><code>contexa.auth.oauth2-server-mode</code></td><td><code>COMBINED</code></td><td>이 앱이 토큰을 발급만 · 검증만 할 때</td></tr>
               <tr><td><code>contexa.auth.oauth2.token-exchange-enabled</code></td><td><code>false</code></td><td>에이전트 위임 토큰 교환을 켤 때</td></tr>

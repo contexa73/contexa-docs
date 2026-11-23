@@ -18,6 +18,10 @@
             <strong>This is a feature for when CONTEXA owns login (<code>CONTEXA_OWNED</code>).</strong> With the default <code>HOST_OWNED</code>, your application's Spring Security handles login and the flows written here do not become chains. To keep your application's existing login, see <a href="../common/bridge.html">Connecting Your Existing Login</a>.
           </div>
 
+          <div class="callout callout-info">
+            <strong>Terms on this page.</strong> A <strong>DSL</strong> (domain-specific language) is a way of writing settings in code by chaining method calls; here you write the login setup with <code>IdentityDslRegistry</code>. An <strong>authentication flow</strong> is one unit of setup that pairs one authentication method with one authentication state. A <strong>security filter chain</strong> (<code>SecurityFilterChain</code>) is the bundle of Spring Security filters built for each flow, and requests are compared with the chain of the lowest <code>order</code> value first. <strong>global</strong> is the setting applied to every flow alike. A <strong>configurer</strong> (<code>SecurityConfigurer</code>) is a unit of code that applies settings to a chain; configurers with smaller order values are applied first. The <strong>authentication state</strong> is how the signed-in user is kept (the session or tokens). <strong>Authentication ownership</strong> says whether your application or CONTEXA owns login (<code>HOST_OWNED</code>, <code>CONTEXA_OWNED</code>).
+          </div>
+
           <h2 id="overview">Overview</h2>
           <p>You write <strong>flows</strong> one after another in a single <code>PlatformConfig</code> bean. A flow is a pair of one authentication method and one login state. At startup CONTEXA registers one <code>SecurityFilterChain</code> bean per flow, and each request is compared with the chains from the lowest <code>order</code>; the first chain that matches handles it.</p>
           <figure class="dg">
@@ -31,7 +35,7 @@
           </figure>
 
           <h2 id="ownership">When it is on: who owns login</h2>
-          <p>CONTEXA has an <strong>authentication ownership</strong> setting (<code>contexa.bridge.ownership</code>) that says who handles login. Flows written with the DSL become chains only with <code>CONTEXA_OWNED</code>.</p>
+          <p>The <strong>authentication ownership</strong> says whether your application or CONTEXA handles login. It is set by the mode of <code>@EnableAISecurity</code>: the mode <code>FULL</code> means <code>CONTEXA_OWNED</code>, and the default mode <code>SANDBOX</code> means <code>HOST_OWNED</code>. Flows written with the DSL become chains only with <code>CONTEXA_OWNED</code>.</p>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>What changes with authentication ownership</strong>The default is <code>HOST_OWNED</code>: the application owns login.</figcaption>
             <div class="dg-compare">
@@ -44,8 +48,9 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Way</th><th>Result</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.bridge.ownership: CONTEXA_OWNED</code></td><td>Gives only login to CONTEXA. When set, it wins over the annotation's mode.</td></tr>
-              <tr><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code></td><td>Becomes <code>CONTEXA_OWNED</code> when the ownership is not set. This mode means CONTEXA owns the whole application, so when the application has no <code>DataSource</code> bean, the CONTEXA database becomes the application's default <code>DataSource</code> (<code>contexa.datasource.isolation.contexa-owned-application</code>).</td></tr>
+              <tr><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code></td><td>Hands login to CONTEXA (<code>CONTEXA_OWNED</code>). When the application sets no <code>spring.datasource.url</code>, or sets the same value as <code>contexa.datasource.url</code>, the CONTEXA database also serves as the application's database. To decide it yourself, set <code>contexa.datasource.isolation.contexa-owned-application</code>.</td></tr>
+              <tr><td><code>contexa.ai.security.mode: FULL</code></td><td>Does the same through a setting, without changing the code. The setting takes precedence over the mode written in the annotation.</td></tr>
+              <tr><td><code>contexa.bridge.ownership</code></td><td>Not a way to turn it on. If you set it, it must mean the same as the mode (<code>FULL</code> with <code>CONTEXA_OWNED</code>, <code>SANDBOX</code> with <code>HOST_OWNED</code>); when they disagree the application does not start. For example, setting only <code>CONTEXA_OWNED</code> under the default mode <code>SANDBOX</code> is refused at startup.</td></tr>
             </tbody>
           </table></div>
           <pre><code class="language-yaml">contexa:
@@ -53,8 +58,9 @@
     url: jdbc:postgresql://localhost:5432/contexa
     username: contexa
     password: contexa
-  bridge:
-    ownership: CONTEXA_OWNED</code></pre>
+  ai:
+    security:
+      mode: FULL   # same as @EnableAISecurity(mode = FULL)</code></pre>
           <p>The Identity DSL comes with <code>spring-boot-starter-contexa</code>. The starter brings the identity, iam, core, autoconfigure and common modules and Spring Authorization Server. It does not bring Spring Security, so declare <code>spring-boot-starter-security</code> with it.</p>
           <p>To turn off the DSL, the chains and the request-time filters altogether, set <code>contexa.identity.security-core.enabled: false</code>.</p>
 
@@ -63,7 +69,7 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Mode</th><th>Shared by every chain</th><th>Flows</th></tr></thead>
             <tbody>
-              <tr><td><code>FULL</code></td><td>Static paths (<code>/contexa/css/**</code>, <code>/contexa/js/**</code>, <code>/images/**</code>, <code>/favicon.ico</code>) are allowed; every other request goes to CONTEXA's dynamic authorization (<code>CustomDynamicAuthorizationManager</code>)</td><td>One MFA flow: primary form login + passkey + one-time code, 1 required factor, order 100, session state</td></tr>
+              <tr><td><code>FULL</code></td><td>Static paths (<code>/contexa/css/**</code>, <code>/contexa/js/**</code>, <code>/contexa/img/**</code>, <code>/images/**</code>, <code>/favicon.ico</code>) and the password change page (<code>/contexa/password-change</code>) are allowed; every other request goes to CONTEXA's dynamic authorization (<code>CustomDynamicAuthorizationManager</code>)</td><td>One MFA flow: primary form login + passkey + one-time code, 1 required factor, order 100, session state</td></tr>
               <tr><td><code>SANDBOX</code> (default mode)</td><td>No chain is built: under <code>SANDBOX</code> the ownership is always <code>HOST_OWNED</code>, and there a <code>PlatformConfig</code> becomes no chain</td><td>None (<a href="../autoconfigure/ai-security.html#sandbox-chain">No <code>SANDBOX</code>-shaped chain</a>)</td></tr>
             </tbody>
           </table></div>
@@ -172,13 +178,25 @@ public class LoginFlowsConfig {
             <li>it was completed with the primary login plus at least as many factors as the flow asks for (<code>requiredFactors</code>), in any flow;</li>
             <li>or, when the flow asks for one factor, the login has since passed a Zero Trust challenge.</li>
           </ul>
-          <p>Any other login, such as a password login of a form flow or a login of an MFA flow that asks for fewer factors, is no login for that request: the flow's rules treat it as anonymous and send it to the flow's own sign-in. Nothing is saved by this, so the session or the token keeps the login for the other flows. The flow's sign-in and MFA step addresses stay reachable with any login. A login made by a method the application added itself (for example <code>httpBasic()</code> in global) carries none of the facts this check reads and is left as it is.</p>
+          <p>Any other login, such as a password login of a form flow or a login of an MFA flow that asks for fewer factors, does not count as a login on the paths of an MFA flow. What happens then:</p>
+          <ul>
+            <li>The MFA flow treats the request as anonymous and sends it to its own sign-in page.</li>
+            <li>The login stored in the session or the token is not removed, so it still counts on the paths of the other flows.</li>
+            <li>The MFA flow's sign-in address and MFA step addresses can be opened in any login state.</li>
+            <li>A login made by a method the application added itself (for example <code>httpBasic()</code> in global) carries none of the facts this check reads, so it is not checked and stays as it is.</li>
+          </ul>
 
           <h2 id="global">Settings for every chain (global)</h2>
           <p>The <code>global(http -&gt; ...)</code> lambda is applied first to every flow's <code>HttpSecurity</code>. Flow settings are applied after it, so for the same item the flow wins; for example the flow option <code>disableCsrf()</code> turns CSRF off for that chain only. If the global lambda throws, CONTEXA logs a warning for that flow and carries on.</p>
           <p><strong>A <code>formLogin(...)</code> written in global is not used by a form flow or an MFA flow.</strong> A form flow replaces it with its own, and an MFA flow removes it, because it would log a user in with the password alone, beside the factors. Both log a warning at startup. Write those settings in the flow: <code>form(form -&gt; form.loginPage(...))</code>, or for MFA <code>primaryAuthentication(primary -&gt; primary.formLogin(form -&gt; form.loginPage(...)))</code>.</p>
           <p>Any other login method written in global, such as <code>httpBasic()</code>, is added to every chain, MFA chains included: a request with Basic credentials is then logged in with the password alone, without the factors. Write such a method in the <code>rawHttp</code> of the single flow that needs it, not in global.</p>
-          <p>Spring's passkey and one-time code logins are handled like <code>formLogin</code>. A <code>webAuthn(...)</code> or <code>oneTimeTokenLogin(...)</code> written in global is taken out of an MFA chain whose flow has no factor of that kind, with a warning at startup, because it would log a person in with the passkey or the mail code alone. Its other pages go with it (for <code>webAuthn(...)</code> the registration page <code>/webauthn/register</code> in that chain). Where the flow has that factor, the factor configures it, and Spring's own addresses (<code>/login/webauthn</code>, <code>/ott/generate</code>) do not answer. Written in the <code>rawHttp</code> of an MFA step, they stop startup. In single flows they stay; these logins are Spring's own, so in a token-state chain they get no token and the next request is anonymous again.</p>
+          <p>Spring's own passkey login (<code>webAuthn(...)</code>) and one-time code login (<code>oneTimeTokenLogin(...)</code>) written in global are handled the same way as <code>formLogin</code>.</p>
+          <ul>
+            <li><strong>MFA flow without a factor of that kind:</strong> the setting is taken out of the chain, with a warning at startup, because it would sign a person in with the passkey or the mail code alone. The other pages of that setting go with it (for <code>webAuthn(...)</code> the registration page <code>/webauthn/register</code> in that chain).</li>
+            <li><strong>MFA flow with that factor:</strong> the factor uses the setting, so Spring's own addresses (<code>/login/webauthn</code>, <code>/ott/generate</code>) do not answer.</li>
+            <li><strong>Written in the <code>rawHttp</code> of an MFA step:</strong> the application does not start.</li>
+            <li><strong>Single-factor flows:</strong> the setting stays. These logins are Spring's own, however, so in a token-state chain they get no token, and the next request is anonymous again.</li>
+          </ul>
           <h3 id="csrf">CSRF</h3>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Flow</th><th>CSRF</th></tr></thead>
@@ -228,7 +246,7 @@ public class LoginFlowsConfig {
           </table></div>
           <ul>
             <li>Options are applied after global. The <code>rawHttp</code> lambda is a <code>SafeHttpCustomizer</code>, so it may throw checked exceptions.</li>
-            <li>Filters added at the same place (for example <code>addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class)</code>) run in the order they were added. Global is applied before CONTEXA's own filters and <code>rawHttp</code> after them, so a filter added in <code>rawHttp</code> at that place runs after the filters that answer the pages CONTEXA generates (the MFA pages, the REST login page) and does not see those requests. Add it in global, or before an earlier filter, to see them too.</li>
+            <li>Filters added at the same place (for example <code>addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class)</code>) run in the order they were added. Global is applied before CONTEXA's own filters, and <code>rawHttp</code> after them. A filter added in <code>rawHttp</code> at that place therefore runs after the filters that answer the pages CONTEXA generates (the MFA pages, the REST login page), and it does not see those page requests. Add it in global, or before an earlier filter, to see them too.</li>
             <li><code>.mfa()</code> has none of these options. An MFA flow's scope is set with <code>urlPrefix</code>, and <code>rawHttp</code> is used inside the primary login's or a factor's options.</li>
             <li>Global takes an <code>HttpSecurity</code> lambda directly, without options.</li>
           </ul>
@@ -288,8 +306,9 @@ public class LoginFlowsConfig {
     url: jdbc:postgresql://localhost:5432/contexa
     username: contexa
     password: contexa
-  bridge:
-    ownership: CONTEXA_OWNED
+  ai:
+    security:
+      mode: FULL   # CONTEXA owns login
   auth:
     oauth2:
       client-secret: replace-with-a-long-random-secret   # required when there is an .oauth2() flow
@@ -353,7 +372,7 @@ public SecurityConfigurer chainNameHeaderConfigurer() {
 
           <h2 id="migration">Moving from an existing Spring Security configuration</h2>
           <ol>
-            <li><strong>Set the ownership to <code>CONTEXA_OWNED</code></strong> (<a href="#enable">How to turn it on</a>).</li>
+            <li><strong>Hand login to CONTEXA.</strong> Change the annotation to <code>@EnableAISecurity(mode = SecurityMode.FULL)</code> (<a href="#enable">How to turn it on</a>).</li>
             <li><strong>Move the <code>SecurityFilterChain</code> beans into one <code>PlatformConfig</code>.</strong> One chain is one flow. <code>securityMatcher</code> moves to <code>rawHttp</code> and <code>@Order</code> to <code>order</code>.</li>
             <li><strong>To hand URL rules to CONTEXA's dynamic authorization,</strong> use <code>anyRequest().access(customDynamicAuthorizationManager)</code> in global (as the default <code>FULL</code> configuration does). URL decisions then come from the policies in the admin console. The resource scanner only registers endpoints as resources; it does not read <code>hasRole</code> rules to create policies, so create policies for the same rules first (<a href="../iam/resource-scanner.html">Resource scanner</a>, <a href="../iam/policy.html">Policies</a>).</li>
             <li><strong>A URL that no policy matches needs a signed-in user by default</strong> (<code>contexa.policy.no-matching-url-policy-decision</code>, default <code>AUTHENTICATED</code>; <code>PERMIT</code> opens it to everyone).</li>
@@ -406,7 +425,8 @@ public class SecurityConfig {
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning · when to change</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.bridge.ownership</code></td><td><code>HOST_OWNED</code></td><td>Who owns login. For DSL chains, <code>CONTEXA_OWNED</code> (with <code>mode = FULL</code> it is <code>CONTEXA_OWNED</code> without setting it)</td></tr>
+              <tr><td><code>contexa.ai.security.mode</code></td><td>The annotation's value (default <code>SANDBOX</code>)</td><td>With <code>FULL</code>, CONTEXA owns login. Takes precedence over the value written in the code</td></tr>
+              <tr><td><code>contexa.bridge.ownership</code></td><td>Follows the mode (<code>HOST_OWNED</code> under <code>SANDBOX</code>)</td><td>Who owns login. It must mean the same as the mode, and a disagreement is refused at startup. Usually left unset</td></tr>
               <tr><td><code>contexa.auth.urls.single.form-login-processing</code></td><td><code>/login</code></td><td>Login processing path of single form flows. Per flow, use <code>loginProcessingUrl</code></td></tr>
               <tr><td><code>contexa.auth.state-type</code></td><td><code>OAUTH2</code></td><td>Handler basis for a flow with no state</td></tr>
               <tr><td><code>contexa.auth.oauth2.client-secret</code></td><td>none</td><td>Required when there is an <code>.oauth2()</code> flow</td></tr>
