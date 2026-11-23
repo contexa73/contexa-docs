@@ -31,7 +31,7 @@
           <p>From records to a decision, the order is:</p>
           <ol>
             <li><strong>You put records.</strong> Your integration or an administrator puts people, approvals, tickets, assignments and company rules through the admin API (<a href="#kinds">Records you can put</a>, <a href="#api">Putting records</a>).</li>
-            <li><strong>Your application states the target of each request.</strong> The request address alone does not say which project or customer a request is about, so your application states it as a request attribute (<a href="#request-values">Values your application states per request</a>).</li>
+            <li><strong>Your application states the target of each request.</strong> The request URL alone does not say which project or customer a request is about, so your application states it as a request attribute (<a href="#request-values">Values your application states per request</a>).</li>
             <li><strong>CONTEXA matches records against each request.</strong> Only for a request a company rule covers, it reads the requester's records as of the request time (<a href="#rules">Company rules</a>, <a href="#holder">Whose records are looked at</a>).</li>
             <li><strong>The decision receives the facts.</strong> The matched facts go into the decision prompt, the text sent to the AI model (<a href="#facts">What the decision sees</a>).</li>
           </ol>
@@ -58,7 +58,14 @@
           <ul>
             <li><strong>Valid states.</strong> An approval covers a request when its <code>status</code> is <code>APPROVED</code>, <code>GRANTED</code> or <code>COMPLETED</code>; a ticket when it is <code>OPEN</code>, <code>APPROVED</code>, <code>ACTIVE</code> or <code>IN_PROGRESS</code>. "Covers" means the approval or ticket is accepted as the basis for the request. An empty <code>status</code> is not checked.</li>
             <li><strong>Self-approval.</strong> When the <code>approver</code> of an approval or ticket is the requester (their <code>subject</code> or <code>companyId</code>) or is empty, CONTEXA treats it as approved by the requester and marks the record as not covering the request (<code>APPROVER</code>).</li>
-            <li><strong>Items already used.</strong> When an approval's <code>usageReported</code> is <code>true</code>, CONTEXA adds up the items your application reported in <code>usage</code> for the approval's target, within the approval's validity and before the request time, and counts them as already used under it. When it is <code>false</code> or empty, the items already used are "not known".</li>
+            <li><strong>Items already used.</strong> When an approval's <code>usageReported</code> is <code>true</code>, CONTEXA adds up the items your application reported in <code>usage</code> that meet all of these conditions, and counts them as already used under the approval.
+              <ul>
+                <li>They were given out for the approval's target.</li>
+                <li>They were given out within the approval's validity.</li>
+                <li>They were given out before the request time.</li>
+              </ul>
+              When it is <code>false</code> or empty, the items already used under the approval record are "not known". CONTEXA then counts only the items already allowed in the same session for the same target and puts that count in the decision, and it marks what was used outside the session as not known.
+            </li>
             <li><strong>The target (<code>target</code>)</strong> is the key your company's records use for it (for example project <code>HX-310</code>). Your application states the target of each request (<a href="#request-values">below</a>).</li>
             <li><strong>Dates.</strong> Assignment periods and days worked are compared with the UTC date of the request time.</li>
           </ul>
@@ -85,7 +92,7 @@
               <tr><td><code>categories</code></td><td>The resource categories the rule covers (<code>@Protectable(category = ...)</code>)</td><td>Every category</td></tr>
               <tr><td><code>exceptions</code></td><td>When no covering record is needed (<a href="#exceptions">below</a>). <code>{"kind": "...", "limit": number}</code></td><td>No exception</td></tr>
               <tr><td><code>records</code></td><td>The record kinds a request is matched against. Choose among the six kinds (<a href="#integrated">explained above</a>)</td><td>The kinds <code>requirement</code> and <code>exceptions</code> name, with <code>TRAVEL</code></td></tr>
-              <tr><td><code>historyDays</code></td><td>How many days of work history (days worked) the decision is shown</td><td>The <code>RECENT_WORK</code> <code>limit</code>, else 90 days</td></tr>
+              <tr><td><code>historyDays</code></td><td>How many days of days-worked records (<code>ACCESS_HISTORY</code>) the decision is shown</td><td>The <code>RECENT_WORK</code> <code>limit</code>, else 90 days</td></tr>
             </tbody>
           </table></div>
           <p>Company records are used for a request under three conditions. If any is missing, no company records reach that request.</p>
@@ -106,7 +113,7 @@
               <tr><td><code>TICKET_WHILE_ON_CALL</code></td><td>The person is on call at the request time and has a ticket that meets every condition</td><td>Not used</td></tr>
             </tbody>
           </table></div>
-          <p>For each rule CONTEXA works out from the exceptions whether this request needs a covering record, and writes the result into the business context. This is <strong>the company's own check</strong>, and it has three outcomes.</p>
+          <p>For each rule CONTEXA works out from the exceptions whether this request needs a covering record, and writes the result into the canonical context (the facts a decision uses, gathered in one format; <a href="prompt-engineering.html#canonical">The Decision Prompt</a>) under the company rule. This is <strong>the company's own check</strong>, and it has three outcomes.</p>
           <ul>
             <li>It is "no covering record needed" when any exception holds.</li>
             <li>It is "unknown" when no exception holds but one cannot be decided, because the kind it looks at was not looked up (a kind you do not integrate, a request with no stated target, and so on).</li>
@@ -115,7 +122,7 @@
           <p>The decision prompt does not carry this check on its rule line. The rule line carries the rule id, the record it requires and its exceptions, and the model checks for itself whether the rule is met (<a href="#facts">What the decision sees</a>). The model also chooses the response.</p>
 
           <h2 id="request-values">Values your application states per request</h2>
-          <p>Your company's records name a project or a customer by a key your company chose (for example <code>HX-310</code>). The request address alone does not reveal that key, and CONTEXA does not guess the target from the request's text. Your application states it as request attributes. A value your application does not state is not compared.</p>
+          <p>Your company's records name a project or a customer by a key your company chose (for example <code>HX-310</code>). The request URL alone does not reveal that key, and CONTEXA does not guess the target from the request's text. Your application states it as request attributes. A value your application does not state is not compared.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Request attribute</th><th>Format</th><th>Use</th></tr></thead>
             <tbody>
@@ -133,7 +140,7 @@ request.setAttribute("claimedRecord", form.getTicketKey()); // the ticket key th
           <h2 id="holder">Whose records are looked at</h2>
           <ul>
             <li><strong>A person's own request</strong> is matched with that person's records.</li>
-            <li><strong>An AI agent's request</strong> is matched with the records of the person who answers for it: the delegator (the person who handed the work over) for a delegated agent, the sponsor registered for the agent when it acts on its own. An agent has no assignments, shifts or tickets of its own. For an agent's request the decision prompt also states whose records they are (delegator, sponsor) (<a href="../agent/overview.html">Agents as Security Subjects</a>).</li>
+            <li><strong>An AI agent's request</strong> is matched with the records of the person who answers for it: the delegator (the person who handed the work over) for a delegated agent, the sponsor (the person registered as accountable for the agent) when it acts on its own. An agent has no assignments, shifts or tickets of its own. For an agent's request the decision prompt also states whose records they are (delegator, sponsor) (<a href="../agent/overview.html">Agents as Security Subjects</a>).</li>
             <li><strong>Tenants.</strong> A person's records are those of the request's tenant together with those put without a tenant (shared by the deployment). Rules and networks are the tenant's when it has any, else the shared ones.</li>
           </ul>
 
@@ -145,8 +152,8 @@ request.setAttribute("claimedRecord", form.getTicketKey()); // the ticket key th
               <tr><td>Rules that apply</td><td>The rule id, the record it requires (an approval or a ticket, with the ticket kind), and the exceptions with their limits. The rule sentence (<code>statement</code>) and the company's own check are not carried</td></tr>
               <tr><td>Closest approval and ticket</td><td>The approval and the ticket, among the person's, that come closest to covering the request: their values (approver, state, purpose, target, item limit, items already used, validity, decision time) and the conditions they fail: <code>APPROVER</code> (approved by the requester), <code>TARGET</code> (another target), <code>PURPOSE</code> (another action), <code>ITEMS</code> (too many items, approvals only), <code>VALIDITY</code> (outside its validity), <code>STATUS</code> (not in a valid state)</td></tr>
               <tr><td>A ticket the requester names</td><td>Whether the ticket named in <code>claimedRecord</code> exists among the person's tickets (<code>NO_TICKET</code> when it does not) and, if it does, the same condition checks</td></tr>
-              <tr><td>Assignment, work history, on-call</td><td>Whether the person is assigned (or account manager) on the request day, recent days worked on the target, whether the person is on call at the request time</td></tr>
-              <tr><td>Network zone</td><td>Carried on the <code>NetworkZone</code> line of the request (<code>REQUEST</code>) block: the zone of the company network the request address is in (<code>CORPORATE</code>), the person's trip network (<code>TRAVEL</code>), or anything else (<code>EXTERNAL</code>, only when you put company networks). For a trip network the trip is also stated on a line of its own</td></tr>
+              <tr><td>Assignment, days worked, on-call</td><td>Whether the person is assigned (or account manager) on the request day, recent days worked on the target, whether the person is on call at the request time</td></tr>
+              <tr><td>Network zone</td><td>Carried on the <code>NetworkZone</code> line of the request (<code>REQUEST</code>) block: the zone of the company network the request's IP address is in (<code>CORPORATE</code>), the person's trip network (<code>TRAVEL</code>), or anything else (<code>EXTERNAL</code>, only when you put company networks). For a trip network the trip is also stated on a line of its own</td></tr>
               <tr><td>Computed at the request time</td><td>Values the engine computes itself against the request time: how far the approval's decision time and validity are from the request time, and the items already used under it (the value your application reported, else the items already allowed in the same session). Conclusions such as whether the item limit is exceeded or whether the rule is met by a record or an exception are added as lines only in the "Decision rules" versions in the next table</td></tr>
             </tbody>
           </table></div>
