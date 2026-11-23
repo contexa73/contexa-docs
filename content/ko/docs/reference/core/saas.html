@@ -21,22 +21,22 @@
 
           <h2 id="overview">개요</h2>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>보내는 것과 받는 것</strong>보내는 채널과 받는 채널은 각각 따로 켭니다. 판정 전달만 <code>contexa.saas.enabled=true</code>로 함께 켜집니다.</figcaption>
+            <figcaption class="dg-caption"><strong>보내는 것과 받는 것</strong>보내는 채널과 받는 채널은 각각 따로 켭니다. <code>contexa.saas.enabled=true</code>는 SaaS 연결 전체의 스위치이며, 이것만 켜면 판정 전달만 동작합니다. 나머지 채널은 채널별 설정도 켜야 합니다.</figcaption>
             <div class="dg-lanes">
               <section class="dg-lane"><h4 class="dg-lane-title">보내기<span class="dg-lane-sub">DB 보관함에 먼저 쌓고 비동기로 전송</span></h4>
                 <ul class="dg-stack">
-                  <li class="dg-node"><span class="dg-node-title">판정 전달</span><span class="dg-node-desc">허용 · 분석 대기가 아닌 판정(가명 처리)</span></li>
+                  <li class="dg-node"><span class="dg-node-title">판정 전달</span><span class="dg-node-desc">허용과 분석 대기를 제외한 판정(가명 처리)</span></li>
                   <li class="dg-node"><span class="dg-node-title">판정 피드백 · 위협 결과</span><span class="dg-node-desc">관리자가 차단을 풀 때</span></li>
-                  <li class="dg-node"><span class="dg-node-title">프롬프트 맥락 감사</span><span class="dg-node-desc">프롬프트 원문 없이 해시만</span></li>
+                  <li class="dg-node"><span class="dg-node-title">프롬프트 맥락 감사</span><span class="dg-node-desc">1차 · 2차 분석이 만든 프롬프트의 해시와 토큰 수만 보냄(프롬프트 원문은 보내지 않음)</span></li>
                   <li class="dg-node"><span class="dg-node-title">기준선 통계 · 성능 지표</span><span class="dg-node-desc">주기적으로 집계</span></li>
                 </ul>
               </section>
               <div class="dg-bridge"><span class="dg-bridge-arrow">OAuth2 client_credentials</span><div class="dg-node dg-host"><span class="dg-node-title">CONTEXA SaaS</span><span class="dg-node-desc">saas.ctxa.ai</span></div></div>
-              <section class="dg-lane"><h4 class="dg-lane-title">받기<span class="dg-lane-sub">한 시간마다 당겨와 프롬프트에 사용</span></h4>
+              <section class="dg-lane"><h4 class="dg-lane-title">받기<span class="dg-lane-sub">한 시간마다 가져와 프롬프트에 사용</span></h4>
                 <ul class="dg-stack">
                   <li class="dg-node dg-model"><span class="dg-node-title">위협 신호</span><span class="dg-node-desc">맞는 신호를 최대 3개까지 고르고, 프롬프트 본문에는 가장 잘 맞는 1개를 싣습니다</span></li>
                   <li class="dg-node dg-model"><span class="dg-node-title">탐지 전략 묶음</span></li>
-                  <li class="dg-node dg-model"><span class="dg-node-title">기준선 씨앗</span><span class="dg-node-desc">개인 · 조직 기준선이 부족할 때 보강</span></li>
+                  <li class="dg-node dg-model"><span class="dg-node-title">기준선 씨앗</span><span class="dg-node-desc">개인 · 조직 행위 기준선이 부족할 때 SaaS가 주는 초기 값으로 보강</span></li>
                 </ul>
               </section>
             </div>
@@ -52,7 +52,7 @@
       client-id: ${CONTEXA_SAAS_CLIENT_ID}
       client-secret: ${CONTEXA_SAAS_CLIENT_SECRET}</code></pre>
           <ul>
-            <li>켜면 시작할 때 끝점 · 비밀값 · OAuth2 설정 · 범위(scope)를 검사하고, 맞지 않으면 시작하지 않습니다. 두 비밀값이 비었거나, 개발용 기본값이거나, 32바이트보다 짧으면 거부합니다.</li>
+            <li>켜면 시작할 때 엔드포인트 · 비밀값 · OAuth2 설정 · 범위(scope)를 검사하고, 맞지 않으면 시작하지 않습니다. 비밀값은 <code>contexa.saas.pseudonymization-secret</code>과 <code>contexa.saas.global-correlation-secret</code> 두 개입니다. 둘 중 하나라도 비었거나, 개발용 기본값이거나, 32바이트보다 짧으면 거부합니다.</li>
             <li>판정 전달은 CONTEXA DB의 보관함(outbox) 표에 먼저 저장한 뒤 보냅니다. 보관함 저장소가 없으면 아무것도 보내지 않습니다.</li>
             <li>보내기가 실패해도 판정 처리는 멈추지 않습니다.</li>
           </ul>
@@ -65,7 +65,12 @@
           </ul>
 
           <h2 id="delivery">전송과 재시도</h2>
-          <p>판정 전달은 상관 ID로 중복을 막고 보관함에 대기로 저장한 뒤, 트랜잭션이 끝나면 따로 보냅니다(<code>POST {endpoint}/api/saas/runtime/xai/decision-ingestions</code>, Bearer 토큰).</p>
+          <p>판정 전달은 아래 순서로 처리합니다(<code>POST {endpoint}/api/saas/runtime/xai/decision-ingestions</code>, Bearer 토큰).</p>
+          <ol>
+            <li>상관관계 ID(correlation ID)로 같은 판정이 두 번 전달되지 않게 막습니다.</li>
+            <li>보관함에 대기 상태로 저장합니다.</li>
+            <li>트랜잭션이 끝난 뒤 별도 작업으로 보냅니다.</li>
+          </ol>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>결과</th><th>처리</th></tr></thead>
             <tbody>
@@ -75,7 +80,7 @@
               <tr><td>시도가 <code>max-retry-attempts</code>(10) 이상</td><td>DEAD_LETTER</td></tr>
             </tbody>
           </table></div>
-          <p>재시도는 <code>dispatch-interval-ms</code>(30초)마다 <code>outbox-batch-size</code>(50)건씩 하고, 여러 서버에서도 한 서버만 실행합니다.</p>
+          <p>재시도 스케줄러는 <code>dispatch-interval-ms</code>(30초)마다 <code>outbox-batch-size</code>(50)건씩 확인해, 재시도 시각이 된 항목을 보냅니다. 재시도 시각은 위 표의 지수 백오프로 정해집니다. 서버가 여러 대여도 한 서버만 실행합니다.</p>
 
           <h2 id="channels">채널별 켜기</h2>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -86,20 +91,20 @@
               <tr><td>위협 결과</td><td><code>contexa.saas.threat-outcome.enabled</code></td><td>관리자가 차단을 풀 때</td></tr>
               <tr><td>프롬프트 맥락 감사</td><td><code>contexa.saas.prompt-context-audit.enabled</code></td><td>1차 · 2차 분석이 프롬프트 맥락을 만들 때</td></tr>
               <tr><td>성능 지표</td><td><code>contexa.saas.performance-telemetry.enabled</code></td><td>시간 단위로 집계해 보냄</td></tr>
-              <tr><td>기준선 통계 · 씨앗</td><td><code>contexa.saas.baseline-signal.enabled</code></td><td>조직 기준선 분포를 주(월요일 시작) 단위로 집계하고, 끝난 주의 집계를 보냄(조직 기준선 3개 · 사용자 기준선 25개 미만이면 보내지 않음). 집계 · 보내기는 <code>contexa.saas.baseline-signal.publish-interval-ms</code>마다 도는데, 이 값을 적지 않으면 1일입니다(설정 색인에 보이는 7일 기본값은 이 주기에 쓰이지 않음). 씨앗은 1시간마다 받음</td></tr>
+              <tr><td>기준선 통계 · 씨앗</td><td><code>contexa.saas.baseline-signal.enabled</code></td><td>조직 기준선 분포를 주(월요일 시작) 단위로 집계하고, 끝난 주의 집계를 보냅니다. 조직 기준선이 3개 미만이거나 사용자 기준선이 25개 미만이면 보내지 않습니다. 집계와 보내기는 <code>contexa.saas.baseline-signal.publish-interval-ms</code>마다 실행되며, 이 값을 적지 않으면 1일입니다(설정 색인에 보이는 7일 기본값은 이 주기에 쓰이지 않음). 씨앗은 1시간마다 받습니다.</td></tr>
               <tr><td>위협 신호</td><td><code>contexa.saas.threat-intelligence.enabled</code></td><td>1시간마다 받음, 90분 캐시</td></tr>
               <tr><td>탐지 전략</td><td><code>contexa.saas.detection-strategy.enabled</code></td><td>1시간마다 받음</td></tr>
             </tbody>
           </table></div>
           <div class="callout callout-warning">
-            <strong>현재 버전의 제한.</strong> 위협 지식 받기(<code>contexa.saas.threat-knowledge.enabled</code>)는 켜도 실제로 당겨오지 않습니다. 이 설정이 판정 엔진 쪽으로 전달되지 않기 때문입니다.
+            <strong>현재 버전의 제한.</strong> 위협 지식 받기(<code>contexa.saas.threat-knowledge.enabled</code>)는 위협 지식 묶음과 런타임 정책을 받는 별도 채널이며, 위 표의 위협 신호와 다릅니다. 이 채널은 켜도 실제로 가져오지 않습니다. 이 설정이 판정 엔진 쪽으로 전달되지 않기 때문입니다.
           </div>
 
           <h2 id="settings">주요 설정</h2>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.saas.enabled</code></td><td><code>false</code></td><td>SaaS 연결 전체 켜기</td><td>SaaS로 보내려면 <code>true</code></td></tr>
+              <tr><td><code>contexa.saas.enabled</code></td><td><code>false</code></td><td>SaaS 연결 전체의 스위치(이것만 켜면 판정 전달만 동작하고, 나머지 채널은 채널별 설정도 필요함)</td><td>SaaS로 보내려면 <code>true</code></td></tr>
               <tr><td><code>contexa.saas.endpoint</code></td><td><code>https://saas.ctxa.ai</code></td><td>받는 서버 주소</td><td>다른 SaaS 주소를 받았을 때</td></tr>
               <tr><td><code>contexa.saas.pseudonymization-secret</code></td><td>개발용 값(켜면 거부)</td><td>가명 HMAC 키(32바이트 이상)</td><td>켤 때 반드시(32바이트 이상)</td></tr>
               <tr><td><code>contexa.saas.global-correlation-secret</code></td><td>개발용 값(켜면 거부)</td><td>전역 IP 상관 키(32바이트 이상)</td><td>켤 때 반드시(32바이트 이상)</td></tr>
@@ -107,7 +112,7 @@
               <tr><td><code>contexa.saas.oauth2.client-id</code> / <code>client-secret</code></td><td><code>dev-client</code> / <code>dev-secret</code></td><td>발급받은 자격으로 바꿔야 합니다</td><td>켤 때 반드시</td></tr>
               <tr><td><code>contexa.saas.include-reasoning</code></td><td><code>false</code></td><td>판정 근거 문장도 보냄</td><td>판정 근거 문장까지 보내기로 했을 때</td></tr>
               <tr><td><code>contexa.saas.max-retry-attempts</code></td><td><code>10</code></td><td>이 횟수부터 DEAD_LETTER</td><td>네트워크가 불안정할 때 늘림</td></tr>
-              <tr><td><code>contexa.saas.dispatch-interval-ms</code></td><td><code>30000</code></td><td>재시도 간격</td><td>재전송을 더 빨리 · 느리게 할 때</td></tr>
+              <tr><td><code>contexa.saas.dispatch-interval-ms</code></td><td><code>30000</code></td><td>보관함에서 보낼 항목을 확인하는 주기(항목별 재시도 시각은 지수 백오프로 정해짐)</td><td>재전송을 더 빨리 · 느리게 할 때</td></tr>
             </tbody>
           </table></div>
           <p>나머지 채널별 경로 · 주기를 포함한 <code>contexa.saas.*</code> 설정 전체(64개)는 <a href="../../install/configuration/index-all.html#contexa-saas">설정 색인</a>에 있습니다.</p>

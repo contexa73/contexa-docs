@@ -19,7 +19,7 @@
           <p>Spring Security's static matchers (<code>requestMatchers(...).hasRole(...)</code>) are fixed in code. <code>CustomDynamicAuthorizationManager</code> is a Spring <code>AuthorizationManager</code>. When the application starts, it reads the URL policies from the database, builds a list of address matchers, and decides every request with that list.</p>
           <p>When you change a policy in the Policy Center admin screen, the list is rebuilt without redeploying. A policy written by AI enters the list only after a person approves it.</p>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>Two moments: loading and requests</strong>Conditions are not interpreted again for each request. Requests read the mapping list built at load time.</figcaption>
+            <figcaption class="dg-caption"><strong>Two moments: loading and requests</strong>Loading reads the policies at startup and whenever a policy changes, and builds the mapping list (the matchers in priority order). A request does not interpret the conditions again; it reads that list.</figcaption>
             <div class="dg-lanes">
               <section class="dg-lane"><h4 class="dg-lane-title">Loading<span class="dg-lane-sub">At startup and when policies change</span></h4>
                 <ol class="dg-flow">
@@ -46,7 +46,7 @@
           </figure>
 
           <h2 id="enable">Enabling: connecting to requests</h2>
-          <p>URL policies apply to requests only while the manager is connected to the authorization step of the security filter chain. With <code>contexa-iam</code> present the manager bean always exists, but how it is connected depends on authentication ownership.</p>
+          <p>URL policies apply to requests only while the manager is connected to the authorization step of the security filter chain. With <code>contexa-iam</code> present the manager bean always exists, but how it is connected depends on who owns sign-in: your application (<code>HOST_OWNED</code>, the default) or CONTEXA (<code>CONTEXA_OWNED</code>). <code>@EnableAISecurity(mode = SecurityMode.FULL)</code> gives <code>CONTEXA_OWNED</code>, the default <code>SANDBOX</code> gives <code>HOST_OWNED</code>, and a value in <code>contexa.bridge.ownership</code> wins. Your chain is the security filter chain your application defines; the CONTEXA chain is the one CONTEXA builds itself.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setup</th><th>URL policy connection</th></tr></thead>
             <tbody>
@@ -76,7 +76,7 @@ public class AppSecurityConfig {
     }
 }</code></pre>
           <div class="callout callout-info">
-            <strong>What URL policies cannot see under HOST_OWNED.</strong> The authentication bridge filter is a servlet filter ordered right after your security chain (the chain's order + 1), so it runs after your security chain has finished. URL policies connected to your chain therefore do not see the delegation stamp: agent expressions answer as for a person's request, and no delegator re-evaluation happens. Put agent conditions in <a href="protectable.html"><code>@Protectable</code></a> method policies.
+            <strong>What URL policies cannot see under HOST_OWNED.</strong> The authentication bridge is a servlet filter that puts the delegation stamp (the marker with a request's authentication, authorization and delegation details) on the request. It is ordered right after your security chain (the chain's order + 1), so it runs after your security chain has finished. URL policies connected to your chain therefore do not see the delegation stamp: agent expressions answer as for a person's request, and no delegator re-evaluation happens. Put agent conditions in <a href="protectable.html"><code>@Protectable</code></a> method policies (<a href="../common/bridge.html">Authentication bridge</a>).
           </div>
           <h3 id="static-rules">Using static rules alongside</h3>
           <ul>
@@ -231,11 +231,11 @@ isDelegatedAgent() and delegationAllowsOperation('READ')</code></pre>
           <ul>
             <li>The full list of usable expressions is in <a href="xacml.html#conditions">Authorization Overview &gt; What a condition can use</a>. The meaning of the <code>#ai</code> decision expressions and the agent expressions is in <a href="ai-security-expressions.html">AI Security Expressions</a>.</li>
             <li>Expressions can be called without <code>#ai.</code> (<code>isAllowed()</code> = <code>#ai.isAllowed()</code>). Agent expressions are usually written without the prefix.</li>
-            <li>An agent condition like the last line only means something under <code>CONTEXA_OWNED</code>, where the URL step sees the delegation stamp (<a href="#enable">Enabling</a>).</li>
+            <li>An agent condition like the last expression, <code>isDelegatedAgent() and delegationAllowsOperation('READ')</code>, only means something under <code>CONTEXA_OWNED</code>, where the URL step sees the delegation stamp (<a href="#enable">Enabling</a>).</li>
           </ul>
 
           <h2 id="delegator-authority">Agents acting for a person</h2>
-          <p>A delegated agent may never do more than its delegator may. A delegated agent's request that the URL policies allow is <strong>evaluated against the policies once more as the delegator</strong>, and refused before any CONTEXA decision when the delegator may not make it or is unknown. The result is recorded in the decision event as <code>delegatorAuthority</code>.</p>
+          <p>A delegated agent, an AI agent that acts for a person on that person's delegation, may never do more than its delegator, the person who delegated, may. A delegated agent's request that the URL policies allow is <strong>evaluated against the policies once more as the delegator</strong>, and refused before any CONTEXA decision when the delegator may not make it or is unknown. The result is recorded in the decision event as <code>delegatorAuthority</code>.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Result</th><th>Meaning</th><th>Request</th></tr></thead>
             <tbody>
@@ -271,7 +271,7 @@ isDelegatedAgent() and delegationAllowsOperation('READ')</code></pre>
               <tr><td><code>contexa.policy.missing-method-policy-decision</code></td><td><code>PERMIT</code></td><td>Decision when no method policy matches (<a href="protectable.html">@Protectable</a>)</td><td><code>DENY</code> to block protected methods without a policy</td></tr>
             </tbody>
           </table></div>
-          <p>When the system settings row created by the default seed exists, its values replace the combining algorithm and the decision for methods at startup (initially <code>FIRST_APPLICABLE</code> and <code>PERMIT</code>), and the decision for URLs once an operator has saved one. The seed row holds none, so until then <code>contexa.policy.no-matching-url-policy-decision</code> applies.</p>
+          <p>When the system settings row created by the default seed (the initial data CONTEXA inserts at startup) exists, its values replace the combining algorithm and the decision for methods at startup (initially <code>FIRST_APPLICABLE</code> and <code>PERMIT</code>), and the decision for URLs once an operator has saved one. The seed row holds none, so until then <code>contexa.policy.no-matching-url-policy-decision</code> applies.</p>
           <p>An installation made by an earlier version holds <code>PERMIT</code> for URLs in its row and keeps it, because an upgrade changes no stored decision.</p>
           <p>In operation, change these values in the admin screen IAM &gt; System Settings (<code>/contexa/admin/system-settings</code>). The admin screen's own settings (<code>contexa.iam.admin.*</code>) are in <a href="admin.html">Admin Console</a>, and all authorization settings in <a href="../../install/configuration/iam.html">Authorization settings</a>.</p>
           <!-- Navigation Footer -->

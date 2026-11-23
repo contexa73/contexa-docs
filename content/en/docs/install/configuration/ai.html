@@ -12,7 +12,7 @@
               <span class="badge badge-secondary">contexa-autoconfigure</span>
             </div>
             <h1>Connecting AI Models</h1>
-          <p class="lead">CONTEXA makes a decision for each protected request by having an AI model analyze it. CONTEXA does not connect to a model provider itself: it uses the models that the Spring AI starters in your application create, so connecting a model means adding the provider's Spring AI starter and API key to your application. You must settle three things: the chat model provider (the model that makes decisions), the embedding model provider (the model that finds similar past decision records), and the dedicated CONTEXA database with its vector store. Every other setting works with its default. This page explains how to connect and choose the models, and the concurrency limits for model servers.</p>
+          <p class="lead">CONTEXA makes a decision for each protected request by having an AI model analyze it. CONTEXA does not connect to a model provider itself. It uses the models that the Spring AI starters in your application create, so to connect a model you add the provider's Spring AI starter and API key to your application. You must settle three things: the chat model provider (the model that makes decisions), the embedding model provider (the model that finds similar past decision records), and the dedicated CONTEXA database with its vector store. Every other setting works with its default. This page explains how to connect and choose the models, and the concurrency limits for model servers.</p>
           </div>
 
           <h2 id="overview">What this page sets</h2>
@@ -21,6 +21,8 @@
           <ul>
             <li><strong>Provider:</strong> the party that supplies a model. This page covers <code>openai</code>, <code>anthropic</code> and <code>ollama</code>.</li>
             <li><strong>Model bean:</strong> a chat model or embedding model object that Spring AI creates in the application.</li>
+            <li><strong>Model catalog and binding:</strong> the list on which CONTEXA names every chat model and embedding model bean of the application. One entry of the catalog is a binding; see <a href="#bindings">Naming models</a>.</li>
+            <li><strong>AI pipeline and AI Lab:</strong> an AI pipeline handles a request in several steps when a Lab or a controller calls it (<a href="../../reference/core/pipeline.html">Pipeline and RAG</a>). A Lab is the unit of work that gathers domain data and calls the pipeline.</li>
             <li><strong>Chat model:</strong> the AI model that reads the facts of a request and answers with a decision: ALLOW, step-up authentication (CHALLENGE), held for review (ESCALATE) or BLOCK.</li>
             <li><strong>Embedding model:</strong> the AI model that turns a document into an array of numbers (a vector). It is used to search for similar past decision records.</li>
             <li><strong>Layer 1 and Layer 2 (layers):</strong> the two stages that make a decision. Layer 1 decides the request. Only a request that gets ESCALATE (an answer meaning that the facts alone cannot settle the decision) goes to Layer 2, which decides it again. This page also calls the two stages layers.</li>
@@ -35,7 +37,7 @@
             </ol>
           </figure>
           <div class="callout callout-info">
-            <strong>The application starts without a chat model.</strong> With no chat model at all, CONTEXA starts but cannot make decisions, and protected requests stay in pending analysis (PENDING_ANALYSIS). The capability check in the startup log (<code>[ContexaCapability] llm-runtime</code> and <code>embedding-runtime</code>) names the model beans that were not created. In a CONTEXA-owned application (<code>FAIL_FAST</code>) this check stops startup (<a href="../installation-guide.html#capability">Capability check</a>). How to read the log is in <a href="#startup-checks">Startup log messages and what to do</a>.
+            <strong>Most applications start without a chat model.</strong> With no chat model at all, CONTEXA starts but cannot make decisions, and protected requests stay in pending analysis (PENDING_ANALYSIS). When startup ends, CONTEXA runs a capability check that tests whether the beans each feature needs were created, and it names the model beans that were not created in the startup log (<code>[ContexaCapability] llm-runtime</code> and <code>embedding-runtime</code>). The exception is a CONTEXA-owned application: one where <code>contexa.datasource.isolation.contexa-owned-application</code> is <code>true</code> or <code>spring.application.name</code> starts with <code>contexa-</code>. There the capability check defaults to <code>FAIL_FAST</code> and stops startup when a required model bean was not created (<a href="../installation-guide.html#capability">Capability check</a>). How to read the log is in <a href="#startup-checks">Startup log messages and what to do</a>.
           </div>
           <h3 id="what-to-set">What to set first, and what stays at its default</h3>
           <p>Three things must be set. Everything else works with its default, and you change it only in the situations listed.</p>
@@ -48,7 +50,7 @@
               <tr><td>Change when needed</td><td>The primary chat model</td><td>Change it when you connect more than one provider and must choose which one is used (<a href="#default-chat-model">Choosing the primary chat model</a>).</td></tr>
               <tr><td>Change when needed</td><td>Layer 1 and Layer 2 models</td><td>Change them when the two layers should use different models (<a href="#layer-models">Layer 1 and Layer 2 models</a>, <a href="#bindings">Naming models</a>).</td></tr>
               <tr><td>Change when needed</td><td>A self-hosted server</td><td>Change them when you use Ollama, or when the number of requests your model server runs at once differs from the defaults (2 for self-hosted, 16 for remote) (<a href="#ollama">Using a local Ollama</a>, <a href="#model-server-gate">How many calls a model server takes</a>).</td></tr>
-              <tr><td>Change when needed</td><td>Vector dimension and schema</td><td>Change them when you use an embedding model CONTEXA does not know, when the dimension is above 2000, or when migrations manage the table (<a href="#dimensions">How the dimension is decided</a>, <a href="#vector-store">Vector store</a>).</td></tr>
+              <tr><td>Change when needed</td><td>Vector dimension and schema</td><td>Change them when you use an embedding model CONTEXA does not know, when the dimension is above 2000, or when migrations manage the vector table (the database table that holds the vectors) (<a href="#dimensions">How the dimension is decided</a>, <a href="#vector-store">Vector store</a>).</td></tr>
               <tr><td>Rarely changed</td><td>Store retry, context search defaults, per-provider call options, per-model handling tables, advisors and streaming</td><td>Leave them at their defaults (<a href="#vector-retry">Retrying failed stores</a>, <a href="#rag">Past records and context search</a>, <a href="#provider-options">Per-provider options of decision calls</a>, <a href="#model-capabilities">Per-model handling tables</a>, <a href="#advisor-streaming">Advisors and streaming</a>).</td></tr>
             </tbody>
           </table></div>
@@ -111,7 +113,7 @@ contexa:
             <li>When no bean can be created, startup stops with the error of the first bean that failed.</li>
           </ol>
           <div class="callout callout-warning">
-            <strong>Write the <code>mode</code> value in lower case with hyphens.</strong> Write <code>dynamic-priority</code>, <code>fixed</code> or <code>spring-primary</code>. CONTEXA uses this value as a condition to create the primary chat model bean. A name with underscores such as <code>DYNAMIC_PRIORITY</code> matches no condition, so the primary chat model is not created, with no error. When model beans exist but the Missing beans line of the capability check names <code>UnifiedLLMOrchestrator</code>, check the spelling of the <code>mode</code> value first.
+            <strong>Write the <code>mode</code> value in lower case with hyphens.</strong> Write <code>dynamic-priority</code>, <code>fixed</code> or <code>spring-primary</code>. CONTEXA uses this value as a condition to create the primary chat model bean. A name with underscores such as <code>DYNAMIC_PRIORITY</code> matches no condition, so the primary chat model is not created, with no error. When model beans exist but the Missing beans line of the capability check names <code>UnifiedLLMOrchestrator</code> (the orchestrator that every model call of CONTEXA goes through, <a href="../../reference/core/llm-orchestrator.html">Calling an LLM</a>), check the spelling of the <code>mode</code> value first.
           </div>
           <ul>
             <li><strong>The choice is made once, at startup.</strong> When a provider call fails while running, CONTEXA does not call another model instead. Transient errors such as a dropped connection, 429 or 503 are retried on the same model up to 4 times. Each retry writes a WARN log (<code>Retry #number - RequestId: ...</code>), and when all fail an ERROR log (<code>failed after 4 retries</code>) is written. What happens to a decision that never gets an answer is in <a href="../../reference/architecture/decision-engine.html#overrides">Decision Engine</a>.</li>
@@ -280,7 +282,7 @@ contexa:
           <p>A model server can process only a set number of requests at once. To stay within that limit, CONTEXA passes every call it makes to a model server through one concurrency limiter per server (the gate). A server is a provider and an address. The decisions of both layers, the AI pipelines and the embeddings of the vector store all pass the gate. A call over the limit waits at the gate instead of piling up at the server.</p>
           <ul>
             <li>A self-hosted server (Ollama, or an address on this host or a private network) runs 2 calls at once and one model at a time, because CONTEXA assumes the server holds only one model in memory. A call for another model, such as an embedding while decisions run, goes in when the running calls are done. A remote provider runs 16 calls at once.</li>
-            <li>Embeddings go in before waiting decision calls. A call that is in is never cut.</li>
+            <li>An embedding call passes the gate before decision calls that are waiting. A call that has passed the gate and is running is never interrupted by another call.</li>
             <li>The time limits of model calls and of vector store writes and searches count from the moment the call passes the gate. The wait at the gate is bounded by the event processing limit (<code>contexa.security.plane.agent.event-timeout-ms</code>); a call that gets no turn within it ends as <code>MODEL_SERVER_BUSY</code>. This is recorded as a defined outcome, not as a server failure. When it appears often, check whether the server can really run more requests in parallel, and if so set the concurrency in the table below to that number.</li>
             <li>After a rate limit (429), an overload (529) or a server that is unavailable for a while (503), calls to that server pause for 2 s, then 4, 8 and 12 s while it keeps answering so, and the call is sent again when its turn comes.</li>
           </ul>
@@ -340,7 +342,7 @@ contexa:
           </ul>
           <p>Three cases change what startup does:</p>
           <ul>
-            <li><strong>A new database:</strong> the vector column is created with the size of the model in use.</li>
+            <li><strong>A new database:</strong> the vector column is created with the dimension of the model in use.</li>
             <li><strong>Above 2000 dimensions:</strong> a pgvector HNSW index holds up to 2000, so startup is refused (when <code>initialize-schema</code> is <code>true</code> and the index is <code>HNSW</code>). The log begins with <code>The vector store cannot create its index: an HNSW index holds at most 2000 dimensions ...</code> and says what to do. Configure a smaller output (for example <code>spring.ai.openai.embedding.options.dimensions=1536</code> with <code>text-embedding-3-large</code>), or create the table yourself and set <code>contexa.vectorstore.pgvector.initialize-schema=false</code>.</li>
             <li><strong>An OpenAI installation from an earlier version:</strong> its table has 1024 dimensions, so startup is refused, and the dimension mismatch log ends with <code>A store made by an earlier Contexa keeps its vectors with ...</code>. With the two lines below it stays as it is, with nothing embedded again.</li>
           </ul>
@@ -351,12 +353,12 @@ spring.ai.openai.embedding.options.dimensions=1024</code></pre>
           </div>
 
           <h2 id="vector-store">Vector store (pgvector)</h2>
-          <p>The vector store holds embedding vectors with their documents and searches for similar documents by similarity. CONTEXA builds it on the pgvector extension of PostgreSQL. Vectors are stored in the vector store bean (<code>contexaVectorStore</code>) that CONTEXA builds itself on the dedicated CONTEXA database (<code>contexaJdbcTemplate</code>). It does not use your application's <code>VectorStore</code> bean, and CONTEXA creates nothing in your application's database (dependencies in <a href="../installation-guide.html">Installation Guide</a>).</p>
+          <p>The vector store holds embedding vectors with their documents and searches for similar documents by similarity. CONTEXA builds it on the pgvector extension of PostgreSQL. Vectors are stored in the vector store bean (<code>contexaVectorStore</code>) that CONTEXA builds, and this bean uses the dedicated CONTEXA database (<code>contexaJdbcTemplate</code>). The table that holds the vectors is the vector table. CONTEXA does not use your application's <code>VectorStore</code> bean, and it creates nothing in your application's database. The dependencies it needs are in the <a href="../installation-guide.html">Installation Guide</a>.</p>
           <p>Write its settings as <code>contexa.vectorstore.pgvector.*</code>. CONTEXA's store reads only these keys; <code>spring.ai.vectorstore.pgvector.*</code> belongs to your application's own Spring AI store and does not apply to CONTEXA's.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.vectorstore.pgvector.dimensions</code></td><td>the embedding model's size</td><td>Vector dimension (128 to 3072). When not set, decided by the <a href="#dimensions">steps above</a></td></tr>
+              <tr><td><code>contexa.vectorstore.pgvector.dimensions</code></td><td>the embedding model's dimension</td></tr>
               <tr><td><code>contexa.vectorstore.pgvector.initialize-schema</code></td><td><code>true</code></td><td>Whether the first start creates the vector extension, table and indexes in the dedicated CONTEXA database. <code>false</code> when migrations manage the schema</td></tr>
               <tr><td><code>contexa.vectorstore.pgvector.schema-name</code></td><td><code>public</code></td><td>Schema that holds the vector table</td></tr>
               <tr><td><code>contexa.vectorstore.pgvector.table-name</code></td><td><code>ctxa_vector_store</code></td><td>Name of the vector table. At start the dimension of an existing table is read from this table and compared</td></tr>
@@ -455,7 +457,7 @@ contexa:
               <tr><td><code>contexa.advisor.security.enabled</code></td><td><code>true</code></td><td>The security advisor. It attaches user and session information to a call and logs the user and the time taken for each call</td></tr>
               <tr><td><code>contexa.advisor.security.order</code></td><td><code>50</code></td><td>Advisor order (lower runs first)</td></tr>
               <tr><td><code>contexa.advisor.security.require-authentication</code></td><td><code>false</code></td><td><code>true</code>: a call with no user ID is refused</td></tr>
-              <tr><td><code>contexa.streaming.final-response-marker</code></td><td><code>###FINAL_RESPONSE###</code></td><td>Marker in the stream where the final answer starts. Do not change it: the code that adds the marker uses the same fixed value, not this setting</td></tr>
+              <tr><td><code>contexa.streaming.final-response-marker</code></td><td><code>###FINAL_RESPONSE###</code></td><td>Marker in the stream where the final answer starts. Do not change it. The CONTEXA code that adds the marker to the stream does not read this setting and uses a fixed value, so changing only this setting leaves the reader unable to find where the final answer starts</td></tr>
               <tr><td><code>contexa.streaming.marker-buffer-size</code></td><td><code>100</code></td><td>Characters held back to find the marker (added to the marker length)</td></tr>
             </tbody>
           </table></div>

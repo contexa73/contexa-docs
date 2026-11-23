@@ -11,7 +11,7 @@
               <span class="badge badge-primary">contexa-core</span>
             </div>
             <h1>Pipeline and RAG</h1>
-            <p class="lead">The pipeline is what a Lab or a controller calls: it handles a request in several steps. On this page you can check which steps a request goes through, how to choose a configuration, how to add RAG retrieval, how to shape the result and change steps, and how to handle failures.</p>
+            <p class="lead">The pipeline is what a Lab (the unit of work that gathers domain data and calls the pipeline) or a controller calls: it handles a request in several steps. On this page you can check which steps a request goes through, how to choose a configuration, how to add RAG retrieval, how to shape the result and change steps, and how to handle failures.</p>
           </div>
 
           <div class="callout callout-info">
@@ -84,7 +84,7 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
           <p>The retriever registry (<code>ContextRetrieverRegistry</code>) finds the retriever registered for the class of the request's context (or one of its parent classes), or uses the default retriever if there is none. The retriever searches the vector store with the question and returns the found documents joined line by line (<code>contextInfo</code>), together with the document list and metadata. If nothing is found, the next steps run with an empty text. The time taken is kept in the metadata <code>contextRetrievalMs</code>. The retriever side is covered in <a href="#rag-integration">Adding RAG</a> below.</p>
 
           <h3 id="step-preprocessing">2. Preprocessing (PREPROCESSING)</h3>
-          <p>Leaves one system metadata text. The default implementation leaves an empty text, so it does nothing (only the time goes into <code>preprocessingMs</code>). This text is passed to the template's <code>generateDomainSystemPrompt(request, systemMetadata)</code>, and the standard template adds it to the system prompt as a <code>&lt;context&gt;</code> block when it is not empty. To put values in, <a href="#custom-step">replace the preprocessing step</a>.</p>
+          <p>The preprocessing step makes the system metadata, a piece of extra information for the system prompt, as one text and leaves it in the pipeline context. The default implementation leaves an empty text, so it does nothing (only the time goes into <code>preprocessingMs</code>). This text is passed to the template's <code>generateDomainSystemPrompt(request, systemMetadata)</code>, and the standard template adds it to the system prompt as a <code>&lt;context&gt;</code> block when it is not empty. To put values in, <a href="#custom-step">replace the preprocessing step</a>.</p>
 
           <h3 id="step-prompt-generation">3. Prompt generation (PROMPT_GENERATION)</h3>
           <ol>
@@ -100,7 +100,7 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
             <li><strong>Model:</strong> the model in the request parameter <code>preferredModel</code> if given; otherwise, or if it is not found, the default chat model. A general request has no analysis layer, so Layer 1 and Layer 2 model settings are not used. The rules that turn a name into a real model are in <a href="model-provider.html#request-order">Model providers</a>.</li>
             <li><strong>How the answer is received:</strong> a standard run knows the response type, so it first tries structured output (giving the model a schema and receiving an object) and, if that fails, receives raw text instead (with the request parameter <code>structuredOutputPolicy=RAW_FORBIDDEN</code> it fails instead).</li>
             <li><strong>Time limit and retries:</strong> one call must finish within <code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code> (default 60000 ms). A temporary failure (408, 409, 429, 5xx, a dropped connection and so on) is sent again with backoff up to 4 times (starting at 2 seconds, at most 12 seconds apart) (<a href="llm-orchestrator.html#retry">Retries</a>).</li>
-            <li><strong>Streaming:</strong> the streaming step (<code>StreamingLLMExecutionStep</code>) sends the model's text out chunk by chunk. It does not use request parameters (model, temperature and so on), does not retry, and the call itself has no time limit (<a href="streaming.html#timeouts">streaming time limit</a>). Advisors are attached, but a blocking error raised by an advisor before the model call does not stop it; only that advisor is skipped (<a href="advisor.html#order-errors">advisor error handling</a>).</li>
+            <li><strong>Streaming:</strong> the streaming step (<code>StreamingLLMExecutionStep</code>) sends the model's text out chunk by chunk. It does not use request parameters (model, temperature and so on). It does not retry. The call itself has no time limit (<a href="streaming.html#timeouts">streaming time limit</a>). Advisors are attached, but a blocking error raised by an advisor before the model call does not stop the call; only that advisor is skipped (<a href="advisor.html#order-errors">advisor error handling</a>).</li>
           </ul>
 
           <h3 id="step-response-parsing">5. Response parsing (RESPONSE_PARSING)</h3>
@@ -115,7 +115,7 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
           <ul>
             <li>If the parsed result already is the response type, it is used as is.</li>
             <li>Otherwise, response processors are called by the rules in <a href="#response-processor">Shaping the result</a>.</li>
-            <li>If the parsed result is empty, a response holding only a <code>FALLBACK</code> marker is created (it is not the response type, so the run ends up as a failure).</li>
+            <li>If the parsed result is empty, a default response (<code>DefaultAIResponse</code>) holding JSON with <code>status</code> <code>FALLBACK</code> is created, and the pipeline context metadata <code>status</code> is also set to <code>FALLBACK</code> (it is not the response type, so the run ends up as a failure).</li>
             <li>If the result is an <code>AIResponse</code>, the run record is attached as metadata: the model actually used <code>selectedModelId</code>, whether the default model stood in <code>modelSelectionFallbackUsed</code>, the call time <code>llmExecutionLatencyMs</code>, the retry count <code>providerRetryCount</code>, template and prompt information, and more.</li>
             <li>Finally, the executor returns the result only if it is the requested response type; otherwise the run is treated as a failure.</li>
           </ul>
@@ -170,7 +170,7 @@ public class ProductResponseProcessor implements DomainResponseProcessor {
         return response;
     }
 }</code></pre>
-          <p>If you open <code>supportsType()</code> widely (for example to every <code>Map</code>), this processor also takes the results of other features, so narrowing by template key is safer. The pipeline context's <code>getMetadata(name, type)</code> reads run records such as <code>selectedModelId</code>.</p>
+          <p>If <code>supportsType()</code> accepts a broad type (for example every <code>Map</code>), this processor also handles the results of other features, so narrowing by template key is safer. The pipeline context's <code>getMetadata(name, type)</code> reads run records such as <code>selectedModelId</code>.</p>
 
           <h2 id="custom-step">Changing steps and adding executors</h2>
           <p><strong>A new bean implementing <code>PipelineStep</code> is not inserted into the pipeline.</strong> An executor runs only the built-in steps it received when it was created (six for standard, four for streaming). Change things in the following ways instead.</p>
@@ -246,7 +246,7 @@ public class CatalogPreprocessingStep extends PreprocessingStep {
           <p>Model connection (provider, key, model name) is in <a href="../../install/configuration/ai.html">AI model configuration</a>, and streaming settings are in <a href="streaming.html#configuration">Streaming</a>.</p>
 
           <h2 id="soar">The SOAR step (not implemented in OSS)</h2>
-          <p>The step list of a configuration also has <code>SOAR_TOOL_EXECUTION</code>, but it does not insert one more step. When the request's context is a <code>SoarContext</code> and a bean named <code>pipelineSoarToolExecutionStep</code> exists, the model call step is replaced by that bean. The OSS modules have no such bean, so application features do not use it. A <code>SoarContext</code> request is also handled without streaming by the streaming executor. For SOAR extensions, see <a href="../soar/index.html">SOAR</a>.</p>
+          <p>The step list of a configuration also has <code>SOAR_TOOL_EXECUTION</code>, an item for SOAR (security orchestration and automated response), but it does not insert one more step. When the request's context is a <code>SoarContext</code> and a bean named <code>pipelineSoarToolExecutionStep</code> exists, that bean runs instead of the model call step. The OSS modules have no such bean, so application features do not use it. A <code>SoarContext</code> request is also handled without streaming by the streaming executor. For SOAR extensions, see <a href="../soar/index.html">SOAR</a>.</p>
 
           <h2 id="api-reference">API summary</h2>
           <h3 id="api-orchestrator">PipelineOrchestrator</h3>

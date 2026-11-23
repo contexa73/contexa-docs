@@ -18,9 +18,10 @@
           </div>
 
           <h2 id="overview">개요</h2>
-          <p>보안 모드는 "로그인을 누가 맡나"를 정합니다. 판정을 실제로 적용할지는 따로 정하는 <a href="#modes">운영 모드</a>의 몫입니다.</p>
+          <p>보안 모드는 "로그인을 누가 맡나"를 정합니다. 이 질문의 답을 인증 소유 방식이라고 부르며, 앱이 담당하면 <code>HOST_OWNED</code>, CONTEXA가 담당하면 <code>CONTEXA_OWNED</code>입니다. 판정을 실제로 적용할지는 <a href="#modes">운영 모드</a>가 따로 정합니다.</p>
+          <p>이 페이지에서 다음 용어는 이렇게 씁니다. <strong>앱 체인</strong>은 앱이 선언한 <code>SecurityFilterChain</code>입니다. <strong>요청 시점 필터</strong>는 요청이 들어올 때 저장된 판정을 확인해 적용하는 CONTEXA의 서블릿 필터입니다(<a href="../identity/zero-trust-filters.html">요청 시점 적용</a>). <strong>에이전트 관문</strong>은 AI 에이전트 요청에 호출 상한 · 책임자 확인 등을 거는 CONTEXA의 단계입니다(<a href="../agent/controls.html">정지 · 확인 · 제한</a>). <strong>CONTEXA 식 처리기</strong>는 CONTEXA 자신의 클래스에 붙은 <code>@PreAuthorize</code> 식을 평가하는 처리기이며 <code>#ai</code> 식도 이해합니다.</p>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>두 보안 모드</strong>기본은 <code>SANDBOX</code>입니다. 인증 소유권(<code>contexa.bridge.ownership</code>)을 직접 적으면 그 값이 이깁니다.</figcaption>
+            <figcaption class="dg-caption"><strong>두 보안 모드</strong>기본은 <code>SANDBOX</code>입니다. 인증 소유 방식(<code>contexa.bridge.ownership</code>)은 보안 모드와 같은 값일 때만 직접 적을 수 있고, 다르면 기동이 멈춥니다.</figcaption>
             <div class="dg-compare">
               <div class="dg-side dg-host"><p class="dg-side-title"><code>SANDBOX</code> → 앱이 로그인을 맡음(<code>HOST_OWNED</code>)</p><ul><li>앱의 Spring Security가 로그인 · 세션 · URL 접근 규칙을 그대로 맡음</li><li>CONTEXA는 로그인 체인을 만들지 않음(자기 관리 화면용 체인 하나만)</li><li>인증 브리지가 로그인 정보를 읽어 판정 사실로 씀</li><li>앱 체인 바로 뒤의 요청 시점 필터와 <code>@Protectable</code> 메서드가 모든 경로에서 판정을 적용</li></ul></div>
               <div class="dg-side"><p class="dg-side-title"><code>FULL</code> → CONTEXA가 로그인을 맡음(<code>CONTEXA_OWNED</code>)</p><ul><li>CONTEXA가 보안 체인(로그인 · MFA · 세션)을 만듦</li><li>요청 시점 필터가 CONTEXA 체인 안의 URL 단계에서 판정을 적용</li><li>CONTEXA OAuth2 인가 서버가 켜지고, CONTEXA 자신의 클래스의 <code>@PreAuthorize</code>는 CONTEXA 식 처리기로 평가됨(앱의 메서드 보안은 건드리지 않음)(에이전트 관문은 두 모드 모두 동작)</li><li>CONTEXA DB가 앱 기본 DataSource가 될 수 있음</li></ul></div>
@@ -53,7 +54,7 @@ public class LegacyApplication {
             <ol class="dg-flow">
               <li class="dg-step"><span class="dg-step-no">1</span><div class="dg-node"><span class="dg-node-title"><code>contexa.enabled</code> 확인</span><span class="dg-node-desc"><code>false</code>면 아무것도 하지 않고 끝납니다. CONTEXA는 꺼진 채로 남습니다.</span></div></li>
               <li class="dg-step"><span class="dg-step-no">2</span><div class="dg-node"><span class="dg-node-title">Spring Boot 버전 확인</span><span class="dg-node-desc">4.x면 ERROR 로그를 남기고 기동을 멈춥니다.</span></div></li>
-              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">어노테이션 값을 설정 키로 넣기</span><span class="dg-node-desc">Spring <code>Environment</code>에 가장 높은 우선순위의 속성 소스로 넣습니다(JVM 시스템 속성이 아님, <a href="#keys">넣는 키</a>). 이 키들을 담은 속성 소스 <code>contexaAiSecurityAnnotation</code>이 "켜짐" 표지입니다. 앱 설정에 같은 키를 적어도 켜지지 않습니다.</span></div></li>
+              <li class="dg-step"><span class="dg-step-no">3</span><div class="dg-node"><span class="dg-node-title">어노테이션 값을 설정 키로 넣기</span><span class="dg-node-desc">Spring <code>Environment</code>에 가장 높은 우선순위의 속성 소스로 넣습니다(JVM 시스템 속성이 아님, <a href="#keys">넣는 키</a>). 다만 앱 설정에 같은 키가 이미 있으면 그 값을 그대로 넣으므로 앱 설정이 우선합니다. 이 키들을 담은 속성 소스 <code>contexaAiSecurityAnnotation</code>이 "켜짐" 표지입니다. 앱 설정에 같은 키를 적어도 켜지지 않습니다.</span></div></li>
               <li class="dg-step"><span class="dg-step-no">4</span><div class="dg-node"><span class="dg-node-title">기본 구성 가져오기</span><span class="dg-node-desc"><code>AiSecurityConfiguration</code>: 보안 모드에 맞는 기본 인증 구성(<code>PlatformConfig</code>, 앱이 두지 않았을 때), 인증 브리지, 진단 빈</span></div></li>
               <li class="dg-step"><span class="dg-step-no">5</span><div class="dg-node"><span class="dg-node-title">CONTEXA 자동설정이 남음</span><span class="dg-node-desc">자동설정 거르기 필터가 "켜짐" 표지를 보고 CONTEXA 자동설정을 통과시킵니다. 표지가 없으면 모두 뺍니다.</span></div></li>
             </ol>
@@ -64,8 +65,8 @@ public class LegacyApplication {
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>모드</th><th>무엇을 정하나</th><th>정하는 곳</th><th>값</th><th>기본</th></tr></thead>
             <tbody>
-              <tr><td>보안 모드</td><td>CONTEXA 기본 인증 구성의 모양, 인증 소유권 · CONTEXA 소유 앱 표시의 기본값</td><td><code>@EnableAISecurity(mode = ...)</code></td><td><code>SANDBOX</code> · <code>FULL</code></td><td><code>SANDBOX</code></td></tr>
-              <tr><td>인증 소유권</td><td>로그인 체인을 CONTEXA가 만드나(<code>CONTEXA_OWNED</code>), 앱이 맡나(<code>HOST_OWNED</code>)</td><td><code>contexa.bridge.ownership</code></td><td><code>HOST_OWNED</code> · <code>CONTEXA_OWNED</code></td><td>보안 모드를 따름(<code>SANDBOX</code> → <code>HOST_OWNED</code>, <code>FULL</code> → <code>CONTEXA_OWNED</code>)</td></tr>
+              <tr><td>보안 모드</td><td>CONTEXA 기본 인증 구성의 모양, 인증 소유 방식과 CONTEXA 소유 앱 설정(<code>contexa.datasource.isolation.contexa-owned-application</code>)의 기본값</td><td><code>@EnableAISecurity(mode = ...)</code></td><td><code>SANDBOX</code> · <code>FULL</code></td><td><code>SANDBOX</code></td></tr>
+              <tr><td>인증 소유 방식</td><td>로그인 체인을 CONTEXA가 만드나(<code>CONTEXA_OWNED</code>), 앱이 맡나(<code>HOST_OWNED</code>)</td><td><code>contexa.bridge.ownership</code></td><td><code>HOST_OWNED</code> · <code>CONTEXA_OWNED</code></td><td>보안 모드를 따름(<code>SANDBOX</code> → <code>HOST_OWNED</code>, <code>FULL</code> → <code>CONTEXA_OWNED</code>)</td></tr>
               <tr><td>운영 모드</td><td>판정을 만들지, 저장 · 적용할지</td><td><code>contexa.security.zerotrust.mode</code>, 관리 화면 시스템 설정</td><td><code>DISABLED</code> · <code>OBSERVE</code> · <code>SHADOW</code> · <code>ENFORCE</code></td><td><code>ENFORCE</code></td></tr>
             </tbody>
           </table></div>
@@ -74,7 +75,7 @@ public class LegacyApplication {
           <h2 id="host-owned"><code>SANDBOX</code>(앱이 로그인을 맡음)를 고르면</h2>
           <h3 id="host-tasks">앱이 할 일</h3>
           <ol>
-            <li><strong>자기 <code>SecurityFilterChain</code>을 선언합니다.</strong> 이 모드에서 CONTEXA는 인증 체인도, 자리표시용 체인도 만들지 않습니다. 앱 체인이 없으면 Spring Boot 기본 보안(모든 요청에 인증 필요)이 걸리고, CONTEXA가 기동 때 WARN 로그로 알립니다. 앱 사용자도 없으면 기동이 거부됩니다. Spring Security를 쓰지 않던 앱은 <code>spring-boot-starter-security</code>와, 기존 규칙을 그대로 두는 체인(예: <code>anyRequest().permitAll()</code>)을 선언합니다.</li>
+            <li><strong>자기 <code>SecurityFilterChain</code>을 선언합니다.</strong> 이 모드에서 CONTEXA는 로그인 체인을 만들지 않습니다. CONTEXA가 로그인을 담당할 때 Spring Boot 기본 체인을 막으려고 두는 자리표시용 체인(어떤 요청에도 맞지 않는 빈 체인)도 만들지 않습니다. 앱 체인이 없으면 Spring Boot 기본 보안(모든 요청에 인증 필요)이 걸리고, CONTEXA가 기동 때 WARN 로그로 알립니다. 앱 사용자도 없으면 기동이 거부됩니다. Spring Security를 쓰지 않던 앱은 <code>spring-boot-starter-security</code>와, 기존 규칙을 그대로 두는 체인(예: <code>anyRequest().permitAll()</code>)을 선언합니다.</li>
             <li><strong>로그인한 사용자를 <code>SecurityContext</code>에 인증된 <code>Authentication</code>으로 넣습니다.</strong> 인증 브리지는 그런 <code>Authentication</code>이 있을 때만 판정 사실을 만들고, <code>@Protectable</code>은 없으면 호출을 거부합니다. 자체 로그인을 쓰는 앱은 앱 체인에 넣은 필터에서 넣어 줍니다(<a href="../common/bridge.html#host-tasks">기존 로그인과 연결하기</a>).</li>
             <li><strong>관리 화면에 대해서는 할 일이 없습니다.</strong> CONTEXA가 <code>/contexa/admin/**</code>를 자기 체인과 CONTEXA 관리자 로그인으로 지킵니다(<a href="../iam/admin.html#protect-host-owned">관리 화면</a>). 메서드 보안은 선택입니다. 이 모드에서 CONTEXA는 <code>@EnableMethodSecurity</code>를 등록하지 않고, 앱이 켜면 관리 컨트롤러의 <code>@PreAuthorize</code> 검사가 더해집니다.</li>
           </ol>
@@ -89,11 +90,11 @@ public class LegacyApplication {
               <tr><td>에이전트 관문(호출 상한 · 책임자 확인 등)</td><td>동작(<a href="../agent/controls.html#ownership">소유 방식에 따라 되는 일</a>)</td></tr>
               <tr><td>메서드 보안 <code>@EnableMethodSecurity</code>와 <code>#ai</code> 식 처리기</td><td><strong>등록하지 않음.</strong> 메서드 보안은 앱이 켭니다. <code>#ai</code> 식 처리기는 어느 소유 방식에서도 앱의 메서드 보안에 등록되지 않습니다.</td></tr>
               <tr><td>관리 화면 URL 보호</td><td><code>/contexa/admin/**</code>를 맡는 CONTEXA 자기 콘솔 체인이 <code>/contexa/admin/login</code>의 CONTEXA 관리자 로그인으로 지킵니다. 앱 체인이 보호할 필요 없습니다.</td></tr>
-              <tr><td>CHALLENGE 뒤 추가 인증(<code>/contexa/step-up</code>)</td><td>동작. CONTEXA의 확인 전용 추가 인증(패스키, 메일 일회용 코드, 앱 자체 재인증)이며, 앱의 로그인 · 세션 · 쿠키는 그대로입니다(<a href="../identity/zero-trust-filters.html#host-step-up">HOST_OWNED의 추가 인증</a>).</td></tr>
+              <tr><td>CHALLENGE 뒤 추가 인증(<code>/contexa/step-up</code>)</td><td>동작. CONTEXA는 로그인을 대신하지 않고, 지금 요청하는 사람이 앱에 로그인한 그 사용자가 맞는지만 패스키, 메일 일회용 코드, 앱 자체 재인증 중 하나로 한 번 더 확인합니다. 앱의 로그인 · 세션 · 쿠키는 그대로입니다(<a href="../identity/zero-trust-filters.html#host-step-up">HOST_OWNED의 추가 인증</a>).</td></tr>
               <tr><td>앱 로그인 성공의 처리</td><td>상호작용 로그인(폼 로그인 · OAuth2 로그인)이 성공하면 CONTEXA가 Spring Security의 로그인 이벤트를 받아 인증 성공 이벤트로 알립니다. 로그인 성공 자체는 AI 분석에 보내지 않으므로, 사용자의 첫 판정은 그가 처음 호출하는 보호 메서드에서 나옵니다. 요청마다 인증하는 경우(Basic · 토큰)도 첫 보호 메서드에서 분석합니다.</td></tr>
               <tr><td>CONTEXA OAuth2 인가 서버, 인증 성공 · 실패 처리기</td><td>켜지지 않음</td></tr>
               <tr><td>직접 넘기기(<code>ContexaAuthBridge.handoff(...)</code>)</td><td>그 요청의 판정 사실만 남기고 <code>SecurityContext</code>를 채우지 않습니다. 같은 요청에 같은 사용자의 <code>Authentication</code>이 있으면 직접 넘긴 결과를 유지합니다.</td></tr>
-              <tr><td>사용자 거울</td><td>예외적으로 CONTEXA DB의 사용자 표에 거울 행을 씁니다(<a href="../common/bridge.html#mirror">사용자 거울</a>).</td></tr>
+              <tr><td>사용자 거울</td><td>예외적으로 CONTEXA DB의 사용자 표에 앱 사용자의 사본(거울 행)을 씁니다. 관리 콘솔과 정책에서 그 사용자를 다루기 위해서입니다(<a href="../common/bridge.html#mirror">사용자 거울</a>).</td></tr>
             </tbody>
           </table></div>
           <p><code>contexa.bridge.populate-security-context</code>는 <code>CONTEXA_OWNED</code>에서만 뜻이 있습니다.</p>
@@ -102,25 +103,25 @@ public class LegacyApplication {
           <p>앱이 <code>PlatformConfig</code> 빈을 두지 않으면 CONTEXA가 아래 기본 구성으로 보안 체인을 만듭니다.</p>
           <ul>
             <li><strong>접근 규칙:</strong> <code>/contexa/css/**</code> · <code>/contexa/js/**</code> · <code>/images/**</code> · <code>/favicon.ico</code>는 허용, 그 밖의 모든 요청은 동적 인가 관리자(<code>CustomDynamicAuthorizationManager</code>, 관리 화면의 정책)가 평가합니다(<a href="../iam/dynamic-authorization.html">동적 인가</a>).</li>
-            <li><strong>로그인:</strong> 폼 로그인(성공 뒤 <code>/</code>)을 1차로 하고 패스키 · 일회용 토큰(OTT)을 2차 요소로 쓰는 MFA 흐름(필요한 요소 수 1), 세션 상태.</li>
+            <li><strong>로그인:</strong> 폼 로그인(성공 뒤 <code>/</code>)을 1차 로그인으로 하고 패스키 또는 일회용 코드(OTT)를 2차 요소로 쓰는 MFA 흐름입니다. 마쳐야 하는 2차 요소는 1개(<code>requiredFactors(1)</code>)이고, 로그인 상태는 세션에 둡니다.</li>
             <li><strong>판정 적용:</strong> 판정은 요청이 끝난 뒤 만들어지고, 운영 모드가 <code>ENFORCE</code>일 때 저장됩니다. 체인 안의 요청 시점 필터가 저장된 판정을 다음 요청에 적용합니다(<a href="../identity/zero-trust-filters.html">요청 시점 적용</a>).</li>
             <li><strong>함께 켜지는 것:</strong> CONTEXA 자신의 클래스에만 거는 <code>@PreAuthorize</code> 처리(CONTEXA 식 처리기, 앱 전체의 <code>@EnableMethodSecurity</code>는 켜지 않음), CONTEXA OAuth2 인가 서버, 인증 성공 · 실패 처리기. 에이전트 관문은 여기서는 CONTEXA 체인 안에서 돕니다.</li>
           </ul>
           <div class="callout callout-warning">
-            <strong><code>FULL</code>은 앱 기본 DataSource를 바꿀 수 있습니다.</strong> 앱에 자기 DB가 없으면(<code>spring.datasource.url</code>이 없거나 <code>contexa.datasource.url</code>과 같은 DB를 가리키면) 이 모드는 <code>contexa.datasource.isolation.contexa-owned-application=true</code>를 넣고, 앱 자신의 DB를 가리키면 표시는 <code>false</code>로 남아 앱의 연결이 그대로입니다. 직접 적은 값은 언제나 그대로 쓰입니다. 표시가 <code>true</code>이고 앱이 <code>DataSource</code> 빈을 직접 만들지 않았다면 앱 기본 <code>dataSource</code> · <code>JdbcTemplate</code> · <code>TransactionTemplate</code>이 CONTEXA DB를 가리키고, 기동 진단의 기본(<code>AUTO</code>)이 필수 기능이 빠지면 기동을 멈추는 <code>FAIL_FAST</code>가 됩니다. 기존 앱에 붙일 때는 <code>SANDBOX</code>를 씁니다.
+            <strong><code>FULL</code>은 앱 기본 DataSource를 바꿀 수 있습니다.</strong> 앱에 자기 DB가 없으면(<code>spring.datasource.url</code>이 없거나 <code>contexa.datasource.url</code>과 같은 DB를 가리키면) 이 모드는 CONTEXA 소유 앱 설정으로 <code>contexa.datasource.isolation.contexa-owned-application=true</code>를 넣습니다. 앱 자신의 DB를 가리키면 이 설정은 <code>false</code>로 남아 앱의 연결이 그대로입니다. 직접 적은 값은 언제나 그대로 쓰입니다. 설정이 <code>true</code>이고 앱이 <code>DataSource</code> 빈을 직접 만들지 않았다면 앱 기본 <code>dataSource</code> · <code>JdbcTemplate</code> · <code>TransactionTemplate</code>이 CONTEXA DB를 가리킵니다. 또 설정이 <code>true</code>이면 기동 진단의 기본 모드(<code>AUTO</code>)가 필수 기능이 빠질 때 기동을 멈추는 <code>FAIL_FAST</code>가 됩니다. 기존 앱에 붙일 때는 <code>SANDBOX</code>를 씁니다.
           </div>
           <p>기본 구성 대신 내 인증 구성을 쓰려면 <code>PlatformConfig</code> 빈을 직접 선언합니다(<a href="../identity/dsl.html">Identity DSL</a>). 이 구성은 <code>CONTEXA_OWNED</code>일 때만 체인이 됩니다.</p>
           <h3 id="sandbox-chain"><code>SANDBOX</code> 방식에서는 로그인 체인을 만들지 않음</h3>
-          <p><code>SANDBOX</code>의 소유권은 언제나 <code>HOST_OWNED</code>입니다. 여기에 <code>contexa.bridge.ownership=CONTEXA_OWNED</code>를 적으면 기동이 멈춥니다. 이때 CONTEXA는 기본이든 앱의 것이든 <code>PlatformConfig</code>로 체인을 만들지 않습니다. CONTEXA의 체인은 <code>/contexa/admin/**</code>만 맡는 관리 화면 체인 하나이고, CONTEXA 관리자 로그인과 <strong>ADMIN 역할</strong>을 씁니다(<a href="../../install/spring-boot.html#ownership">소유 방식에 따라 동작하는 것</a>).</p>
+          <p><code>SANDBOX</code>의 인증 소유 방식은 언제나 <code>HOST_OWNED</code>입니다. 여기에 <code>contexa.bridge.ownership=CONTEXA_OWNED</code>를 적으면 기동이 멈춥니다. 이때 CONTEXA는 기본이든 앱의 것이든 <code>PlatformConfig</code>로 체인을 만들지 않습니다. CONTEXA의 체인은 <code>/contexa/admin/**</code>만 맡는 관리 화면 체인 하나이고, CONTEXA 관리자 로그인과 <strong>ADMIN 역할</strong>을 씁니다(<a href="../../install/spring-boot.html#ownership">소유 방식에 따라 동작하는 것</a>).</p>
 
           <h2 id="auth-object">레거시 인증 객체 힌트</h2>
-          <p>앱이 Spring Security 밖에서 세션이나 요청 속성에 사용자 객체를 두는 경우에 씁니다. 인증 도장은 먼저 <code>SecurityContext</code>의 <code>Authentication</code>에서 만들고, 그다음 세션 · 요청 속성 · 헤더 세 통로를 차례로 시도합니다. 아래 세 속성은 이 세 통로에만 영향을 줍니다(<a href="../common/bridge.html#order">읽는 순서</a>).</p>
+          <p>앱이 Spring Security 밖에서 세션이나 요청 속성에 사용자 객체를 두는 경우에 씁니다. 인증 도장(인증 브리지가 요청에 붙이는 인증 · 인가 · 위임 정보 표지 가운데, 로그인한 사용자가 누구인지를 나타내는 표지)은 먼저 <code>SecurityContext</code>의 <code>Authentication</code>에서 만들고, 그다음 세션 · 요청 속성 · 헤더 세 위치를 차례로 시도합니다. 아래 세 속성은 이 세 위치에만 영향을 줍니다(<a href="../common/bridge.html#order">읽는 순서</a>).</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>속성</th><th>기본값</th><th>바꾸는 것</th></tr></thead>
             <tbody>
-              <tr><td><code>authObjectLocation</code></td><td><code>AUTO</code></td><td>세 통로의 시도 순서만 바꿉니다. 다른 통로를 끄지 않습니다.<br><code>AUTO</code> · <code>SESSION</code>: 세션 → 요청 속성 → 헤더<br><code>REQUEST_ATTRIBUTE</code>: 요청 속성 → 세션 → 헤더<br><code>HEADER</code>: 헤더 → 세션 → 요청 속성</td></tr>
+              <tr><td><code>authObjectLocation</code></td><td><code>AUTO</code></td><td>세 위치(세션 · 요청 속성 · 헤더)를 시도하는 순서만 바꿉니다. 다른 위치를 끄지 않습니다.<br><code>AUTO</code> · <code>SESSION</code>: 세션 → 요청 속성 → 헤더<br><code>REQUEST_ATTRIBUTE</code>: 요청 속성 → 세션 → 헤더<br><code>HEADER</code>: 헤더 → 세션 → 요청 속성</td></tr>
               <tr><td><code>authObjectAttribute</code></td><td><code>""</code></td><td>사용자 객체가 든 속성 이름. 위치가 <code>SESSION</code>이면 세션 속성, <code>REQUEST_ATTRIBUTE</code>면 요청 속성 이름으로 쓰입니다. <code>AUTO</code> · <code>HEADER</code>에서는 쓰이지 않습니다.</td></tr>
-              <tr><td><code>authObjectType</code></td><td><code>Object.class</code>(지정 안 함)</td><td>사용자 객체의 클래스. 후보 객체 가운데 클래스 이름이 같은 것에 점수를 더 줍니다(다른 객체를 거르지는 않음). 세션 · 요청 속성 통로 모두에 적용됩니다.</td></tr>
+              <tr><td><code>authObjectType</code></td><td><code>Object.class</code>(지정 안 함)</td><td>사용자 객체의 클래스. 후보 객체 가운데 클래스 이름이 같은 것에 점수를 더 줍니다(다른 객체를 거르지는 않음). 세션 · 요청 속성 위치 모두에 적용됩니다.</td></tr>
             </tbody>
           </table></div>
           <pre><code class="language-java">@SpringBootApplication
@@ -129,7 +130,7 @@ public class LegacyApplication {
         authObjectAttribute = "loginUser",
         authObjectType = LoginUser.class)     // LoginUser: 앱이 세션에 두는 사용자 클래스
 public class LegacyApplication { }</code></pre>
-          <p>헤더 통로는 <code>X-Contexa-*</code> 헤더를 읽으며 <strong>기본으로 꺼져 있습니다</strong>(<code>contexa.bridge.authentication.headers.enabled=false</code>). 켜도 신뢰 프록시에서 온 요청이고 헤더의 사용자가 앱이 인증한 사용자와 같을 때만 받습니다(<a href="../common/bridge.html#headers">게이트웨이 헤더로 넘기기</a>). 세션 · 요청 속성 · 헤더는 권한(인가 도장) · 위임 정보를 읽는 곳이기도 하며, 위 세 속성은 그쪽 읽기에는 영향을 주지 않습니다.</p>
+          <p>헤더 위치는 <code>X-Contexa-*</code> 헤더를 읽으며 <strong>기본으로 꺼져 있습니다</strong>(<code>contexa.bridge.authentication.headers.enabled=false</code>). 켜도 신뢰 프록시에서 온 요청이고 헤더의 사용자가 앱이 인증한 사용자와 같을 때만 받습니다(<a href="../common/bridge.html#headers">게이트웨이 헤더로 넘기기</a>). 세션 · 요청 속성 · 헤더는 권한(인가 도장) · 위임 정보를 읽는 곳이기도 하며, 위 세 속성은 그쪽 읽기에는 영향을 주지 않습니다.</p>
 
           <h2 id="verify">켜졌는지 확인하기</h2>
           <ul>
@@ -139,7 +140,7 @@ public class LegacyApplication { }</code></pre>
                 <li><code>[Contexa] HOST_OWNED mode: no SecurityFilterChain is declared by the application ...</code>(WARN): 앱 체인이 없어 Spring Boot 기본 보안이 걸렸습니다. 앱 체인을 선언합니다. 로그가 권하는 <code>anyRequest().permitAll()</code>은 관리 화면을 CONTEXA 자기 체인이 지키므로 CONTEXA 경로에 대해서는 안전합니다.</li>
                 <li><code>[Contexa] HOST_OWNED: the application sets the signed-in user after Spring Security's filters ...</code>(WARN, 한 번): MVC 인터셉터나 컨트롤러에서 사용자를 정하는 요청은 <code>@Protectable</code> 메서드에서만 적용됩니다.</li>
                 <li><code>Contexa owns the sign-in of this application, but the application declares its own security chain(s) [...] ...</code>(기동 거부): 앱 로그인을 지키려면 <code>SANDBOX</code>를 쓰고, 아니면 그 체인을 지웁니다.</li>
-                <li><code>[Contexa] CONTEXA_OWNED: the application declares the user store(s) [...], which Contexa's sign-in does not read: ...</code>(WARN): CONTEXA 로그인은 앱의 사용자 저장소를 몇 개를 두었든 읽지 않습니다. 시드 관리자를 포함한 CONTEXA 계정은 CONTEXA 자신의 사용자 저장소에서 로그인하고, 앱의 사용자는 CONTEXA 로그인으로 로그인되지 않습니다.</li>
+                <li><code>[Contexa] CONTEXA_OWNED: the application declares the user store(s) [...], which Contexa's sign-in does not read: ...</code>(WARN): CONTEXA 로그인은 앱의 사용자 저장소를 몇 개를 두었든 읽지 않습니다. 앱이 시작할 때 CONTEXA가 만드는 관리자 계정(<code>contexa.iam.seed.admin.password</code>)을 포함한 CONTEXA 계정은 CONTEXA 자신의 사용자 저장소에서 로그인하고, 앱의 사용자는 CONTEXA 로그인으로 로그인되지 않습니다.</li>
                 <li><code>[Contexa] A one-time-code factor is offered but no mail sender is configured (spring.mail.*) ...</code>(WARN): 코드를 보낼 수 없습니다. 메일을 설정하거나, 사용자는 패스키로만 확인합니다.</li>
                 <li><code>[ContexaCapability] ...</code>(ERROR): 기동 진단이 빠진 빈을 찾았습니다(<a href="overview.html#diagnostics">기동 진단</a>).</li>
               </ul>
@@ -153,7 +154,7 @@ public class LegacyApplication { }</code></pre>
             <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
             <tbody>
               <tr><td><code>contexa.datasource.url</code></td><td>없음(필수)</td><td>CONTEXA 전용 DB 주소</td><td>처음 켤 때 반드시</td></tr>
-              <tr><td><code>contexa.bridge.ownership</code></td><td>보안 모드를 따름</td><td>인증 소유권. 적으면 모드와 맞아야 하고(<code>SANDBOX</code>는 <code>HOST_OWNED</code>, <code>FULL</code>은 <code>CONTEXA_OWNED</code>), 엇갈리면 기동이 멈춤</td><td>보통 적지 않음. 모드를 따름(<a href="#sandbox-chain">위</a>)</td></tr>
+              <tr><td><code>contexa.bridge.ownership</code></td><td>보안 모드를 따름</td><td>인증 소유 방식. 적으면 보안 모드와 맞아야 하고(<code>SANDBOX</code>는 <code>HOST_OWNED</code>, <code>FULL</code>은 <code>CONTEXA_OWNED</code>), 엇갈리면 기동이 멈춤</td><td>보통 적지 않음. 모드를 따름(<a href="#sandbox-chain">위</a>)</td></tr>
               <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>운영 모드</td><td>처음에는 <code>SHADOW</code>로 시작해 <code>ENFORCE</code>로 전환</td></tr>
               <tr><td><code>contexa.bridge.populate-security-context</code></td><td><code>true</code></td><td>브리지가 만든 인증을 <code>SecurityContext</code>에 채울지(<code>CONTEXA_OWNED</code>에서만)</td><td>CONTEXA 소유 체인에서 채우기를 막을 때</td></tr>
               <tr><td><code>contexa.enabled</code></td><td><code>true</code></td><td><code>false</code>면 어노테이션이 있어도 CONTEXA 전체를 켜지 않음</td><td>CONTEXA를 잠시 통째로 끌 때</td></tr>
@@ -164,10 +165,10 @@ public class LegacyApplication { }</code></pre>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>설정 키</th><th>어노테이션 속성</th><th>넣는 때</th><th>뜻</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.ai.security.mode</code></td><td><code>mode</code></td><td>늘</td><td>기본 인증 구성의 모양. 앱 설정에 같은 키를 적었으면 그 값이 어노테이션 속성보다 우선합니다</td></tr>
-              <tr><td><code>contexa.ai.security.auth-object.location</code></td><td><code>authObjectLocation</code></td><td>늘</td><td>세 통로의 시도 순서</td></tr>
-              <tr><td><code>contexa.ai.security.auth-object.attribute</code></td><td><code>authObjectAttribute</code></td><td>늘</td><td>사용자 객체 속성 이름</td></tr>
-              <tr><td><code>contexa.ai.security.auth-object.type</code></td><td><code>authObjectType</code></td><td>늘(클래스 이름)</td><td>사용자 객체 클래스</td></tr>
+              <tr><td><code>contexa.ai.security.mode</code></td><td><code>mode</code></td><td>늘(앱 설정에 같은 키가 있으면 그 값을 그대로 넣음)</td><td>기본 인증 구성의 모양. 앱 설정에 같은 키를 적었으면 그 값이 어노테이션 속성보다 우선합니다</td></tr>
+              <tr><td><code>contexa.ai.security.auth-object.location</code></td><td><code>authObjectLocation</code></td><td>늘(앱 설정에 같은 키가 있으면 그 값을 그대로 넣음)</td><td>세 위치(세션 · 요청 속성 · 헤더)를 시도하는 순서</td></tr>
+              <tr><td><code>contexa.ai.security.auth-object.attribute</code></td><td><code>authObjectAttribute</code></td><td>늘(앱 설정에 같은 키가 있으면 그 값을 그대로 넣음)</td><td>사용자 객체 속성 이름</td></tr>
+              <tr><td><code>contexa.ai.security.auth-object.type</code></td><td><code>authObjectType</code></td><td>늘(클래스 이름, 앱 설정에 같은 키가 있으면 그 값을 그대로 넣음)</td><td>사용자 객체 클래스</td></tr>
               <tr><td><code>contexa.bridge.ownership</code></td><td><code>mode</code></td><td>앱이 이 키를 적지 않았을 때</td><td><code>SANDBOX</code> → <code>HOST_OWNED</code>, <code>FULL</code> → <code>CONTEXA_OWNED</code></td></tr>
               <tr><td><code>contexa.datasource.isolation.contexa-owned-application</code></td><td><code>mode</code></td><td>앱이 이 키를 적지 않았을 때</td><td><code>FULL</code>이면 <code>true</code>(<a href="#full">위 주의</a>)</td></tr>
             </tbody>

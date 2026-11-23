@@ -28,7 +28,7 @@
             </ol>
           </figure>
           <div class="callout callout-warning">
-            <strong>URL policies are evaluated only when the request passes the dynamic authorization manager.</strong> With <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>, the security chain CONTEXA builds sends every request to <code>CustomDynamicAuthorizationManager</code>. In the default <code>HOST_OWNED</code> mode CONTEXA builds no security chain, so the application's own chain has to call it, for example <code>.anyRequest().access(customDynamicAuthorizationManager)</code> (<a href="end-to-end-workflow.html#prepare">Preparation</a>). <code>@Protectable</code> method policies are evaluated in both modes, whenever the method is called.
+            <strong>URL policies are evaluated only when the request passes the dynamic authorization manager.</strong> How the manager is connected depends on who owns sign-in. With <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>, CONTEXA owns sign-in (<code>CONTEXA_OWNED</code>) and the security chain CONTEXA builds sends every request to <code>CustomDynamicAuthorizationManager</code>. In the default <code>HOST_OWNED</code> mode your application owns sign-in and CONTEXA builds no security chain, so the application's own chain has to call it, for example <code>.anyRequest().access(customDynamicAuthorizationManager)</code> (<a href="end-to-end-workflow.html#prepare">Preparation</a>). <code>@Protectable</code> method policies are evaluated in both modes, whenever the method is called.
           </div>
 
           <h2 id="structure">What a policy is made of</h2>
@@ -152,7 +152,7 @@ Method policy → (hasAuthority('ROLE_ADMIN')) and (#ai.isAllowed())</code></pre
           </ul>
 
           <h3 id="business-rule-api">Creating from code (business rule API)</h3>
-          <p>You can create a policy over HTTP without the screen. Quick Mode and AI Mode use the same translation.</p>
+          <p>You can create a policy over HTTP without the screen. You send inputs such as roles, permissions and an AI decision (the business rule) as JSON in the request body, and CONTEXA turns them into SpEL conditions and creates the policy. Quick Mode and AI Mode use the same translation.</p>
           <pre><code class="language-http">POST /contexa/admin/api/policies/build-from-business-rule
 Content-Type: application/json
 
@@ -203,7 +203,7 @@ Content-Type: application/json
           <ul>
             <li><strong>Not allowed:</strong> <code>T(...)</code> type references (only <code>LocalTime</code> · <code>LocalDate</code> · <code>LocalDateTime</code> · <code>DayOfWeek</code> from <code>java.time</code>), constructor calls (<code>new</code>), bean references (<code>@name</code>), assignment, and the methods and properties used for reflection, class loading or process execution (<code>getClass</code> · <code>forName</code> · <code>exec</code> · <code>getRuntime</code>, <code>class</code> · <code>classLoader</code> and others). Expressions only read values and cannot change them.</li>
             <li><strong>On save:</strong> every save path (screen, API, version rollback and others) checks the expression, and a rejected one is not saved. The condition entity is checked once more right before it is written.</li>
-            <li><strong>On load:</strong> a stored expression that fails is not dropped; the policy is turned into a deny. A URL policy denies all its target paths, and a method policy is made to yield deny for its effect. Dropping the policy could open the target through the "decision when no policy applies" (allow by default). The error log names the policy ID and the reason.</li>
+            <li><strong>On load:</strong> a stored expression that fails is not dropped; the policy is turned into a deny. A URL policy denies all its target paths, and a method policy is made to yield deny for its effect. Dropping the policy could open the target through the "decision when no policy applies" (by default <code>AUTHENTICATED</code> for URLs, which admits signed-in users, and <code>PERMIT</code> for methods). The error log names the policy ID and the reason.</li>
           </ul>
 
           <h3 id="condition-templates">Condition templates</h3>
@@ -268,7 +268,7 @@ Content-Type: application/json
             </ul>
           </figure>
           <ol>
-            <li>In Policy Center's "Policy List" tab (<code>/contexa/admin/policy-center?tab=list</code>), filter by approval status in the Approval box (<code>approvalStatus=</code>: Pending, Approved, Rejected, Not required). You can also filter by keyword, by State (<code>activeFilter=true</code> · <code>false</code>) and by Policy Health.
+            <li>In Policy Center's "Policy List" tab (<code>/contexa/admin/policy-center?tab=list</code>), filter by approval status in the "Approval" drop-down list (<code>approvalStatus=</code>: Pending, Approved, Rejected, Not required). You can also filter by keyword, by State (<code>activeFilter=true</code> · <code>false</code>) and by Policy Health.
               <ul>
                 <li>"Conflicts or duplicates" (<code>health=ISSUES</code>) lists the policies of the conflicts and duplicates the policy check found. These are the policies the dashboard counts, and they are listed under the line "{count} policy conflicts · {count} duplicates: {count} policies involved".</li>
                 <li>When the check cannot run, this message appears: "The policy check could not run, so no policy is listed."</li>
@@ -348,7 +348,7 @@ Content-Type: application/json
             </tbody>
           </table></div>
           <div class="callout callout-warning">
-            <strong>YAML values are overwritten by the system settings at startup.</strong> The default seed creates a <code>ctxa_system_settings</code> row (algorithm <code>FIRST_APPLICABLE</code>, <code>PERMIT</code> for methods, no value for URLs), and CONTEXA applies that row's values at startup and every time the system settings are saved; the decision for URLs is applied only once an operator has saved one, and until then the YAML value stays in effect (<code>AUTHENTICATED</code> without it). A row made by an earlier version holds <code>PERMIT</code> for URLs and keeps it. So change these three values in the admin console under "IAM → System Settings". Saving applies them to the instance at once, reloads the URL policies, and in distributed mode tells the other instances. YAML values are used only when there is no <code>ctxa_system_settings</code> row (for example with <code>contexa.iam.seed.enabled: false</code> before anyone saves the system settings).
+            <strong>A system settings row takes precedence over the YAML values at startup.</strong> The default seed creates a <code>ctxa_system_settings</code> row (algorithm <code>FIRST_APPLICABLE</code>, <code>PERMIT</code> for methods, no value for URLs), and CONTEXA applies that row's values at startup and every time the system settings are saved. While the row exists, its algorithm and method decision always apply. The decision for URLs applies only once an operator has saved one; until then the YAML value stays in effect even though the row exists (<code>AUTHENTICATED</code> without it). A row made by an earlier version holds <code>PERMIT</code> for URLs and keeps it. So change these three values in the admin console under "IAM → System Settings". Saving applies them to the instance at once, reloads the URL policies, and in distributed mode tells the other instances. The YAML values for the algorithm and the method decision are used only when there is no <code>ctxa_system_settings</code> row (for example with <code>contexa.iam.seed.enabled: false</code> before anyone saves the system settings). The YAML value for URLs is used in that case too, and until an operator saves a URL decision.
           </div>
           <pre><code class="language-yaml">contexa:
   datasource:

@@ -15,7 +15,7 @@
           </div>
 
           <div class="callout callout-info">
-            <strong>A Strategy here is the part that picks your application feature.</strong> It has nothing to do with the Layer 1 and Layer 2 strategies of the security decision. Decisions are made separately by the <a href="../architecture/decision-engine.html">decision engine</a>.
+            <strong>A Strategy here is the part of your application that decides which Lab handles a request.</strong> It has nothing to do with the Layer 1 and Layer 2 strategies of the security decision. Decisions are made separately by the <a href="../architecture/decision-engine.html">decision engine</a>.
           </div>
 
           <h2 id="what-youll-build">What you will build</h2>
@@ -34,7 +34,7 @@
 
           <h2 id="architecture">The whole flow and what you build</h2>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>The path of one recommendation request</strong>Boxes tagged "Built in step …" are what you build on this page; "CONTEXA" boxes are provided by CONTEXA.</figcaption>
+            <figcaption class="dg-caption"><strong>The path of one recommendation request</strong>Boxes tagged "Built in step …" are what you build on this page; "CONTEXA" boxes are provided by CONTEXA. The "step N" here is the order in which you build the parts; it is not a pipeline step (retrieval, preprocessing, … postprocessing, or <code>STEP N</code> in the log).</figcaption>
             <ol class="dg-flow">
               <li class="dg-node dg-host"><span class="dg-node-tag">Built in step 6</span><span class="dg-node-title">Controller</span><span class="dg-node-desc">Builds an <code>AIRequest</code> from the context, the template type and the diagnosis type, and hands it to <code>StandardStreamingService</code></span></li>
               <li class="dg-node dg-contexa"><span class="dg-node-tag">CONTEXA</span><span class="dg-node-title">AI entry point (<code>AICoreOperations</code>)</span><span class="dg-node-desc">Locks the same request, writes the audit start line, finds the Strategy by diagnosis type (<code>AIStrategyRegistry</code>)</span></li>
@@ -104,7 +104,7 @@ public class ProductRecommendationResponse extends AIResponse {
           </div>
 
           <h3 id="type-names">Two name tags</h3>
-          <p>A request carries two name tags. The template type (<code>TemplateType</code>) decides which prompt template is used, and the diagnosis type (<code>DiagnosisType</code>) decides which Strategy handles it. Both are simple classes wrapping one name, and they match only when the names are spelled the same.</p>
+          <p>A request carries two name tags. The template type (<code>TemplateType</code>) decides which prompt template is used, and the diagnosis type (<code>DiagnosisType</code>) decides which Strategy handles it. Both are simple classes wrapping one name. The name of the template type must equal the name that the prompt template's <code>getSupportedType()</code> returns, and the name of the diagnosis type must equal the one that the Strategy's <code>getSupportedType()</code> returns.</p>
           <pre><code class="language-java">// Name that picks the prompt template: same text as the template's getSupportedType()
 new TemplateType("PRODUCT_RECOMMENDATION")
 
@@ -406,7 +406,7 @@ public class ProductContextRetriever extends ContextRetriever {
 }</code></pre>
           <p>The returned <code>contextInfo</code> is passed unchanged to the template's <code>generateUserPrompt(request, contextInfo)</code> in the prompt step. <code>vectorOperations.searchSimilar(query)</code> with a single string searches 5 documents with no threshold, so pass a <code>SearchRequest</code> as above to use the settings.</p>
           <div class="callout callout-warning">
-            <strong>Your own retriever does not filter by authorization.</strong> Requests with the registered context type skip the default retriever's user, organization, tenant and purpose filtering and its prompt-injection check. If users may see different documents, put that into the search condition yourself. Also, this retriever cannot be created without a <code>VectorStore</code> bean, so the application does not start. The detailed retrieval rules are in <a href="rag.html">RAG and vector store</a>.
+            <strong>Your own retriever does not filter by authorization.</strong> Requests with the registered context type skip the default retriever's user, organization, tenant and purpose filtering and its prompt-injection check. If users may see different documents, put that into the search condition yourself. Also, the retriever in this example takes a <code>VectorStore</code> bean in its constructor, so without that bean the retriever cannot be created and the application does not start. The detailed retrieval rules are in <a href="rag.html">RAG and vector store</a>.
           </div>
 
           <h2 id="step-6">Step 6: Opening it with a controller</h2>
@@ -505,7 +505,7 @@ Content-Type: application/json
             <tbody>
               <tr><td><code>errorMessage</code> in the response JSON is <code>Pipeline execution failed: …</code></td><td>The pipeline failed and a fallback response came back (default failure policy). For example, <code>Template matching failed</code> means no template bean matches the template type name</td><td>Read the cause after the prefix. To receive it as an error, change the <a href="pipeline.html#failures">failure policy</a></td></tr>
               <tr><td><code>AIOperationException: Pipeline returned unexpected response type</code></td><td>An error outside the pipeline on the Strategy path (input check failed, no Strategy or Lab, and so on)</td><td>Find the cause in the server log line <code>ASYNC strategy execution failed</code></td></tr>
-              <tr><td><code>StrategicOperationConflictException</code> (<code>AIOperationException</code>): <code>Strategic operation conflict: …</code></td><td>Exactly the same request (same response type, template, diagnosis type, question, user, session, organization and parameters) is already running. The lock lives in memory in standalone mode and in Redis in distributed mode, so it also applies across instances. Each run takes the lock under an owner of its own, so requests on the same server refuse each other too, and the lock is given back when the run ends, fails or is cancelled. If the server holding it stops, it is released after 30 minutes at most</td><td>Fill in the user and session in the context, or send again after the earlier request ends</td></tr>
+              <tr><td><code>StrategicOperationConflictException</code> (<code>AIOperationException</code>): <code>Strategic operation conflict: …</code></td><td>Exactly the same request (same response type, template, diagnosis type, question, user, session, organization and parameters) is already running. The lock lives in memory in standalone mode and in Redis in distributed mode (the <a href="../../install/configuration/infrastructure.html#modes">infrastructure mode</a>), so in distributed mode it also applies across instances. Each run takes the lock under an owner of its own, so requests on the same server refuse each other too. The lock is given back when the run ends, fails or is cancelled. If the server holding it stops, it is released after 30 minutes at most</td><td>Fill in the user and session in the context, or send again after the earlier request ends</td></tr>
               <tr><td><code>AIOperationException: Strategic lock unavailable: …</code></td><td>The lock store (Redis in distributed mode) could not answer. It is not a conflict, and nothing runs without the lock</td><td>Check the connection to the lock store, then send again</td></tr>
               <tr><td>Metadata <code>modelSelectionFallbackUsed</code> is <code>true</code></td><td>The requested model was not found and the default chat model was used</td><td>Check the model name and the connection settings</td></tr>
               <tr><td>An <code>AUDIT_START</code> line on the logger <code>IAM_AUDIT</code></td><td>The audit record written when the Strategy path starts (no completion or failure record)</td><td>Use it to confirm a call came in</td></tr>

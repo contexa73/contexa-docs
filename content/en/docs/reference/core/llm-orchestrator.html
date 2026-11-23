@@ -15,7 +15,7 @@
           </div>
 
           <h2 id="overview">Overview</h2>
-          <p>The orchestrator (<code>UnifiedLLMOrchestrator</code>) is CONTEXA's single door to LLMs. The pipeline's LLM step (<code>LLM_EXECUTION</code>), the security decision engine and application code all call models through this object. One call is handled in the order below.</p>
+          <p>The orchestrator (<code>UnifiedLLMOrchestrator</code>) is CONTEXA's single door to LLMs. The pipeline's LLM step (<code>LLM_EXECUTION</code>), the security decision engine and application code all call models through this object. On this page a layer is the decision engine's Layer 1 or Layer 2 analysis, and each layer can use its own model (<a href="model-provider.html#layer-models">Setting the layer models (Layer 1, Layer 2)</a>). One call is handled in the order below.</p>
 
           <figure class="dg">
             <figcaption class="dg-caption"><strong>The path of one call</strong>Shown for <code>execute()</code>. How <code>stream()</code> differs is in "Time limits, retries and failures" below.</figcaption>
@@ -175,21 +175,21 @@ Mono&lt;String&gt; answer = toolClient.callToolCallbacks(prompt, callbacks);</co
             <li>The application&#39;s <code>spring.http.client.*</code> settings (connect and read limits, redirects, SSL bundle) apply to model calls, and so do the customizers of the application&#39;s own Reactor Netty request factory when it has one. Customizations proper to Apache HttpClient or Jetty do not apply to model calls.</li>
             <li>The same holds when CONTEXA calls the Spring AI models the application built (OpenAI and Anthropic chat models made with the application&#39;s <code>RestClient</code> builder, and so on).</li>
             <li>When the application&#39;s request factory is not Reactor Netty&#39;s, a <code>RestClientCustomizer</code> of CONTEXA&#39;s (<code>contexaModelCallTransportCustomizer</code>, run first) gives those builders a request factory. This factory sends CONTEXA&#39;s model call requests over CONTEXA&#39;s Reactor Netty (CONTEXA&#39;s event loop) and the application&#39;s own requests over the application&#39;s factory as they were.</li>
-            <li>The application&#39;s <code>spring.http.client.*</code> settings apply to both, and a customizer of the application&#39;s that sets a factory of its own wins. An application on Reactor Netty is left as it is.</li>
+            <li>The application&#39;s <code>spring.http.client.*</code> settings apply to both request factories, the application&#39;s and CONTEXA&#39;s. The customizer above runs first, so when another customizer of the application&#39;s sets a request factory of its own, that factory is kept. An application already on Reactor Netty is left as it is.</li>
             <li>When <code>stream()</code> has a layer (<code>analysisLevel</code> · <code>securityTaskType</code> · <code>tier</code>), that layer's time limit applies. When time runs out, layer 1 turns the timeout error into the text <code>TIMEOUT</code>; layer 2 keeps the timeout error. A value that makes layer 3, such as <code>DEEP</code>, finds no layer time limit and ends with the error <code>Invalid tier value: 3</code>. Without a layer there is no layer time limit.</li>
           </ul>
 
           <h3 id="retry">When a call is sent again</h3>
           <ul>
             <li><strong>Retry of transient errors (<code>execute()</code> family):</strong> up to 4 more tries, waiting from 2 seconds and longer each time (at most 12 seconds). Retried: errors Spring AI classifies as transient, I/O errors (IOException), HTTP 408 · 409 · 429, 502 · 503 · 504, dropped or refused connections, and rate-limit messages such as "rate limit" or "try again in". Any other 4xx (the request itself was refused) is not retried.</li>
-            <li><strong>With the server gate (<code>contexa.llm.gate.enabled</code>, on by default):</strong> when the server answers with an overload such as 429, 503 or 529, the call is sent again at once but waits in line at that server's gate, which stays closed for a short time. The gate limits how many calls each model server takes at once (2 for self-hosted, 16 for remote; <a href="../../install/configuration/ai.html">Connecting AI Models</a>).</li>
+            <li><strong>With the server gate (<code>contexa.llm.gate.enabled</code>, on by default):</strong> the gate limits how many calls each model server takes at once and makes the rest wait in line (2 for self-hosted, 16 for remote; <a href="../../install/configuration/ai.html">Connecting AI Models</a>). When a server answers with an overload such as 429, 503 or 529, that server&#39;s gate closes for a while. The retry then adds no wait of its own and is sent at once, and it waits in the gate&#39;s line until the gate opens again.</li>
             <li><strong>Turning it off:</strong> the metadata <code>disableRetries=true</code>. The number of retries is recorded in <code>providerRetryCount</code>.</li>
             <li><strong>Refused fields:</strong> when the provider refuses the request with a 4xx (other than 408 · 409 · 429) because of a thinking or sampling field it carried, the request is sent once more without that field, within the time left. The model's later requests leave that field out too.</li>
-            <li>The security decision engine handles a failed decision call on its own (<a href="../architecture/decision-engine.html#overrides">When the model's answer is changed</a>).</li>
+            <li>When a decision call fails, the security decision engine does not use the model&#39;s answer and decides on the safe side instead, with extra authentication or a hold for review (<a href="../architecture/decision-engine.html#overrides">When the model&#39;s answer is changed</a>).</li>
           </ul>
 
           <h3 id="throttle">Provider call throttling (off by default)</h3>
-          <p>Makes calls wait so that the provider's per-minute request and token limits (429) are not hit. Each application instance counts on its own.</p>
+          <p>Makes calls wait so that the provider's per-minute request and token limits (429) are not hit. Requests and tokens are counted separately for each application instance.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setting (<code>contexa.security.plane.llm-provider-throttle.*</code>)</th><th>Default</th><th>Meaning</th></tr></thead>
             <tbody>

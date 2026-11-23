@@ -15,14 +15,14 @@
           </div>
 
           <h2 id="overview">개요</h2>
-          <p>어드바이저는 Spring AI의 <code>CallAdvisor</code> · <code>StreamAdvisor</code>입니다. 모델에 가기 전 요청을 살피거나 바꾸고, 돌아온 응답을 살핍니다. CONTEXA의 어드바이저는 기본 클래스 <code>BaseAdvisor</code>를 상속해 도메인(묶음 이름) · 이름 · 순서를 가지고, 레지스트리(<code>AdvisorRegistry</code>)가 켜진 것을 순서대로 모아 둡니다. 오케스트레이터는 모델을 부를 때마다 이 목록을 붙입니다(<a href="llm-orchestrator.html#advisors">LLM 호출하기</a>).</p>
+          <p>어드바이저는 Spring AI의 <code>CallAdvisor</code> · <code>StreamAdvisor</code>입니다. 모델에 가기 전 요청을 살피거나 바꾸고, 돌아온 응답을 살핍니다. CONTEXA의 어드바이저는 기본 클래스 <code>BaseAdvisor</code>를 상속해 도메인(묶음 이름) · 이름 · 순서를 가지고, 레지스트리(<code>AdvisorRegistry</code>)가 켜진 것을 순서대로 모아 둡니다. 모델 호출을 한 곳에서 맡는 오케스트레이터(<code>UnifiedLLMOrchestrator</code>)는 모델을 부를 때마다 이 목록을 붙입니다(<a href="llm-orchestrator.html#advisors">LLM 호출하기</a>).</p>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>어드바이저가 도는 순서</strong>순서 값이 작은 것이 먼저 요청을 보고, 응답은 거꾸로 받습니다. 아래는 기본 어드바이저에 순서 60인 내 어드바이저를 더한 예입니다.</figcaption>
             <ol class="dg-flow">
               <li class="dg-node dg-request"><span class="dg-node-title">모델 호출 요청</span><span class="dg-node-desc">오케스트레이터의 <code>execute()</code></span></li>
               <li class="dg-node"><span class="dg-node-tag">순서 50</span><span class="dg-node-title">보안 문맥 어드바이저</span><span class="dg-node-desc">요청 문맥에 사용자 · 세션 · 인증 여부를 넣습니다</span></li>
               <li class="dg-node"><span class="dg-node-tag">순서 60</span><span class="dg-node-title">내 어드바이저</span><span class="dg-node-desc">요청을 살피거나 막습니다(<code>beforeCall</code>)</span></li>
-              <li class="dg-node"><span class="dg-node-tag">맨 안쪽</span><span class="dg-node-title"><code>ThinkingGenerationAdvisor</code></span><span class="dg-node-desc">답 앞의 생각 블록을 건너뛰게 합니다(레지스트리 밖, 늘 붙음)</span></li>
+              <li class="dg-node"><span class="dg-node-tag">모델 바로 앞</span><span class="dg-node-title"><code>ThinkingGenerationAdvisor</code></span><span class="dg-node-desc">모델이 답 앞에 돌려주는 추론(thinking) 내용을 건너뛰고 답만 읽게 합니다(레지스트리 밖, 늘 붙음)</span></li>
               <li class="dg-node dg-model"><span class="dg-node-title">AI 모델</span></li>
               <li class="dg-node"><span class="dg-node-tag">돌아올 때</span><span class="dg-node-title">응답을 거꾸로 받기</span><span class="dg-node-desc">내 어드바이저의 <code>afterCall</code> → 보안 문맥 어드바이저의 <code>afterCall</code>(감사 로그)</span></li>
             </ol>
@@ -37,7 +37,7 @@
           <p>모든 LLM 호출의 요청 문맥에 "누구의 호출인지"를 넣고, 응답이 오면 감사 로그를 남깁니다. 이름은 <code>SECURITY.security-context</code>, 순서는 <code>contexa.advisor.security.order</code>(기본 50)입니다.</p>
           <ol>
             <li>오케스트레이터가 <code>ExecutionContext</code>의 <code>userId</code> · <code>sessionId</code>를 <code>event.userId</code> · <code>event.sessionId</code>로 넘깁니다(<code>execute()</code> 계열이고 어드바이저가 켜진 호출만).</li>
-            <li><code>event.userId</code>가 있으면 비동기 보안 문맥 제공자(<code>AsyncSecurityContextProvider</code>)에서 그 사용자의 인증 정보를 찾습니다. 제공자는 <code>generalRedisTemplate</code> 빈이 있으면(분산 모드) Redis, 없으면 메모리입니다.</li>
+            <li><code>event.userId</code>가 있으면 비동기 보안 문맥 제공자(<code>AsyncSecurityContextProvider</code>)에서 그 사용자의 인증 정보를 찾습니다. <code>generalRedisTemplate</code> 빈이 있으면(분산 모드, <a href="../../install/configuration/infrastructure.html#modes">단독과 분산 고르기</a>) 제공자는 Redis에서, 없으면 메모리에서 찾습니다.</li>
             <li>아래 키를 요청 문맥에 넣습니다.</li>
           </ol>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -54,7 +54,7 @@
           </table></div>
           <p>응답이 오면 INFO 로그 <code>LLM audit - userId: …, sessionId: …, authenticated: …, executionTimeMs: …, hasResponse: …</code>를 남깁니다.</p>
           <div class="callout callout-warning">
-            <strong>인증 요구는 "사용자 ID가 넘어왔는지"만 봅니다.</strong> <code>contexa.advisor.security.require-authentication=true</code>(기본 <code>false</code>)면 사용자 ID도 인증 정보도 없는 호출을 차단 오류로 막아 모델을 부르지 않습니다. 실제 로그인을 확인하는 것은 아닙니다. 또 <code>stream()</code>은 사용자 ID를 넘기지 않고 스트림에서는 차단 오류도 건너뛰므로 막지 못하고, <code>advisorEnabled(false)</code>인 호출은 이 어드바이저를 거치지 않습니다.
+            <strong>인증 요구는 "사용자 ID가 넘어왔는지"만 봅니다.</strong> <code>contexa.advisor.security.require-authentication=true</code>(기본 <code>false</code>)면 사용자 ID도 인증 정보도 없는 호출에 차단 오류를 내서 모델을 부르지 않습니다. 차단 오류는 모델을 부르기 전에 호출을 중단시키는 오류입니다(<a href="#order-errors">실행 순서와 오류 처리</a>). 실제 로그인을 확인하는 것은 아닙니다. 스트림은 막지 못합니다. <code>stream()</code>은 사용자 ID를 넘기지 않고, 스트림에서는 차단 오류가 나도 이 어드바이저만 건너뛰고 모델을 부르기 때문입니다. <code>advisorEnabled(false)</code>인 호출은 이 어드바이저를 거치지 않습니다.
           </div>
 
           <h2 id="custom">내 어드바이저 만들기</h2>
@@ -88,7 +88,7 @@ public class PromptSizeAdvisor extends BaseAdvisor {
             <li><strong>이름:</strong> 전체 이름은 <code>도메인.이름</code>(예: <code>APP.prompt-size</code>)입니다. 도메인이나 이름이 비면 등록할 때 <code>IllegalArgumentException</code>이 납니다.</li>
             <li><strong>스트림:</strong> <code>beforeStream</code>은 기본으로 <code>beforeCall</code>을 부르고, <code>afterStream</code>은 기본으로 아무것도 하지 않습니다(스트림 응답 조각마다 불림). 스트림에서 다르게 하려면 재정의합니다.</li>
             <li><strong>문맥 키:</strong> <code>beforeCall</code> 뒤에 <code>advisor.domain</code> · <code>advisor.name</code> · <code>advisor.timestamp</code>가 요청 문맥에 들어갑니다(<code>enrichContext</code>).</li>
-            <li>설정값으로 켜고 끄려면 <code>isEnabled()</code>를 재정의합니다. 이것은 레지스트리 목록에 들어갈지만 정하고, 붙은 뒤 실제로 동작할지는 <code>setEnabled(…)</code>로 바꾸는 값이 정합니다.</li>
+            <li>설정값으로 켜고 끄려면 <code>isEnabled()</code>를 재정의합니다. <code>isEnabled()</code>는 어드바이저가 레지스트리 목록에 들어갈지만 정합니다. 목록에 들어간 뒤 실제로 동작할지는 <code>setEnabled(…)</code>로 바꾸는 값이 정합니다.</li>
           </ul>
 
           <h2 id="order-errors">실행 순서와 오류 처리</h2>
@@ -99,7 +99,7 @@ public class PromptSizeAdvisor extends BaseAdvisor {
               <tr><td>모델 호출 전(<code>beforeCall</code>)에 차단 오류(<code>AdvisorException.blocking(…)</code>)</td><td>모델을 부르지 않고 그 오류로 끝납니다. 요청 문맥에 <code>advisor.error</code> · <code>advisor.error.message</code> · <code>advisor.error.domain</code> · <code>advisor.blocked.by</code>를 남깁니다.</td><td>이 어드바이저만 건너뛰고 모델을 부릅니다(막지 못함).</td></tr>
               <tr><td>모델 호출 전에 비차단 오류(<code>AdvisorException.nonBlocking(…)</code>)</td><td>이 어드바이저만 건너뛰고 계속합니다.</td><td>같음</td></tr>
               <tr><td>모델 호출 전에 그 밖의 예외</td><td>요청 문맥 <code>&lt;도메인.이름&gt;.error</code>에 메시지를 남기고 계속합니다.</td><td>건너뛰고 계속합니다.</td></tr>
-              <tr><td>모델 호출 뒤(<code>afterCall</code>)나 안쪽에서 난 오류</td><td>종류와 상관없이 오류로 끝납니다(차단 오류면 위 문맥 키도 남김).</td><td>스트림이 오류로 끝납니다.</td></tr>
+              <tr><td>모델 호출 이후(<code>afterCall</code>)나 모델 호출 중, 또는 이 어드바이저보다 순서가 큰 어드바이저에서 난 오류</td><td>스트림이 오류로 끝납니다.</td></tr>
             </tbody>
           </table></div>
 
@@ -144,7 +144,7 @@ AdvisorRegistry.RegistryStats stats = advisorRegistry.getStats();
             </tbody>
           </table></div>
           <div class="callout callout-info">
-            <strong>읽는 곳이 없는 설정.</strong> <code>contexa.advisor.chain-profile</code>(기본 <code>STANDARD</code>), <code>contexa.advisor.soar.approval.enabled</code> · <code>order</code> · <code>timeout</code>, <code>contexa.llm.advisor-enabled</code>는 받기만 하고 쓰는 코드가 없어 바꿔도 아무 일도 일어나지 않습니다. OSS에는 SOAR 승인 어드바이저가 없습니다(SOAR는 <a href="../soar/index.html">SOAR 확장점</a> 참고).
+            <strong>읽는 곳이 없는 설정.</strong> <code>contexa.advisor.chain-profile</code>(기본 <code>STANDARD</code>), <code>contexa.advisor.soar.approval.enabled</code> · <code>order</code> · <code>timeout</code>, <code>contexa.llm.advisor-enabled</code>는 설정 클래스에는 있지만 이 값을 읽는 코드가 없어 바꿔도 아무 일도 일어나지 않습니다. OSS에는 SOAR 승인 어드바이저가 없습니다(SOAR는 <a href="../soar/index.html">SOAR 확장점</a> 참고).
           </div>
 
           <h2 id="registry-api">참조</h2>

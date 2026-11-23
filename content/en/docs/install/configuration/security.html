@@ -46,7 +46,7 @@
               <li class="dg-node"><span class="dg-node-tag"><a href="#throughput">Throughput</a></span><span class="dg-node-title">3. Analysis queue and threads</span></li>
               <li class="dg-node dg-model"><span class="dg-node-tag"><a href="#timeouts">Time limits</a> · <a href="#prompt">Prompt</a></span><span class="dg-node-title">4. Layer 1, and Layer 2 if Layer 1 cannot decide</span><span class="dg-node-desc">If Layer 2 cannot decide either, the <a href="#escalate">fallback action</a></span></li>
               <li class="dg-node"><span class="dg-node-tag"><a href="#minimum-action">Minimum-action rules</a></span><span class="dg-node-title">5. Check the action the model gave</span></li>
-              <li class="dg-node dg-store"><span class="dg-node-tag"><a href="#mode">Operating mode</a></span><span class="dg-node-title">6. Store the decision, apply it from the next request</span><span class="dg-node-desc">Shadow mode keeps it in its own memory and does not apply it</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-tag"><a href="#mode">Operating mode</a></span><span class="dg-node-title">6. Store the decision, apply it from the next request</span><span class="dg-node-desc">Shadow mode keeps the decision in shadow memory (a store apart from the one enforcement uses) and does not apply it</span></li>
               <li class="dg-node"><span class="dg-node-tag"><a href="#baseline">Behavioral baseline learning</a></span><span class="dg-node-title">7. Learn</span><span class="dg-node-desc">Only allow decisions (in enforcement mode, the ones actually applied)</span></li>
             </ol>
           </figure>
@@ -58,7 +58,7 @@
             <tbody>
               <tr><td><code>DISABLED</code></td><td>No</td><td>No</td><td>No</td><td>You do not use AI decisions</td></tr>
               <tr><td><code>OBSERVE</code></td><td colspan="3">An old name that is still accepted. The code reads it as <code>DISABLED</code> and logs a WARN at start.</td><td>—</td></tr>
-              <tr><td><code>SHADOW</code></td><td>Yes</td><td>Keeps decisions in the decision and audit records and in shadow memory. No request is blocked and no response is changed</td><td>Allow decisions only</td><td>The first stage of adoption, to check the quality of decisions</td></tr>
+              <tr><td><code>SHADOW</code></td><td>Yes</td><td>Keeps decisions in the decision and audit records and in shadow memory (explained below the table). No request is blocked and no response is changed</td><td>Allow decisions only</td><td>The first stage of adoption, to check the quality of decisions</td></tr>
               <tr><td><code>ENFORCE</code> (default)</td><td>Yes</td><td>Stores the decision and applies it from the same user's next request</td><td>Only allow decisions that were actually applied</td><td>Production</td></tr>
             </tbody>
           </table></div>
@@ -91,7 +91,7 @@
             <li>When a mode is already stored and you save with the mode field empty, <code>SHADOW</code> is stored.</li>
           </ul>
           <div class="callout callout-warning">
-            <strong>Lowering the mode pauses the restrictions already stored; it does not remove them.</strong> <code>@Protectable</code> methods follow the operating mode: in shadow mode they only record a stored restriction, and in Disabled they do not check it. The two filters CONTEXA places in front of requests (step-up authentication and access control) also follow the mode, both when the application owns sign-in (<code>HOST_OWNED</code>) and when CONTEXA owns it (<code>CONTEXA_OWNED</code>): they stop a request only when <code>enabled</code> is on and the mode is <code>ENFORCE</code>. A stored BLOCK, CHALLENGE or ESCALATE stays and applies again when the mode returns to <code>ENFORCE</code>, until an administrator releases it or the decision's lifetime passes.
+            <strong>Lowering the mode pauses the restrictions already stored; it does not remove them.</strong> A restriction is a stored BLOCK, CHALLENGE or ESCALATE decision. <code>@Protectable</code> methods follow the operating mode: in shadow mode they only record a stored restriction, and in Disabled they do not check it. The two filters CONTEXA places in front of requests (step-up authentication and access control) also follow the mode. Both when the application owns sign-in (<code>HOST_OWNED</code>) and when CONTEXA owns it (<code>CONTEXA_OWNED</code>), they stop a request only when <code>enabled</code> is on and the mode is <code>ENFORCE</code>. A stored restriction stays and applies again when the mode returns to <code>ENFORCE</code>. It ends only when an administrator releases it or the decision's lifetime passes.
           </div>
 
           <h2 id="timeouts">Decision time limits</h2>
@@ -177,10 +177,15 @@
               <tr><td><code>contexa.security.coldpath.max-escalation-windows</code></td><td><code>10000</code></td><td>Most counting windows that overload protection keeps, one per scope and scenario. Past it, the windows idle the longest are removed first</td><td>When there are very many scopes</td></tr>
             </tbody>
           </table></div>
-          <p>Overload protection skips Layer 2 in a scope and scenario where held for review comes out in large numbers. When 11 or more analyses of the same scope and scenario have been counted (the count starts again once it reaches 100) and over half of them are held for review, a request that Layer 1 held for review ends as step-up authentication (CHALLENGE) without Layer 2. The values 100, 11 and half are fixed in code.</p>
+          <p>Overload protection skips Layer 2 in a scope and scenario where held for review comes out in large numbers. The scope is the organization named in the event (the user when there is none, and the connecting IP when there is no user either), and the scenario is the scenario value in the event (the request path when there is none). For each scope and scenario CONTEXA keeps one counting window that holds up to the last 100 analyses. Protection starts when both conditions below are met.</p>
+          <ol>
+            <li>11 or more analyses of the same scope and scenario have been counted (the count starts again once it reaches 100).</li>
+            <li>Over half of them are held for review.</li>
+          </ol>
+          <p>A request that Layer 1 held for review then ends as step-up authentication (CHALLENGE) without Layer 2. The values 100, 11 and half are fixed in code.</p>
 
           <h2 id="minimum-action">Minimum-action rules</h2>
-          <p>A minimum-action rule sets a floor: when the facts of a decision meet a condition below, the action the model gives must be at least that action. The rules keep the model from giving a weak action such as ALLOW in a risky situation. Step-up authentication is a stronger action than ALLOW, and held for review is stronger than step-up authentication. The rules have two modes, <code>OBSERVE</code> and <code>ENFORCE</code>.</p>
+          <p>A minimum-action rule sets a floor under the action so that the model cannot give a weak action such as ALLOW in a risky situation. When the facts of a decision meet the condition of a rule below, the action the model gives must be the floor of that rule or a stronger one. Actions get stronger in this order: ALLOW, step-up authentication, held for review, BLOCK. The rules have two modes, <code>OBSERVE</code> and <code>ENFORCE</code> (these are modes of the minimum-action rules; they are not the legacy operating-mode name <code>OBSERVE</code>). In the table below, an unexplained difference is one that departs from the behavioral baseline and that no business record, such as an approval or a ticket, explains.</p>
           <ul>
             <li><code>OBSERVE</code> (default): a violation of a floor is only recorded.</li>
             <li><code>ENFORCE</code>: the system prompt states the floors to the model, and the model is asked once more when its answer is weaker than a floor. If the answer is still weaker, it becomes held for review.</li>
@@ -193,7 +198,7 @@
               <tr><td><code>contexa.security.zerotrust.minimum-action.identity.min-deviations</code></td><td><code>2</code></td><td>Number of differences at which rule 1 applies</td><td>To make rule 1 stricter or looser</td></tr>
               <tr><td><code>contexa.security.zerotrust.minimum-action.identity.min-resource-class</code></td><td><code>SENSITIVE</code></td><td>Lowest resource class rule 1 applies to</td><td>To change rule 1's resource range</td></tr>
               <tr><td><code>contexa.security.zerotrust.minimum-action.new-device-export.enabled</code></td><td><code>true</code></td><td>Rule 2. An export (EXPORT) of a sensitive or higher resource from an unexplained new device or network has the floor step-up authentication (CHALLENGE)</td><td>To turn rule 2 off</td></tr>
-              <tr><td><code>contexa.security.zerotrust.minimum-action.policy-satisfaction.enabled</code></td><td><code>true</code></td><td>Rule 3. When the policy facts say "not satisfied", the floor below applies</td><td>To turn rule 3 off</td></tr>
+              <tr><td><code>contexa.security.zerotrust.minimum-action.policy-satisfaction.enabled</code></td><td><code>true</code></td><td>Rule 3. When the policy-satisfaction fact of the decision says "not satisfied", the floor below applies</td><td>To turn rule 3 off</td></tr>
               <tr><td><code>contexa.security.zerotrust.minimum-action.policy-satisfaction.action</code></td><td><code>ESCALATE</code></td><td>Floor of rule 3. Only <code>CHALLENGE</code> or <code>ESCALATE</code> is allowed; any other value stops start-up</td><td><code>CHALLENGE</code> to lower an unmet policy to step-up authentication</td></tr>
             </tbody>
           </table></div>
@@ -207,7 +212,7 @@
               <tr><td><code>contexa.security.zerotrust.baseline.learning.alpha</code></td><td><code>0.1</code></td><td>Factor of the exponential moving average (a higher value weighs recent requests more)</td><td>To make the baseline follow changes faster or slower</td></tr>
               <tr><td><code>contexa.security.zerotrust.baseline.learning.verified-weight</code></td><td><code>0.5</code></td><td>Weight when learning a request that passed step-up authentication or whose block an administrator released (an allowed request counts 1)</td><td>Rarely</td></tr>
               <tr><td><code>contexa.security.zerotrust.baseline.learning.unverified-expiry</code></td><td><code>30d</code></td><td>How long a value learned without verification stays in the baseline when it is not seen again</td><td>Rarely</td></tr>
-              <tr><td><code>contexa.security.zerotrust.baseline.learning.half-life</code></td><td><code>14d</code></td><td>Half-life by which older frequencies count less when values compete for places in one dimension</td><td>Rarely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.baseline.learning.half-life</code></td><td><code>14d</code></td><td>When the values learned for one item (for example the network) are full and a new value comes in, the value with the lowest frequency is removed to make room. The half-life is the period over which, in this comparison, the frequency of a value counts less the longer ago it was last seen (it counts half once the half-life has passed)</td><td>Rarely</td></tr>
               <tr><td><code>contexa.security.zerotrust.baseline.retention</code></td><td><code>30d</code></td><td>A baseline with no new learning for this long after its last learning is removed</td><td>When your retention policy differs</td></tr>
               <tr><td><code>contexa.security.zerotrust.baseline.statistical.min-samples</code></td><td><code>20</code></td><td>Minimum number of learned requests before a personal baseline is established</td><td>When baselines take too long to establish, or are established too early</td></tr>
               <tr><td><code>contexa.security.zerotrust.baseline.statistical.min-days</code></td><td><code>5</code></td><td>Minimum number of dates the learning must span</td><td>When baselines take too long to establish, or are established too early</td></tr>
@@ -308,8 +313,8 @@
           <h2 id="risk-signals">Receiving outside risk signals (off by default)</h2>
           <p>CONTEXA receives revocation and risk signals that other systems, such as an IdP, send (Security Event Tokens, OpenID SSF · CAEP · RISC) at <code>POST /contexa/api/risk-signals</code>. It handles a received signal as follows.</p>
           <ul>
-            <li>A signal whose signature verifies is answered with <code>202</code>, and the subject's decision is removed so the next request is decided again.</li>
-            <li>A restriction already in force (BLOCK · ESCALATE · CHALLENGE) stays.</li>
+            <li>A signal whose signature verifies is answered with <code>202</code>, and the subject's ALLOW decision or pending-analysis decision is removed so the next request is decided again.</li>
+            <li>A restriction already in force (BLOCK · ESCALATE · CHALLENGE) is not removed and stays, because a signal never weakens a decision.</li>
             <li>A signal that ends sessions (session revoked · credential compromised · account disabled and so on) logs the user out of every session.</li>
             <li>A signal that fails verification is answered with <code>400</code>.</li>
           </ul>

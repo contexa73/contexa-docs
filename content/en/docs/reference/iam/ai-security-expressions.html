@@ -12,7 +12,7 @@
               <span class="badge badge-secondary">Authorization</span>
             </div>
             <h1>AI Security Expressions: Decision and Agent Conditions</h1>
-            <p class="lead">AI security expressions read, in a policy condition, the latest Zero Trust decision CONTEXA stored (<code>#ai.isAllowed()</code> and others) and the facts of agents and delegation (<code>isDelegatedAgent()</code> and others). Where you can use them depends on who owns login (the authentication ownership).</p>
+            <p class="lead">AI security expressions read, in a policy condition, the latest Zero Trust decision CONTEXA stored (<code>#ai.isAllowed()</code> and others) and the details of agents and delegation (<code>isDelegatedAgent()</code> and others). A delegated agent is an AI agent that acts for a person on that person's delegation. Where you can use the expressions depends on who owns login: your application (<code>HOST_OWNED</code>) or CONTEXA (<code>CONTEXA_OWNED</code>). This guide calls that choice the authentication ownership mode.</p>
           </div>
 
           <div class="callout callout-warning">
@@ -24,9 +24,9 @@
             <thead><tr><th>Where</th><th><code>CONTEXA_OWNED</code></th><th><code>HOST_OWNED</code> (default)</th></tr></thead>
             <tbody>
               <tr><td>Conditions of <code>@Protectable</code> method policies</td><td>Yes</td><td>Yes</td></tr>
-              <tr><td>Conditions of URL policies</td><td>Yes (the CONTEXA chain connects URL policies)</td><td>Yes once you connect URL policies to your chain. At that step there is no delegation stamp yet, so agent expressions answer as for a person's request and <code>#ai</code> reads the person's decision, not the delegated agent's (<a href="dynamic-authorization.html#enable">Enabling URL access policies</a>)</td></tr>
+              <tr><td>Conditions of URL policies</td><td>Yes (the CONTEXA chain connects URL policies)</td><td>Yes once you connect URL policies to your chain. When your chain evaluates URL policies, the authentication bridge has not yet put the delegation stamp (the marker that carries the request's authentication, authorization and delegation details) on the request. Agent expressions therefore answer as for a person's request and <code>#ai</code> reads the person's decision, not the delegated agent's (<a href="dynamic-authorization.html#enable">Enabling URL access policies</a>)</td></tr>
               <tr><td><code>@PreAuthorize</code>, <code>@PostAuthorize</code> and other Spring method security</td><td>No. Your method security uses Spring Security's default handler; CONTEXA's handler is not exposed to the application</td><td>No. The handler your method security uses has no <code>#ai</code></td></tr>
-              <tr><td><code>agentRequestConfirmed()</code></td><td>True for a request the accountable person confirmed</td><td>The same: true for a request the accountable person confirmed (the agent request gate runs after the application's chain)</td></tr>
+              <tr><td><code>agentRequestConfirmed()</code></td><td>True for a request the accountable person (the person responsible for the agent) confirmed</td><td>The same: true for a request the accountable person confirmed (the agent request gate runs after the application's chain)</td></tr>
               <tr><td><code>agentCallsInLastMinuteAtMost(n)</code></td><td>Compared with the calls the gate counted</td><td>The same</td></tr>
             </tbody>
           </table></div>
@@ -59,10 +59,10 @@
             </div>
           </figure>
           <ul>
-            <li><strong>Decision key:</strong> the user ID. A delegated agent acting for a person reads the decision under its own key (<code>&lt;user&gt;::agent::&lt;agent&gt;</code>), and reads BLOCK when its delegator is blocked (<a href="../agent/overview.html#decision-key">Decisions under the agent's own key</a>).</li>
+            <li><strong>Decision key:</strong> the key under which a stored decision is found. For a person it is the user ID. A delegated agent acting for a person reads the decision under its own key (<code>&lt;user&gt;::agent::&lt;agent&gt;</code>), and reads BLOCK when its delegator, the person who gave it the work, is blocked (<a href="../agent/overview.html#decision-key">Decisions under the agent's own key</a>).</li>
             <li><strong>No decision:</strong> not analysed yet, past its lifetime, or no authentication: it reads as <code>PENDING_ANALYSIS</code>.</li>
             <li><strong>ALLOW is bound to its context:</strong> an ALLOW reads as ALLOW only in the session, client IP and User-Agent (the context fingerprint) it was made for, and as pending analysis elsewhere. BLOCK, CHALLENGE and ESCALATE apply to every request of the user.</li>
-            <li><strong>Even for sync methods</strong>, a method policy's condition is evaluated before the call's own decision, so it reads the decision stored until then (<a href="protectable.html#flow">The order in which one call is handled</a>).</li>
+            <li><strong>Even for <code>sync = true</code> methods</strong> (methods that get a fresh decision inside the call and run only if it allows), a method policy's condition is evaluated before the call's own decision, so it reads the decision stored until then (<a href="protectable.html#flow">The order in which one call is handled</a>).</li>
             <li>No numeric risk score is exposed to expressions; only the five decisions are read.</li>
           </ul>
 
@@ -103,7 +103,7 @@
             <li>Expressions in URL policies read the CHALLENGE of an agent request the accountable person confirmed as ALLOW. Expressions in method policies do not do this and read it as CHALLENGE.</li>
           </ul>
           <h3 id="agent-expressions">Agent expressions</h3>
-          <p>Apart from the model's decision, URL and method policies can check a delegation deterministically. These expressions read the request's delegation stamp (made by the authentication bridge from the token, session, ...), not the delegation record.</p>
+          <p>Apart from the model's decision, URL and method policies can check a delegation by fixed rules. These expressions read the request's delegation stamp, not the delegation record. The authentication bridge makes the stamp from the token, the session and similar sources.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Expression</th><th>Meaning</th></tr></thead>
             <tbody>
@@ -122,7 +122,7 @@
 !delegationRequiresApproval() or agentRequestConfirmed()</code></pre>
           <ul>
             <li>A person's request has no delegation stamp, so agent expressions are false for it. <code>delegationChainDepthAtMost(n)</code> (n of 0 or more) and <code>agentCallsInLastMinuteAtMost(n)</code> are the exceptions: they are true for a person.</li>
-            <li>The second line is a confirmation-required policy: when the delegation requires approval, only the very request the accountable person confirmed passes. Make it an <code>ALLOW</code> policy ordered before the other allowing policies (lower priority number). A policy with the opposite effect on the same target is refused on save as a conflict. The flow is in <a href="../agent/controls.html#confirm">Confirmation by the accountable person</a>.</li>
+            <li>The second line, <code>!delegationRequiresApproval() or agentRequestConfirmed()</code>, is a confirmation-required policy: when the delegation requires approval, only the very request the accountable person confirmed passes. Make it an <code>ALLOW</code> policy ordered before the other allowing policies (lower priority number). A policy with the opposite effect on the same target is refused on save as a conflict. The flow is in <a href="../agent/controls.html#confirm">Confirmation by the accountable person</a>.</li>
             <li>The same descriptions appear in <a href="../agent/delegation.html#expressions">Delegation and Objective Contracts</a> and <a href="../agent/controls.html#expressions">Stop, Confirm, Limit</a>.</li>
           </ul>
 
