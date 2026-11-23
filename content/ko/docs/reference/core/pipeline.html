@@ -11,7 +11,7 @@
               <span class="badge badge-primary">contexa-core</span>
             </div>
             <h1>파이프라인과 RAG</h1>
-            <p class="lead">Lab이나 컨트롤러가 부르는 파이프라인이 요청을 어떤 단계로 처리하는지 설명합니다. 구성을 고르고, RAG 검색을 붙이고, 결과를 손보고, 단계를 바꾸고, 실패를 다루는 방법을 알 수 있습니다.</p>
+            <p class="lead">파이프라인은 Lab이나 컨트롤러가 호출하면 요청을 여러 단계로 나누어 처리하는 구성입니다. 이 페이지에서 요청이 어떤 단계로 처리되는지, 구성을 고르는 방법, RAG 검색을 추가하는 방법, 결과를 가공하고 단계를 바꾸는 방법, 실패를 처리하는 방법을 확인할 수 있습니다.</p>
           </div>
 
           <div class="callout callout-info">
@@ -81,7 +81,7 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
 
           <h2 id="step-deep-dive">단계별 동작</h2>
           <h3 id="step-context-retrieval">1. 검색(CONTEXT_RETRIEVAL)</h3>
-          <p>검색기 등록부(<code>ContextRetrieverRegistry</code>)가 요청 문맥의 클래스(또는 그 부모 클래스)에 등록된 검색기를 찾고, 없으면 기본 검색기를 씁니다. 검색기는 질문으로 벡터 저장소를 찾아 문서들을 한 줄씩 이어 붙인 글(<code>contextInfo</code>)과 문서 목록 · 메타데이터를 돌려줍니다. 찾은 문서가 없으면 빈 글로 다음 단계가 그대로 돕니다. 걸린 시간은 메타데이터 <code>contextRetrievalMs</code>에 남습니다. 검색기 쪽 내용은 아래 <a href="#rag-integration">RAG 붙이기</a>에 있습니다.</p>
+          <p>검색기 등록부(<code>ContextRetrieverRegistry</code>)가 요청 문맥의 클래스(또는 그 부모 클래스)에 등록된 검색기를 찾고, 없으면 기본 검색기를 씁니다. 검색기는 질문으로 벡터 저장소를 찾아 문서들을 한 줄씩 이어 붙인 글(<code>contextInfo</code>)과 문서 목록 · 메타데이터를 돌려줍니다. 찾은 문서가 없으면 빈 글로 다음 단계가 그대로 돕니다. 걸린 시간은 메타데이터 <code>contextRetrievalMs</code>에 남습니다. 검색기 쪽 내용은 아래 <a href="#rag-integration">RAG 연결하기</a>에 있습니다.</p>
 
           <h3 id="step-preprocessing">2. 전처리(PREPROCESSING)</h3>
           <p>시스템 메타데이터 글을 하나 만들어 남깁니다. 기본 구현은 빈 글을 남기므로 아무 일도 하지 않습니다(걸린 시간만 <code>preprocessingMs</code>에 남음). 이 글은 템플릿의 <code>generateDomainSystemPrompt(request, systemMetadata)</code>로 전달되고, 표준 템플릿은 비어 있지 않으면 시스템 프롬프트에 <code>&lt;context&gt;</code> 블록으로 붙입니다. 값을 넣고 싶으면 <a href="#custom-step">전처리 단계를 바꿉니다</a>.</p>
@@ -114,13 +114,13 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
           <h3 id="step-postprocessing">6. 후처리(POSTPROCESSING)</h3>
           <ul>
             <li>해석 결과가 이미 응답 타입이면 그대로 씁니다.</li>
-            <li>아니면 응답 처리기를 <a href="#response-processor">결과 손보기</a>의 규칙대로 부릅니다.</li>
+            <li>아니면 응답 처리기를 <a href="#response-processor">결과 가공하기</a>의 규칙대로 부릅니다.</li>
             <li>해석 결과가 비어 있으면 <code>FALLBACK</code> 표시만 든 응답을 만듭니다(응답 타입이 아니므로 결국 실패로 처리됨).</li>
             <li>결과가 <code>AIResponse</code>면 실행 기록을 메타데이터로 붙입니다: 실제로 쓴 모델 <code>selectedModelId</code>, 기본 모델로 대신했는지 <code>modelSelectionFallbackUsed</code>, 호출 시간 <code>llmExecutionLatencyMs</code>, 재시도 수 <code>providerRetryCount</code>, 템플릿 · 프롬프트 정보 등.</li>
             <li>마지막으로 실행기는 이 결과가 요청한 응답 타입일 때만 돌려주고, 아니면 실패로 처리합니다.</li>
           </ul>
 
-          <h2 id="rag-integration">RAG 붙이기</h2>
+          <h2 id="rag-integration">RAG 연결하기</h2>
           <p>RAG(검색 증강 생성)는 관련 문서를 찾아 프롬프트에 넣어 답을 낫게 하는 방법입니다. 검색 단계가 이 일을 하며, 따로 켤 필요가 없습니다.</p>
           <ul>
             <li><strong>기본 검색기</strong>(<code>AuthorizedContextRetriever</code>)는 요청 파라미터 <code>naturalLanguageQuery</code>로 <code>contexa.rag.defaults.top-k</code>개를 <code>similarity-threshold</code> 이상으로 찾고, 요청한 사용자 · 조직 · 테넌트 · 검색 목적에 맞는 문서만 남기며, 프롬프트 주입이 의심되는 문서를 걸러 냅니다. 남은 문서는 줄마다 <code>[auth=…]</code> 꼬리표가 붙습니다.</li>
@@ -135,7 +135,7 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
 vectorStore.add(List.of(doc));</code></pre>
           <p>메타데이터에 허용 목적이 적히지 않은 문서는 어느 목적의 검색에도 나옵니다. 사용자 · 조직 범위, 문서 종류, 보관 같은 자세한 규칙은 <a href="rag.html">RAG와 벡터 저장소</a>에 있습니다.</p>
 
-          <h2 id="response-processor">결과 손보기: 응답 처리기</h2>
+          <h2 id="response-processor">결과 가공하기: 응답 처리기</h2>
           <p>응답 처리기(<code>DomainResponseProcessor</code>)는 후처리 단계에서 해석 결과를 응답 타입으로 바꾸는 마지막 기회입니다. 빈으로 만들면 자동으로 모이며, 이렇게 불립니다.</p>
           <ul>
             <li><strong>해석 결과가 이미 응답 타입이면 불리지 않습니다.</strong> 구조화 출력이나 응답 해석이 성공하면 처리기를 거치지 않습니다.</li>

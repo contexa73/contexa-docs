@@ -13,7 +13,7 @@
               <span class="badge badge-primary">contexa-autoconfigure</span>
             </div>
             <h1>Prompt Quality Assurance</h1>
-            <p class="lead">How CONTEXA checks that the security decision prompt makes good decisions, and stops a worse version from going live without a stated reason. This page covers the labelled cases a version is graded against, how a version is measured, the wrong answers and their causes, the quality gate, how real decisions feed back into the cases, the quality report, and what each decision records about the prompt it used.</p>
+            <p class="lead">The result of a security decision depends on the prompt (the instructions) sent to the AI model. CONTEXA measures, against labelled cases, whether a new prompt version makes decisions worse, and stops a version that decides worse from going live without a stated reason. On this page you can check how versions are measured and which metrics are used, the quality gate, how to add cases from real operation, and what each decision records about the prompt it used.</p>
           </div>
 
           <h2 id="overview">Overview</h2>
@@ -148,7 +148,14 @@
             <li><strong>A measurement gives way to real decisions.</strong> It waits in the server's queue together with the trials of the version screens, and its model calls wait behind real decisions at the model server's gate. <code>contexa.pqa.oss.quality.measurement.concurrency</code> sets how many replays run at once (1 by default). The gate of a self-hosted server has 2 slots and the gate of a remote provider has 16.</li>
             <li><strong>One server at a time</strong> runs measurements. It holds a lock in the database and renews it with a heartbeat (<code>heartbeat</code>, 30 s). When that server stops, another server takes over within about two and a half minutes and resumes from the answers already taken. "Cancel" is written to the database, so the server running the measurement stops at its next answer.</li>
             <li><strong>A busy model server does not count against the prompt.</strong> When the model server gives no answer to a replay (it is busy, unreachable, or past a time limit), CONTEXA asks again up to 2 more times, after 15 s and then 30 s. An answer that still does not arrive, or a case that cannot be read, enters no metric, and the measurement shows "Incomplete, {n} answers".</li>
-            <li><strong>The number of calls is shown before you start.</strong> The screen says "About {cases} cases × {runs} runs = {calls} calls · about {minutes} min · limit {limit}", and "{n} answers measured already under the same setting are used again". A measurement taken anew counts every answer as a call. One answer makes at least one call, and at most four for each attempt (the first analysis and its corrective retry, the second analysis and its retry). The default set run 3 times makes at least 210 calls and at most 2,520 with the default retries. A measurement whose minimum number of calls is above <code>contexa.pqa.oss.quality.measurement.call-limit</code> (3,000) does not start, and one that reaches the limit stops and ends failed. The screen reckons about 7 seconds an answer, shared among the replays that run at once.</li>
+            <li><strong>The number of calls is shown before you start.</strong> The screen says "About {cases} cases × {runs} runs = {calls} calls · about {minutes} min · limit {limit}", and "{n} answers measured already under the same setting are used again". The screen reckons about 7 seconds an answer, shared among the replays that run at once.
+              <ul>
+                <li>A measurement taken anew counts every answer as a call.</li>
+                <li>One answer makes at least one call, and at most four for each attempt (the first analysis and its corrective retry, the second analysis and its retry).</li>
+                <li>The default set run 3 times makes at least 210 calls and at most 2,520 with the default retries.</li>
+                <li>A measurement whose minimum number of calls is above <code>contexa.pqa.oss.quality.measurement.call-limit</code> (3,000) does not start, and one that reaches the limit stops and ends failed.</li>
+              </ul>
+            </li>
             <li><strong>Answers are reused.</strong> An answer kept for the same case content, version, model setting and run is not measured again, so a bundle published with new cases is measured on the new cases only. "Measure again without the kept answers" (API <code>anew</code>) asks the model for every answer again, at least one call each, and the list marks such a measurement "measured anew". A measurement started without that option reuses the kept answers. So do "Save and measure at once" and the automatic first measurement of a version that has none.</li>
           </ul>
           <h3 id="metrics">The 11 metrics</h3>
@@ -175,7 +182,10 @@
             <li><strong>Same conditions.</strong> Two measurements are compared only when they were taken the same way: the same bundle version, model setting and number of runs. The screen says "Same conditions: bundle {version} · {models} · {n} runs".</li>
             <li><strong>Case against the same case.</strong> For each rate, CONTEXA takes each root and the cases that both measurements scored. It marks the root worse, better or unchanged by its own rate. An exact one-sided sign test over the roots that changed then asks whether so many could turn one way by chance. When a root is a single answer, the exact McNemar test does this. The level is <code>contexa.pqa.oss.quality.gate.significance</code> (0.05).</li>
             <li><strong>Verdicts.</strong> "Same" means no difference, or a difference within the noise of the rate. "Better" or "Worse" means a difference beyond the noise that the test says is not chance. "Undecided" means nothing is paired, the noise is not known, or too few roots changed to tell. The verdicts rest on a test because counting changed cases alone would stop the same prompt one time in four to one in two.</li>
-            <li><strong>The noise</strong> is how far two measurements of one version, taken the same way, differ from each other. A difference smaller than the noise says nothing about the versions. CONTEXA reads the noise from the newest two such measurements of the version in use first, else of the candidate, when each has answers of its own: taken anew, or finding no kept answer to reuse. A measurement that reused answers kept from another one shows no noise and is not read for it. "The difference of two measurements of one version taken anew is the noise the quality gate reads": measure the version in use anew twice, or let the weekly measurement do it (<a href="#operation-remeasure">Measured again on schedule</a>). Without such a pair the screen says the noise is "not known yet, so a difference is "undecided"".</li>
+            <li>
+              <p><strong>The noise</strong> is how far two measurements of one version, taken the same way, differ from each other. A difference smaller than the noise says nothing about the versions. CONTEXA reads the noise from the newest two such measurements of the version in use first, else of the candidate, when each has answers of its own: taken anew, or finding no kept answer to reuse. A measurement that reused answers kept from another one shows no noise and is not read for it.</p>
+              <p>"The difference of two measurements of one version taken anew is the noise the quality gate reads": measure the version in use anew twice, or let the weekly measurement do it (<a href="#operation-remeasure">Measured again on schedule</a>). Without such a pair the screen says the noise is "not known yet, so a difference is "undecided"".</p>
+            </li>
             <li><strong>Default cases and your cases, apart.</strong> "Default bundle and our cases" shows the misses of each apart. The reason is that "The default bundle does not stand for your environment and was used to make the product version, so it favours it."</li>
             <li><strong>Cases added after the version.</strong> These are the cases that came in after the version was made, which its author could not see. "A worse result only here hints at a version fitted to the cases seen." The gate's eleventh condition reads them.</li>
           </ul>
@@ -270,7 +280,19 @@
             <li><strong>Going back</strong> to a version that the scope has used for decisions before takes no quality condition. The confirmation says "Passed (going back)". A rollback, an emergency rollback too, can go only to such a version, and any other target is refused. A version counts as used for decisions when it decides now, was applied as <code>ACTIVE</code>, was the target of a rollback that was not refused, or is named in the rollback records. A version that only ran as a canary does not count.</li>
             <li><strong>Two ways reach the decisions without the gate:</strong> the version that <code>contexa.security.tiered.prompt-bundle.active</code> names, and the newest CONTEXA version that an upgrade brings when no version is chosen on the screen. The version list says so ("{version} decides as the setting names it, without passing the release gate.") and shows the state of the version's measurement in this environment. CONTEXA measures such a version once on its own.</li>
             <li><strong>Right after an upgrade</strong> the version in use has no measurement. CONTEXA measures it once by itself on the latest published bundle, and it publishes the default set first when the scope has none. The default set run 3 times is 210 answers, so model calls are made. Until the measurement is done, the gate only warns. A CONTEXA version whose measurement the product ships, taken the same way here, is not measured again. A version in use that was measured under other settings only is measured once more. CONTEXA looks for such versions every 10 minutes.</li>
-            <li><strong>API.</strong> <code>GET /contexa/admin/api/prompt-quality/versions/{number}/use-check</code> (<code>?target=CANARY</code> for a canary) returns the gate's answer under <code>quality</code>. Its fields are <code>mode</code>, <code>measurement</code>, <code>verdict</code> (as computed), <code>applied</code> (<code>PASSED</code>, <code>WARNING</code> or <code>BLOCKED</code>), <code>rollback</code>, <code>overridable</code> (whether a reason would override the block), <code>rows</code> (the eleven conditions), <code>changes</code> and <code>details</code>. <code>POST /{number}/use</code> and <code>/canary/start</code> take <code>overrideReason</code> (<a href="prompt-versions.html#api">Prompt Versions API</a>).</li>
+            <li><strong>API.</strong> <code>GET /contexa/admin/api/prompt-quality/versions/{number}/use-check</code> (<code>?target=CANARY</code> for a canary) returns the gate's answer under <code>quality</code>. Its fields are as follows.
+              <ul>
+                <li><code>mode</code>: the gate mode</li>
+                <li><code>measurement</code>: the state of the measurement</li>
+                <li><code>verdict</code>: the result as computed</li>
+                <li><code>applied</code>: the result that applies (<code>PASSED</code>, <code>WARNING</code> or <code>BLOCKED</code>)</li>
+                <li><code>rollback</code>: whether it is a rollback</li>
+                <li><code>overridable</code>: whether a reason would override the block</li>
+                <li><code>rows</code>: the eleven conditions</li>
+                <li><code>changes</code>: the cases that diverged</li>
+                <li><code>details</code>: the detail the confirmation uses</li>
+              </ul>
+              <code>POST /{number}/use</code> and <code>/canary/start</code> take <code>overrideReason</code> (<a href="prompt-versions.html#api">Prompt Versions API</a>).</li>
           </ul>
 
           <h2 id="operation">Connected to operation</h2>
@@ -281,7 +303,15 @@
           <p>The review queue is the list of decisions that an administrator is asked to rate in the decision detail. It is the one direct measure in operation of whether decisions are right. A random sample of allowed decisions hardly ever finds a miss: with one miss in 10,000 allowed decisions, 20 a day find one in 500 days on average. So the review queue (Zero Trust → Decision records, <code>?view=review</code>) draws these decisions each UTC day:</p>
           <ol>
             <li>Up to <code>contexa.security.zerotrust.console.review-daily-sample</code> (20) stopped decisions, at random.</li>
-            <li>Up to <code>review-risk-sample</code> (10) allowed decisions chosen by risk. A decision qualifies when it shows a sign that it may be a miss: the explanation the model marked most likely is not legitimate work, the second analysis decided, the model was asked again, at least <code>contexa.pqa.oss.sealed-evidence.unknown-fact-threshold</code> (3) decision facts were unknown, or the personal baseline is not established. The allowed decisions of a user who was blocked that day also qualify. They are looked for <code>review-blocked-lookback-days</code> (7) back from the block, unless an administrator released the block or rated it not valid. Decisions before a block come first, then those with more signs.</li>
+            <li>Up to <code>review-risk-sample</code> (10) allowed decisions chosen by risk. A decision qualifies when it shows one of these signs that it may be a miss:
+              <ul>
+                <li>the explanation the model marked most likely is not legitimate work</li>
+                <li>the second analysis decided</li>
+                <li>the model was asked again</li>
+                <li>at least <code>contexa.pqa.oss.sealed-evidence.unknown-fact-threshold</code> (3) decision facts were unknown</li>
+                <li>the personal baseline is not established</li>
+              </ul>
+              The allowed decisions of a user who was blocked that day also qualify. They are looked for <code>review-blocked-lookback-days</code> (7) back from the block, unless an administrator released the block or rated it not valid. Decisions before a block come first, then those with more signs.</li>
             <li>Up to <code>review-allowed-sample</code> (5) allowed decisions without any sign, at random, so that ordinary cases (cases that should pass) come in as well.</li>
           </ol>
           <p>While the sealed evidence capture runs, only sealed decisions are drawn, so a reviewed decision can be replayed and made a case. Test runs are not drawn, and the allowed decisions of a day are drawn once. With the defaults the queue takes up to 35 decisions a day instead of 20.</p>
@@ -350,7 +380,16 @@
           <p>Every decision records which prompt it was drawn with, so you can always tell afterwards which version decided. A decision's prompt execution information, and its sealed evidence, name the prompt in two ways.</p>
           <ul>
             <li><strong>The version:</strong> its name (<code>v2.0</code>), what chose it and its content hash. They are fixed on the event when the decision starts (<code>promptBundleSelection.version</code>, <code>.source</code>, <code>.contentHash</code>). The decision record keeps the version name and the content hash.</li>
-            <li><strong>The governance descriptor</strong> of the template is the fixed description of the prompt the engine runs. It holds the prompt key <code>cortex.security-decision</code>, the template key, the release <code>2026.11.16-v1.0</code>, the output contract <code>CORTEX_PROMPT_CONTRACT_V5</code>, the user text layout <code>v1.0-dictionary-blocks</code>, and the release's hash. The release name is the name of the bundle the engine runs, so the product default <code>v1.1.0</code>, the earlier product versions and the versions made on them all carry it. The trace check of the evidence audit compares the sealed descriptor with its release in the registry. The manifests of the earlier bundles v19, v20 and v21 are gone.</li>
+            <li><strong>The governance descriptor</strong> of the template is the fixed description of the prompt the engine runs. It holds:
+              <ul>
+                <li>the prompt key <code>cortex.security-decision</code></li>
+                <li>the template key</li>
+                <li>the release <code>2026.11.16-v1.0</code></li>
+                <li>the output contract <code>CORTEX_PROMPT_CONTRACT_V5</code></li>
+                <li>the user text layout <code>v1.0-dictionary-blocks</code></li>
+                <li>the release's hash</li>
+              </ul>
+              The release name is the name of the bundle the engine runs, so the product default <code>v1.1.0</code>, the earlier product versions and the versions made on them all carry it. The trace check of the evidence audit compares the sealed descriptor with its release in the registry. The manifests of the earlier bundles v19, v20 and v21 are gone.</li>
           </ul>
           <h3 id="selection">What chose the version</h3>
           <p>The selection source tells you how a decision got its version.</p>
@@ -392,9 +431,18 @@
           <p>Read this section when you upgrade from a version that had the official verification. It lists what disappeared, what replaces it, and what you may need to do by hand.</p>
           <ul>
             <li><strong>Removed:</strong> the official verification of a sealed package (12 metrics, 66 checks, its runs, results and reverification) with its screens "Protected Candidates" (<code>/contexa/admin/prompt-quality/resources</code>) and "Official Inspection" (<code>/contexa/admin/prompt-quality/runtime-evidence</code>) and their APIs, the "Inspection Overview" screen and its API <code>GET /contexa/admin/api/prompt-inspection/overview</code>, the scoring of the sealed structure and the deterministic replay.</li>
-            <li><strong>The inspection checks:</strong> three of them stay, as the evidence audit of sealed packages (<code>SEAL_INTEGRITY</code>, <code>BUNDLE_TRACE</code>, <code>SOURCE_TRUTH</code>). Six checks read the lines of the prompt (<code>DICTIONARY_CONTRACT</code>, <code>DECISION_FACT_MATCH</code>, <code>FACT_ACCURACY</code>, <code>UNKNOWN_DECLARED</code>, <code>PAST_RECORD_NOTATION</code>, <code>SAME_FACT</code>). They no longer run on your sealed packages. They check the renderer of the build over a fixed set of reference inputs (the golden inputs) when CONTEXA is built. The citation check of <code>REASON_MATCH</code> runs on the decision path for every decision, and its result is kept with the decision record. The inspector is version 30 (<code>prompt-inspector/30</code>), so the sealed packages are inspected again with the three checks.</li>
+            <li><strong>The inspection checks:</strong> the earlier checks changed as follows.
+              <ul>
+                <li>Three of them stay, as the evidence audit of sealed packages (<code>SEAL_INTEGRITY</code>, <code>BUNDLE_TRACE</code>, <code>SOURCE_TRUTH</code>).</li>
+                <li>Six checks read the lines of the prompt (<code>DICTIONARY_CONTRACT</code>, <code>DECISION_FACT_MATCH</code>, <code>FACT_ACCURACY</code>, <code>UNKNOWN_DECLARED</code>, <code>PAST_RECORD_NOTATION</code>, <code>SAME_FACT</code>). They no longer run on your sealed packages. They check the renderer of the build over a fixed set of reference inputs (the golden inputs) when CONTEXA is built.</li>
+                <li>The citation check of <code>REASON_MATCH</code> runs on the decision path for every decision, and its result is kept with the decision record.</li>
+              </ul>
+              The inspector is version 30 (<code>prompt-inspector/30</code>), so the sealed packages are inspected again with the three checks.</li>
             <li><strong>Removed settings:</strong> <code>contexa.pqa.official-verification.stale-execution-timeout</code>, <code>contexa.pqa.routes.official-api-root</code>, <code>contexa.pqa.routes.enterprise-api-root</code>, <code>contexa.pqa.routes.enterprise-verification-runtime-runs-path</code>. They are no longer read.</li>
-            <li><strong>The capability <code>PQA_ENGINE</code> is gone.</strong> A value left in <code>contexa.capability.required</code> that names no capability of this version, such as <code>pqa-engine</code>, decides nothing. The start logs one warning ("Ignoring contexa.capability.required.pqa-engine: this version has no such capability …") and goes on. Remove the key. The settings object now keeps <code>required</code> as a map from the key to its value (<code>Map&lt;String, Boolean&gt;</code>), so code of your application that calls <code>ContexaCapabilityProperties.getRequired()</code> must take that type.</li>
+            <li>
+              <p><strong>The capability <code>PQA_ENGINE</code> is gone.</strong> A value left in <code>contexa.capability.required</code> that names no capability of this version, such as <code>pqa-engine</code>, decides nothing. The start logs one warning ("Ignoring contexa.capability.required.pqa-engine: this version has no such capability …") and goes on. Removing the key is recommended.</p>
+              <p>The settings object now keeps <code>required</code> as a map from the key to its value (<code>Map&lt;String, Boolean&gt;</code>), so code of your application that calls <code>ContexaCapabilityProperties.getRequired()</code> must take that type.</p>
+            </li>
             <li><strong>The 58 tables of the official verification</strong> are not created on a new installation, and an existing installation keeps them. CONTEXA never drops them by itself. The script <code>META-INF/contexa/db/drop-retired-official-verification.sql</code> of <code>contexa-iam</code> drops them. Run it by hand against the CONTEXA database (for example <code>psql -f drop-retired-official-verification.sql</code>), and only after the upgrade. An older version reads a database without these tables as a partial installation and refuses to start.</li>
             <li><strong>What an upgrade changes in operation:</strong>
               <ul>
