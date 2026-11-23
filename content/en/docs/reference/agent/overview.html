@@ -12,16 +12,38 @@
               <span class="badge badge-secondary">Agent security</span>
             </div>
             <h1>Agents as Security Subjects</h1>
-            <p class="lead">When an AI agent sends a request to your application, CONTEXA tells it apart from a person's request. It reads which agent it is, whom it acts for and what it was given to do, passes these to the decision model as facts, and applies the decision to that agent only. This page covers how CONTEXA recognizes agents, registration, where decisions are stored, the path of one request, and protecting tool calls (MCP).</p>
+            <p class="lead">CONTEXA tells the request of an AI agent apart from the request of a person, and it stores and applies the decision for that agent alone. For every request it reads which agent sent it, for whom the agent acts and what the agent was given to do, and passes these to the decision model as facts. Stopping one agent therefore does not stop the work of the person who gave it the task. This page covers the rules that mark a request as an agent's, how CONTEXA identifies and registers agents, where decisions are stored, and how to protect tool calls (MCP).</p>
           </div>
 
           <div class="callout callout-warning">
-            <strong>Check this first: ownership.</strong> The agent request gate (call limits, refusing ended delegations, confirmation by the accountable person, refusing outside a narrowed scope), decision enforcement at the URL and at <code>@Protectable</code> methods, and stopping after a BLOCK work in both ownership modes; by default (<code>HOST_OWNED</code>) the gate runs right after the application's security chain. The CONTEXA resource server and authorization server behaviors work only when CONTEXA owns the authentication chain (<code>CONTEXA_OWNED</code>, <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>). The full table is in <a href="controls.html#ownership">Stop, Confirm, Limit</a>.
+            <strong>Check this first: authentication ownership.</strong> Authentication ownership (ownership for short) means who handles sign-in. When your application does, the mode is <code>HOST_OWNED</code> (the default). When CONTEXA does, it is <code>CONTEXA_OWNED</code> (<code>@EnableAISecurity(mode = SecurityMode.FULL)</code>). The agent gate, enforcement of stored decisions at URL requests and at <code>@Protectable</code> methods, and stopping after a BLOCK work under both modes. Only the place where the gate runs differs: right after the application's security chain under <code>HOST_OWNED</code>, and inside the chain CONTEXA builds under <code>CONTEXA_OWNED</code>. Only the controls on the token-issuing and token-checking side (the CONTEXA authorization server and resource server) work under <code>CONTEXA_OWNED</code> alone. The table for each mode is in <a href="controls.html#ownership">Stop, Confirm, Limit</a>.
           </div>
+
+          <h2 id="menu">The agent security menu</h2>
+          <p>Agent security is split into three pages. This page explains how a request is recognized as an agent's and how agents are registered. The other two explain the scope of work given to an agent, and how to stop and limit an agent.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>What each of the three pages covers</strong>A request is recognized as an agent's, the scope of its work is recorded, and the agent is stopped or limited when it is risky.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side dg-request"><p class="dg-side-title">Agents as Security Subjects (this page)</p><ul><li>How a request is recognized as an agent's</li><li>Agent registration and the decision key</li><li>Protecting tool calls (MCP)</li></ul></div>
+              <div class="dg-side dg-store"><p class="dg-side-title"><a href="delegation.html">Delegation and Objective Contracts</a></p><ul><li>How to record the scope of work a person gave an agent</li><li>The rules that compare the scope with the actual request</li><li>Objective contracts</li></ul></div>
+              <div class="dg-side dg-contexa"><p class="dg-side-title"><a href="controls.html">Stop, Confirm, Limit</a></p><ul><li>The agent gate and the answers an agent receives</li><li>Confirmation by the accountable person, stopping and release</li><li>Call limits and scope narrowing</li></ul></div>
+            </div>
+          </figure>
+          <h3 id="terms">Terms in this menu</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td>Delegator</td><td>The person who gave the agent its work.</td></tr>
+              <tr><td>Accountable person</td><td>The person who confirms an agent's requests and receives stop notices. For a delegated agent it is the delegator. For an autonomous agent it is the sponsor named at registration (<code>sponsor</code>).</td></tr>
+              <tr><td>Authentication bridge</td><td>The CONTEXA component that reads, on every request, the sign-in, authority and delegation information your application already has and turns it into decision facts (<a href="../common/bridge.html">Authentication Bridge</a>).</td></tr>
+              <tr><td>Delegation stamp</td><td>The bundle of information the authentication bridge reads from a request and attaches to it: which agent acts for whom, and for what.</td></tr>
+              <tr><td>Agent gate</td><td>A request filter that applies to an agent's requests only. It checks, in this order, call limits, ended delegations, confirmation by the accountable person and the narrowed scope. It does not apply to a person's requests (<a href="controls.html">Stop, Confirm, Limit</a>).</td></tr>
+            </tbody>
+          </table></div>
 
           <h2 id="overview">Overview</h2>
           <figure class="dg">
-            <figcaption class="dg-caption"><strong>The path of one agent request</strong>It takes the same path as a person's request, but the decision is stored under the agent's own key and applies to that agent only.</figcaption>
+            <figcaption class="dg-caption"><strong>How an agent request is processed</strong>It follows the same steps as a person's request, but the decision is stored under the agent's own key and applies to that agent only.</figcaption>
             <ol class="dg-flow">
               <li class="dg-node dg-request"><span class="dg-node-title">Agent request</span><span class="dg-node-desc">An access token or an agent account session</span></li>
               <li class="dg-node dg-host"><span class="dg-node-tag">Authentication</span><span class="dg-node-title">Token or session check</span><span class="dg-node-desc">A suspended agent's token is refused here (with the CONTEXA resource server)</span></li>
@@ -46,12 +68,12 @@
             </tbody>
           </table></div>
           <ul>
-            <li><strong>Agent facts win.</strong> If any of a delegation flag, an agent ID, a delegation ID, or an agent execution mode or actor type is present, the request is recorded as an agent's even when the application declared a person. This keeps an agent's activity from being recorded as a person's.</li>
+            <li><strong>Any agent marker makes the request an agent's.</strong> If any of a delegation flag, an agent ID, a delegation ID, or an agent execution mode or actor type is present, the request is recorded as an agent's even when the application declared a person. This keeps an agent's activity from being recorded as a person's.</li>
             <li><strong>An agent whose delegation is not stated is an autonomous agent.</strong> Its activity stays with the agent, not with a person.</li>
             <li>Both agent kinds have the subject type value <code>AGENT_RUNTIME</code> in records and are told apart by the execution mode (<code>DELEGATED_AGENT</code> or <code>AUTONOMOUS_AGENT</code>).</li>
           </ul>
 
-          <h2 id="paths">How CONTEXA recognizes an agent</h2>
+          <h2 id="paths">How CONTEXA identifies an agent</h2>
           <p>Agent requests usually arrive in one of three shapes.</p>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>Three shapes of an agent request</strong>Whatever the shape, the decision model receives the facts in the same form.</figcaption>
@@ -68,7 +90,7 @@
             <tbody>
               <tr><td>Actor claims</td><td><code>act</code></td><td>RFC 8693 actor. The outermost is the current actor, nested ones are prior actors (the chain)</td></tr>
               <tr><td>Agent ID claims</td><td><code>agent_id</code>, <code>agentId</code></td><td>Names the agent directly</td></tr>
-              <tr><td>Agent actor markers</td><td><code>xms_act_fct</code> = <code>11</code></td><td>Entra's agent identity marker</td></tr>
+              <tr><td>Agent actor markers</td><td><code>xms_act_fct</code> = <code>11</code></td><td>Microsoft Entra's agent identity marker</td></tr>
               <tr><td>Delegated markers</td><td><code>execution_mode</code> = <code>DELEGATED_AGENT</code></td><td>A token for work done for a person</td></tr>
               <tr><td>Agent client IDs</td><td>Empty</td><td>For authorization servers that mark agents no other way; the clients listed here are agents</td></tr>
             </tbody>
@@ -86,9 +108,16 @@
             </tbody>
           </table></div>
           <ul>
-            <li><strong>An agent seen for the first time is recorded automatically.</strong> Even an unregistered agent is kept in the registry as observed (<code>OBSERVED</code>) at its first request. An observed agent is not approved, so it cannot authenticate with its own token.</li>
-            <li><strong>An approved agent</strong> is registered (<code>LIFECYCLE</code>), allowlisted and in service (<code>ACTIVE</code>). The status is one of <code>ACTIVE</code> (in service), <code>SUSPENDED</code> (stopped) and <code>DEREGISTERED</code>.</li>
-            <li>The same agent's requests are written to the registry at most once every <code>registry-write-interval</code> (default 1 minute).</li>
+            <li><strong>An agent seen for the first time is recorded automatically.</strong> Even an unregistered agent is added to the registry at its first request, with the registration source (<code>source</code>) <code>OBSERVED</code>, meaning it was first seen in a request. An observed agent is not approved, so it cannot authenticate with its own token.</li>
+            <li><strong>An approved agent</strong> is one registered through the registration interface (<code>LIFECYCLE</code>), on the allow list and in service (<code>ACTIVE</code>).</li>
+            <li>The <strong>status</strong> (<code>status</code>) of a registry entry has three values. It is separate from the registration source (<code>OBSERVED</code> or <code>LIFECYCLE</code>).
+              <ul>
+                <li><code>ACTIVE</code>: in service.</li>
+                <li><code>SUSPENDED</code>: stopped by a decision or by an operator. It can be put back in service.</li>
+                <li><code>DEREGISTERED</code>: removed from the IdP that issued the agent. If this agent still sends requests, the decision weighs that fact.</li>
+              </ul>
+            </li>
+            <li>The same agent's requests are written to the registry again at most once every <code>registry-write-interval</code> (default 1 minute).</li>
           </ul>
           <h3 id="register-api">Registering through the admin API</h3>
           <pre><code class="language-http">POST /contexa/admin/api/agents/register
@@ -137,7 +166,7 @@ Content-Type: application/json
           <ul>
             <li>The delegator's authority is read from your <code>UserDetailsService</code>. A disabled or locked account delegates nothing. To read it from elsewhere (a directory, ...), declare a <code>DelegatorAuthoritySource</code> bean.</li>
             <li>A request that authenticated as the delegator through token exchange was already evaluated as the delegator, so it is not done again.</li>
-            <li>When the operating mode is not <code>ENFORCE</code> (SHADOW, OBSERVE, DISABLED, or <code>contexa.security.zerotrust.enabled=false</code>), nothing is refused; it is only recorded.</li>
+            <li>When the operating mode is not <code>ENFORCE</code> (<code>SHADOW</code> or <code>DISABLED</code>, or <code>contexa.security.zerotrust.enabled=false</code>), nothing is refused; it is only recorded. The old name <code>OBSERVE</code> is read as <code>DISABLED</code>.</li>
             <li>URL policies are re-evaluated in the CONTEXA chain (<code>CONTEXA_OWNED</code>); method policies under both ownerships.</li>
           </ul>
 
@@ -153,16 +182,16 @@ Content-Type: application/json
           </table></div>
           <p>No setting is needed for these lines. The objective text the delegator wrote (free text) is left out of the <code>Delegation</code> line and kept apart as untrusted text, so instructions hidden in it are not read as decision facts. How the prompt is drawn is in <a href="../architecture/prompt-engineering.html#human-agent">The Decision Prompt</a>.</p>
 
-          <h2 id="mcp">Protecting tool calls and MCP servers</h2>
+          <h2 id="mcp">Protecting tool calls (MCP)</h2>
           <div class="callout callout-warning">
-            <strong>What the OSS covers.</strong> The OSS holds only the data forms of MCP tool permits and approvals; issuing, validating and revoking them and classifying tool approvals belong to the enterprise MCP module. With the OSS you protect tool calls in the three ways below.
+            <strong>What the OSS covers.</strong> The OSS holds only the data forms of MCP tool permits and approvals; issuing, validating and revoking them and classifying tool approvals belong to the enterprise MCP module. In the OSS edition you protect tool calls in the three ways below.
           </div>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Way</th><th>When</th><th>What it does</th><th>What you do</th></tr></thead>
             <tbody>
-              <tr><td>① AuthZEN evaluation API</td><td>The MCP server or gateway is outside CONTEXA</td><td>The enforcement point asks for the decision at <code>POST /contexa/authzen/access/v1/evaluation</code> (several at <code>/evaluations</code>, at most 20). A restriction in force answers it, else it is analysed in place. The response <code>decision</code> is <code>true</code> only for an ALLOW while enforcing</td><td><code>contexa.security.zerotrust.authzen.enabled: true</code>; the caller's credential holds <code>SCOPE_contexa.authzen</code></td></tr>
+              <tr><td>① AuthZEN evaluation API</td><td>The MCP server or gateway is outside CONTEXA</td><td>The enforcement point (the gateway or MCP server that receives the request and carries out allow or deny) asks for the decision at <code>POST /contexa/authzen/access/v1/evaluation</code> (several at <code>/evaluations</code>). A restriction already in force answers it; otherwise the request is analysed in place. The values of the request and the response are <a href="#authzen-details">below</a></td><td><code>contexa.security.zerotrust.authzen.enabled: true</code>; the caller's credential holds <code>SCOPE_contexa.authzen</code></td></tr>
               <tr><td>② Wrap the tool in a <code>@Protectable</code> method and pass argument origins</td><td>Tools run inside your application</td><td>States as a decision fact (the <code>ArgumentOrigin</code> line) an argument value that neither the user's request nor the company's records name and that first appeared in a tool output read earlier. What it means is the model's call</td><td>Your agent framework adapter fills <code>ArgumentOrigins</code></td></tr>
-              <tr><td>③ Confirmation-required policy</td><td>Tools a person must approve each time</td><td>The policy <code>!delegationRequiresApproval() or agentRequestConfirmed()</code> lets through, once, only the request its accountable person approved (both ownership modes)</td><td>The agent follows the <a href="controls.html#confirm">confirmation flow</a></td></tr>
+              <tr><td>③ Confirmation-required policy</td><td>Tools a person must approve each time</td><td>The policy <code>!delegationRequiresApproval() or agentRequestConfirmed()</code> lets through, once, only the request its accountable person approved. <code>@Protectable</code> method policies work under both ownership modes. URL policies work only under <code>CONTEXA_OWNED</code>, because under <code>HOST_OWNED</code> the application's chain evaluates URL policies before the agent gate and cannot know of the confirmation</td><td>The agent follows the <a href="controls.html#confirm">confirmation flow</a></td></tr>
             </tbody>
           </table></div>
           <h3 id="authzen-example">AuthZEN request example</h3>
@@ -173,7 +202,23 @@ Content-Type: application/json
   "resource": { "type": "report", "id": "2026-10" },
   "context":  { "client_ip": "10.0.0.5" }
 }</code></pre>
-          <p><code>subject.type</code> is one of <code>user</code>, <code>agent</code> and <code>service</code>. An agent with a <code>delegator_id</code> is decided as a delegated agent, without one as an autonomous agent. Each evaluation is a decision event of its own, so the evaluations sent together are not taken for one request.</p>
+          <p><code>subject.type</code> is one of <code>user</code>, <code>agent</code> and <code>service</code>. An agent with a <code>delegator_id</code> is decided as a delegated agent, and an agent without one as an autonomous agent. The decision key of an autonomous agent is <code>subject.properties.client_id</code> when it is present, and <code>subject.id</code> otherwise. Each evaluation becomes an analysis request of its own, so evaluations sent together are not taken for one request.</p>
+          <h3 id="authzen-details">Values the AuthZEN evaluation API receives and returns</h3>
+          <p>AuthZEN (the OpenID Authorization API 1.0) is the standard way for the side that receives a request (the enforcement point) to ask a decision server "may this request be allowed?". CONTEXA provides the evaluation API only, not the search API.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>Item</th><th>Content</th></tr></thead>
+            <tbody>
+              <tr><td>Caller</td><td>Must be an authenticated enforcement point. Without authentication the answer is <code>401</code>. Without the <code>required-authority</code> authority (default <code>SCOPE_contexa.authzen</code>) it is <code>403</code>.</td></tr>
+              <tr><td>One evaluation</td><td><code>POST {base-path}/access/v1/evaluation</code>. <code>subject</code>, <code>action</code> and <code>resource</code> are required; without them the answer is <code>400</code>. <code>context</code> is optional.</td></tr>
+              <tr><td>Several evaluations</td><td><code>POST {base-path}/access/v1/evaluations</code>. The <code>evaluations</code> array holds up to <code>max-evaluations</code> items (default 20); more gives <code>400</code>. Without the array, the body is handled as one evaluation. When one item is invalid, only that item answers with an error and the others are still evaluated.</td></tr>
+              <tr><td>When to stop</td><td><code>options.evaluations_semantic</code> of a request with several evaluations. <code>execute_all</code> (default) evaluates all of them, <code>deny_on_first_deny</code> stops at the first denial, and <code>permit_on_first_permit</code> stops at the first permit.</td></tr>
+              <tr><td>Values <code>context</code> may carry</td><td><code>client_ip</code>, <code>user_agent</code>, <code>session_id</code>, <code>tenant_id</code>, <code>time</code> (RFC 3339), <code>request</code> (<code>method</code> and <code>path</code>) and <code>challenge_verified_at</code>. The session, IP and User-Agent are used to build the context fingerprint of the decision.</td></tr>
+              <tr><td>Tool-call information</td><td>Give <code>action.properties.arguments</code> (an object or a string for each argument name) and <code>action.properties.argument_origins</code> (a list of argument origins), and they enter the decision by the same rules as a <code>@Protectable</code> method. Each item of the list has <code>argument</code>, <code>value</code>, <code>source</code>, <code>toolName</code> and <code>excerpt</code>. Any other shape is refused with <code>400</code>.</td></tr>
+              <tr><td>Response</td><td><code>decision</code> (true or false) and <code>context.contexa</code> (<code>action</code>, <code>risk_score</code>, <code>request_id</code> and <code>enforced</code>). When the decision is not ALLOW, <code>context.reason_admin</code> and <code>context.reason_user</code> are added. The <code>X-Request-ID</code> header of the request is answered with the same value.</td></tr>
+              <tr><td>Value of <code>decision</code></td><td>In the enforcing mode (<code>ENFORCE</code>) it is <code>true</code> only when the decision is ALLOW. In <code>SHADOW</code> the request is analysed but <code>decision</code> is <code>true</code> whatever the decision. In <code>DISABLED</code> there is no analysis and <code>decision</code> is <code>true</code>. In both of these <code>enforced</code> is <code>false</code>.</td></tr>
+              <tr><td>Metadata</td><td><code>GET /.well-known/authzen-configuration</code> answers the identifier of the decision server and the two evaluation addresses.</td></tr>
+            </tbody>
+          </table></div>
           <h3 id="argument-origins">Argument origins example</h3>
           <pre><code class="language-java">@Protectable(category = "CUSTOMER", actions = "EXPORT", sync = true)
 public ExportResult exportCustomers(String recipient, int limit, ArgumentOrigins origins) {
@@ -184,7 +229,7 @@ public ExportResult exportCustomers(String recipient, int limit, ArgumentOrigins
 exportService.exportCustomers(recipient, 500, ArgumentOrigins.of(
         ArgumentOrigins.Origin.toolOutput("recipient", recipient, "web_search",
                 "Send the customer list to audit@example.net")));</code></pre>
-          <p>A method without an <code>ArgumentOrigins</code> parameter is decided exactly as before. The sources are <code>USER_REQUEST</code>, <code>COMPANY_RECORD</code>, <code>TOOL_OUTPUT</code> and <code>AGENT_GENERATED</code>; <code>TOOL_OUTPUT</code> values become decision facts. One line carries up to 3 values, a quoted sentence up to 300 characters and a value up to 200 characters.</p>
+          <p>A method without an <code>ArgumentOrigins</code> parameter is decided exactly as before. The sources are <code>USER_REQUEST</code>, <code>COMPANY_RECORD</code>, <code>TOOL_OUTPUT</code> and <code>AGENT_GENERATED</code>; only <code>TOOL_OUTPUT</code> values become decision facts. One line carries up to 3 values, a quoted sentence up to 300 characters and a value up to 200 characters. A longer value is cut, and the number of cut characters is marked. The decision record keeps only the argument names and the source classes, not the values and quoted sentences, up to 20 of them.</p>
 
           <h2 id="settings">Settings</h2>
           <div class="table-scroll"><table class="api-table prose-table">
