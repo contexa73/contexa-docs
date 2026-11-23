@@ -21,8 +21,8 @@
           <figure class="dg">
             <figcaption class="dg-caption"><strong>봉인 증거의 처리 과정</strong>봉인 · 저장 · 증거 감사는 자동이고, 재현과 사례 올리기는 관리자가 요청할 때 합니다.</figcaption>
             <ol class="dg-flow">
-              <li class="dg-node dg-model"><span class="dg-node-title">프롬프트 포착</span><span class="dg-node-desc">판정 프롬프트가 만들어지는 순간, 모델이 받을 글과 압축하기 전 원본을 메모리에 잡아 둡니다</span></li>
-              <li class="dg-node"><span class="dg-node-title">봉인</span><span class="dg-node-desc">판정이 끝나면 일곱 구역을 한 묶음으로 만들고 SHA-256 해시를 계산합니다. 그 해시를 HMAC-SHA256으로 서명하고(서명 키를 설정하지 않았으면 시작할 때 만든 임시 키로), 직전에 저장된 묶음의 해시를 넣어 묶음들을 이어 붙입니다</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-title">프롬프트 포착</span><span class="dg-node-desc">판정 프롬프트가 만들어지는 순간, 모델이 받을 프롬프트와 압축하기 전 원본(프롬프트 예산을 맞추려고 항목을 줄이기 전의 프롬프트)을 메모리에 임시로 보관합니다</span></li>
+              <li class="dg-node"><span class="dg-node-title">봉인</span><span class="dg-node-desc">판정이 끝나면 일곱 구역을 한 묶음으로 만듭니다. 저장할 때 직전에 저장된 묶음의 해시를 이 묶음에 넣고, 묶음 전체의 SHA-256 해시를 계산한 뒤 HMAC-SHA256으로 서명합니다(서명 키를 설정하지 않았으면 시작할 때 만든 임시 키로). 이렇게 묶음들이 이어집니다</span></li>
               <li class="dg-node dg-store"><span class="dg-node-title">저장</span><span class="dg-node-desc">CONTEXA DB의 <code>ctxa_sealed_evidence_package</code> 표에 새 행으로 넣기만 하고 고치지 않습니다(기본 90일 보관)</span></li>
             </ol>
             <p class="dg-outcomes-title">저장된 증거 묶음으로 하는 일</p>
@@ -49,7 +49,13 @@
           </figure>
           <ul>
             <li>6구역의 실행 정보에서 512자를 넘는 글은 통째로 담지 않고 길이와 해시만 남깁니다.</li>
-            <li><strong>판정이 읽은 기준선</strong>은 4구역 안에 키 하나(<code>decisionBaselines</code>) 아래로 담깁니다. 개인 기준선과 조직 기준선을 각각 담고, 판정이 기준선을 찾지 못했으면 없었다고 명시해 담습니다. 이 값은 분석이 기준선을 읽은 그 순간의 값이고, 봉인할 때 다시 읽지 않습니다. 그래서 나중에 재현해도 판정이 읽은 그 기준선으로 다시 묻습니다(<a href="#replay">재현</a>). 이 키가 전혀 없는 묶음은 기준선을 담기 전에 봉인한 묶음입니다.</li>
+            <li><strong>판정이 읽은 기준선</strong>은 4구역 안에 키 하나(<code>decisionBaselines</code>) 아래로 담깁니다.
+              <ul>
+                <li>개인 기준선과 조직 기준선을 각각 담고, 판정이 기준선을 찾지 못했으면 없었다고 명시해 담습니다.</li>
+                <li>이 값은 분석이 기준선을 읽은 그 순간의 값이고, 봉인할 때 다시 읽지 않습니다. 그래서 나중에 재현해도 판정이 읽은 그 기준선으로 다시 묻습니다(<a href="#replay">재현</a>).</li>
+                <li>이 키가 전혀 없는 묶음은 기준선을 담기 전에 봉인한 묶음입니다.</li>
+              </ul>
+            </li>
           </ul>
 
           <h2 id="when">언제 봉인하나</h2>
@@ -61,9 +67,9 @@
               <ol>
                 <li><strong>새로 시작한 뒤의 구간과 고정 표본.</strong> 이 규칙은 하루 상한과 상관없이 적용합니다.
                   <ul>
-                    <li><strong>구간:</strong> 서버가 뜬 직후 판정 1,000건과, 판정에 쓰는 프롬프트 버전이 바뀐 직후 판정 1,000건은 모두 봉인합니다(<code>contexa.pqa.oss.sealed-evidence.full-capture-after-change</code>). 버전이 바뀌는 경우는 판정에 쓰는 버전의 표지를 옮길 때, 되돌릴 때, 설정을 바꿀 때입니다.</li>
+                    <li><strong>구간:</strong> 서버가 시작된 직후 판정 1,000건과, 판정에 쓰는 프롬프트 버전이 바뀐 직후 판정 1,000건은 모두 봉인합니다(<code>contexa.pqa.oss.sealed-evidence.full-capture-after-change</code>). 버전이 바뀌는 경우는 판정에 쓰는 버전의 표지를 옮길 때, 되돌릴 때, 설정을 바꿀 때입니다.</li>
                     <li><strong>고정 표본:</strong> 구간 밖에서는 요청 ID의 고정 해시로 고른 1%를 봉인합니다(<code>sample-percent</code>). 같은 요청은 언제나 같은 결과를 받습니다.</li>
-                    <li><strong>버전을 가르는 법:</strong> 버전은 이름과 내용 해시로 구별합니다. 먼저 적용(<a href="prompt-versions.html#canary">일부 사용자에게 먼저 적용</a>)이나 함께 시험(<a href="prompt-versions.html#shadow">함께 시험으로 돌리기</a>)으로 도는 버전은 자기 구간을 따로 가집니다. 구간은 서버(노드)마다 따로 셉니다.</li>
+                    <li><strong>버전 구별:</strong> 버전은 이름과 내용 해시로 구별합니다. 먼저 적용(<a href="prompt-versions.html#canary">일부 사용자에게 먼저 적용</a>)이나 함께 시험(<a href="prompt-versions.html#shadow">함께 시험으로 돌리기</a>)에 쓰이는 버전은 자기 구간을 따로 가집니다. 구간은 서버(노드)마다 따로 셉니다.</li>
                   </ul>
                 </li>
                 <li><strong>요청을 멈춘 판정.</strong> 추가 인증(<code>CHALLENGE</code>), 검토 보류(<code>ESCALATE</code>), 차단(<code>BLOCK</code>) 판정은 봉인합니다.</li>
@@ -76,13 +82,20 @@
                     <li>개인 기준선이 아직 자리 잡지 않았습니다.</li>
                   </ul>
                 </li>
-                <li><strong>하루 상한.</strong> 규칙 2와 3은 UTC 하루에 저장된 증거 묶음이 <code>daily-limit</code>(2,000)건보다 적은 동안만 적용합니다. 저장소에 있는 그날의 묶음을 모두 세므로, 같은 DB를 쓰는 서버들은 상한 하나를 함께 지킵니다. 서버마다 30초에 한 번 개수를 다시 읽으므로, 그 사이에 봉인한 만큼은 상한을 넘을 수 있습니다. 상한에 닿으면 그날은 규칙 1만으로 봉인하고, 빠진 판정 수를 10분에 한 번까지 로그에 남깁니다. <code>0</code>이면 처음부터 규칙 1만으로 봉인합니다.</li>
+                <li><strong>하루 상한.</strong> 규칙 2와 3은 UTC 하루에 저장된 증거 묶음이 <code>daily-limit</code>(2,000)건보다 적은 동안만 적용합니다.
+                  <ul>
+                    <li>저장소에 있는 그날의 묶음을 모두 세므로, 같은 DB를 쓰는 서버들은 상한 하나를 함께 지킵니다.</li>
+                    <li>서버마다 30초에 한 번 개수를 다시 읽으므로, 그 사이에 봉인한 만큼은 상한을 넘을 수 있습니다.</li>
+                    <li>상한에 닿으면 그날은 규칙 1만으로 봉인하고, 봉인에서 빠진 판정 수를 10분에 한 번까지 로그에 남깁니다.</li>
+                    <li><code>0</code>이면 처음부터 규칙 1만으로 봉인합니다.</li>
+                  </ul>
+                </li>
               </ol>
             </li>
             <li><strong>저장 공간:</strong> 증거 묶음 하나는 약 60 KB를 씁니다(제품의 표본 판정으로 잰 값). 기본 하루 상한까지 쌓이는 양은 하루 약 120 MB입니다. 상한에 닿은 뒤에도 규칙 1이 봉인하는 묶음은 더해집니다.</li>
-            <li><strong>판정에 주는 영향:</strong> 봉인은 판정 처리 순서에서 적용(55) 다음, 감사(60) 앞(56)에 있습니다. 그러나 증거 묶음을 조립하고 저장하는 일은 별도 스레드가 합니다. 그 스레드가 밀리면 넘친 증거 묶음은 버리고, 판정에는 영향을 주지 않습니다.</li>
+            <li><strong>판정에 주는 영향:</strong> 봉인은 판정 처리 순서에서 적용(55) 다음, 감사(60) 앞(56)에 있습니다. 그러나 증거 묶음을 조립하고 저장하는 일은 별도 스레드가 합니다. 그 스레드가 제때 처리하지 못해 넘친 증거 묶음은 버리고, 판정에는 영향을 주지 않습니다.</li>
             <li><strong>포착한 프롬프트의 대기:</strong> 모델에 보낸 프롬프트는 판정이 끝나 봉인될 때까지 메모리에서 최대 10분(<code>snapshot-ttl</code>) 기다립니다.</li>
-            <li><strong>검토 대기열과의 관계:</strong> Zero Trust 콘솔의 검토 대기열은 봉인(포착)이 도는 동안 봉인된 판정만 뽑습니다. 그래서 검토한 판정을 재현하고 정답 사례로 올릴 수 있습니다(<a href="prompt-quality.html#operation-review">프롬프트 품질 보증</a>).</li>
+            <li><strong>검토 대기열과의 관계:</strong> Zero Trust 콘솔(관리 콘솔의 Zero Trust 메뉴, <a href="../iam/admin.html">관리 콘솔</a>)의 검토 대기열은 사람이 검토할 판정을 모은 목록입니다. 이 목록은 봉인(포착)이 켜져 있는 동안 봉인된 판정만 골라 담습니다. 그래서 검토한 판정을 재현하고 정답 사례로 올릴 수 있습니다(<a href="prompt-quality.html#operation-review">프롬프트 품질 보증</a>).</li>
           </ul>
 
           <h2 id="integrity">바뀌지 않았음을 확인하기</h2>
@@ -122,13 +135,22 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>검사(화면 이름)</th><th>무엇을 확인하나</th></tr></thead>
             <tbody>
-              <tr><td><code>SEAL_INTEGRITY</code>(무결성)</td><td>묶음이 저장된 뒤 바뀌지 않았고 안쪽 기록끼리 맞는지 봅니다. 묶음 해시를 다시 계산해 저장된 값과 비교하고, 형식 3이면 서명도 확인합니다. 시스템 프롬프트와 사용자 프롬프트가 둘 다 저장되어 있고 각각의 해시와 맞는지 봅니다. 모델이 받은 프롬프트가 압축 전 원본과 같은지 보고, 다르면 압축했다는 기록이 있어야 맞는 것으로 셉니다. 요청 ID(상관 ID)가 있고 요청 사실에 적힌 요청 ID와 같은지 봅니다. 봉인된 프롬프트가 마지막 모델 호출이 보낸 프롬프트와 같은지, 판정에 기록된 출력 재시도가 모델 호출 단계의 기록과 맞는지도 봅니다</td></tr>
+              <tr><td><code>SEAL_INTEGRITY</code>(무결성)</td><td>묶음이 저장된 뒤 바뀌지 않았고 안쪽 기록끼리 맞는지 봅니다. 구체적으로 다음을 확인합니다.
+                <ul>
+                  <li>묶음 해시를 다시 계산해 저장된 값과 비교하고, 형식 3이면 서명도 확인합니다.</li>
+                  <li>시스템 프롬프트와 사용자 프롬프트가 둘 다 저장되어 있고 각각의 해시와 맞는지 봅니다.</li>
+                  <li>모델이 받은 프롬프트가 압축 전 원본과 같은지 보고, 다르면 압축했다는 기록이 있어야 맞는 것으로 셉니다.</li>
+                  <li>요청 ID(상관 ID)가 있고 요청 사실에 적힌 요청 ID와 같은지 봅니다.</li>
+                  <li>봉인된 프롬프트가 마지막 모델 호출이 보낸 프롬프트와 같은지 봅니다.</li>
+                  <li>판정에 기록된 출력 재시도가 모델 호출 단계의 기록과 맞는지 봅니다.</li>
+                </ul>
+              </td></tr>
               <tr><td><code>BUNDLE_TRACE</code>(출처 추적)</td><td>봉인된 프롬프트가 정식으로 출시된 버전에서 나왔는지 봅니다. 묶음에 적힌 프롬프트 버전이 프롬프트 릴리스 레지스트리(출시한 버전을 기록한 곳)에 있는지, 묶음에 적힌 계약 버전과 내용 해시가 그 버전의 것과 같은지, 그 출시에 승인이 있는지 확인합니다. 쓰지 않게 되어 은퇴한 버전도 레지스트리에 남아 있으면 있는 것으로 셉니다. 새 버전이 나와도 앞선 버전으로 만든 묶음이 불일치가 되지는 않습니다. 레지스트리가 없으면 확인 못 함으로 셉니다</td></tr>
               <tr><td><code>SOURCE_TRUTH</code>(원천 대조)</td><td>판정이 쓴 사실이 앱이 가진 원래 기록과 같은지 봅니다. 원천 검증기(<code>PromptFactSourceVerifier</code>)가 그 판정에 대해 원천을 다시 읽어 사실마다 원천에 적힌 값을 줍니다. 검사는 그 값을 봉인된 판정이 수집한 값, 곧 표준 맥락의 당직 기록 · 배정 · 승인 · 위임과 견줍니다. 봉인된 판정이 모른다고 적은 사실은 불일치가 아닙니다. 봉인된 맥락에 구조화된 값이 없는 사실은 견줄 수 없으므로 확인 못 함으로 셉니다. 기본 검증기는 CONTEXA의 업무 기록과 위임을 다시 읽으며, 앱이 같은 형의 빈을 선언하면 그것을 대신 씁니다. 검증기가 없으면 연동된 원천이 없다고 기록합니다</td></tr>
             </tbody>
           </table></div>
           <ul>
-            <li><strong>판정 결과(verdict):</strong> 묶음마다 결과가 하나 나옵니다.
+            <li><strong>감사 결과(verdict):</strong> 묶음마다 결과가 하나 나옵니다.
               <ul>
                 <li><code>PASS</code>: 세 검사가 모두 맞은 경우입니다.</li>
                 <li><code>FAIL</code>: 불일치가 하나 이상인 경우입니다.</li>
@@ -139,9 +161,9 @@
               개별 발견은 <code>MISMATCH</code>(불일치)와 <code>UNVERIFIABLE</code>(확인 못 함)이며, 확인 못 한 것은 통과로 세지 않습니다. 화면은 이 결과를 "모두 온전함"(<code>PASS</code>, <code>NOT_APPLICABLE</code>), "문제 있음"(<code>FAIL</code>), "확인 못 함 있음"(<code>INCOMPLETE</code>, <code>ERROR</code>, 아직 검수 안 함)으로 묶어 보여 줍니다.</li>
             <li><strong>실행:</strong> 자동 감사는 30초마다(<code>contexa.prompt-inspection.interval</code>, 첫 실행은 <code>initial-delay</code> 뒤) 아직 감사하지 않은 가장 오래된 묶음부터 50개씩(<code>batch-size</code>) 처리합니다. 서버가 여러 대여도 잠금 하나로 한 대만 돕니다. 묶음 ID 해시로 <code>sample-percent</code>(기본 100)만큼만 고릅니다.</li>
             <li><strong>검수기 버전:</strong> 결과마다 검수기 버전(<code>prompt-inspector/N</code>, 지금 30)을 남기고, 사전 프롬프트이면 읽은 사전도 남깁니다. 검수기 버전이 바뀌면 묶음을 다시 감사하고, 묶음마다 최근 두 검수기 버전의 결과를 남깁니다.</li>
-            <li><strong>예전 증거 묶음:</strong> 옛 프롬프트 번들(v19 · v20 · v21)로 만든 묶음은 보관 기한이 끝날 때까지 그 번들 이름을 지니고, 그 묶음에 해당하는 검사로 감사합니다.</li>
-            <li><strong>감사 결과는 보관 기간을 정하지 않습니다</strong>(<a href="#retention">보관</a>). 프롬프트 줄을 읽던 검사는 이제 빌드에서 렌더러를 확인합니다. <a href="prompt-quality.html#removed">없어진 것</a>을 참고합니다.</li>
-            <li><strong>켜지는 조건:</strong> 검수기, 자동 감사, 다시 검수, 봉인 증거 화면은 <code>contexa.enterprise.enabled</code>가 <code>true</code>가 아니고 <code>contexa.prompt-inspection.enabled</code>가 <code>true</code>(기본)일 때만 만들어집니다. 검수를 꺼도 재현과 프롬프트 버전의 시험 판정은 남습니다.</li>
+            <li><strong>예전 증거 묶음:</strong> 옛 프롬프트 번들(v19 · v20 · v21)로 만든 증거 묶음은 보관 기한이 끝날 때까지 그 번들 이름을 지니고, 그 번들에 해당하는 검사로 감사합니다.</li>
+            <li><strong>감사 결과는 보관 기간을 정하지 않습니다</strong>(<a href="#retention">보관</a>). 예전에 프롬프트의 줄을 읽던 검사 여섯 개는 이제 증거 묶음을 검사하지 않고, 제품을 빌드할 때 고정된 기준 입력(황금 입력)으로 프롬프트를 그리는 부분(렌더러)을 확인합니다. 자세한 내용은 <a href="prompt-quality.html#removed">없어진 것</a>을 참고합니다.</li>
+            <li><strong>켜지는 조건:</strong> 검수기, 자동 감사, 다시 검수, 봉인 증거 화면은 <code>contexa.enterprise.enabled</code>(엔터프라이즈 모듈을 쓰는 설치에서 켜는 설정, 기본 <code>false</code>)가 <code>true</code>가 아니고 <code>contexa.prompt-inspection.enabled</code>가 <code>true</code>(기본)일 때만 만들어집니다. 검수를 꺼도 재현과 프롬프트 버전의 시험 판정은 계속 쓸 수 있습니다.</li>
           </ul>
 
           <h2 id="console">봉인 증거 화면</h2>
@@ -150,14 +172,14 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>부분</th><th>보이는 것과 하는 일</th></tr></thead>
             <tbody>
-              <tr><td>머리</td><td>고른 기간에 봉인된 건수를 "이 기간 봉인 {n}건"으로 보여 줍니다(기간을 고르지 않으면 최근 7일). 안내 문장 "멈춘 판정을 먼저, 허용 판정은 표본으로 봉인합니다. 증거 감사는 무결성, 출처 추적, 원천 대조 세 가지를 봅니다."도 함께 보입니다. "이 기간 다시 검수" 단추는 이 기간의 봉인을 증거 감사로 다시 보게 합니다. 다시 보는 일은 자동 검수 차례에 돌고, 모델을 부르지 않습니다</td></tr>
+              <tr><td>머리</td><td>고른 기간에 봉인된 건수를 "이 기간 봉인 {n}건"으로 보여 줍니다(기간을 고르지 않으면 최근 7일). 안내 문장 "멈춘 판정을 먼저, 허용 판정은 표본으로 봉인합니다. 증거 감사는 무결성, 출처 추적, 원천 대조 세 가지를 봅니다."도 함께 보입니다. "이 기간 다시 검수" 버튼은 이 기간의 봉인을 증거 감사로 다시 보게 합니다. 다시 보는 일은 자동 검수 차례에 처리되고, 모델을 부르지 않습니다</td></tr>
               <tr><td>숫자</td><td>"봉인된 판정"("멈춘 판정 {n} · 허용 표본 {m}")과, 검사마다 하나씩 있는 숫자입니다: "봉인 뒤 바뀐 기록"(무결성), "판의 출처를 잇지 못한 기록"(출처 추적), "원천과 다른 사실이 든 기록"(원천 대조)</td></tr>
               <tr><td>거르기</td><td>조치, 프롬프트 버전, 감사 결과(모두 온전함, 문제 있음, 무결성 불일치, 출처 추적 불일치, 원천 대조 불일치, 확인 못 함 있음), 사용자, 대상 경로, 그리고 감사가 문제를 찾은 프롬프트 블록과 항목으로 거릅니다</td></tr>
               <tr><td>목록</td><td>"봉인 목록"이며 최근 순입니다. 줄마다 때와 사용자, 대상, 조치, 프롬프트 버전이 보입니다</td></tr>
               <tr><td>증거 묶음 하나: "이 판정"</td><td>판정을 한 문장으로 알려 줍니다(예: "{사용자} 의 {대상} 요청을 차단했습니다."). 프롬프트 버전, 봉인한 때, 모델 설정, 모델이 든 이유, 함께 시험으로 돌린 판정인지도 보입니다</td></tr>
-              <tr><td>"기록이 온전한가"</td><td>증거 감사의 세 검사와 그 발견("맞음 {n} · 불일치 {m} · 확인 못 함 {k}"), 감사한 검수기와 사전, "다시 검수" 단추, 앞선 검수기 버전의 저장된 결과, "줄마다 맞춘 검사"가 보입니다</td></tr>
+              <tr><td>"기록이 온전한가"</td><td>증거 감사의 세 검사와 그 발견("맞음 {n} · 불일치 {m} · 확인 못 함 {k}"), 감사한 검수기와 사전, "다시 검수" 버튼, 앞선 검수기 버전의 저장된 결과, "줄마다 맞춘 검사"가 보입니다</td></tr>
               <tr><td>"이 판정에 들어간 것"</td><td>탭 세 개가 있습니다. 프롬프트(봉인한 시스템 프롬프트와 사용자 프롬프트), 사실(사실마다 프롬프트 블록과 줄), 답(모델의 답과 모델이 인용한 사실)입니다</td></tr>
-              <tr><td>"재현"</td><td>이 묶음의 재현 기록(때, 원래와의 비교, 판정 시간)과 "재현" 단추가 있습니다(<a href="#replay">아래</a>)</td></tr>
+              <tr><td>"재현"</td><td>이 묶음의 재현 기록(때, 원래와의 비교, 판정 시간)과 "재현" 버튼이 있습니다(<a href="#replay">아래</a>)</td></tr>
               <tr><td>"사례로 올리기"</td><td>관리자가 정한 정답과 함께 봉인된 판정을 정답 사례로 만듭니다. 화면은 이렇게 안내합니다: "사례는 봉인한 입력을 쓰고 이 봉인을 가리킵니다. 관문에 쓰이려면 올린 사람과 다른 관리자의 확인이 필요할 수 있습니다."(<a href="prompt-quality.html#cases">정답 사례</a>)</td></tr>
             </tbody>
           </table></div>
@@ -189,7 +211,7 @@
               본문은 <code>{"bundleVersion", "secondPassModels", "userBaseline", "organizationBaseline"}</code>이고, <code>bundleVersion</code>에는 프롬프트 버전 이름을 적으며, 2차 분석 모델은 최대 3개입니다. 경로의 <code>{requestId}</code>는 봉인된 판정의 요청(상관) ID입니다. 재현이 받는 이름 목록은 <code>GET /contexa/admin/api/sealed-decisions/replay-bundles</code>(숨기지 않은 보안 판정 버전, 새것부터)입니다. 봉인된 판정은 자기가 쓴 버전을 이름으로 가리키므로, 숨긴 버전도 이름으로 지정하면 받습니다.</li>
             <li><strong>AI 모델을 실제로 부르므로 비용이 듭니다.</strong> 결과는 판정에 적용하지 않고, 학습하지 않고, 봉인하지 않습니다. 남는 것은 감사 기록 <code>SEALED_DECISION_REPLAYED</code> 하나입니다. 각 분석 단계는 최대 3분까지 기다립니다. 고른 버전이 원래와 다르거나 모델이 다르게 답하면 조치가 원래 판정과 다를 수 있습니다.</li>
             <li><strong>실패했을 때:</strong> 그 요청 ID나 증거 묶음의 봉인 판정이 없으면 404, 목록에 없는 이름이거나 요청이 잘못되면 400, 판정 파이프라인이 앱에 없으면 503을 돌려줍니다.</li>
-            <li><strong>켜지는 조건:</strong> 재현은 증거 묶음을 보관하는 곳이면 <code>contexa.prompt-inspection.enabled</code>가 켜져 있든 꺼져 있든 쓸 수 있습니다. <code>contexa.enterprise.enabled=true</code>이면 없습니다.</li>
+            <li><strong>켜지는 조건:</strong> 재현은 증거 묶음이 저장되는 설치라면 <code>contexa.prompt-inspection.enabled</code>가 켜져 있든 꺼져 있든 쓸 수 있습니다. <code>contexa.enterprise.enabled=true</code>이면 이 오픈소스판(OSS)의 재현 기능은 만들어지지 않습니다.</li>
           </ul>
           <pre><code class="language-http">POST /contexa/admin/api/sealed-decisions/7f3c2a/replay
 Content-Type: application/json
@@ -201,7 +223,7 @@ Content-Type: application/json
           <ul>
             <li>증거 묶음은 감사 결과와 상관없이 봉인 시각부터 90일(<code>contexa.pqa.oss.sealed-evidence.retention.period</code>) 뒤에 만료됩니다. 만료 시각은 봉인할 때 묶음에 적히므로, 보관 기간 설정을 바꾸면 그 뒤에 봉인하는 묶음부터 적용됩니다. 만료된 묶음은 매일 03:30(<code>retention.cleanup-cron</code>, 서버의 시간대)에 지웁니다.</li>
             <li><strong>만료 뒤에도 남는 것:</strong> 프롬프트 버전의 시험 판정이 다시 판정한 묶음, 정답 사례를 올린 묶음, 관리자가 평가한 판정의 묶음은 그 시험 · 사례 · 평가가 남아 있는 동안 지우지 않습니다.</li>
-            <li><code>retention.clean-period</code>(30일)는 이제 아무것도 지우지 않습니다. 예전 버전은 마지막 검수에서 문제가 없던 묶음을 30일 뒤에 지웠습니다. 무결성 확인은 <code>clean-period</code>와 <code>period</code> 가운데 짧은 쪽보다 오래된 묶음 앞에서 빠진 묶음을, 끊어진 사슬이 아니라 그때의 삭제로 읽습니다.</li>
+            <li><code>retention.clean-period</code>(30일)는 이제 아무것도 지우지 않습니다. 예전 버전은 마지막 검수에서 문제가 없던 묶음을 30일 뒤에 지웠습니다. 무결성 확인은 직전 묶음이 저장소에 없을 때 다음과 같이 읽습니다. 이 묶음보다 앞서 남아 있는 묶음 가운데 가장 늦게 봉인된 것이 <code>clean-period</code>와 <code>period</code> 가운데 짧은 쪽보다 오래되었으면 그 사이는 삭제로 읽고, 더 새로우면 끊어진 사슬(<code>LINK_BROKEN</code>)로 봅니다.</li>
           </ul>
 
           <h2 id="limits">한계</h2>
@@ -241,7 +263,7 @@ Content-Type: application/json
 
           <h2 id="requirements">켜지는 조건과 확장점</h2>
           <ul>
-            <li>봉인은 <code>contexa-iam</code>이 클래스패스에 있고 CONTEXA DB(<code>contexa.datasource.*</code>)가 연결되어 있으면 기본으로 켜집니다. <code>contexa.enterprise.enabled=true</code>이면 OSS의 봉인 포착, 보관 삭제, 증거 감사, 재현 빈은 만들어지지 않습니다.</li>
+            <li>봉인은 <code>contexa-iam</code>이 클래스패스에 있고 CONTEXA DB(<code>contexa.datasource.*</code>)가 연결되어 있으면 기본으로 켜집니다. <code>contexa.enterprise.enabled=true</code>이면 오픈소스판(OSS)의 봉인 포착, 보관 삭제, 증거 감사, 재현 빈은 만들어지지 않습니다.</li>
             <li>다른 서명 방식(키 관리 서비스, HSM 등)을 쓰려면 <code>EvidenceSigner</code> 빈을 선언합니다. 판정 감사 기록과 증거 묶음이 함께 그 서명기를 씁니다.</li>
             <li>다른 저장소에 두려면 <code>SealedEvidencePackageRepository</code> 빈을, 봉인할 판정을 직접 고르려면 <code>SealedEvidenceCaptureSampling</code> 빈을 선언합니다(<a href="#when">언제 봉인하나</a>의 규칙을 대신함).</li>
             <li>판정 사실을 앱이 가진 기록과 직접 대조하려면 <code>PromptFactSourceVerifier</code> 빈을 선언합니다.</li>
