@@ -43,7 +43,9 @@
           <h2 id="session">Session state</h2>
           <p>Turned on with <code>.session(Customizer.withDefaults())</code>.</p>
           <ul>
-            <li>Changes the session ID at login (<code>changeSessionId</code>), unless <code>sessionManagement(...)</code> in global or in the flow option sets another session fixation policy (such as <code>sessionFixation(fixation -&gt; fixation.none())</code>), which is then used. This holds for every login that ends in a session: form, REST, one-time code, passkey, and MFA (when the factors are completed, or at the primary login when no factor is required). Login also replaces the CSRF token, so a page that logs in with REST and stays open reads the token again before its next request.</li>
+            <li>Changes the session ID at login (<code>changeSessionId</code>), unless <code>sessionManagement(...)</code> in global or in the flow option sets another session fixation policy (such as <code>sessionFixation(fixation -&gt; fixation.none())</code>), which is then used.</li>
+            <li>This holds for every login that ends in a session: form, REST, one-time code, passkey, and MFA (when the factors are completed, or at the primary login when no factor is required).</li>
+            <li>Login also replaces the CSRF token, so a page that logs in with REST and stays open reads the token again before its next request.</li>
             <li>The logout address is <code>/logout</code>; for an MFA flow with a prefix it is <code>&lt;prefix&gt;/logout</code>. The address is fixed: a <code>logoutUrl(...)</code> written in global or in the flow option <code>logout(...)</code> is not used, because the request-time access control and the MFA-in-progress access control let a restricted session through to exactly this address.</li>
             <li>Logout invalidates the session and clears the login, and CONTEXA's logout handler (<code>compositeLogoutHandler</code>) does CONTEXA's cleanup and clears token cookies.</li>
             <li>After logout: an MFA flow with a prefix goes to <code>&lt;prefix&gt;/mfa/login</code>; every other session flow goes to <code>/contexa/admin/login</code>. These are defaults: a <code>logoutSuccessUrl(...)</code> or <code>logoutSuccessHandler(...)</code> written in global or in the flow option <code>logout(...)</code> is used instead.</li>
@@ -86,9 +88,12 @@
           <ul>
             <li><strong>Resource server:</strong> JWT validation, CONTEXA's token converter, 401 and 403 handlers, stateless (<code>STATELESS</code>).</li>
             <li><strong>Authorization server:</strong> <code>OAuth2AuthorizationService</code>, <code>RegisteredClientRepository</code>, the token endpoint, OIDC, and a grant that gives tokens to a logged-in user (<a href="#authenticated-user-grant">below</a>).</li>
-            <li><strong>Server mode</strong> <code>contexa.auth.oauth2-server-mode</code>: <code>RESOURCE_SERVER</code> (validate only), <code>AUTHORIZATION_SERVER</code> (issue only), <code>COMBINED</code> (both, default). A login flow in the token state needs the issuing side: with <code>RESOURCE_SERVER</code> such a flow stops startup. Use <code>COMBINED</code> (or <code>AUTHORIZATION_SERVER</code>) where the application logs people in, or give those flows the session state. With <code>AUTHORIZATION_SERVER</code> the login succeeds and the next requests are anonymous, since nothing validates the token.</li>
+            <li><strong>Server mode</strong> <code>contexa.auth.oauth2-server-mode</code>: <code>RESOURCE_SERVER</code> (validate only), <code>AUTHORIZATION_SERVER</code> (issue only), <code>COMBINED</code> (both, default).</li>
+            <li>A login flow in the token state needs the issuing side, so with <code>RESOURCE_SERVER</code> such a flow stops startup. Use <code>COMBINED</code> (or <code>AUTHORIZATION_SERVER</code>) where the application logs people in, or give those flows the session state.</li>
+            <li>With <code>AUTHORIZATION_SERVER</code> the login succeeds and the next requests are anonymous, since nothing validates the token.</li>
             <li>When the application defines one <code>OAuth2TokenGenerator</code> bean or one <code>BearerTokenResolver</code> bean, CONTEXA uses it as it is.</li>
-            <li><strong>Logout</strong> (in a mode that includes the authorization server): <code>POST /logout</code>. An API request is answered 200 with <code>status</code> <code>LOGGED_OUT</code>; a plain browser submission moves to the login page (an MFA flow's own; otherwise <code>contexa.auth.urls.primary.form-login-page</code>). A <code>logoutSuccessUrl(...)</code> or <code>logoutSuccessHandler(...)</code> written in global or in <code>logout(...)</code> is not used in the token state; to change the answer, define a <code>LogoutSuccessHandler</code> bean named <code>contexaOauth2LogoutSuccessHandler</code>.</li>
+            <li><strong>Logout</strong> (in a mode that includes the authorization server): <code>POST /logout</code>. An API request is answered 200 with <code>status</code> <code>LOGGED_OUT</code>. A plain browser submission moves to the login page (an MFA flow's own; otherwise <code>contexa.auth.urls.primary.form-login-page</code>).</li>
+            <li><strong>Changing the logout response:</strong> a <code>logoutSuccessUrl(...)</code> or <code>logoutSuccessHandler(...)</code> written in global or in <code>logout(...)</code> is not used in the token state. To change the answer, define a <code>LogoutSuccessHandler</code> bean named <code>contexaOauth2LogoutSuccessHandler</code>.</li>
           </ul>
           <h3 id="transport">Token transport</h3>
           <div class="table-scroll"><table class="api-table prose-table">
@@ -155,7 +160,14 @@ Content-Type: application/json
           </ul>
 
           <h2 id="token-checks">Token checks and decisions</h2>
-          <p>CONTEXA's resource server checks every access token with Spring validators before CONTEXA reads the request: signature, lifetime, issuer (<code>contexa.auth.oauth2.issuer-validation-enabled</code>, on by default), and the audience (<code>aud</code>) when <code>contexa.auth.oauth2.audiences</code> is set. CONTEXA's authorization server names the ID of the client a token was issued to as the audience, so list the clients whose tokens this application accepts. A token that fails these checks is refused with 401, and no CONTEXA filter or decision runs for that request.</p>
+          <p>CONTEXA's resource server checks every access token with Spring validators before CONTEXA reads the request. The checks are:</p>
+          <ul>
+            <li>the signature</li>
+            <li>the lifetime</li>
+            <li>the issuer (<code>contexa.auth.oauth2.issuer-validation-enabled</code>, on by default)</li>
+            <li>the audience (<code>aud</code>), only when <code>contexa.auth.oauth2.audiences</code> is set</li>
+          </ul>
+          <p>CONTEXA's authorization server names the ID of the client a token was issued to as the audience, so list the clients whose tokens this application accepts in that setting. A token that fails these checks is refused with 401, and no CONTEXA filter or decision runs for that request.</p>
           <p>A CONTEXA decision never adds authorities. ALLOW keeps the token's authorities; CHALLENGE, BLOCK and ESCALATE remove the original authorities and leave only the decision's marker authority (<a href="zero-trust-filters.html#authorities">How authorities change</a>). To tie an operation to a scope, use a Spring rule such as <code>hasAuthority("SCOPE_reports.write")</code>; a token without that scope is refused whatever the decision.</p>
           <p>If the application validates tokens with its own resource server, put the same checks on its decoder.</p>
           <pre><code class="language-java">@Bean
@@ -184,7 +196,8 @@ grant_type=urn:ietf:params:oauth:grant-type:token-exchange
             <li>Both tokens must have been issued by this authorization server and still be valid. If the person's token has <code>may_act</code>, only the actor named there can exchange it.</li>
             <li>The scope is the requested scope and must be within the scopes registered for the agent client.</li>
             <li>The issued token has <code>sub</code> = the person, <code>act.sub</code> = the agent client and <code>client_id</code> = the agent client. The resource server authenticates the request as the person (the person's authorities and the token's scopes), and every decision records the registered agent acting for that person.</li>
-            <li>Every token CONTEXA issues is made by Spring Authorization Server's token generator, which adds the token exchange <code>act</code> and the <code>cnf</code> binding of DPoP and mTLS clients before CONTEXA's claims (<code>client_id</code>, login facts, roles). So a token request with a DPoP proof receives a sender-bound token (<code>token_type</code> <code>DPoP</code>). When you define your own <code>OAuth2TokenGenerator</code> bean it is used as it is, and that bean must add these claims itself.</li>
+            <li>Every token CONTEXA issues is made by Spring Authorization Server's token generator. This generator adds the token exchange <code>act</code> and the <code>cnf</code> binding of DPoP and mTLS clients before CONTEXA's claims (<code>client_id</code>, login facts, roles). So a token request with a DPoP proof receives a sender-bound token (<code>token_type</code> <code>DPoP</code>).</li>
+            <li>When you define your own <code>OAuth2TokenGenerator</code> bean it is used as it is, and that bean must add these claims itself.</li>
           </ul>
 
           <h2 id="settings">Settings you often change</h2>
