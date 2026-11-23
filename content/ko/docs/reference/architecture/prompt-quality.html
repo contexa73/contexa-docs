@@ -1,0 +1,420 @@
+<nav class="breadcrumb">
+            <a href="../../../index.html">홈</a>
+            <span class="breadcrumb-separator">/</span>
+            <a href="../../../docs/reference/index.html">레퍼런스</a>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">프롬프트 품질 보증</span>
+          </nav>
+
+          <div class="docs-page-header">
+            <div class="docs-module-badge">
+              <span class="badge badge-primary">contexa-core</span>
+              <span class="badge badge-primary">contexa-iam</span>
+              <span class="badge badge-primary">contexa-autoconfigure</span>
+            </div>
+            <h1>프롬프트 품질 보증</h1>
+            <p class="lead">보안 판정 프롬프트가 판정을 맞게 내리는지 Contexa 가 어떻게 재는지, 더 나쁘게 판정하는 버전이 사유 없이 판정에 쓰이지 않게 어떻게 막는지 설명합니다. 버전을 채점하는 정답 사례, 측정과 지표, 틀린 사례와 원인, 품질 관문, 운영이 사례에 더하는 것, 품질 보고서, 판정이 자기 프롬프트에 대해 남기는 기록을 다룹니다.</p>
+          </div>
+
+          <h2 id="overview">한눈에 보기</h2>
+          <p>품질은 프롬프트의 글자가 아니라 판정으로 잽니다. 보안 판정 프롬프트의 버전을 <strong>정답 사례</strong>(판정 입력과 그 정답)에 돌리고, 나온 답을 규칙으로 정답과 견줘 채점합니다. 버전을 판정에 쓰려 하면 <strong>품질 관문</strong>이 그 버전의 측정을 지금 판정에 쓰는 버전의 측정과 견줍니다. 운영이 고리를 닫습니다: 관리자가 평가한 판정, 허용했으나 뒤에 침해로 확인된 판정이 사례가 됩니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>프롬프트 품질 보증의 고리</strong>측정은 판정을 바꾸지 않습니다. 판정 기록 · 봉인 · 결과 기록 · 학습을 남기지 않고, 모델 호출은 실제 판정 뒤에 줄을 섭니다.</figcaption>
+            <ol class="dg-flow">
+              <li class="dg-node dg-request"><span class="dg-node-tag">1</span><span class="dg-node-title">정답 사례</span><span class="dg-node-desc">판정 입력과 정답. Contexa 기본 묶음과 우리 사례, 두 번째 관리자가 확인</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">2</span><span class="dg-node-title">측정</span><span class="dg-node-desc">사례마다 판정 파이프라인으로 재현, 기본 3회. 지표 11가지와 95% 범위, 두 버전은 사례끼리 견줌</span></li>
+              <li class="dg-node"><span class="dg-node-tag">3</span><span class="dg-node-title">틀린 사례와 원인</span><span class="dg-node-desc">틀린 답마다 원인 일곱 가운데 하나와 고칠 곳</span></li>
+              <li class="dg-node"><span class="dg-node-tag">4</span><span class="dg-node-title">새 버전</span><span class="dg-node-desc">버전 화면에서 만들고 저장하면서 측정</span></li>
+              <li class="dg-node dg-challenge"><span class="dg-node-tag">5</span><span class="dg-node-title">품질 관문</span><span class="dg-node-desc">판정에 사용 · 먼저 적용 시작 때 조건 열하나. 막힘은 사유로 넘기고, 되돌리기는 조건 없이</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">6</span><span class="dg-node-title">운영 연결</span><span class="dg-node-desc">위험에 따라 허용 판정을 검토, 평가한 판정과 침해를 사례로, 지금 버전을 매주 다시 측정</span></li>
+              <li class="dg-node dg-store"><span class="dg-node-tag">7</span><span class="dg-node-title">증거와 보고서</span><span class="dg-node-desc">판정의 봉인 증거, 감사에 내는 품질 보고서</span></li>
+            </ol>
+          </figure>
+          <ul>
+            <li><strong>채점은 규칙이 합니다:</strong> 답의 조치가 사례의 허용 조치 가운데 하나이면 맞은 답입니다. 모델로 답을 채점하지 않습니다.</li>
+            <li><strong>모든 비율에는 표본이 붙습니다:</strong> 비율마다 서로 다른 뿌리 사례 단위로 센 95% 범위를 함께 냅니다. 사례로 두 버전을 가릴 수 없으면 화면은 "판단 불가"라고 씁니다.</li>
+            <li><strong>보안 판정에만 있습니다:</strong> 정답 사례, 측정, 품질 관문은 <code>cortex.security-decision</code> 에만 있습니다. 버전이 있는 다른 프롬프트 7종(<a href="prompt-versions.html#other-prompts">프롬프트 버전 관리</a>)에는 없습니다.</li>
+          </ul>
+          <div class="callout callout-info">
+            <strong>프롬프트 검수와 공식 검증을 대신합니다.</strong> 공식 검증(지표 12개, 검사 66개, 화면 "보호 후보" · "공식검사" · "검수 현황"), 봉인 구조 채점, 결정적 재현은 없어졌습니다. 봉인 증거의 검수는 세 검사만 남아 증거 감사가 되었습니다(<a href="evidence.html#audit">봉인 증거</a>). 업그레이드로 바뀌는 것은 <a href="#removed">없어진 것과 업그레이드</a>에 있습니다.
+          </div>
+
+          <h2 id="screens">화면 다섯 개</h2>
+          <p>메뉴 묶음 "프롬프트 품질 보증"에는 화면이 다섯 있고, 화면마다 질문 하나에 답합니다. 화면마다 위에 다섯 메뉴 막대가 있고, 그 가운데 넷에는 옆에 개수가 붙습니다. 모든 화면과 API에는 관리자 역할이 필요합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>메뉴</th><th>주소</th><th>답하는 질문</th><th>메뉴 옆 개수</th></tr></thead>
+            <tbody>
+              <tr><td>품질 현황</td><td><code>/contexa/admin/prompt-quality/status</code></td><td>"지금 판정에 쓰는 프롬프트가 얼마나 맞히는지, 무엇을 확인해야 하는지 봅니다."(<a href="#status">품질 현황 화면</a>)</td><td>—</td></tr>
+              <tr><td>정답 사례</td><td><code>/contexa/admin/prompt-quality/cases</code>, 사례 하나는 <code>/cases/{key}</code></td><td>"판정을 채점하는 기준입니다. 사례 한 건은 판정 입력과 정답입니다."(<a href="#cases">정답 사례</a>)</td><td>범위의 사례 수. Contexa 기본 묶음과 확인 대기 사례 포함</td></tr>
+              <tr><td>측정과 비교</td><td><code>/contexa/admin/prompt-quality/measure</code>, <code>/measure/{id}</code>, <code>/measure/run</code>, <code>/measure/compare</code>, <code>/measure/trials/{id}</code></td><td>"정답 사례로 판을 재고, 새 판이 지금 판보다 나은지 견줍니다."(<a href="#measure">버전 측정</a>)</td><td>측정 수. 정답 사례 측정과 봉인 판정 측정</td></tr>
+              <tr><td>프롬프트 버전</td><td><code>/contexa/admin/prompt-quality/versions</code></td><td>"판정에 쓰는 프롬프트를 버전으로 관리합니다."(<a href="prompt-versions.html">프롬프트 버전 관리</a>)</td><td>버전 수. 숨긴 버전 제외</td></tr>
+              <tr><td>봉인 증거</td><td><code>/contexa/admin/prompt-quality/evidence</code>, 증거 묶음 하나는 <code>/evidence/{packageId}</code></td><td>"판정에 들어간 프롬프트와 사실, 답을 봉인해 둔 기록입니다."(<a href="evidence.html#console">봉인 증거</a>)</td><td>최근 7일에 봉인한 판정 수</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>예전 주소</strong>는 이 화면으로 넘어갑니다: <code>/contexa/admin/prompt-inspection</code> 과 <code>/prompt-inspection/packages</code> 는 봉인 증거 목록으로(기간과 거르기 조건을 함께 가져감), <code>/prompt-inspection/packages/{packageId}</code> 는 그 증거 묶음으로, <code>/contexa/admin/prompt-quality/versions/trials</code> 와 <code>/prompt-quality/releases/compare</code> 는 측정과 비교로, <code>/versions/trials/{id}</code> 는 <code>/measure/trials/{id}</code> 로 갑니다. 공식 검증의 화면(<code>/contexa/admin/prompt-quality/resources</code>, <code>/runtime-evidence</code>)은 없어졌습니다.</li>
+            <li>화면은 <code>?scope=</code>(프롬프트 버전의 테넌트, 없으면 플랫폼 전체)를 받습니다. 사례, 묶음, 측정은 버전처럼 범위마다 따로 있습니다.</li>
+            <li>업그레이드하면 기존 설치에도 새 메뉴가 생기고, 없어진 화면의 메뉴는 지워지며, "봉인 프롬프트"는 "봉인 증거"가 됩니다.</li>
+          </ul>
+
+          <h2 id="cases">정답 사례</h2>
+          <p>정답 사례는 판정 입력과 그 정답입니다. 입력은 봉인 판정의 재현이 읽는 것(표준 맥락, 요청 사실, 인증 상태, 기준선, 과거 기록)이지 프롬프트의 글자가 아니므로, 버전이 프롬프트를 어떤 형식으로 그리든 사례는 그 형식으로 다시 그려집니다. 사례는 운영의 봉인 판정과 따로 저장하고, 재현 때 메모리에서 봉인 형식으로 만들어 넣습니다.</p>
+          <h3 id="cases-answer">정답</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>화면 이름</th><th>담는 것</th></tr></thead>
+            <tbody>
+              <tr><td>정답(허용되는 조치)</td><td>맞는 조치 하나 이상(위협이면 예를 들어 <code>BLOCK</code>, <code>CHALLENGE</code>, <code>ESCALATE</code>). 답의 조치가 이 가운데 있으면 맞은 답입니다</td></tr>
+              <tr><td>가장 나은 조치</td><td>선택. 허용되는 조치 가운데 하나</td></tr>
+              <tr><td>판정의 성격</td><td>위협, 정상, 불확실. 불확실 사례는 위협처럼 멈춰야 할 사례로 셉니다</td></tr>
+              <tr><td>유형</td><td>외부인(다른 사람이 계정을 씀), 내부자(계정 주인이 역할이나 기록이 덮지 않는 일을 함), 정상 업무, 자동화</td></tr>
+              <tr><td>사례 등급</td><td>보통, 반드시 잡을 사례(예: 서버가 스스로 확인한 계정 탈취), 막으면 안 되는 사례. 관문은 "반드시 잡을 사례"를 허용한 답, "막으면 안 되는 사례"를 차단한 답을 한 회차도 허용하지 않습니다</td></tr>
+              <tr><td>정답인 까닭</td><td>필수. 한국어, 영어, 또는 둘 다</td></tr>
+              <tr><td>판단을 가르는 사실</td><td>선택, 한 줄에 하나(예: <code>intent.anomalySignal=CONFIRMED_ACCOUNT_TAKEOVER</code>). 원인 "입력 부족"은 이것을 적은 사례에서만 계산됩니다</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>뿌리:</strong> 다른 사례로 만든 사례는 그 사례의 뿌리를 가리킵니다. 한 판정의 변형들은 서로 독립이 아니므로 95% 범위와 관문이 요구하는 사례 수는 서로 다른 뿌리 단위로 셉니다. 변형만으로는 목표가 채워지지 않습니다.</li>
+            <li><strong>사례의 출처:</strong> "Contexa 기본"(기본 묶음), "운영에서 올림"(관리자가 올린 봉인 판정, 판정 상세에서 평가한 판정, <a href="#operation">운영 연결</a>), "우리가 만듦"(다른 사례를 복제해 값을 바꾼 것. 새 기기, 바깥 주소, 승인 기록 삭제 같은 변형). 운영에서 올린 사례 가운데 2차 판단까지 간 판정은 표시해 따로 셉니다.</li>
+            <li><strong>고정한 환경:</strong> 사례는 자기가 읽히는 시간대와 맥락 형식을 지니고, 서버 시간대와 상관없이 자기 시간대와 자기 범위의 버전으로 재현됩니다.</li>
+          </ul>
+          <h3 id="cases-default">Contexa 기본 묶음</h3>
+          <p>제품에는 읽기 전용 기본 묶음 70건이 실려 있습니다. 봉인 판정 25건, 그 가운데 10건에서 만든 통제 변형 35건, 그리고 서버가 확인한 악성 신호를 담은 통제 사례 10건(키 <code>VER-…</code>, 등급 "반드시 잡을 사례", 정답은 <code>BLOCK</code> 하나)입니다. 보통 등급 60건은 유형마다 15건(위협 44, 불확실 1, 정상 15)이고, 서로 다른 뿌리로 세면 멈춰야 할 뿌리 25개, 허용해야 할 뿌리 10개입니다. 사례마다 정답인 까닭을 한국어와 영어로 적었고, 변형 45건은 판단을 가르는 사실을 적었으며, 모든 사례는 UTC 로 읽힙니다. 기본 묶음에는 "막으면 안 되는 사례"가 없습니다.</p>
+          <ul>
+            <li>기본 묶음의 사례는 복제해서("복제해서 만들기") 고칩니다. 복제본은 같은 뿌리로 셉니다.</li>
+            <li>제품을 올리면 기본 묶음만 바뀝니다. 우리 사례는 그대로입니다.</li>
+          </ul>
+          <h3 id="cases-confirm">두 번째 관리자의 확인과 발행</h3>
+          <ul>
+            <li><strong>정답은 두 사람이 정합니다.</strong> 사례와 그 정답을 바꾼 것은 정답을 정한 사람과 다른 관리자가 확인할 때까지 기다립니다("확인 대기"). "정답을 정한 사람은 확인할 수 없습니다." 실제 공격을 정상으로 올린 사례는 그 공격을 허용하는 버전을 통과시킵니다. 관리자가 한 명뿐인 설치는 <code>contexa.pqa.oss.quality.two-person-confirmation=false</code> 로 끕니다. 그러면 사례는 올리는 대로 확인되고, 정답 변경은 여전히 누가 바꿨는지와 함께 남습니다.</li>
+            <li><strong>발행</strong>("묶음 발행")은 이 빌드의 기본 묶음과 범위의 확인된 사례를 내용 해시로 고정합니다. "관문은 발행한 묶음 판을 씁니다. 발행은 사례 목록을 고정하고, 새로 더한 사례만 더 잽니다." 확인 대기 사례는 들어가지 않고, 같은 사례를 다시 발행하면 앞서 발행한 묶음이 그대로 쓰입니다. 범위에 발행한 묶음이 없으면 첫 자동 측정이 기본 묶음만으로 발행합니다.</li>
+            <li><strong>정답 바꾸기</strong>는 바뀌기 전의 정답을 남깁니다. 사례 상세의 "정답을 바꿔서 좋아진 건수"는 지금 정답으로는 맞고 처음 올린 정답으로는 틀렸던 답을 셉니다. 어느 버전이 좋아서 나아진 것이 아니므로 따로 보입니다.</li>
+            <li>단계마다 감사 기록이 남습니다: <code>PROMPT_QUALITY_CASE_SUBMITTED</code>, <code>PROMPT_QUALITY_CASE_ANSWER_CHANGED</code>, <code>PROMPT_QUALITY_CASE_CONFIRMED</code>, <code>PROMPT_QUALITY_CASE_SET_PUBLISHED</code>.</li>
+          </ul>
+          <h3 id="cases-privacy">개인 정보</h3>
+          <p>운영에서 올린 사례에는 "실제 사용자와 주소, 그 사용자의 기준선이 들어 있고 봉인 보존 기한(90일)을 넘어 남습니다". 사례는 Contexa DB 안에만 둡니다. 사례를 지우면 그 정답 변경 이력과 그 사례로 잰 답이 함께 지워지고, 그 사례가 들어 있던 발행 묶음은 이 사례를 빠진 것으로 읽습니다. 사용자를 삭제하면 그 사용자의 사례도 지워집니다. 사례를 올린 봉인 증거 묶음은 사례가 있는 동안 지우지 않습니다. 품질 보고서는 사례의 입력과 정답인 까닭을 읽지 않습니다(<a href="#report">품질 보고서</a>).</p>
+          <h3 id="cases-screen">정답 사례 화면</h3>
+          <ul>
+            <li><strong>머리:</strong> "발행된 묶음 {판} · {때} 발행 · {n}건"과 발행 뒤 더해진 사례, 단추 "봉인 판정에서 올리기"(봉인되지 않은 판정은 거절, <code>NOT_SEALED</code>), "사례 만들기", "묶음 발행".</li>
+            <li><strong>숫자:</strong> "멈춰야 할 사례"와 "허용해야 할 사례"(발행 묶음의 서로 다른 뿌리 수와 관문이 요구하는 목표, 기본 200과 300), "나은 판을 가려낼 확률", "확인 대기".</li>
+            <li><strong>"나은 판을 가려낼 확률"</strong>은 서로 다른 멈춰야 할 뿌리로 놓침을 10%p 줄인 버전을 관문의 쌍 비교(유의 수준의 정확 부호 검정)로 가려낼 확률입니다. 지금 버전의 놓침률을 쓰고, 뿌리를 서로 독립으로, 두 버전의 결과가 0.7 만큼 연관된다고 보고 모의 없이 정확히 계산합니다. 목표를 채우기 전에는 비교가 "판단 불가"로 나옵니다.</li>
+            <li><strong>"리소스 등급별 사례"</strong>(핵심, 민감, 일반, 공개)는 판정 기록이 남기는 리소스 등급으로, 발행 묶음의 멈춰야 할 뿌리와 허용해야 할 뿌리를 최근 7일 운영 판정 수와 나란히 놓고 "있음", "사례 적음"(한쪽 뿌리가 5개 미만으로, 그 등급의 쌍 비교가 유의할 수 있는 최소보다 적음), "사례 없음", "판정 없음"으로 표시합니다. "측정하는 것은 리소스가 아니라 판"이므로, 운영 판정은 있는데 사례가 적은 등급에서는 판정이 나빠져도 전체 평균이 가립니다.</li>
+            <li><strong>목록</strong>(전체, 확인 대기)은 리소스 등급, 사례 이름 같은 거르기와 함께 사례, 성격과 유형, 정답, 사례 등급, 리소스와 등급, 지금 버전의 최근 측정 결과("맞힘", "놓침", "정답 밖", "아직 안 잼", "확인 대기")를 보입니다. 동작은 복제, 확인, 삭제, 정답 바꾸기입니다.</li>
+            <li><strong>사례 상세:</strong> 정답, 정답인 까닭, 판단을 가르는 사실, 코드 대신 낱말로 보이는 판정 입력(요청, 세션, 평소와의 차이, 업무 기록, 모르는 것. 값은 "예", "아니요", "허용", "거부" 같은 낱말), 버전별 결과와 회차마다의 조치, 정답 변경 이력.</li>
+          </ul>
+
+          <h2 id="measure">버전 측정</h2>
+          <p>측정 한 번은 프롬프트 버전 하나를, 서버가 지금 쓰는 모델 설정으로, 발행한 묶음 하나에 대해, 사례마다 정한 횟수(기본 3회, 1~10회)만큼 돌리는 것입니다. 답 하나는 사례의 입력을 봉인 판정 재현처럼, 사례 자신의 시간대와 사례 범위의 버전으로, 엔진의 판정 파이프라인으로 재현한 것입니다: 그 버전으로 그린 프롬프트, 답 검사, 다시 묻기, 대체 조치를 그대로 탑니다. 1차 답이 <code>ESCALATE</code> 이면 서버의 2차 모델로 2차 판단을 묻습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>기준</th><th>세는 것</th></tr></thead>
+            <tbody>
+              <tr><td>1차 답 기준</td><td>"모델이 그 프롬프트로 낸 답입니다. 프롬프트의 품질을 말하며 관문이 이것을 씁니다."</td></tr>
+              <tr><td>최종 조치 기준</td><td>"엔진의 마무리 규칙까지 거친 조치입니다. 사용자가 겪는 것을 말합니다." 마무리 규칙은 서버 설정으로 계산합니다: <code>ESCALATE</code> 뒤의 2차 판단, 넷 가운데 어느 것도 아닌 2차 판단의 조치는 <code>CHALLENGE</code> 로, 2차 판단 뒤에도 남은 <code>ESCALATE</code> 는 서버가 정한 종결 조치로. 과부하 보호는 그때의 부하에 달려 재현할 수 없어 빼고, 결과에 그렇게 밝힙니다</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>모델 설정</strong>은 답을 바꾸는 서버 설정 전부입니다: 층마다 묻는 모델(층의 모델, 없으면 기본 채팅 모델. 화면에 그 이름이 보임), 층마다 요청의 선택(출력 한도, 추론 강도, 장황함, 생각하기, 예산 프로필), 호출의 결정성, 구조화 출력, 프롬프트 자르기와 인자 발췌, 최소 조치 규칙과 그 방식, 2차 판단 뒤 남은 <code>ESCALATE</code> 의 끝, 맥락 형식. 시간 한도, 캐시, 모델 관문은 들어가지 않고, 서버 시간대도 들어가지 않습니다. 사례는 자기가 정한 시간대로 그려지므로 서버 시간대를 바꿔도 측정이 낡지 않습니다. 두 측정은 모델 설정이 같을 때만 견주고, 서버가 더는 쓰지 않는 설정으로 잰 측정은 낡은 것이 됩니다.</li>
+            <li><strong>판정 뒤에 줄을 섭니다:</strong> 측정은 버전 화면의 시험 판정과 같은 서버의 실행 줄에 서고, 모델 호출은 모델 서버 관문에서 실제 판정 뒤에 <code>contexa.pqa.oss.quality.measurement.concurrency</code> 개씩 섭니다(기본 1. 자체 모델 서버의 관문 자리는 2, 원격 제공자는 16).</li>
+            <li><strong>측정은 한 번에 서버 하나가 돌립니다.</strong> DB 잠금과 생존 신호(<code>heartbeat</code>, 30초)를 씁니다. 돌리던 서버가 멈추면 약 2분 30초 안에 다른 서버가 받은 답부터 이어 갑니다. "취소"는 DB 에 적혀, 돌리는 서버가 다음 답에서 멈춥니다.</li>
+            <li><strong>모델 서버가 바쁜 것은 프롬프트 탓으로 세지 않습니다.</strong> 모델 서버가 답하지 못한 재현(바쁨, 연결 안 됨, 시간 초과)은 15초, 다시 30초 뒤에 두 번 더 묻습니다. 그래도 받지 못한 답과 읽을 수 없던 사례는 지표에 넣지 않고, 측정은 "측정 미완 {n}답"으로 표시됩니다.</li>
+            <li><strong>시작 전에 호출 수를 보입니다:</strong> "예상 호출 {사례}건 × {회}회 = {호출}번 · 약 {분}분 · 한도 {한도}번"과 "같은 설정으로 이미 잰 답 {n}개는 다시 씁니다". 새로 재면 모든 답을 호출로 셉니다. 답 하나는 시도마다 적어도 한 번, 많아야 네 번(1차와 그 다시 묻기, 2차와 그 다시 묻기) 모델을 부릅니다. 기본 묶음을 3회 재면 적어도 210번, 기본 재시도까지 많아야 2,520번입니다. <code>contexa.pqa.oss.quality.measurement.call-limit</code>(3,000)를 넘을 측정은 시작하지 않고, 도중에 한도에 닿으면 멈추고 실패로 끝납니다. 화면은 답 하나에 약 7초로 계산합니다.</li>
+            <li><strong>답을 다시 씁니다:</strong> 같은 사례 내용, 버전, 모델 설정, 회차로 이미 받은 답은 다시 재지 않습니다. 그래서 새 사례를 더해 발행한 묶음은 새 사례만 잽니다. "저장된 답을 쓰지 않고 다시 재기"(API <code>anew</code>)는 모든 답을 모델에게 새로 묻고 답마다 모델을 한 번 이상 부르며, 목록에 "새로 잼"으로 표시됩니다. 이것을 고르지 않은 측정, "저장하고 바로 측정", 측정이 없는 버전의 자동 측정은 저장된 답을 다시 씁니다.</li>
+          </ul>
+          <h3 id="metrics">지표 11가지</h3>
+          <p>값은 회차 평균입니다. 비율의 95% 범위는 서로 다른 뿌리 수를 표본으로 한 윌슨 범위이며, 한 뿌리의 변형과 회차는 범위를 좁히지 않습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>지표</th><th>정의</th></tr></thead>
+            <tbody>
+              <tr><td>놓침률</td><td>멈춰야 할 사례에서 허용이 나온 답의 비율. 불확실로 분류한 사례도 멈춰야 할 사례에 넣습니다</td></tr>
+              <tr><td>오탐률</td><td>허용해야 할 사례에서 허용 조치 집합 밖이 나온 답의 비율</td></tr>
+              <tr><td>마찰률</td><td>허용해야 할 사례에서 허용이 아닌 답의 비율. 모든 요청에 추가 인증을 거는 버전을 걸러 냅니다</td></tr>
+              <tr><td>과잉 차단</td><td>정답에 <code>BLOCK</code> 이 없는 사례에서 차단이 나온 답의 비율</td></tr>
+              <tr><td>조치 적중률</td><td>허용 조치 집합 안에 든 답의 비율</td></tr>
+              <tr><td>미룸 비율</td><td>1차 답이 <code>ESCALATE</code> 인 답의 비율. 미루기만 하는 버전을 걸러 냅니다</td></tr>
+              <tr><td>일관성</td><td>답이 둘 이상인 사례 가운데 모든 회차의 조치가 같은 사례의 비율. 2회 이상 재야 나옵니다</td></tr>
+              <tr><td>근거 정확도</td><td>답이 인용한 사실 가운데 프롬프트에 실제 있고 답 검사가 짚지 않은 것의 비율</td></tr>
+              <tr><td>다시 물은 비율</td><td>답이 계약을 어겨 다시 물은 답의 비율</td></tr>
+              <tr><td>모델 없이 정한 비율</td><td>모델 답을 쓰지 못해 엔진이 조치를 정한 답의 비율</td></tr>
+              <tr><td>판정 시간과 답 토큰</td><td>중앙값과 95번째 값. 보이기만 하고 판정하지 않습니다</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="compare">두 버전 견주기</h3>
+          <ul>
+            <li>두 측정은 같은 방식으로 잰 것만 견줍니다: 같은 묶음 판, 같은 모델 설정, 같은 반복 수("같은 조건: 사례 묶음 {판} · {모델} · {n}회").</li>
+            <li><strong>같은 사례끼리:</strong> 비율마다 뿌리 하나에 두 측정이 모두 채점한 사례를 모으고, 그 뿌리의 비율로 나빠짐 · 좋아짐 · 그대로를 가립니다. 바뀐 뿌리에 대한 단측 정확 부호 검정이, 그만큼이 우연히 한쪽으로 갈 수 있는지 봅니다(뿌리가 답 하나이면 맥니마 정확 검정과 같음). 유의 수준은 <code>contexa.pqa.oss.quality.gate.significance</code>(0.05)입니다.</li>
+            <li><strong>결과:</strong> "같음"(차이가 없거나 그 비율의 흔들림 안), "좋아짐" · "나빠짐"(흔들림을 넘고 검정이 우연을 기각), "판단 불가"(짝지을 것이 없거나, 흔들림을 모르거나, 바뀐 뿌리가 너무 적음). 바뀐 사례 수만 세면 같은 프롬프트도 네 번에 한 번에서 두 번에 한 번꼴로 막힙니다.</li>
+            <li><strong>흔들림</strong>은 같은 버전을 같은 방식으로 잰 최근 두 측정의 차이입니다. 지금 버전의 것을 먼저, 없으면 후보 버전의 것을 쓰고, 두 측정 모두 자기 답을 받았어야 합니다(새로 쟀거나, 다시 쓸 답이 없었던 측정). 다른 측정의 답을 다시 쓴 측정은 흔들림을 보이지 않아 쓰지 않습니다. "같은 판을 새로 잰 두 측정의 차이가 품질 관문이 쓰는 흔들림입니다": 지금 버전을 두 번 새로 재거나, 매주 예약 재측정에 맡깁니다(<a href="#operation-remeasure">예약 재측정</a>). 그런 짝이 없으면 화면은 "아직 몰라 차이는 "판단 불가"로 나옵니다"라고 씁니다.</li>
+            <li><strong>우리 사례는 따로:</strong> "기본 묶음과 우리 사례"는 둘의 놓침을 따로 보입니다. "기본 묶음은 고객 환경을 대표하지 못하고, 제품 판을 만들 때 쓴 사례라 제품 판에 유리합니다."</li>
+            <li><strong>판을 만든 뒤에 들어온 사례:</strong> 버전을 만든 사람이 볼 수 없었던 사례입니다. "여기서만 성적이 나쁘면 본 사례에 맞춘 판일 수 있습니다." 관문의 열한째 조건이 이것을 봅니다.</li>
+          </ul>
+          <h3 id="measure-screen">측정과 비교 화면</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>보기</th><th>보이는 것과 하는 일</th></tr></thead>
+            <tbody>
+              <tr><td>측정 목록</td><td>시작: "입력"("정답 사례 묶음" 또는 "최근 봉인 판정"), "판", "사례 묶음 판", "반복 수", 서버가 쓰는 모델 설정과 그 모델 이름, "저장된 답을 쓰지 않고 다시 재기", 예상 호출 수, "측정 시작". "진행 중인 측정"에는 받은 답, 남은 시간, "취소". 목록은 최근 순으로 판과 모델 설정, 입력, 상태(대기, 진행 중, 끝남, 측정 미완, 취소됨, 실패), 결과, 시작한 때. 아래에 "함께 시험 결과"(<a href="prompt-versions.html#shadow">함께 시험으로 돌리기</a>)</td></tr>
+              <tr><td>한 판의 결과</td><td>기준("1차 답 기준", "최종 조치 기준"), "지표 11가지"와 분자 · 분모 · 95% 범위(전체 또는 한 리소스 등급의 사례), "기본 묶음과 우리 사례", "판을 만든 뒤에 들어온 사례"</td></tr>
+              <tr><td>두 판의 비교</td><td>놓침에 대한 문장, "지표별 비교"와 지표마다의 결과와 흔들림, "리소스 등급별 놓침"(전체는 그대로인데 나빠진 등급), "갈린 사례 목록"(새로 놓침, 새로 잡음, 새로 멈춤, 새로 풀림)과 두 답, 모델이 든 근거 코드, 인용한 사실이 사실과 맞는지</td></tr>
+              <tr><td>틀린 사례와 원인</td><td>측정의 틀린 답과 원인(<a href="#causes">아래</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>버전 화면의 "측정"은 그 버전을 고른 채로 이 화면을 엽니다.</li>
+            <li><strong>"최근 봉인 판정"</strong>은 버전 화면에 있던 시험 판정입니다. 최근 봉인 판정 20, 50, 100건을 두 버전으로 다시 판정합니다. 채점할 정답이 없으므로 조치만 견줍니다(<a href="prompt-versions.html#trials">시험 판정</a>). 시험 결과는 <code>/measure/trials/{id}</code> 에서 열리고, 두 버전의 조치가 갈린 봉인 판정은 거기서 사례로 올릴 수 있습니다.</li>
+          </ul>
+
+          <h2 id="causes">틀린 사례와 원인</h2>
+          <p>"틀린 사례와 원인" 보기는 측정의 틀린 답마다 결정적 규칙으로 원인 하나를 정합니다. 아래 순서에서 먼저 맞는 것이 원인입니다. 관리자가 원인을 바꿀 수 있고("분류 바꾸기"), 바꾼 원인은 다시 덮지 않습니다. "운영에서 "타당하지 않음"으로 평가된 판정도 함께"를 켜면, 최근 90일에 관리자가 판정 상세에서 "타당하지 않음"으로 평가한 판정도 함께 나눕니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>원인</th><th>가르는 기준</th><th>고칠 곳</th></tr></thead>
+            <tbody>
+              <tr><td>형식과 모델</td><td>답이 없거나, 계약을 어겨 대체 조치가 들어갔거나, 시간을 넘겼습니다. 시간 초과는 재현의 한도가 아니라 운영 한도, 곧 1차 모델 호출의 시간 한도(<code>contexa.security.tiered.layer1.timeout.llm-ms</code>, 기본 90초)로 가립니다</td><td>모델 설정</td></tr>
+              <tr><td>엔진이 바꿈</td><td>모델 제안은 정답이었는데 엔진 규칙이 조치를 바꿨습니다</td><td>규칙 설정</td></tr>
+              <tr><td>입력 오류</td><td>프롬프트의 사실이 바깥 원천과 다릅니다(증거 감사가 찾음). 증거 감사가 돈 봉인의 운영 판정에서만 나옵니다</td><td>수집기나 고객 자료</td></tr>
+              <tr><td>입력 부족</td><td>판단을 가르는 사실이 프롬프트의 모르는 것 목록에 있거나 맥락 수준이 낮습니다(<code>ENVIRONMENT_ONLY</code>, <code>IDENTITY_AWARE</code>). 판단을 가르는 사실을 적은 사례에서만 계산됩니다</td><td>연동. 빠진 사실을 알려 줍니다</td></tr>
+              <tr><td>근거 오류</td><td>인용한 사실이 프롬프트에 없거나 그 줄이 그 말을 하지 않습니다</td><td>프롬프트 또는 모델</td></tr>
+              <tr><td>불안정</td><td>같은 사례가 회차마다 다른 조치를 냅니다. 2회 이상 잰 측정에서만 계산됩니다</td><td>프롬프트 또는 모델</td></tr>
+              <tr><td>판단 오류</td><td>인용은 맞는데 조치가 정답 밖입니다</td><td>프롬프트 새 판</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>어느 규칙에도 걸리지 않은 틀린 답은 "나누지 못함"입니다.</li>
+            <li>고칠 곳이 프롬프트 새 판인 원인에서는 "이 사례들을 띄우고 새 버전 만들기"가 틀린 사례 카드를 옆에 띄운 새 버전 화면을 엽니다: "저장하고 바로 측정하면 사례 묶음 전체를 다시 재며 이 사례들의 결과도 함께 나옵니다".</li>
+          </ul>
+
+          <h2 id="gate">품질 관문</h2>
+          <p>보안 판정의 버전을 판정에 쓰거나 먼저 적용을 시작할 때, 출시 관문이 품질 관문을 읽습니다. 범위의 최근 발행 묶음에서, 1차 답 기준으로, 후보 버전의 측정을 지금 버전의 측정과 견줍니다. 다른 프롬프트 7종에는 품질 조건이 없습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>#</th><th>조건(확인 창의 이름)</th><th>못 미치면</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>두 판을 같은 사례 묶음 판, 같은 모델 설정, 같은 반복 수로 쟀다</td><td>막음. 측정이 없어도 여기서 막힘</td></tr>
+              <tr><td>2</td><td>"반드시 잡을 사례"를 한 번도 허용하지 않았다</td><td>막음</td></tr>
+              <tr><td>3</td><td>"반드시 잡을 사례"를 허용 조치 밖(예: 차단이 맞는데 추가 인증이나 미룸)으로 새로 답하지 않았다</td><td>후보가 그런 사례를 어느 회차에서든 허용이 아닌 허용 조치 밖의 답으로 냈고 지금 판은 그런 적이 없으면 막음. 지금 판도 허용 조치 밖으로 답한 사례는 후보 탓이 아니어서 경고만 함. 견줄 지금 판 측정이 없으면 모두 후보의 답으로 셈</td></tr>
+              <tr><td>4</td><td>"막으면 안 되는 사례"를 한 번도 차단하지 않았다</td><td>막음</td></tr>
+              <tr><td>5</td><td>놓침이 지금 판보다 유의하게 늘지 않았다</td><td>막음</td></tr>
+              <tr><td>6</td><td>오탐, 과잉 차단, 마찰, 미룸이 유의하게 늘지 않았다</td><td>막음</td></tr>
+              <tr><td>7</td><td>마찰이 지금 판보다 상한 이상 늘지 않았다(유의성과 관계없이)</td><td>같은 사례에서 후보의 마찰률이 지금 판보다 <code>friction-increase-limit</code>(0.20, 20%p. 기본 묶음 1회면 허용해야 할 답 15개 가운데 3개 더) 이상 높으면 막음. 조건 6의 정확 검정에 쓸 뿌리가 너무 적게 남아도 모든 요청에 추가 인증을 거는 버전을 막음</td></tr>
+              <tr><td>8</td><td>모델 없이 정한 비율이 한도 이하이고 근거 정확도가 유의하게 낮아지지 않았다</td><td><code>model-less-limit</code>(5%)를 넘거나 근거 정확도가 나빠지면 막음</td></tr>
+              <tr><td>9</td><td>새로 놓치거나 새로 멈춘 사례가 없다</td><td>경고와 사례 링크. 새로 놓친 사례는 조건 5가, 새로 멈춘 사례는 조건 6이나 7이 막지 않을 때</td></tr>
+              <tr><td>10</td><td>사례가 가리기에 충분하다</td><td>경고. 모자란 뿌리 수(<code>minimum-stop-roots</code> 멈춰야 할 뿌리 200, <code>minimum-allow-roots</code> 허용해야 할 뿌리 300)나 판단 불가인 비율 수</td></tr>
+              <tr><td>11</td><td>판을 만든 뒤에 들어온 사례에서도 성적이 같다</td><td>경고. 본 사례에 맞춘 버전일 수 있음. 놓침, 오탐, 과잉 차단, 마찰마다 나중 뿌리가 앞선 뿌리보다 자주 틀렸는지 피셔 정확 검정으로 봄</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>"유의하게"</strong>는 <a href="#compare">두 버전 견주기</a>의 쌍 비교입니다. 같은 버전을 두 번 잰 흔들림을 넘는 차이만 막습니다. 한 답도 허용하지 않는 것은 조건 2, 3, 4이고, 조건 7은 늘어난 폭만으로 막습니다.</li>
+            <li>기본 묶음만 있으면(멈춰야 할 뿌리 25, 허용해야 할 뿌리 10) 조건 10은 늘 경고입니다.</li>
+            <li>모든 조건을 통과하면 확인 창은 "조건 {n}개를 모두 통과했습니다."라고 씁니다.</li>
+          </ul>
+          <h3 id="gate-mode">경고 방식과 막기 방식, 넘기는 사유</h3>
+          <ul>
+            <li><strong><code>WARN</code></strong>(<code>contexa.pqa.oss.quality.gate.mode</code> 의 기본): 막는 판정도 경고로 적용합니다. "관문이 경고 방식이라 막는 조건 {n}건도 경고로 적용됩니다." 판정 자체는 계산한 그대로 남습니다.</li>
+            <li><strong><code>BLOCK</code></strong>: 막는 조건에 걸리면 관리자가 사유를 적어야 진행합니다("사유를 남기고 판정에 사용", "사유를 남기고 먼저 적용"). "사유를 적으면 넘길 수 있고, 누가 왜 넘겼는지 감사 기록에 남습니다"(<code>PROMPT_VERSION_QUALITY_GATE_OVERRIDDEN</code>). 빈 사유는 거절합니다. 장애를 고치는 급한 새 버전도 이 길을 씁니다. 설정 설명은 이 설치에서 재현성과 변별력 확인을 통과한 뒤 <code>BLOCK</code> 으로 바꾸라고 합니다.</li>
+            <li>사유로 넘기는 것은 품질 막힘뿐입니다: "품질 밖의 막는 사유가 있어 사유를 적어도 넘길 수 없습니다."</li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>측정 상태</th><th>확인 창</th><th>관문이 하는 일</th></tr></thead>
+            <tbody>
+              <tr><td><code>MEASURED</code></td><td>통과, 경고, 막힘</td><td>열한 조건을 봄</td></tr>
+              <tr><td><code>MISSING</code></td><td>"측정 없음": 후보 버전, 지금 버전, 또는 둘 다 최근 묶음으로 잰 측정이 없음</td><td>조건 1이 막음</td></tr>
+              <tr><td><code>STALE</code></td><td>"측정이 낡음": 그 뒤 모델 설정이 바뀜. "다시 재기" 단추</td><td>적어도 경고하고 다시 재라고 알림</td></tr>
+              <tr><td><code>UNMEASURABLE</code></td><td>"측정 불능": "이 설치에서는 재현을 돌릴 수 없어 잴 수 없습니다. "미달"이 아니며 경고만 합니다."</td><td>경고만</td></tr>
+              <tr><td><code>BASELINE_PENDING</code></td><td>"기준 판 측정 대기": 지금 버전의 측정이 아직 없고 첫 측정이 대기하거나 도는 중</td><td>측정이 끝날 때까지 조건 1이 막지 않고 경고</td></tr>
+            </tbody>
+          </table></div>
+          <h3 id="gate-confirm">확인 창</h3>
+          <ul>
+            <li>"판정에 사용"과 "먼저 적용 시작"의 확인 창은 관문의 상태와 한 줄 설명을 보이고, "품질 관문 · 사례 묶음 {판} · {모델} · {n}회" 아래에 볼 조건만 펼칩니다. 판정이 막힘이면 막는 조건만, 아니면 경고만 펼치고, 나머지는 "통과 {n}줄", "경고 {n}줄", "보지 못함 {n}줄"로 접습니다.</li>
+            <li>새로 놓친 사례는 측정과 비교에서 엽니다("새로 놓친 사례 {n}건 보기"). 그런 사례가 있고 판정이 막힘이 아니면 "새로 놓친 사례 목록을 확인했습니다"를 표시해야 진행합니다.</li>
+            <li>최근 시험 판정("시험함", "시험 안 함")은 품질 관문을 읽지 못했을 때만 보입니다.</li>
+          </ul>
+          <h3 id="gate-outside">되돌리기와 관문 밖에서 판정에 쓰이는 버전</h3>
+          <ul>
+            <li><strong>되돌리기:</strong> 이 범위에서 판정에 쓰인 적이 있는 버전으로 돌아가는 것은 품질 조건 없이 됩니다("통과(되돌리기)"). 되돌리기와 급히 되돌리기는 그런 버전으로만 가고, 다른 대상은 거절합니다. 지금 판정에 쓰이는 버전, <code>ACTIVE</code> 로 적용된 적이 있는 버전, 거절되지 않은 되돌리기의 대상, 되돌리기 기록에 나오는 버전이 판정에 쓰인 적이 있는 버전이고, 먼저 적용만 했던 버전은 들지 않습니다.</li>
+            <li><strong>관문을 거치지 않는 두 길:</strong> <code>contexa.security.tiered.prompt-bundle.active</code> 가 가리키는 버전, 화면에서 고른 버전이 없을 때 업그레이드로 들어온 가장 새 Contexa 버전. 버전 목록이 이를 알리고("{버전} 은 설정 파일로 정해져 출시 관문을 거치지 않고 판정에 쓰입니다.") 이 환경에서 잰 측정의 상태를 함께 보이며, Contexa 가 그런 버전을 한 번 스스로 잽니다.</li>
+            <li><strong>업그레이드 직후</strong>에는 지금 버전의 측정이 없습니다. Contexa 가 범위의 최근 발행 묶음으로 한 번 스스로 재고, 발행한 묶음이 없으면 기본 묶음을 먼저 발행합니다(기본 묶음 3회는 답 210개이고 모델을 부릅니다). 그 전에는 관문이 경고만 합니다. 제품이 측정 결과를 함께 실은 Contexa 버전은, 여기와 같은 방식으로 잰 것이면 다시 재지 않습니다. 다른 설정으로만 잰 지금 버전은 한 번 다시 재며, 10분마다 이를 찾습니다.</li>
+            <li>관문의 답은 <code>GET /contexa/admin/api/prompt-quality/versions/{number}/use-check</code>(먼저 적용은 <code>?target=CANARY</code>)의 <code>quality</code> 에 있습니다: <code>mode</code>, <code>measurement</code>, <code>verdict</code>(계산한 그대로), <code>applied</code>(<code>PASSED</code>, <code>WARNING</code>, <code>BLOCKED</code>), <code>rollback</code>, <code>overridable</code>, <code>rows</code>(열한 조건), <code>changes</code>, <code>details</code>. <code>POST /{number}/use</code> 와 <code>/canary/start</code> 는 <code>overrideReason</code> 을 받습니다(<a href="prompt-versions.html#api">프롬프트 버전 API</a>).</li>
+          </ul>
+
+          <h2 id="operation">운영 연결</h2>
+          <h3 id="operation-sealing">무엇을 봉인하나</h3>
+          <p>요청을 멈춘 판정(<code>CHALLENGE</code>, <code>ESCALATE</code>, <code>BLOCK</code>)과 위험 신호가 있는 허용 판정을 UTC 하루 2,000건까지 먼저 봉인하고, 바뀐 뒤의 창과 1% 표본은 그대로 봉인합니다. 봉인에는 이제 판정이 읽은 기준선이 담겨, 뒤에 재현해도 판정이 읽은 것을 읽습니다(<a href="evidence.html#when">언제 봉인하나</a>).</p>
+          <h3 id="operation-review">검토 대기열은 허용 판정을 위험에 따라 뽑습니다</h3>
+          <p>허용 판정의 무작위 표본은 놓침을 거의 찾지 못합니다. 허용 1만 건에 놓침이 1건이면 하루 20건으로 평균 500일에 한 건을 찾습니다. 그래서 검토 대기열(Zero Trust → 판정 기록, <code>?view=review</code>)은 UTC 하루마다 다음을 뽑습니다.</p>
+          <ol>
+            <li>멈춘 판정을 무작위로 <code>contexa.security.zerotrust.console.review-daily-sample</code>(20)건까지.</li>
+            <li>놓침일 수 있는 신호가 있는 허용 판정을 <code>review-risk-sample</code>(10)건까지. 신호는 모델이 가장 그럴듯하다고 본 설명이 정상 업무가 아님, 2차 판단까지 감, 모델에 다시 물음, 판정 사실 가운데 <code>contexa.pqa.oss.sealed-evidence.unknown-fact-threshold</code>(3)개 이상을 모름, 개인 기준선이 아직 서지 않음입니다. 그날 차단된 사용자의 앞선 허용 판정도 차단에서 <code>review-blocked-lookback-days</code>(7)일을 거슬러 넣되, 관리자가 그 차단을 풀었거나 잘못이라고 평가했으면 넣지 않습니다. 차단 앞의 판정이 먼저, 그다음은 신호가 많은 판정이 먼저입니다.</li>
+            <li>신호 없는 허용 판정을 무작위로 <code>review-allowed-sample</code>(5)건까지. 정상 사례 수를 채우는 데 씁니다.</li>
+          </ol>
+          <p>봉인 증거 포착이 도는 동안에는 봉인된 판정만 뽑아, 검토한 판정을 재현하고 사례로 올릴 수 있게 합니다. 시험 실행은 뽑지 않고, 하루의 허용 판정은 한 번만 뽑습니다. 기본값으로 대기열은 하루 20건이 아니라 최대 35건이 됩니다.</p>
+          <h3 id="operation-promote">평가와 함께 사례로 올리기, 허용 뒤 침해로 확인</h3>
+          <ul>
+            <li><strong>"평가와 함께 사례로 올리기"</strong>(판정 상세)는 평가와 함께, 정한 정답으로 사례를 만듭니다. "평가와 사례는 함께 저장되거나 둘 다 저장되지 않습니다. 사례는 봉인한 입력을 씁니다." 봉인되지 않은 판정은 사례가 될 수 없습니다: "봉인되지 않은 판정이라 사례로 올릴 수 없습니다. 평가만 저장됩니다." 이 사례는 플랫폼 범위에 들고, 다른 사례처럼 두 번째 관리자의 확인을 기다립니다.</li>
+            <li><strong>"허용 뒤 침해로 확인"</strong>은 허용으로 끝난 판정에 결과 <code>ALLOWED_BREACH_CONFIRMED</code>("허용 뒤 침해로 확인됨")를 메모(선택)와 함께 남깁니다. 운영에서 본 놓침으로 셉니다. 같은 판정을 다시 기록하면 처음 기록을 그대로 두고, 허용으로 끝난 판정만 침해로 확인할 수 있습니다. 판정 기록의 결과 거르기에 이 값이 있습니다.</li>
+            <li>봉인 증거 화면("사례로 올리기"), 정답 사례 화면("봉인 판정에서 올리기"), 시험 판정 결과(두 버전의 조치가 갈린 판정)에서도 봉인 판정을 사례로 올립니다.</li>
+          </ul>
+          <h3 id="operation-remeasure">예약 재측정</h3>
+          <ul>
+            <li><code>contexa.pqa.oss.quality.remeasure.cron</code>(<code>0 0 2 * * SUN</code>, UTC. <code>-</code> 이면 끔)마다 모든 범위의 지금 버전을 그 범위의 측정이 쓰는 묶음으로 다시 잽니다. 한 서버가 돌립니다.</li>
+            <li>예약 재측정은 저장된 답을 쓰지 않고 새로 잽니다. 같은 설정에서 나빠진 버전을 찾고, 그런 측정 둘이 흔들림을 주게 하기 위해서입니다. 그래서 매주 모델을 부르며, 기본 묶음 3회면 약 210번입니다(모델 서버가 바쁠 때의 재시도까지 많아야 2,520번). 끝내지 못한 예약 측정은 다시 시도합니다.</li>
+            <li>다시 잰 측정은 그 버전의 앞선 측정과 견주고, 나빠지거나 바뀌면 경고 로그를 남기고 품질 현황에 보입니다. 제품에는 그 밖의 관리자 알림이 없습니다.</li>
+          </ul>
+          <h3 id="status">품질 현황 화면</h3>
+          <ul>
+            <li><strong>머리:</strong> 판정에 쓰는 버전과 그때부터(최근 90일 안에서 그 버전이 처음 판정한 시각), 최근 측정(묶음, 모델, 회차), 놓침에 대한 문장, 운영 지표의 기간(하루, 일주일이 기본, 한 달, 분기), "품질 보고서" 단추.</li>
+            <li><strong>"지금 쓰는 판":</strong> 측정이 최신인지 낡았는지, 묶음, 모델 설정, 반복 수, "다음 예약 재측정".</li>
+            <li><strong>"정답 사례로 잰 값":</strong> 지표 11가지와 95% 범위.</li>
+            <li><strong>"운영에서 본 값":</strong> 지금 버전과 그 앞 버전의 실제 판정에서, 버전을 바꾼 전후의 같은 길이 기간으로 센 여섯 값입니다: 멈춘 비율, 추가 인증 통과율, 차단 해제율, 평가 적절 비율, 다시 물은 비율, 모델 없이 정한 비율. 정답과 견준 값이 아닙니다.</li>
+            <li><strong>확인이 필요한 것:</strong></li>
+          </ul>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>확인할 것</th><th>단추</th></tr></thead>
+            <tbody>
+              <tr><td>"측정이 낡았습니다: 모델 설정이 바뀌었습니다"</td><td>다시 재기</td></tr>
+              <tr><td>"측정이 없습니다: 지금 판 {판} 을 잰 적이 없습니다"("측정이 없으면 관문의 첫 조건이 막습니다")</td><td>측정하기</td></tr>
+              <tr><td>"기준 판 측정 대기: {판} 을 자동으로 재는 중입니다"("그 전에는 관문이 경고만 합니다")</td><td>측정 보기</td></tr>
+              <tr><td>"측정 불능: 이 설치에서는 판정을 재현할 수 없습니다"</td><td>—</td></tr>
+              <tr><td>"예약 재측정에서 나빠졌습니다: {지표} {앞}건 → {뒤}건"</td><td>비교 보기</td></tr>
+              <tr><td>"예약 재측정에서 판정이 바뀌었습니다: 새로 놓침 {n}건 · 새로 멈춤 {m}건"</td><td>비교 보기</td></tr>
+              <tr><td>"확인을 기다리는 사례 {n}건"</td><td>확인하기</td></tr>
+              <tr><td>"검토 대기 {n}건"("위험에 따라 뽑은 판정입니다. 평가하면서 사례로 올릴 수 있습니다")</td><td>검토하기</td></tr>
+            </tbody>
+          </table></div>
+
+          <h2 id="report">품질 보고서</h2>
+          <p>품질 현황 머리의 "품질 보고서"는 범위 하나와 UTC 날짜 단위의 기간("시작일 (UTC)", "마지막 날 (UTC)". 기본 90일, 최대 400일)으로 zip 하나를 내려받습니다. 기계용 <code>report.json</code>, 사람용 <code>report-ko.md</code> 와 <code>report-en.md</code> 가 들어 있습니다. 모델은 부르지 않습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>절</th><th>담는 것</th></tr></thead>
+            <tbody>
+              <tr><td>1. 지금 판정에 쓰는 판의 정확도</td><td>지금 버전과 그 앞 버전들의 측정. 정확도 지표 선언(EU AI Act 15조)</td></tr>
+              <tr><td>2. 사례 묶음 판</td><td>측정이 쓴 묶음</td></tr>
+              <tr><td>3. 운영 감시</td><td>기간의 운영 지표. 시판 뒤 감시(EU AI Act 72조)</td></tr>
+              <tr><td>4. 뒤집힌 결정</td><td>관리자가 푼 차단, 관리자가 잘못이라고 평가한 판정, 침해로 확인된 허용. 사람이 뒤집은 결정의 감시(NIST AI RMF, MANAGE)</td></tr>
+              <tr><td>5. 변경과 승인 이력</td><td>버전 변경과 그 승인</td></tr>
+              <tr><td>6. 가림</td><td>보고서를 만들 때 쓴 가림 규칙</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li><strong>판정과 사례의 대상인 사람</strong>은 가명으로 적습니다. 보고서마다 새로 뽑고 어디에도 적지 않는 열쇠로 만든 키 해시이므로, 한 보고서 안에서는 같은 사람이 같은 가명이고 다음 보고서에서는 다른 가명입니다.</li>
+            <li><strong>관리자가 쓴 글</strong>(사유, 메모, 제목)은 남기되, 그 안의 대상자 식별자는 가명으로, 전자우편 주소와 IP 주소는 표시로 바꿉니다.</li>
+            <li><strong>보고서가 읽지 않는 것:</strong> 사례의 입력, 정답인 까닭, 판정의 요청 · 경로 · 주소 · 세션 · 요약, 뒤집힌 판정에 관리자가 적은 메모(그 사유 코드는 들어감).</li>
+            <li>일한 관리자의 이름은 그대로 적습니다. 보고서는 누가 무엇을 승인했는지의 기록이기 때문입니다.</li>
+            <li>API: <code>GET /contexa/admin/api/prompt-quality/report?scope=&amp;from=YYYY-MM-DD&amp;to=YYYY-MM-DD</code>. 시작일이 마지막 날보다 늦거나 400일보다 긴 기간은 <code>400</code> 으로 답합니다.</li>
+          </ul>
+
+          <h2 id="identity">판정이 자기 프롬프트에 대해 남기는 것</h2>
+          <p>판정의 프롬프트 실행 정보와 봉인 증거는 판정을 그린 프롬프트를 두 가지로 밝힙니다.</p>
+          <ul>
+            <li><strong>버전:</strong> 판정이 시작될 때 사건에 고정한 이름(<code>v2.0</code>), 무엇이 골랐는지, 내용 해시(<code>promptBundleSelection.version</code> · <code>.source</code> · <code>.contentHash</code>). 판정 기록에도 버전 이름과 내용 해시가 남습니다.</li>
+            <li><strong>템플릿의 거버넌스 기술자:</strong> 프롬프트 키 <code>cortex.security-decision</code>, 템플릿 키, 제품 판 <code>2026.11.16-v1.0</code>(묶음 이름이라 제품 기본 <code>2026.11.18-v1.0</code> 과 그 위의 버전에서도 이 이름), 출력 계약 <code>CORTEX_PROMPT_CONTRACT_V5</code>, 사용자 글 배치 <code>v1.0-dictionary-blocks</code>, 제품 판의 해시. 증거 감사의 출처 추적 검사가 봉인된 기술자를 레지스트리의 제품 판과 대조합니다. 옛 묶음 v19 · v20 · v21 의 매니페스트는 없어졌습니다.</li>
+          </ul>
+          <h3 id="selection">무엇이 버전을 골랐나</h3>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>선택 출처</th><th>언제</th></tr></thead>
+            <tbody>
+              <tr><td><code>REGISTRY</code></td><td>화면에서 판정에 사용 중인 버전. 요청한 테넌트의 것, 없으면 <code>PLATFORM_GLOBAL</code> 의 것</td></tr>
+              <tr><td><code>CANARY</code></td><td>화면의 먼저 적용. 비율과 대상 안에 든 요청</td></tr>
+              <tr><td><code>CONFIGURATION</code></td><td>표지가 없을 때 <code>contexa.security.tiered.prompt-bundle.active</code> 가 가리키는 버전(관문 밖)</td></tr>
+              <tr><td><code>BUILD_DEFAULT</code></td><td>표지도 설정도 없을 때 가장 새 Contexa 제공 버전(관문 밖), 버전을 하나도 읽지 못하면 빌드의 제품 기본 문서</td></tr>
+              <tr><td><code>SHADOW</code></td><td>함께 시험 버전. 판정과 떨어진 표본 복사본에서만</td></tr>
+              <tr><td><code>REPLAY</code></td><td>봉인된 판정을 다시 물을 때(<a href="evidence.html#replay">재현</a>)</td></tr>
+            </tbody>
+          </table></div>
+          <p>순서는 <a href="prompt-versions.html#resolve">판정의 버전이 정해지는 순서</a>에 있습니다. 표지는 레지스트리에서 읽고, 최대 60초 캐시하며 무효화를 5초마다 확인합니다.</p>
+
+          <h2 id="registry">버전 뒤의 레지스트리</h2>
+          <p>버전마다 프롬프트 거버넌스 레지스트리에 행이 하나 있고, 화면의 작업은 출시 관문을 거쳐 그 행의 상태를 옮깁니다. 보안 판정이면 출시 관문이 품질 관문을 읽습니다. 상태 어휘(<code>PromptBundleState</code>)는 그대로이고, 화면은 자기 말로 보입니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>레지스트리 상태</th><th>화면 표시</th></tr></thead>
+            <tbody>
+              <tr><td><code>ACTIVE</code></td><td>판정에 사용 중</td></tr>
+              <tr><td><code>CANARY</code></td><td>먼저 적용 중</td></tr>
+              <tr><td><code>SHADOW</code></td><td>함께 시험 중</td></tr>
+              <tr><td><code>AVAILABLE</code></td><td>쓰지 않음(새 버전은 여기서 시작)</td></tr>
+              <tr><td><code>DEPRECATED</code></td><td>쓰지 않음(옛 묶음이 남긴 행. AVAILABLE 로 읽음)</td></tr>
+              <tr><td><code>RETIRED</code></td><td>숨김</td></tr>
+            </tbody>
+          </table></div>
+          <ul>
+            <li>관문이 막은 이동은 아무것도 바꾸지 않고 이유와 함께 기록합니다. 적용한 이동은 레지스트리 상태와 승인 · 되돌리기 기록을 바꾸고 실행 중 캐시 무효화를 알립니다. 한 버전을 ACTIVE 로 옮기면 같은 테넌트 · 프롬프트의 다른 ACTIVE 버전은 AVAILABLE 이 됩니다(묶음의 행은 DEPRECATED). 판정에 사용 · 먼저 적용 · 함께 시험을 그만둔 버전은 AVAILABLE 로 돌아가고, 숨긴 버전은 어느 상태도 받지 않습니다.</li>
+            <li><strong>기동 때</strong> 서버마다 빌드의 제품 기본을 버전으로 등록하고(처음 설치는 v1.0, 업그레이드는 다음 번호), 옛 묶음을 가리키는 레지스트리 행을 은퇴시킵니다. 그 행은 지우지 않습니다: 지난 봉인 판정의 추적 검사가 읽습니다.</li>
+            <li>되돌리기, 두 번째 관리자의 승인이 필요한 급히 되돌리기, 먼저 적용, 함께 시험은 버전 화면에서 합니다(<a href="prompt-versions.html#use">판정에 사용과 되돌리기</a>).</li>
+          </ul>
+
+          <h2 id="removed">없어진 것과 업그레이드</h2>
+          <ul>
+            <li><strong>없어진 것:</strong> 봉인 증거 묶음의 공식 검증(지표 12개, 검사 66개, 실행 · 결과 · 재검증)과 그 화면 "보호 후보"(<code>/contexa/admin/prompt-quality/resources</code>)와 "공식검사"(<code>/contexa/admin/prompt-quality/runtime-evidence</code>), 그 API, "검수 현황" 화면과 그 API <code>GET /contexa/admin/api/prompt-inspection/overview</code>, 봉인 구조 채점, 결정적 재현.</li>
+            <li><strong>검수 검사:</strong> 봉인 증거의 증거 감사로 셋이 남았습니다(<code>SEAL_INTEGRITY</code>, <code>BUNDLE_TRACE</code>, <code>SOURCE_TRUTH</code>). 프롬프트 줄을 읽던 여섯(<code>DICTIONARY_CONTRACT</code>, <code>DECISION_FACT_MATCH</code>, <code>FACT_ACCURACY</code>, <code>UNKNOWN_DECLARED</code>, <code>PAST_RECORD_NOTATION</code>, <code>SAME_FACT</code>)은 빌드에서 황금 입력으로 렌더러를 확인하고, <code>REASON_MATCH</code> 의 인용 대조는 모든 판정의 판정 경로에서 돌아 그 결과가 판정 기록에 남습니다. 검수기는 판 30(<code>prompt-inspector/30</code>)이라 봉인 증거 묶음을 세 검사로 다시 검수합니다.</li>
+            <li><strong>없어진 설정:</strong> <code>contexa.pqa.official-verification.stale-execution-timeout</code>, <code>contexa.pqa.routes.official-api-root</code>, <code>contexa.pqa.routes.enterprise-api-root</code>, <code>contexa.pqa.routes.enterprise-verification-runtime-runs-path</code>. 더는 읽지 않습니다.</li>
+            <li><strong>기능 <code>PQA_ENGINE</code> 이 없어졌습니다.</strong> <code>contexa.capability.required</code> 에 이 버전에 없는 기능 이름(예: <code>pqa-engine</code>)이 남아 있으면 아무것도 정하지 않고, 기동 때 경고 한 줄("Ignoring contexa.capability.required.pqa-engine: this version has no such capability …")을 남긴 뒤 그대로 기동합니다. 그 키를 지우십시오. 설정 객체는 이제 <code>required</code> 를 키와 값의 맵(<code>Map&lt;String, Boolean&gt;</code>)으로 두므로, 앱 코드가 <code>ContexaCapabilityProperties.getRequired()</code> 를 부르면 그 형식으로 받아야 합니다.</li>
+            <li><strong>공식 검증의 테이블 58개</strong>는 새 설치에서는 만들지 않고, 기존 설치에는 그대로 남습니다. Contexa 는 스스로 지우지 않습니다. <code>contexa-iam</code> 의 스크립트 <code>META-INF/contexa/db/drop-retired-official-verification.sql</code> 이 지웁니다. Contexa DB 에 사람이 직접 돌리되(예: <code>psql -f drop-retired-official-verification.sql</code>), 반드시 업그레이드한 뒤에 돌리십시오. 옛 버전은 이 테이블이 없는 DB 를 설치가 덜 된 것으로 보고 기동하지 않습니다.</li>
+            <li><strong>업그레이드로 운영에서 바뀌는 것:</strong> 보안 판정의 새 버전 화면은 바로 판정에 쓰는 대신 저장하고 측정합니다(<a href="prompt-versions.html#three-clicks">프롬프트 버전 관리</a>). 첫 기동 때 지금 버전을 잽니다(답 210개, 모델 호출 발생). 지금 버전을 매주 새로 다시 잽니다(기본 묶음이면 모델 호출 약 210번). 검토 대기열이 하루 최대 35건이 됩니다. 멈춘 판정과 위험한 허용 판정을 하루 2,000건까지 봉인합니다. 검수에서 문제가 없었다고 30일 뒤 지우던 봉인 증거 묶음을 더는 지우지 않습니다(<a href="evidence.html#retention">보관</a>). 버전 화면의 시험 판정은 측정과 한 줄에 서서 측정 뒤에서 기다립니다.</li>
+          </ul>
+
+          <h2 id="api">화면과 API</h2>
+          <div class="callout callout-warning">
+            <strong>모든 화면과 API에는 관리자(<code>ADMIN</code>) 역할이 필요합니다.</strong> <code>CONTEXA_OWNED</code> 에서는 메서드 보안으로 이 검사가 걸립니다. 기본인 <code>HOST_OWNED</code> 에서는 Contexa 의 콘솔 체인이 콘솔에 로그인한 관리자만 <code>/contexa/admin/**</code> 에 들이고, 앱이 메서드 보안을 켜면 같은 검사가 더해집니다(<a href="overview.html#ownership">소유 방식에 따라 동작하는 것</a>).
+          </div>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>할 일</th><th>API(모두 <code>?scope=</code> 를 받음)</th></tr></thead>
+            <tbody>
+              <tr><td>품질 현황</td><td><code>GET /contexa/admin/api/prompt-quality/status?period=day|week|month|quarter</code>, 보고서 <code>GET /contexa/admin/api/prompt-quality/report?from=&amp;to=</code></td></tr>
+              <tr><td>정답 사례</td><td><code>/contexa/admin/api/prompt-quality/cases</code> 아래: <code>GET</code>(목록), <code>GET /{key}</code>, <code>GET /{key}/input</code>, <code>POST</code>(사례 복제, 본문 <code>{"sourceKey", "input", "answer"}</code>), <code>POST /promote</code>(봉인 판정에서, 본문 <code>{"packageId", "answer"}</code>), <code>POST /{key}/answer</code>, <code>/{key}/confirm</code>, <code>/{key}/delete</code>, <code>POST /publish</code></td></tr>
+              <tr><td>측정</td><td><code>/contexa/admin/api/prompt-quality/measure</code> 아래: <code>GET</code>(목록), <code>GET /band</code>, <code>GET /estimate?version=&amp;caseSet=&amp;repeats=</code>, <code>POST</code> 본문 <code>{"version", "caseSet", "repeats"}</code>, <code>POST /{id}/cancel</code>, <code>GET /run</code>(최근), <code>GET /{id}</code>, <code>GET /compare?candidate=&amp;reference=</code>(또는 <code>candidateMeasure=&amp;referenceMeasure=</code>), <code>GET /compare/answers?case=</code></td></tr>
+              <tr><td>원인</td><td><code>GET /contexa/admin/api/prompt-quality/measure/run/causes</code>, <code>GET /measure/{id}/causes</code>, <code>POST /measure/causes/{id}/category</code></td></tr>
+              <tr><td>시험 판정에서 사례로</td><td><code>GET /contexa/admin/api/prompt-quality/measure/trials/{trialId}/divergent</code>, <code>POST /measure/trials/{trialId}/cases</code></td></tr>
+              <tr><td>판정에서 사례로, 침해 확인</td><td><code>POST /contexa/admin/api/zero-trust/decisions/{observationId}/case</code> 본문 <code>{"evaluation", "answer"}</code>, <code>POST /contexa/admin/api/zero-trust/decisions/{observationId}/breach</code> 본문 <code>{"note"}</code></td></tr>
+              <tr><td>봉인 증거, 증거 감사, 재현</td><td><a href="evidence.html#console">봉인 증거</a></td></tr>
+              <tr><td>버전, 관문의 답, 판정에 사용</td><td><a href="prompt-versions.html#api">프롬프트 버전 관리</a></td></tr>
+            </tbody>
+          </table></div>
+          <p>거절된 요청은 사유 코드로 답합니다. 사례는 예를 들어 <code>SELF_CONFIRMATION</code>, <code>READ_ONLY</code>, <code>NOT_SEALED</code>, <code>NOT_DIVERGENT</code>, 측정은 <code>NO_CASE_SET</code>, <code>REPEATS</code>, <code>CALL_LIMIT</code>, <code>RUNNING</code> 입니다.</p>
+
+          <h2 id="settings">설정</h2>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>바꿀 때</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.prompt.governance.enabled</code></td><td><code>true</code></td><td>버전 화면과 그 API, 시험 판정, 레지스트리 · 출시 관문 · 되돌리기, 그리고 정답 사례 · 측정 · 품질 관문 · 품질 현황 · 보고서</td><td>버전을 화면에서 관리하지 않을 때 끔</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.two-person-confirmation</code></td><td><code>true</code></td><td>사례와 정답 변경이 다른 관리자의 확인을 기다림</td><td>관리자가 한 명인 설치는 끔</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.repeats</code></td><td><code>3</code></td><td>시작할 때 수를 정하지 않으면 사례마다 돌리는 횟수(1~10)</td><td>드물게. 반복 수가 같은 측정끼리만 견줌</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.concurrency</code></td><td><code>1</code></td><td>측정 하나가 한꺼번에 돌리는 재현 수. 판정 뒤에 섬</td><td>원격 제공자면 2 이상. 2면 시간이 절반</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.retries</code></td><td><code>2</code></td><td>모델 서버가 답하지 못한 재현을 더 묻는 횟수</td><td>모델 서버가 자주 바쁠 때</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.retry-delay</code></td><td><code>15s</code></td><td>첫 재시도 전 기다림. 두 번째는 두 배</td><td>드물게</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.call-limit</code></td><td><code>3000</code></td><td>측정 하나의 최대 모델 호출 수. <code>0</code> 이면 한도 없음</td><td>호출마다 비용이 들 때</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.measurement.heartbeat</code></td><td><code>30s</code></td><td>돌리는 서버가 잠금을 늘리고 다른 서버가 일을 찾는 주기(잠금은 네 주기 동안 유지)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.gate.mode</code></td><td><code>WARN</code></td><td><code>WARN</code> 은 막는 판정을 경고로 적용, <code>BLOCK</code> 은 막고 사유로 넘김</td><td>재현성과 변별력 확인을 통과한 뒤 <code>BLOCK</code></td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.gate.model-less-limit</code></td><td><code>0.05</code></td><td>후보 버전의 답 가운데 모델 없이 정한 비율의 상한(0~1)</td><td>드물게</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.gate.significance</code></td><td><code>0.05</code></td><td>정확 검정의 유의 수준. 크면 더 작은 차이도 막음</td><td>드물게</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.gate.friction-increase-limit</code></td><td><code>0.20</code></td><td>같은 사례에서 후보의 마찰률이 지금 판보다 이만큼 늘면 유의성과 관계없이 막음. 0 초과 1 이하</td><td>드물게. 낮추면 더 작은 증가도 막음</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.gate.minimum-stop-roots</code></td><td><code>200</code></td><td>두 버전을 가릴 수 있는 서로 다른 멈춰야 할 뿌리 수</td><td>드물게</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.gate.minimum-allow-roots</code></td><td><code>300</code></td><td>두 버전을 가릴 수 있는 서로 다른 허용해야 할 뿌리 수</td><td>드물게</td></tr>
+              <tr><td><code>contexa.pqa.oss.quality.remeasure.cron</code></td><td><code>0 0 2 * * SUN</code></td><td>지금 버전을 다시 재는 때(UTC). <code>-</code> 이면 끔</td><td>매주 측정을 옮기거나 끌 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.console.review-daily-sample</code></td><td><code>20</code></td><td>하루에 검토로 뽑는 멈춘 판정 수</td><td>검토를 늘리거나 줄일 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.console.review-risk-sample</code></td><td><code>10</code></td><td>하루에 위험에 따라 뽑는 허용 판정 수. <code>0</code> 이면 뽑지 않음</td><td>검토를 늘리거나 줄일 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.console.review-allowed-sample</code></td><td><code>5</code></td><td>하루에 무작위로 뽑는 신호 없는 허용 판정 수. <code>0</code> 이면 뽑지 않음</td><td>정상 사례를 채우는 속도를 바꿀 때</td></tr>
+              <tr><td><code>contexa.security.zerotrust.console.review-blocked-lookback-days</code></td><td><code>7</code></td><td>차단된 사용자의 앞선 허용 판정을 차단에서 거슬러 보는 날 수</td><td>드물게</td></tr>
+            </tbody>
+          </table></div>
+          <pre><code class="language-yaml">contexa:
+  pqa:
+    oss:
+      quality:
+        two-person-confirmation: true
+        measurement:
+          repeats: 3
+          concurrency: 1
+          call-limit: 3000
+        gate:
+          mode: WARN       # 이 설치에서 관문을 확인한 뒤 BLOCK
+          friction-increase-limit: 0.20
+        remeasure:
+          cron: "0 0 2 * * SUN"</code></pre>
+          <p>관문 값이 범위를 벗어나면 기동하지 않습니다. 봉인 · 증거 감사 · 보관 설정은 <a href="evidence.html#settings">봉인 증거</a>, 버전 설정은 <a href="prompt-versions.html#settings">프롬프트 버전 관리</a>에 있습니다.</p>
+          <!-- Navigation Footer -->
+          <div class="docs-nav-footer">
+            <a href="prompt-versions.html" class="docs-nav-link prev">
+              <span class="docs-nav-label">이전</span>
+              <span class="docs-nav-title">프롬프트 버전 관리</span>
+            </a>
+            <a href="evidence.html" class="docs-nav-link next">
+              <span class="docs-nav-label">다음</span>
+              <span class="docs-nav-title">봉인 증거</span>
+            </a>
+          </div>
