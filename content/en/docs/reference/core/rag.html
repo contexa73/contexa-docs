@@ -50,7 +50,7 @@
 
           <h2 id="prepare">Before you start</h2>
           <ul>
-            <li><strong>Vector store:</strong> with the Spring AI pgvector starter (<code>spring-ai-starter-vector-store-pgvector</code>) and an embedding model, CONTEXA builds its own vector store bean (<code>contexaVectorStore</code>) on the dedicated CONTEXA database. It does not use your application's <code>VectorStore</code> bean. Without this bean the general and behavior services are not created, and the pipeline's context retrieval returns nothing.</li>
+            <li><strong>Vector store:</strong> with the Spring AI pgvector starter (<code>spring-ai-starter-vector-store-pgvector</code>) and an embedding model, CONTEXA builds its own vector store bean (<code>contexaVectorStore</code>) on the dedicated CONTEXA database. It does not use your application's <code>VectorStore</code> bean. This bean is not a default injection candidate (<code>defaultCandidate = false</code>), so injecting a plain <code>VectorStore</code> does not give it; add <code>@Qualifier("contexaVectorStore")</code> to use it directly. Without this bean the general and behavior services are not created, and the pipeline's context retrieval returns nothing.</li>
             <li><strong>Embedding model:</strong> one Spring AI embedding model (fixed to one provider). How it is chosen is in <a href="model-provider.html#embedding">Choosing the embedding model</a>. CONTEXA follows your application's model: OpenAI with no model named is Spring AI's default <code>text-embedding-ada-002</code>.</li>
             <li><strong>Table:</strong> CONTEXA turns on <code>contexa.vectorstore.pgvector.initialize-schema</code> by default. The first start creates, in the dedicated CONTEXA database, the vector extension, the table (<code>public.ctxa_vector_store</code>), its HNSW index and the metadata index used by per-user searches.</li>
             <li><strong>If migrations manage your schema,</strong> turn <code>initialize-schema</code> off and create the table, the vector index and the metadata index yourself. Off, nothing is created or changed at start.</li>
@@ -131,7 +131,7 @@ List&lt;Document&gt; top5 = unifiedVectorService.searchSimilar(SearchRequest.bui
               <tr><td>Map with <code>gte</code> · <code>lte</code></td><td>Not supported</td><td>Range (both needed)</td></tr>
             </tbody>
           </table></div>
-          <p>Filter keys of the general service may use only letters, digits, <code>_</code>, <code>.</code> and <code>-</code> (otherwise <code>IllegalArgumentException</code>). Several conditions must all match (AND).</p>
+          <p>Filter keys of the general service start with a letter or <code>_</code> and may use only letters, digits, <code>_</code>, <code>.</code> and <code>-</code> (otherwise <code>IllegalArgumentException: Unsafe vector filter key</code>). Several conditions must all match (AND).</p>
 
           <h2 id="failures">Preparing for failures</h2>
           <ul>
@@ -146,7 +146,8 @@ List&lt;Document&gt; top5 = unifiedVectorService.searchSimilar(SearchRequest.bui
           <p>For a service that handles only one kind of document, extend <code>AbstractVectorLabService</code>. Fill in four methods and storing gets metadata enrichment and validation, and searching gets the service's own filters.</p>
           <pre><code class="language-java">public class FaqVectorService extends AbstractVectorLabService {
 
-    public FaqVectorService(VectorStore vectorStore, ContexaRagProperties ragProperties) {
+    public FaqVectorService(@Qualifier("contexaVectorStore") VectorStore vectorStore,
+                            ContexaRagProperties ragProperties) {
         super(vectorStore, null, ragProperties);   // null without metrics (VectorStoreMetrics)
     }
 
@@ -189,7 +190,7 @@ contexa:
       enrichment-enabled: true</code></pre>
 
           <h2 id="behavior">Behavior record service (BehaviorVectorService)</h2>
-          <p>A Lab service that stores user behavior as documents and finds similar behavior (name <code>BehavioralAnalysis</code>, document type <code>behavior</code>). It is created when a <code>VectorStore</code> bean exists. No OSS code calls its methods; the decision engine stores and searches its past decision records through the general service, not this one (<a href="#decision-records">below</a>).</p>
+          <p>A Lab service that stores user behavior as documents and finds similar behavior (name <code>BehavioralAnalysis</code>, document type <code>behavior</code>, bean <code>contexaBehaviorVectorService</code>). It is created when the <code>contexaVectorStore</code> bean exists. No OSS code calls its methods; the decision engine stores and searches its past decision records through the general service, not this one (<a href="#decision-records">below</a>).</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Method</th><th>What it does</th></tr></thead>
             <tbody>
@@ -227,8 +228,8 @@ List&lt;Document&gt; similar = behaviorVectorService
           <h2 id="pipeline">The pipeline and the RAG advisors</h2>
           <ul>
             <li><strong>The pipeline's context retrieval step (<code>CONTEXT_RETRIEVAL</code>):</strong> the default retriever (<code>AuthorizedContextRetriever</code>) searches through the general service. The query is the request parameter <code>naturalLanguageQuery</code>, otherwise the text of the domain context. It finds the top <code>contexa.rag.defaults.top-k</code> (10) documents with relevance <code>contexa.rag.defaults.similarity-threshold</code> (0.7) or more, and puts into the prompt only those that fit the request's user, organization, tenant and retrieval purpose (<code>PromptContextAuthorizationService</code>). The pipeline is in <a href="pipeline.html">AI pipeline</a>.</li>
-            <li><strong>RAG retrieval advisor beans:</strong> with <code>VectorStore</code> and <code>ChatClient.Builder</code> beans, Spring AI <code>RetrievalAugmentationAdvisor</code> beans are created: <code>riskAssessmentRagAdvisor</code> (<code>risk_assessment</code> documents with <code>riskScore</code> 0.5 or more, <code>contexa.rag.risk.top-k</code> 50 · <code>similarity-threshold</code> 0.8) and <code>policyGenerationRagAdvisor</code> (<code>policy_evolution</code> documents, 20 · 0.7). Both first refine the query with the chat model.</li>
-            <li><code>behaviorAnalysisRagAdvisor</code> is created only with <code>contexa.rag.behavior.shared-advisor-enabled=true</code> (off by default). It searches the <code>behavior</code> documents of <strong>every user</strong> from the last <code>contexa.rag.behavior.lookback-days</code> (30) days, so for per-user retrieval write your own advisor with a user condition.</li>
+            <li><strong>RAG retrieval advisor beans:</strong> with the <code>contexaVectorStore</code> and <code>contexaChatClientBuilder</code> (made when there is a primary chat model) beans, Spring AI <code>RetrievalAugmentationAdvisor</code> beans are created: <code>contexaRiskAssessmentRagAdvisor</code> (<code>risk_assessment</code> documents with <code>riskScore</code> 0.5 or more, <code>contexa.rag.risk.top-k</code> 50 · <code>similarity-threshold</code> 0.8) and <code>contexaPolicyGenerationRagAdvisor</code> (<code>policy_evolution</code> documents, 20 · 0.7). Both first refine the query with the chat model.</li>
+            <li><code>contexaBehaviorAnalysisRagAdvisor</code> is created only with <code>contexa.rag.behavior.shared-advisor-enabled=true</code> (off by default). It uses <code>contexa.rag.defaults.top-k</code> (10) and <code>similarity-threshold</code> (0.7) for the count and the relevance. It searches the <code>behavior</code> documents of <strong>every user</strong> from the last <code>contexa.rag.behavior.lookback-days</code> (30) days, so for per-user retrieval write your own advisor with a user condition.</li>
             <li>No OSS code uses these advisor beans, and they do not enter the registry automatically. To use one, add it to a call with <code>ExecutionContext.addAdvisor(…)</code> (<a href="advisor.html#overview">Advisors</a>).</li>
             <li><code>contexa.rag.vocabulary-reindex-on-start</code> (default <code>true</code>): after start, in the background, past-record documents stored under an older classification vocabulary are moved to the current one.</li>
           </ul>
@@ -252,7 +253,7 @@ List&lt;Document&gt; similar = behaviorVectorService
               <tr><td><code>contexa.rag.etl.behavior.retention-days</code></td><td><code>90</code></td><td>Retention days of decision and behavior records (0 or less: kept)</td><td>When your retention policy differs</td></tr>
             </tbody>
           </table></div>
-          <p>All RAG and pgvector settings are in <a href="../../install/configuration/ai.html">AI model settings</a>. <code>contexa.vectorstore.pgvector.hnsw.m</code>, <code>hnsw.ef-construction</code>, <code>ivfflat.*</code> and <code>document.*</code> are read by nothing and have no effect.</p>
+          <p>All RAG and pgvector settings are in <a href="../../install/configuration/ai.html">AI model settings</a>. <code>contexa.vectorstore.pgvector.hnsw.m</code>, <code>contexa.vectorstore.pgvector.hnsw.ef-construction</code>, <code>contexa.vectorstore.pgvector.ivfflat.*</code> and <code>contexa.vectorstore.pgvector.document.*</code> are read by nothing and have no effect.</p>
 
           <h2 id="reference">Reference</h2>
           <details>

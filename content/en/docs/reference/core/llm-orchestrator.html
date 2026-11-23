@@ -25,7 +25,7 @@
               <li class="dg-node"><span class="dg-node-tag">②</span><span class="dg-node-title">Attach advisors</span><span class="dg-node-desc">The enabled global advisors and the advisors of this call only</span></li>
               <li class="dg-node"><span class="dg-node-tag">③</span><span class="dg-node-title">Fit the provider options</span><span class="dg-node-desc">Options are reshaped into what OpenAI, Anthropic or Ollama accepts</span></li>
               <li class="dg-node dg-model"><span class="dg-node-tag">④</span><span class="dg-node-title">Call the provider</span><span class="dg-node-desc">Within the time limit (60 s by default). With throttling on, the call waits for its turn</span></li>
-              <li class="dg-node"><span class="dg-node-tag">⑤</span><span class="dg-node-title">Send again on failure</span><span class="dg-node-desc">Once without a refused field; up to 4 times for a transient error</span></li>
+              <li class="dg-node"><span class="dg-node-tag">⑤</span><span class="dg-node-title">Send again on failure</span><span class="dg-node-desc">Once without a field an Anthropic model refused; up to 4 times for a transient error</span></li>
               <li class="dg-node"><span class="dg-node-tag">⑥</span><span class="dg-node-title">Answer and record</span><span class="dg-node-desc">The answer is returned; the chosen model, time taken and token counts go into the metadata</span></li>
             </ol>
           </figure>
@@ -45,8 +45,8 @@
           <h2 id="prepare">Before you start</h2>
           <ul>
             <li><strong>At least one chat model is needed.</strong> Add a Spring AI provider starter (for example <code>spring-ai-starter-model-openai</code>) and set <code>spring.ai.&lt;provider&gt;.*</code> (API key, address); Spring AI then creates a chat model (<code>ChatModel</code>) bean. CONTEXA's own Ollama connection (<code>contexa.llm.chat.ollama.base-url</code>) also counts as a chat model. How to connect is in <a href="model-provider.html">Connecting and Choosing Models</a>.</li>
-            <li>Without a chat model the orchestrator bean is not created. When model selection finds no model at all, the call ends with the error <code>No LLM model configured. …</code>.</li>
-            <li><strong>Injection:</strong> take <code>LLMOperations</code> (the <code>execute()</code>, <code>stream()</code> and <code>executeEntity()</code> on this page), or <code>LLMClient</code> · <code>ToolCapableLLMClient</code>, whose methods take only a prompt. The beans named <code>llmClient</code> and <code>toolCapableLLMClient</code> are the same orchestrator.</li>
+            <li>Without a chat model the orchestrator bean is not created. When model selection finds no model at all, the call ends with the error <code>No LLM model configured. …</code> (<code>stream()</code>: <code>LLM model not configured. …</code>).</li>
+            <li><strong>Injection:</strong> take <code>LLMOperations</code> (the <code>execute()</code>, <code>stream()</code> and <code>executeEntity()</code> on this page), or <code>LLMClient</code> · <code>ToolCapableLLMClient</code>, whose methods take only a prompt. The orchestrator bean is named <code>contexaUnifiedLLMOrchestrator</code>, and <code>contexaLlmClient</code> and <code>contexaToolCapableLLMClient</code> are the same orchestrator object.</li>
             <li>The orchestrator is created only when the advisor registry (<code>AdvisorRegistry</code>) bean exists. Do not turn off <code>contexa.advisor.enabled</code> (default <code>true</code>); to leave advisors out, use the other ways in <a href="advisor.html#enable">Turning advisors on and off</a>.</li>
             <li>With <code>contexa.llm.enabled=false</code> the whole LLM auto-configuration (orchestrator, model selection, primary chat model) is off.</li>
           </ul>
@@ -97,7 +97,7 @@ Mono&lt;Summary&gt; summary = llm.executeEntity(context, Summary.class);</code><
               <tr><td><code>timeoutMs</code></td><td>A time limit (ms) used only by <code>stream()</code>. It does not apply to <code>execute()</code>.</td></tr>
               <tr><td><code>toolCallbacks</code> · <code>toolProviders</code> · <code>toolExecutionEnabled</code></td><td>Tool calling (<a href="#tools">below</a>)</td></tr>
               <tr><td><code>advisors</code> · <code>advisorEnabled</code></td><td>Advisors for this call only, and whether the global advisors are used (<a href="#advisors">below</a>)</td></tr>
-              <tr><td><code>metadata</code></td><td>Extra instructions and the recorded results. Keys read: model requests <code>requestedModelId</code> · <code>preferredModel</code> · <code>modelId</code>, retry off <code>disableRetries</code>, call time limit <code>callTimeoutMs</code>, Ollama thinking off <code>disableOllamaThinking</code>. Result keys are in <a href="#check">Checking a call</a>.</td></tr>
+              <tr><td><code>metadata</code></td><td>Extra instructions and the recorded results. Keys read: model requests <code>requestedModelId</code> · <code>preferredModel</code> · <code>modelId</code> (<code>runtimeModelId</code> is cleared before selection, so it is not an input), retry off <code>disableRetries</code>, call time limit <code>callTimeoutMs</code>, Ollama thinking off <code>disableOllamaThinking</code>. Result keys are in <a href="#check">Checking a call</a>.</td></tr>
               <tr><td><code>streamingMode</code></td><td>Nothing reads it. Whether a call streams depends on calling <code>stream()</code>.</td></tr>
             </tbody>
           </table></div>
@@ -105,10 +105,10 @@ Mono&lt;Summary&gt; summary = llm.executeEntity(context, Summary.class);</code><
           <h2 id="routing">Which model a request goes to</h2>
           <p>The model is chosen for each call in the order below; once a step decides, the later ones are not looked at. The recorded values and the detailed rules are in <a href="model-provider.html#request-order">Connecting and Choosing Models</a>.</p>
           <ol>
-            <li><strong>Requested model:</strong> <code>preferredModel</code>, otherwise the metadata <code>requestedModelId</code> → <code>preferredModel</code> → <code>modelId</code>. If that model cannot be made, selection moves to the next step.</li>
+            <li><strong>Requested model:</strong> <code>preferredModel</code>, otherwise the metadata <code>requestedModelId</code> → <code>preferredModel</code> → <code>modelId</code>. The metadata <code>runtimeModelId</code> is cleared before selection, so it is not an input. If that model cannot be made, selection moves to the next step.</li>
             <li><strong>Layer model:</strong> the layer comes from <code>analysisLevel</code> (QUICK → 1, NORMAL → 2, DEEP → 3) → <code>securityTaskType</code> (table below) → <code>tier</code>. 1 or less is layer 1, 2 or more is layer 2, and the layer's model (<code>contexa.security.tiered.llm.layer1.model</code> · <code>layer2.model</code>) is used. With no layer model set, this step is skipped.</li>
             <li><strong>Backup model:</strong> the layer's <code>backup.model</code>, when the layer model cannot be made</li>
-            <li><strong>Primary chat model:</strong> always used when nothing above decided (<code>primaryChatModel</code>)</li>
+            <li><strong>Primary chat model:</strong> always used when nothing above decided (the bean <code>contexaPrimaryChatModel</code>)</li>
           </ol>
           <p><code>ExecutionContext.getEffectiveTier()</code> returns the layer number decided in the same order (<code>analysisLevel</code> → <code>securityTaskType</code> → <code>tier</code>); 3 stays 3, and it is <code>null</code> when none is set.</p>
           <p>The security decision engine's Layer 1 and Layer 2 use the same layer models. For the models used in decisions, see <a href="../architecture/decision-engine.html#layer-models">Decision Engine: a different model for each layer</a>.</p>
@@ -162,9 +162,9 @@ Mono&lt;String&gt; answer = toolClient.callToolCallbacks(prompt, callbacks);</co
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Item</th><th><code>execute()</code> · <code>executeEntity()</code> · tool calls</th><th><code>stream()</code></th></tr></thead>
             <tbody>
-              <tr><td>Time limit</td><td><code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code> (default 60000 ms). The metadata <code>callTimeoutMs</code> wins when smaller. With neither (0), no limit</td><td><code>timeoutMs</code> (when set) and the layer time limit <code>contexa.security.tiered.llm.tiered.layer1.timeout-ms</code> · <code>layer2.timeout-ms</code> (default 30000 · 60000 ms, at most 120000 ms)</td></tr>
+              <tr><td>Time limit</td><td><code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code> (default 60000 ms). The metadata <code>callTimeoutMs</code> wins when smaller. With neither (0), no limit</td><td><code>timeoutMs</code> (when set) and the layer time limit <code>contexa.security.tiered.llm.tiered.layer1.timeout-ms</code> · <code>contexa.security.tiered.llm.tiered.layer2.timeout-ms</code> (default 30000 · 60000 ms, at most 120000 ms)</td></tr>
               <tr><td>Retry of transient errors</td><td>Up to 4 times</td><td>None</td></tr>
-              <tr><td>Resend without a refused field</td><td>Once</td><td>None</td></tr>
+              <tr><td>Resend without a refused field</td><td>Once (Anthropic models)</td><td>None</td></tr>
               <tr><td>Provider call throttling</td><td>When on</td><td>None</td></tr>
               <tr><td>Advisors</td><td>Global + this call's</td><td>Global only</td></tr>
             </tbody>
@@ -178,10 +178,10 @@ Mono&lt;String&gt; answer = toolClient.callToolCallbacks(prompt, callbacks);</co
 
           <h3 id="retry">When a call is sent again</h3>
           <ul>
-            <li><strong>Retry of transient errors (<code>execute()</code> family):</strong> up to 4 more tries, waiting from 2 seconds and longer each time (at most 12 seconds). Retried: errors Spring AI classifies as transient, I/O errors (IOException), HTTP 408 · 409 · 429, 502 · 503 · 504, dropped or refused connections, and rate-limit messages such as "rate limit" or "try again in". Any other 4xx (the request itself was refused) is not retried.</li>
+            <li><strong>Retry of transient errors (<code>execute()</code> family):</strong> up to 4 more tries, waiting from 2 seconds and longer each time (at most 12 seconds). Retried: errors Spring AI classifies as transient, I/O errors (IOException), HTTP 408 · 409 · 429, 502 · 503 · 504, dropped connections, and rate-limit messages such as "rate limit" or "try again in". Any other 4xx (the request itself was refused) is not retried, and neither is a failure that could not connect to the model server at all (connection refused, unknown host, no route), because sent again within seconds it meets the same closed port. When all 4 fail, the ERROR log <code>LLM failed after 4 retries …</code> is written and the call ends with the error <code>Retries exhausted: 4/4</code>.</li>
             <li><strong>With the server gate (<code>contexa.llm.gate.enabled</code>, on by default):</strong> when the server answers with an overload such as 429, 503 or 529, the call is sent again at once but waits in line at that server's gate, which stays closed for a short time. The gate limits how many calls each model server takes at once (2 for self-hosted, 16 for remote; <a href="../../install/configuration/ai.html">Connecting AI Models</a>).</li>
             <li><strong>Turning it off:</strong> the metadata <code>disableRetries=true</code>. The number of retries is recorded in <code>providerRetryCount</code>.</li>
-            <li><strong>Refused fields:</strong> when the provider refuses the request with a 4xx (other than 408 · 409 · 429) because of a thinking or sampling field it carried, the request is sent once more without that field, within the time left. The model's later requests leave that field out too.</li>
+            <li><strong>Refused fields (Anthropic models):</strong> when Anthropic refuses the request with a 4xx (other than 408 · 409 · 429) because of a thinking or sampling (<code>temperature</code>, <code>top_p</code>, <code>top_k</code>) field it carried, the request is sent once more without that field, within the time left. The model's later requests leave that field out too.</li>
             <li>The security decision engine handles a failed decision call on its own (<a href="../architecture/decision-engine.html#overrides">When the model's answer is changed</a>).</li>
           </ul>
 
@@ -207,7 +207,7 @@ Mono&lt;String&gt; answer = toolClient.callToolCallbacks(prompt, callbacks);</co
             <tbody>
               <tr><td>OpenAI</td><td>For the gpt-5 and o series (default list), <code>maxTokens</code> is sent as <code>max_completion_tokens</code>, and for models that take only the default sampling <code>temperature</code> · <code>topP</code> are left out. These models also get <code>seed</code> and the metadata <code>openAiReasoningEffort</code> · <code>openAiVerbosity</code>. The metadata <code>promptCacheKey</code>, when present, is sent as the prompt cache key.</td></tr>
               <tr><td>Anthropic</td><td>The model's default options (including the prompt cache setting) are copied and the request values put on top. For Claude models that take only the default sampling, <code>temperature</code> · <code>topP</code> · <code>topK</code> are left out.</td></tr>
-              <tr><td>Ollama</td><td><code>OllamaChatOptions</code> get the model name, <code>temperature</code>, <code>topP</code>, <code>seed</code> and <code>numPredict</code> (= <code>maxTokens</code>). For a model on the thinking-off list, or with the metadata <code>disableOllamaThinking=true</code>, thinking is turned off.</td></tr>
+              <tr><td>Ollama</td><td><code>OllamaChatOptions</code> get the model name, <code>temperature</code>, <code>topP</code>, <code>seed</code> and <code>numPredict</code> (= <code>maxTokens</code>), and the context size <code>num_ctx</code> is set (16384 by default, doubled up to 32768 when the prompt and the answer do not fit; <a href="model-provider.html#capabilities">Capabilities per provider</a>). For a model on the thinking-off list, or with the metadata <code>disableOllamaThinking=true</code>, thinking is turned off.</td></tr>
               <tr><td>Others</td><td>Spring AI's common <code>ChatOptions</code> (model name, <code>temperature</code>, <code>topP</code>, <code>maxTokens</code>)</td></tr>
             </tbody>
           </table></div>

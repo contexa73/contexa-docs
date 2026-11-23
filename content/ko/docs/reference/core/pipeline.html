@@ -18,6 +18,10 @@
             <strong>보안 판정과는 다른 쓰임입니다.</strong> 판정 엔진도 안쪽에서 같은 오케스트레이터와 단계를 지나가지만, 자기 구성과 규칙으로 판정을 만듭니다. 이 페이지는 앱 기능이 부르는 범용 사용만 다룹니다. 판정은 <a href="../architecture/decision-engine.html">판정 엔진</a>을 참고합니다.
           </div>
 
+          <div class="callout callout-info">
+            <strong>이 페이지의 용어.</strong> <strong>오케스트레이터</strong>는 요청을 받아 알맞은 실행기에 맡기는 진입점이고, <strong>실행기</strong>(executor)는 단계를 정해진 순서로 실제로 돌리는 부품입니다. <strong>구성</strong>(<code>PipelineConfiguration</code>)은 이번 실행에서 켤 단계의 목록입니다. <strong>구조화 출력</strong>은 모델에 결과의 JSON 스키마를 주고 그 형식대로 답하게 해 객체로 받는 방식이고, <strong>원문 글</strong>(raw)은 모델의 답을 글 그대로 받은 뒤 JSON을 꺼내는 방식입니다. <strong>메타데이터</strong>는 실행 중에 쌓이는 이름-값 기록(걸린 시간, 쓴 모델 등)입니다.
+          </div>
+
           <h2 id="overview">파이프라인이 하는 일</h2>
           <p>파이프라인 오케스트레이터(<code>PipelineOrchestrator</code>)는 요청과 구성(<code>PipelineConfiguration</code>)을 받아, 그 구성을 처리할 실행기를 고르고 단계를 차례로 실행합니다. 실행기는 둘입니다: 결과 객체를 돌려주는 표준 실행기(<code>UniversalPipelineExecutor</code>)와 글 조각을 흘려보내는 스트리밍 실행기(<code>StreamingUniversalPipelineExecutor</code>).</p>
           <p>보통은 Lab 안에서 부릅니다(<a href="strategy.html#step-3">Lab 만들기</a>). Strategy · Lab 없이 프롬프트 하나로 끝나는 기능이면 컨트롤러가 바로 부를 수도 있습니다. 이때는 문맥 · 응답 타입 · 템플릿만 있으면 됩니다.</p>
@@ -89,7 +93,7 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
           <h3 id="step-prompt-generation">3. 프롬프트 만들기(PROMPT_GENERATION)</h3>
           <ol>
             <li>요청의 템플릿 타입 이름으로 템플릿 빈을 찾습니다. 없으면 <code>Template matching failed</code>로 실패합니다.</li>
-            <li>템플릿의 <code>generateSystemPrompt(request, systemMetadata)</code>와 <code>generateUserPrompt(request, contextInfo)</code>를 부릅니다. 표준 템플릿은 JSON 형식 지시를, 스트리밍 템플릿은 스트리밍 규칙과 JSON 예를 시스템 프롬프트에 붙입니다.</li>
+            <li>템플릿의 <code>generateSystemPrompt(request, systemMetadata)</code>와 <code>generateUserPrompt(request, contextInfo)</code>를 부릅니다. 표준 템플릿은 JSON 형식 지시(<code>&lt;output_format&gt;</code> 블록)를, 스트리밍 템플릿은 내가 쓴 스트리밍 지시문(<code>streamingInstructions()</code>)과 표지로 감싼 JSON 예를 시스템 프롬프트에 붙입니다.</li>
             <li>프롬프트 정리기(<code>LLMViewComposer</code>, 기본 <code>SafePromptNormalizationLLMViewComposer</code>)가 줄바꿈을 정리하고, 글자까지 똑같은 절이 되풀이되면 하나만 남깁니다. 자르거나 요약하지 않습니다.</li>
             <li>시스템 메시지와 사용자 메시지로 된 Spring AI <code>Prompt</code>를 남깁니다. 템플릿이 응답 타입을 알려 주면(표준 템플릿) 그 타입도 다음 단계에 넘깁니다.</li>
           </ol>
@@ -98,8 +102,8 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
           <ul>
             <li><strong>보내는 곳:</strong> <code>UnifiedLLMOrchestrator</code>가 Spring AI 채팅 모델로 보내고, 등록된 어드바이저(<code>BaseAdvisor</code> 빈)를 적용합니다(<a href="llm-orchestrator.html">LLM 오케스트레이터</a> · <a href="advisor.html">어드바이저</a>).</li>
             <li><strong>모델:</strong> 요청 파라미터 <code>preferredModel</code>이 있으면 그 모델, 없거나 찾지 못하면 기본 채팅 모델입니다. 범용 요청에는 분석 계층이 없어 1차 · 2차 분석 모델 설정을 쓰지 않습니다. 이름이 실제 모델이 되는 규칙은 <a href="model-provider.html#request-order">모델 공급자</a>에 있습니다.</li>
-            <li><strong>답 받는 방식:</strong> 표준 실행은 응답 타입을 알므로 구조화 출력(모델에 스키마를 주고 객체로 받기)을 먼저 하고, 실패하면 원문 글로 다시 받습니다(요청 파라미터 <code>structuredOutputPolicy=RAW_FORBIDDEN</code>이면 다시 받지 않고 실패).</li>
-            <li><strong>시간 제한과 재시도:</strong> 호출 한 번은 <code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code>(기본 60000ms) 안에 끝나야 합니다. 일시 오류(408 · 409 · 429, 5xx, 연결 끊김 등)는 백오프로 최대 4번(2초부터, 간격 최대 12초) 다시 보냅니다(<a href="llm-orchestrator.html#retry">재시도</a>).</li>
+            <li><strong>답 받는 방식:</strong> 표준 실행은 응답 타입을 알므로 구조화 출력(모델에 스키마를 주고 객체로 받기)을 먼저 하고, 실패하면 원문 글로 다시 받습니다. 다만 모델 서버에 닿지 못했거나 시간 제한에 걸린 실패는 다시 받아도 같으므로 그대로 실패하고, 요청 파라미터 <code>structuredOutputPolicy=RAW_FORBIDDEN</code>이면 다시 받지 않고 실패합니다.</li>
+            <li><strong>시간 제한과 재시도:</strong> 호출 한 번은 <code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code>(기본 60000ms) 안에 끝나야 합니다. 일시 오류(408 · 409 · 429, 5xx, 연결 끊김 등)는 백오프로 최대 4번(2초부터, 간격 최대 12초) 다시 보냅니다. 모델 서버에 아예 연결하지 못한 실패(연결 거부 · 호스트를 모름)는 다시 보내지 않습니다(<a href="llm-orchestrator.html#retry">재시도</a>).</li>
             <li><strong>스트리밍:</strong> 스트리밍 단계(<code>StreamingLLMExecutionStep</code>)가 모델 글을 조각마다 흘려보냅니다. 요청 파라미터(모델 · 온도 등)를 쓰지 않고, 다시 보내지 않으며, 호출 자체의 시간 제한도 없습니다(<a href="streaming.html#timeouts">스트리밍 시간 제한</a>). 어드바이저는 붙지만, 어드바이저가 모델 호출 전에 차단 오류를 내도 막지 못하고 그 어드바이저만 건너뜁니다(<a href="advisor.html#order-errors">어드바이저 오류 처리</a>).</li>
           </ul>
 
@@ -128,11 +132,11 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
             <li><strong>Spring AI RAG 어드바이저(<code>RetrievalAugmentationAdvisor</code>) 빈은 모델 호출에 자동으로 붙지 않습니다.</strong> 모델 호출에 붙는 어드바이저는 <code>BaseAdvisor</code> 빈뿐이고, 범용 파이프라인의 RAG는 이 검색 단계가 합니다.</li>
             <li><strong>내 검색기</strong>는 <code>ContextRetriever</code>를 확장한 빈을 만들고, 등록부의 <code>registerRetriever(문맥 클래스, 검색기)</code>로 직접 등록해야 불립니다. 등록한 문맥 타입은 기본 검색기의 권한 거르기를 거치지 않습니다. 전체 예는 <a href="strategy.html#step-5">커스텀 AI 기능 만들기 5단계</a>에 있습니다.</li>
           </ul>
-          <p>검색하려면 먼저 문서가 벡터 저장소에 있어야 합니다. Spring AI <code>VectorStore</code>로 넣습니다.</p>
+          <p>검색하려면 먼저 문서가 CONTEXA 벡터 저장소에 있어야 합니다. 범용 서비스(<code>UnifiedVectorService</code>, 빈 <code>contexaUnifiedVectorService</code>)로 넣습니다. 앱이 자기 pgvector 저장소를 따로 두었더라도 기본 검색기는 그 저장소가 아니라 CONTEXA 전용 DB의 저장소를 찾으므로, Spring AI <code>VectorStore</code>를 한정자 없이 주입해 넣은 문서는 찾지 못합니다.</p>
           <pre><code class="language-java">Document doc = new Document(
         "Product A is a lightweight laptop ideal for travel",
         Map.of("category", "electronics", "productId", "PROD-001"));
-vectorStore.add(List.of(doc));</code></pre>
+unifiedVectorService.storeDocument(doc);</code></pre>
           <p>메타데이터에 허용 목적이 적히지 않은 문서는 어느 목적의 검색에도 나옵니다. 사용자 · 조직 범위, 문서 종류, 보관 같은 자세한 규칙은 <a href="rag.html">RAG와 벡터 저장소</a>에 있습니다.</p>
 
           <h2 id="response-processor">결과 손보기: 응답 처리기</h2>
@@ -180,7 +184,7 @@ public class ProductResponseProcessor implements DomainResponseProcessor {
               <tr><td>시스템 메타데이터 넣기</td><td><code>PreprocessingStep</code>을 상속한 빈을 만들고 <code>buildSystemMetadata(request)</code>를 재정의합니다(아래 예). 내장 전처리 빈 대신 쓰입니다.</td></tr>
               <tr><td>프롬프트 정리 방식</td><td><code>LLMViewComposer</code> 빈을 직접 둡니다.</td></tr>
               <tr><td>검색 · 프롬프트 · 응답 해석 · 후처리 단계 전체</td><td><code>ContextRetrievalStep</code> · <code>PromptGenerationStep</code> · <code>ResponseParsingStep</code> · <code>PostprocessingStep</code> 빈을 직접 두면 내장 빈 대신 쓰입니다. 단, 응답 해석 · 후처리에는 판정용 처리도 들어 있으므로 상속해서 일부만 바꿉니다.</td></tr>
-              <tr><td>실행 방식 자체</td><td><code>PipelineExecutor</code> 빈을 더합니다. 오케스트레이터는 <code>getPriority()</code>가 작은 실행기부터 보며 <code>supportsConfiguration(구성)</code>이 <code>true</code>이고 스트리밍 여부가 맞는 첫 실행기를 씁니다.</td></tr>
+              <tr><td>실행 방식 자체</td><td><code>PipelineExecutor</code> 빈을 더합니다. 오케스트레이터는 <code>getPriority()</code>가 작은 실행기부터 보며 <code>supportsConfiguration(구성)</code>이 <code>true</code>이고 스트리밍 여부가 맞는 첫 실행기를 씁니다. 그런 실행기가 없으면 스트리밍 여부와 상관없이 구성을 맡는 첫 실행기를 씁니다.</td></tr>
             </tbody>
           </table></div>
           <pre><code class="language-java">@Component
@@ -201,11 +205,11 @@ public class CatalogPreprocessingStep extends PreprocessingStep {
             <thead><tr><th><code>pipelineFailurePolicy</code></th><th>실패하면</th></tr></thead>
             <tbody>
               <tr><td><code>SYNTHETIC_FALLBACK_RESPONSE</code>(기본)</td><td>오류 대신 응답 타입의 빈 객체를 돌려줍니다. <code>errorMessage</code>는 <code>Pipeline execution failed: 원인</code>, 메타데이터에 <code>errorType</code>(예외 클래스 이름)과 <code>timestamp</code>. 응답 타입에 인자 없는 생성자(또는 <code>(String, ExecutionStatus)</code> 생성자)가 없으면 이것마저 실패합니다.</td></tr>
-              <tr><td><code>PROPAGATE_ERROR</code></td><td>오류를 그대로 호출자에게 보냅니다. Strategy 경로에서는 <code>AIOperationException("Pipeline returned unexpected response type")</code>으로 바뀌어 도착합니다.</td></tr>
+              <tr><td><code>PROPAGATE_ERROR</code></td><td>오류를 그대로 호출자에게 보냅니다. Strategy 경로에서는 Lab · Strategy를 거치며 감싸져 <code>AIOperationException</code>(메시지 <code>Strategy execution failed: …</code>)으로 도착하고, 원래 예외는 <code>getCause()</code>를 따라가면 남아 있습니다.</td></tr>
             </tbody>
           </table></div>
           <ul>
-            <li><strong>스트리밍 실행(<code>executeStream</code>)이 실패하면</strong> 오류 대신 <code>ERROR: 원인</code> 글 조각 하나를 내고 끝납니다. SSE에서 어떻게 보이는지는 <a href="streaming.html#troubleshooting">스트리밍 문제 해결</a>에 있습니다.</li>
+            <li><strong>스트리밍 실행(<code>executeStream</code>)이 실패하면</strong> 흐름이 그 오류로 끝납니다(<code>onError</code>). 실패 정책은 스트리밍에 쓰이지 않습니다. <code>StandardStreamingService</code>를 거치면 이 오류가 이름이 <code>error</code>인 SSE 이벤트가 됩니다(<a href="streaming.html#troubleshooting">스트리밍 문제 해결</a>).</li>
             <li><strong>단계 로그:</strong> <code>[PIPELINE] STEP 3 completed: PROMPT_GENERATION (4ms) - Request: …</code>, 실패하면 <code>STEP 3 failed: …</code>(스트리밍은 <code>[STREAMING-PIPELINE]</code>).</li>
             <li><strong>단계 시간:</strong> 파이프라인 문맥 메타데이터 <code>pipelineStep.&lt;단계 이름&gt;.ms</code>(응답 처리기에서 읽을 수 있음).</li>
             <li><strong>결과의 메타데이터:</strong> <code>selectedModelId</code> · <code>modelSelectionFallbackUsed</code> · <code>llmExecutionLatencyMs</code> · <code>providerRetryCount</code> 등(<a href="#step-postprocessing">후처리</a>).</li>
@@ -216,15 +220,19 @@ public class CatalogPreprocessingStep extends PreprocessingStep {
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>파라미터</th><th>읽는 곳</th><th>뜻</th></tr></thead>
             <tbody>
-              <tr><td><code>naturalLanguageQuery</code></td><td>검색(기본 검색기), 템플릿 도우미</td><td>검색 질문. 없으면 문맥의 <code>toString()</code>으로 찾습니다</td></tr>
+              <tr><td><code>naturalLanguageQuery</code></td><td>검색(기본 검색기), 템플릿 도우미</td><td>검색 질문. 없으면 문맥의 <code>toString()</code>으로 찾습니다. 검색은 이 파라미터만 읽고 <code>setNaturalLanguageQuery()</code>로 넣은 값은 읽지 않습니다. 템플릿 도우미 <code>extractNaturalQuery()</code>는 <code>setNaturalLanguageQuery()</code> 값을 먼저, 없으면 이 파라미터를 씁니다</td></tr>
               <tr><td><code>retrievalPurpose</code></td><td>검색(기본 검색기)</td><td>검색 목적(기본 <code>general_context</code>). 허용 목적이 적힌 문서는 이 목적과 같을 때만 나옵니다</td></tr>
               <tr><td><code>allowedDocumentTypes</code></td><td>검색(기본 검색기)</td><td>남길 문서 종류 목록. 없으면 모든 종류</td></tr>
               <tr><td><code>userId</code> · <code>organizationId</code> · <code>tenantId</code></td><td>검색(기본 검색기)</td><td>권한 거르기 기준. 없으면 문맥의 값</td></tr>
               <tr><td><code>iamDataContext</code></td><td>템플릿 도우미 <code>extractContextInfo()</code></td><td>검색 결과 앞에 붙일 글</td></tr>
               <tr><td><code>preferredModel</code>(또는 <code>requestedModelId</code> · <code>runtimeModelId</code>)</td><td>모델 호출(표준)</td><td>쓸 모델 이름</td></tr>
-              <tr><td><code>temperature</code> · <code>topP</code> · <code>seed</code> · <code>maxTokens</code></td><td>모델 호출(표준)</td><td>생성 옵션</td></tr>
+              <tr><td><code>temperature</code> · <code>topP</code> · <code>seed</code> · <code>maxTokens</code>(또는 앞에 <code>runtime</code>을 붙인 이름, 예: <code>runtimeTemperature</code>)</td><td>모델 호출(표준)</td><td>생성 옵션</td></tr>
+              <tr><td><code>openAiReasoningEffort</code> · <code>openAiVerbosity</code> · <code>promptCacheKey</code> · <code>disableOllamaThinking</code></td><td>모델 호출(표준)</td><td>공급자별 옵션. 해당 공급자에만 실립니다(<a href="llm-orchestrator.html#provider-options">공급자별로 맞춰 보내는 옵션</a>)</td></tr>
+              <tr><td><code>outputSchema</code></td><td>모델 호출(표준)</td><td>공급자에 보낼 출력 JSON 스키마. 구조화 출력을 받는 공급자 옵션일 때만 실립니다</td></tr>
               <tr><td><code>disableRetries</code></td><td>모델 호출(표준)</td><td><code>true</code>면 일시 오류에도 다시 보내지 않음</td></tr>
-              <tr><td><code>structuredOutputMode</code></td><td>모델 호출(표준)</td><td>구조화 출력 방식(<code>NATIVE_STRUCTURED</code> · <code>VALIDATED_CONVERTER</code> · <code>RAW_FORBIDDEN</code> · <code>LEGACY_RAW</code>). 없으면 모델 · 공급자에 맞춰 자동</td></tr>
+              <tr><td><code>structuredOutputMode</code></td><td>모델 호출(표준)</td><td>구조화 출력 방식(<code>NATIVE_STRUCTURED</code> · <code>VALIDATED_CONVERTER</code> · <code>RAW_FORBIDDEN</code> · <code>LEGACY_RAW</code>). 없으면 모델 · 공급자에 맞춰 자동. 모르는 값이면 <code>VALIDATED_CONVERTER</code></td></tr>
+              <tr><td><code>nativeStructuredOutputEnabled</code></td><td>모델 호출(표준)</td><td><code>false</code>면 공급자 자체의 구조화 출력 대신 <code>VALIDATED_CONVERTER</code>를 씁니다(<code>structuredOutputMode</code>가 없을 때만)</td></tr>
+              <tr><td><code>structuredOutputValidationMaxAttempts</code></td><td>모델 호출(표준)</td><td><code>VALIDATED_CONVERTER</code> 방식에서 형식이 틀린 답을 다시 요청하는 횟수(기본 1)</td></tr>
               <tr><td><code>structuredOutputPolicy</code></td><td>모델 호출 · 응답 해석</td><td><code>ALLOW_RAW_FALLBACK</code>(기본) 또는 <code>RAW_FORBIDDEN</code>(글로 대신 받기 · Map 대체 없이 실패)</td></tr>
               <tr><td><code>responseType</code> · <code>outputConverter</code></td><td>응답 해석</td><td>목표 타입(템플릿 · 실행의 응답 타입이 없을 때)</td></tr>
               <tr><td><code>strictResponsePostprocessing</code></td><td>후처리</td><td><code>true</code>면 응답 처리기가 응답 타입을 만들지 못할 때 바로 실패</td></tr>
@@ -246,7 +254,7 @@ public class CatalogPreprocessingStep extends PreprocessingStep {
           <p>모델 연결(공급자 · 키 · 모델 이름)은 <a href="../../install/configuration/ai.html">AI 모델 연결 설정</a>, 스트리밍 설정은 <a href="streaming.html#configuration">스트리밍</a>에 있습니다.</p>
 
           <h2 id="soar">SOAR 단계(OSS에는 구현 없음)</h2>
-          <p>구성의 단계 목록에는 <code>SOAR_TOOL_EXECUTION</code>도 있지만 단계를 하나 더 끼우는 것이 아닙니다. 요청 문맥이 <code>SoarContext</code>이고 <code>pipelineSoarToolExecutionStep</code>이라는 이름의 빈이 있을 때, 모델 호출 단계를 그 빈으로 바꿔 돌리는 자리입니다. OSS 모듈에는 이 빈이 없으므로 앱 기능에는 쓰지 않습니다. <code>SoarContext</code> 요청은 스트리밍 실행기에서도 스트리밍 없이 처리됩니다. SOAR 확장은 <a href="../soar/index.html">SOAR</a>를 참고합니다.</p>
+          <p>구성의 단계 목록에는 <code>SOAR_TOOL_EXECUTION</code>도 있지만 단계를 하나 더 끼우는 것이 아닙니다. 요청 문맥이 <code>SoarContext</code>이고 <code>contexaPipelineSoarToolExecutionStep</code>이라는 이름의 빈이 있을 때, 모델 호출 단계를 그 빈으로 바꿔 돌리는 자리입니다. OSS 모듈에는 이 빈이 없으므로 앱 기능에는 쓰지 않습니다. <code>SoarContext</code> 요청은 스트리밍 실행기에서도 스트리밍 없이 처리됩니다. SOAR 확장은 <a href="../soar/index.html">SOAR</a>를 참고합니다.</p>
 
           <h2 id="api-reference">API 요약</h2>
           <h3 id="api-orchestrator">PipelineOrchestrator</h3>
@@ -256,7 +264,7 @@ public class CatalogPreprocessingStep extends PreprocessingStep {
               <tr><td><code>PipelineOrchestrator(List&lt;PipelineExecutor&gt; executors)</code></td><td>생성자. 실행기를 <code>getPriority()</code> 오름차순으로 둡니다</td></tr>
               <tr><td><code>execute(request, responseType)</code></td><td>기본 표준 구성으로 실행</td></tr>
               <tr><td><code>execute(request, config, responseType)</code></td><td>주어진 구성으로 실행. 실패하면 실패 정책대로 대체 응답 또는 오류</td></tr>
-              <tr><td><code>executeStream(request)</code> · <code>executeStream(request, config)</code></td><td>기본 스트리밍 구성 · 주어진 구성으로 스트리밍. 실패하면 <code>ERROR: 원인</code> 조각</td></tr>
+              <tr><td><code>executeStream(request)</code> · <code>executeStream(request, config)</code></td><td>기본 스트리밍 구성 · 주어진 구성으로 스트리밍. 실패하면 흐름이 그 오류로 끝남</td></tr>
             </tbody>
           </table></div>
           <h3 id="api-configuration">PipelineConfiguration</h3>

@@ -18,6 +18,10 @@
             <strong>This is not the security decision engine.</strong> This group (AI Engine) is the general-purpose AI pipeline that your application calls directly. The security decision that allows, steps up or blocks a request (Layer 1 and Layer 2 analysis) is made separately by the <a href="../architecture/decision-engine.html">decision engine</a>; your application does not call it through the APIs on this page.
           </div>
 
+          <div class="callout callout-info">
+            <strong>Terms on this page.</strong> An <strong>LLM</strong> (large language model) is an AI model that takes text and answers with text, and <strong>Spring AI</strong> is the Spring library that calls many LLM providers the same way. A <strong>prompt</strong> is the instruction sent to the model: the system prompt carries the role and the rules, and the user prompt carries the content of this request. The <strong>pipeline</strong> is the set of steps that processes one request in order: retrieval, preprocessing, prompt building, model call, response parsing and postprocessing. The <strong>context</strong> (<code>DomainContext</code>) is the business data passed to the model; a <strong>Strategy</strong> is the request-handling unit chosen by the name of a diagnosis type (<code>DiagnosisType</code>); a <strong>Lab</strong> is the work unit that gathers business data and calls the pipeline. <strong>RAG</strong> (retrieval-augmented generation) finds related documents in a vector store and puts them into the prompt. <strong>SSE</strong> (Server-Sent Events) is the HTTP way for a server to send events one after another over one connection. A <strong>bean</strong> is an object Spring creates and manages, and <strong>backoff</strong> means waiting longer before each retry of a failed call.
+          </div>
+
           <h2 id="what-you-can-do">What you can do with this engine</h2>
           <p>You ask an AI model with your own prompt and your own data, and receive the answer in one of two ways. It works just as well for features that have nothing to do with security (product recommendations, document summaries, classification and so on).</p>
           <figure class="dg">
@@ -27,7 +31,7 @@
               <div class="dg-side"><p class="dg-side-title">Streaming: live text on the screen</p><ul><li>Returns SSE (Server-Sent Events) as <code>Flux&lt;ServerSentEvent&lt;String&gt;&gt;</code></li><li>Runs the first four steps, sends the model's text sentence by sentence, and a JSON result at the end</li><li>For chat and analysis screens that show the answer as it is written</li></ul></div>
             </div>
           </figure>
-          <p>CONTEXA uses this engine too. Policy generation, resource name suggestions and condition template generation in the IAM admin console run on it (<a href="#contexa-usage">Where CONTEXA uses this engine</a>).</p>
+          <p>CONTEXA uses this engine too. Policy generation, resource name suggestions and condition template generation in the IAM admin console work through it (<a href="#contexa-usage">Where CONTEXA uses this engine</a>).</p>
 
           <h2 id="requirements">What must be in place</h2>
           <p>The AI engine has no switch of its own; it is created when the CONTEXA platform is turned on. Only when all of the following are present are the engine's beans (<code>AICoreOperations</code>, <code>PipelineOrchestrator</code>, <code>StandardStreamingService</code>) created.</p>
@@ -49,10 +53,10 @@
             <figcaption class="dg-caption"><strong>The path of a request on the Strategy path</strong>The direct pipeline path skips steps 2–3; the direct Lab path skips step 2 and the Strategy.</figcaption>
             <ol class="dg-flow">
               <li class="dg-node dg-host"><span class="dg-node-tag">Your app</span><span class="dg-node-title">Controller</span><span class="dg-node-desc">Builds an <code>AIRequest</code> holding the context, the template type and the diagnosis type, and hands it over</span></li>
-              <li class="dg-node dg-contexa"><span class="dg-node-tag">CONTEXA</span><span class="dg-node-title">AI entry point (<code>AICoreOperations</code>)</span><span class="dg-node-desc">Locks so the same request does not run twice at once, writes one audit start line, then finds the Strategy by diagnosis type</span></li>
+              <li class="dg-node dg-contexa"><span class="dg-node-tag">CONTEXA</span><span class="dg-node-title">AI entry point (<code>AICoreOperations</code>)</span><span class="dg-node-desc">Locks so the same request does not run twice at once (30 minutes at most), writes one audit start line, then finds the Strategy by diagnosis type</span></li>
               <li class="dg-node dg-host"><span class="dg-node-tag">Your app</span><span class="dg-node-title">Strategy → Lab</span><span class="dg-node-desc">The Strategy checks the input and hands it to the Lab; the Lab adds data and calls the pipeline</span></li>
               <li class="dg-node dg-contexa"><span class="dg-node-tag">CONTEXA</span><span class="dg-node-title">Pipeline (<code>PipelineOrchestrator</code>)</span><span class="dg-node-desc">Retrieval → preprocessing → prompt → model call → response parsing → postprocessing. Streaming runs the first four steps</span></li>
-              <li class="dg-node dg-model"><span class="dg-node-tag">AI model</span><span class="dg-node-title">Spring AI chat model</span><span class="dg-node-desc">The result object or the live text travels back up</span></li>
+              <li class="dg-node dg-model"><span class="dg-node-tag">AI model</span><span class="dg-node-title">Spring AI chat model</span><span class="dg-node-desc">The model's answer (the result object or the live text) returns to the application along the same path</span></li>
             </ol>
             <div class="dg-legend"><span class="dg-host">What you build</span><span class="dg-contexa">What CONTEXA provides</span><span class="dg-model">AI model</span></div>
           </figure>
@@ -95,7 +99,7 @@ Flux&lt;ServerSentEvent&lt;String&gt;&gt; events = streamingService.stream(reque
               <tr><td>Pipeline steps</td><td>Six</td><td>The first four (up to the model call)</td></tr>
               <tr><td>Choosing model and temperature</td><td>Possible with request parameters</td><td>Not possible (default chat model)</td></tr>
               <tr><td>Time limit</td><td>60 seconds per model call; a temporary failure is sent again with backoff up to 4 times</td><td>Ends when the next event does not arrive within 5 minutes (fixed in code)</td></tr>
-              <tr><td>On failure</td><td>By default, an empty response object with <code>errorMessage</code> filled in</td><td>An event that starts with <code>ERROR:</code></td></tr>
+              <tr><td>On failure</td><td>By default, an empty response object with <code>errorMessage</code> filled in</td><td>One event named <code>error</code> (data <code>{"code": …, "message": …}</code>)</td></tr>
             </tbody>
           </table></div>
           <p>What streaming events really look like, and client code, are in <a href="streaming.html">Streaming</a>.</p>
@@ -115,16 +119,16 @@ Flux&lt;ServerSentEvent&lt;String&gt;&gt; events = streamingService.stream(reque
           <ul>
             <li><strong>Layer 1 and Layer 2 model settings do not apply here.</strong> <code>contexa.security.tiered.llm.layer1.model</code> and <code>contexa.security.tiered.llm.layer2.model</code> are used by the decision engine. A general request has no analysis layer, so it uses the default chat model (<a href="model-provider.html#request-order">how the model is decided</a>).</li>
             <li><strong>There is no setting for a time limit on the whole pipeline.</strong> <code>timeoutSeconds</code> on <code>PipelineConfiguration</code> only holds a value; no code reads it.</li>
-            <li><strong>The streaming time limit is 5 minutes, fixed in code</strong>, so no setting changes it.</li>
+            <li><strong>The streaming time limit is 5 minutes, fixed in code</strong>, so no setting changes it. The setting key <code>contexa.streaming.timeout</code> exists, but the service does not read it.</li>
           </ul>
 
           <h2 id="verify">Checking that it works</h2>
           <ul>
-            <li><strong>Step logs:</strong> a standard run logs each step, for example <code>[PIPELINE] STEP 4 completed: LLM_EXECUTION (1830ms) - Request: …</code> (streaming logs <code>[STREAMING-PIPELINE]</code>).</li>
+            <li><strong>Step logs:</strong> a standard run logs each step at INFO level, for example <code>[PIPELINE] STEP 4 completed: LLM_EXECUTION (1830ms) - Request: …</code> (streaming logs <code>[STREAMING-PIPELINE]</code>).</li>
             <li><strong>The model actually used:</strong> it is in the metadata <code>selectedModelId</code> of the standard result object. If the requested model was not found and the default model was used, <code>modelSelectionFallbackUsed</code> is <code>true</code>.</li>
             <li><strong>Failure:</strong> by default, instead of an error you get a response object whose <code>errorMessage</code> starts with <code>Pipeline execution failed: …</code>. Check <code>getErrorMessage()</code> before using the result.</li>
-            <li><strong>Lock conflict:</strong> on the Strategy path, if exactly the same request (same response type, template, diagnosis type, user, session, organization and parameters) is already running, the new one is refused with <code>StrategicOperationConflictException</code> (a subtype of <code>AIOperationException</code>, message <code>Strategic operation conflict</code>).</li>
-            <li><strong>Audit log:</strong> the Strategy path writes one <code>AUDIT_START</code> line to the logger <code>IAM_AUDIT</code> when it starts. Completion and failure are not written separately.</li>
+            <li><strong>Lock conflict:</strong> on the Strategy path, if exactly the same request (same response type, template, diagnosis type, question text (the <code>setNaturalLanguageQuery()</code> value), business type of the context, user, session, organization and parameters) is already running, the new one is refused with <code>StrategicOperationConflictException</code> (a subtype of <code>AIOperationException</code>, message <code>Strategic operation conflict</code>). The lock is released when the run ends, and after 30 minutes at the latest. If the lock store does not answer, the call ends with <code>AIOperationException</code> (message <code>Strategic lock unavailable</code>) and nothing runs without the lock.</li>
+            <li><strong>Audit log:</strong> the Strategy path writes <code>AUDIT_START</code> (INFO) to the logger <code>IAM_AUDIT</code> when it starts, and <code>AUDIT_FAILED</code> (ERROR) when it fails. When the failure is a security exception or its message contains <code>access denied</code>, it also writes <code>SECURITY_EVENT</code> (ERROR). Success is not written separately.</li>
           </ul>
 
           <h2 id="rag">The default retriever filters by authorization</h2>

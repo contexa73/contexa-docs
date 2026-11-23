@@ -18,6 +18,10 @@
             <strong>This is a different use from the security decision.</strong> The decision engine also passes through the same orchestrator and steps internally, but it makes decisions with its own configuration and rules. This page covers only the general-purpose use that application features call. For decisions, see the <a href="../architecture/decision-engine.html">decision engine</a>.
           </div>
 
+          <div class="callout callout-info">
+            <strong>Terms on this page.</strong> The <strong>orchestrator</strong> is the entry point that takes a request and hands it to a suitable executor, and an <strong>executor</strong> is the part that actually runs the steps in their fixed order. A <strong>configuration</strong> (<code>PipelineConfiguration</code>) is the list of steps to turn on for this run. <strong>Structured output</strong> gives the model the JSON schema of the result, has it answer in that form and receives an object; <strong>raw text</strong> receives the model's answer as text and then takes the JSON out of it. <strong>Metadata</strong> is the record of names and values collected during a run (time taken, model used and so on).
+          </div>
+
           <h2 id="overview">What the pipeline does</h2>
           <p>The pipeline orchestrator (<code>PipelineOrchestrator</code>) takes a request and a configuration (<code>PipelineConfiguration</code>), picks an executor that can handle that configuration, and runs the steps in order. There are two executors: the standard executor (<code>UniversalPipelineExecutor</code>), which returns a result object, and the streaming executor (<code>StreamingUniversalPipelineExecutor</code>), which streams text chunks.</p>
           <p>It is usually called inside a Lab (<a href="strategy.html#step-3">Building the Lab</a>). For a feature that one prompt can answer without a Strategy or Lab, a controller can call it directly; then you only need a context, a response type and a template.</p>
@@ -89,7 +93,7 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
           <h3 id="step-prompt-generation">3. Prompt generation (PROMPT_GENERATION)</h3>
           <ol>
             <li>Finds the template bean by the name of the request's template type. If there is none, it fails with <code>Template matching failed</code>.</li>
-            <li>Calls the template's <code>generateSystemPrompt(request, systemMetadata)</code> and <code>generateUserPrompt(request, contextInfo)</code>. A standard template adds JSON format instructions to the system prompt; a streaming template adds the streaming rules and the JSON example.</li>
+            <li>Calls the template's <code>generateSystemPrompt(request, systemMetadata)</code> and <code>generateUserPrompt(request, contextInfo)</code>. A standard template adds JSON format instructions (an <code>&lt;output_format&gt;</code> block) to the system prompt; a streaming template adds the streaming instructions you write (<code>streamingInstructions()</code>) and the JSON example wrapped in the markers.</li>
             <li>The prompt composer (<code>LLMViewComposer</code>, by default <code>SafePromptNormalizationLLMViewComposer</code>) tidies line breaks and keeps only one copy of a section repeated character for character. It does not cut or summarize.</li>
             <li>Leaves a Spring AI <code>Prompt</code> made of a system message and a user message. If the template reports a response type (standard templates do), that type is passed to the next step too.</li>
           </ol>
@@ -98,8 +102,8 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
           <ul>
             <li><strong>Where it goes:</strong> <code>UnifiedLLMOrchestrator</code> sends it to the Spring AI chat model and applies the registered advisors (<code>BaseAdvisor</code> beans) (<a href="llm-orchestrator.html">LLM orchestrator</a>, <a href="advisor.html">Advisors</a>).</li>
             <li><strong>Model:</strong> the model in the request parameter <code>preferredModel</code> if given; otherwise, or if it is not found, the default chat model. A general request has no analysis layer, so Layer 1 and Layer 2 model settings are not used. The rules that turn a name into a real model are in <a href="model-provider.html#request-order">Model providers</a>.</li>
-            <li><strong>How the answer is received:</strong> a standard run knows the response type, so it first tries structured output (giving the model a schema and receiving an object) and, if that fails, receives raw text instead (with the request parameter <code>structuredOutputPolicy=RAW_FORBIDDEN</code> it fails instead).</li>
-            <li><strong>Time limit and retries:</strong> one call must finish within <code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code> (default 60000 ms). A temporary failure (408, 409, 429, 5xx, a dropped connection and so on) is sent again with backoff up to 4 times (starting at 2 seconds, at most 12 seconds apart) (<a href="llm-orchestrator.html#retry">Retries</a>).</li>
+            <li><strong>How the answer is received:</strong> a standard run knows the response type, so it first tries structured output (giving the model a schema and receiving an object) and, if that fails, receives raw text instead. A failure that did not reach the model server or ran into a time limit would end the same way again, so it fails as it is; with the request parameter <code>structuredOutputPolicy=RAW_FORBIDDEN</code> it also fails instead.</li>
+            <li><strong>Time limit and retries:</strong> one call must finish within <code>contexa.security.plane.llm-timeout.provider-call-timeout-ms</code> (default 60000 ms). A temporary failure (408, 409, 429, 5xx, a dropped connection and so on) is sent again with backoff up to 4 times (starting at 2 seconds, at most 12 seconds apart). A failure that could not connect to the model server at all (connection refused, unknown host) is not sent again (<a href="llm-orchestrator.html#retry">Retries</a>).</li>
             <li><strong>Streaming:</strong> the streaming step (<code>StreamingLLMExecutionStep</code>) sends the model's text out chunk by chunk. It does not use request parameters (model, temperature and so on), does not retry, and the call itself has no time limit (<a href="streaming.html#timeouts">streaming time limit</a>). Advisors are attached, but a blocking error raised by an advisor before the model call does not stop it; only that advisor is skipped (<a href="advisor.html#order-errors">advisor error handling</a>).</li>
           </ul>
 
@@ -128,11 +132,11 @@ PipelineConfiguration streaming = PipelineConfiguration.builder()
             <li><strong>Spring AI RAG advisor (<code>RetrievalAugmentationAdvisor</code>) beans are not attached to model calls automatically.</strong> Only <code>BaseAdvisor</code> beans are attached to model calls; RAG in the general pipeline is done by this retrieval step.</li>
             <li><strong>Your own retriever</strong> is a bean extending <code>ContextRetriever</code>; it is called only after you register it with the registry's <code>registerRetriever(context class, retriever)</code>. A registered context type skips the default retriever's authorization filtering. A full example is in <a href="strategy.html#step-5">Build a custom AI feature, step 5</a>.</li>
           </ul>
-          <p>Documents must be in the vector store before they can be found. Add them with Spring AI's <code>VectorStore</code>.</p>
+          <p>Documents must be in the CONTEXA vector store before they can be found. Add them with the general service (<code>UnifiedVectorService</code>, bean <code>contexaUnifiedVectorService</code>). Even when your application keeps a pgvector store of its own, the default retriever searches the store in the dedicated CONTEXA database, not that one, so documents added through a Spring AI <code>VectorStore</code> injected without a qualifier are not found.</p>
           <pre><code class="language-java">Document doc = new Document(
         "Product A is a lightweight laptop ideal for travel",
         Map.of("category", "electronics", "productId", "PROD-001"));
-vectorStore.add(List.of(doc));</code></pre>
+unifiedVectorService.storeDocument(doc);</code></pre>
           <p>A document whose metadata names no allowed purpose appears in searches for any purpose. Detailed rules such as user and organization scope, document types and retention are in <a href="rag.html">RAG and vector store</a>.</p>
 
           <h2 id="response-processor">Shaping the result: response processors</h2>
@@ -180,7 +184,7 @@ public class ProductResponseProcessor implements DomainResponseProcessor {
               <tr><td>Put in system metadata</td><td>Make a bean extending <code>PreprocessingStep</code> and override <code>buildSystemMetadata(request)</code> (example below). It is used instead of the built-in preprocessing bean.</td></tr>
               <tr><td>How prompts are tidied</td><td>Provide your own <code>LLMViewComposer</code> bean.</td></tr>
               <tr><td>A whole retrieval, prompt, parsing or postprocessing step</td><td>Providing your own <code>ContextRetrievalStep</code>, <code>PromptGenerationStep</code>, <code>ResponseParsingStep</code> or <code>PostprocessingStep</code> bean replaces the built-in one. Response parsing and postprocessing also contain decision-specific handling, so extend them and change only a part.</td></tr>
-              <tr><td>The way of running itself</td><td>Add a <code>PipelineExecutor</code> bean. The orchestrator looks at executors from the lowest <code>getPriority()</code> and uses the first one whose <code>supportsConfiguration(config)</code> is <code>true</code> and whose streaming support matches.</td></tr>
+              <tr><td>The way of running itself</td><td>Add a <code>PipelineExecutor</code> bean. The orchestrator looks at executors from the lowest <code>getPriority()</code> and uses the first one whose <code>supportsConfiguration(config)</code> is <code>true</code> and whose streaming support matches. When there is none, it uses the first one that takes the configuration, whatever its streaming support.</td></tr>
             </tbody>
           </table></div>
           <pre><code class="language-java">@Component
@@ -201,11 +205,11 @@ public class CatalogPreprocessingStep extends PreprocessingStep {
             <thead><tr><th><code>pipelineFailurePolicy</code></th><th>On failure</th></tr></thead>
             <tbody>
               <tr><td><code>SYNTHETIC_FALLBACK_RESPONSE</code> (default)</td><td>Returns an empty object of the response type instead of an error. <code>errorMessage</code> is <code>Pipeline execution failed: cause</code>, and the metadata holds <code>errorType</code> (the exception class name) and <code>timestamp</code>. If the response type has no no-argument constructor (or <code>(String, ExecutionStatus)</code> constructor), even this fails.</td></tr>
-              <tr><td><code>PROPAGATE_ERROR</code></td><td>Sends the error to the caller as is. On the Strategy path it arrives turned into <code>AIOperationException("Pipeline returned unexpected response type")</code>.</td></tr>
+              <tr><td><code>PROPAGATE_ERROR</code></td><td>Sends the error to the caller as is. On the Strategy path it is wrapped on its way through the Lab and the Strategy and arrives as <code>AIOperationException</code> (message <code>Strategy execution failed: …</code>); the original exception is still there along <code>getCause()</code>.</td></tr>
             </tbody>
           </table></div>
           <ul>
-            <li><strong>When a streaming run (<code>executeStream</code>) fails,</strong> it emits one text chunk <code>ERROR: cause</code> instead of an error, and ends. How it looks in SSE is in <a href="streaming.html#troubleshooting">Streaming troubleshooting</a>.</li>
+            <li><strong>When a streaming run (<code>executeStream</code>) fails,</strong> the flow ends with that error (<code>onError</code>). The failure policy is not used for streaming. Through <code>StandardStreamingService</code>, the error becomes an SSE event named <code>error</code> (<a href="streaming.html#troubleshooting">Streaming troubleshooting</a>).</li>
             <li><strong>Step logs:</strong> <code>[PIPELINE] STEP 3 completed: PROMPT_GENERATION (4ms) - Request: …</code>, or <code>STEP 3 failed: …</code> on failure (streaming logs <code>[STREAMING-PIPELINE]</code>).</li>
             <li><strong>Step times:</strong> the pipeline context metadata <code>pipelineStep.&lt;step name&gt;.ms</code> (readable in a response processor).</li>
             <li><strong>Metadata of the result:</strong> <code>selectedModelId</code>, <code>modelSelectionFallbackUsed</code>, <code>llmExecutionLatencyMs</code>, <code>providerRetryCount</code> and more (<a href="#step-postprocessing">postprocessing</a>).</li>
@@ -216,15 +220,19 @@ public class CatalogPreprocessingStep extends PreprocessingStep {
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Parameter</th><th>Read by</th><th>Meaning</th></tr></thead>
             <tbody>
-              <tr><td><code>naturalLanguageQuery</code></td><td>Retrieval (default retriever), template helpers</td><td>The search question. Without it, the context's <code>toString()</code> is searched</td></tr>
+              <tr><td><code>naturalLanguageQuery</code></td><td>Retrieval (default retriever), template helpers</td><td>The search question. Without it, the context's <code>toString()</code> is searched. Retrieval reads only this parameter, not a value set with <code>setNaturalLanguageQuery()</code>. The template helper <code>extractNaturalQuery()</code> takes the <code>setNaturalLanguageQuery()</code> value first and this parameter when there is none</td></tr>
               <tr><td><code>retrievalPurpose</code></td><td>Retrieval (default retriever)</td><td>The retrieval purpose (default <code>general_context</code>). A document that names allowed purposes appears only when this purpose matches</td></tr>
               <tr><td><code>allowedDocumentTypes</code></td><td>Retrieval (default retriever)</td><td>The document types to keep. Without it, all types</td></tr>
               <tr><td><code>userId</code>, <code>organizationId</code>, <code>tenantId</code></td><td>Retrieval (default retriever)</td><td>The basis of authorization filtering. Without them, the context's values</td></tr>
               <tr><td><code>iamDataContext</code></td><td>Template helper <code>extractContextInfo()</code></td><td>Text placed before the retrieval result</td></tr>
               <tr><td><code>preferredModel</code> (or <code>requestedModelId</code>, <code>runtimeModelId</code>)</td><td>Model call (standard)</td><td>The model name to use</td></tr>
-              <tr><td><code>temperature</code>, <code>topP</code>, <code>seed</code>, <code>maxTokens</code></td><td>Model call (standard)</td><td>Generation options</td></tr>
+              <tr><td><code>temperature</code>, <code>topP</code>, <code>seed</code>, <code>maxTokens</code> (or the name with <code>runtime</code> in front, for example <code>runtimeTemperature</code>)</td><td>Model call (standard)</td><td>Generation options</td></tr>
+              <tr><td><code>openAiReasoningEffort</code>, <code>openAiVerbosity</code>, <code>promptCacheKey</code>, <code>disableOllamaThinking</code></td><td>Model call (standard)</td><td>Provider-specific options, sent only to that provider (<a href="llm-orchestrator.html#provider-options">Options fitted to each provider</a>)</td></tr>
+              <tr><td><code>outputSchema</code></td><td>Model call (standard)</td><td>The output JSON schema to send to the provider. Sent only when the provider's options take structured output</td></tr>
               <tr><td><code>disableRetries</code></td><td>Model call (standard)</td><td>With <code>true</code>, a temporary failure is not sent again</td></tr>
-              <tr><td><code>structuredOutputMode</code></td><td>Model call (standard)</td><td>The structured output mode (<code>NATIVE_STRUCTURED</code>, <code>VALIDATED_CONVERTER</code>, <code>RAW_FORBIDDEN</code>, <code>LEGACY_RAW</code>). Without it, chosen automatically for the model and provider</td></tr>
+              <tr><td><code>structuredOutputMode</code></td><td>Model call (standard)</td><td>The structured output mode (<code>NATIVE_STRUCTURED</code>, <code>VALIDATED_CONVERTER</code>, <code>RAW_FORBIDDEN</code>, <code>LEGACY_RAW</code>). Without it, chosen automatically for the model and provider. An unknown value means <code>VALIDATED_CONVERTER</code></td></tr>
+              <tr><td><code>nativeStructuredOutputEnabled</code></td><td>Model call (standard)</td><td>With <code>false</code>, <code>VALIDATED_CONVERTER</code> is used instead of the provider's own structured output (only when <code>structuredOutputMode</code> is not given)</td></tr>
+              <tr><td><code>structuredOutputValidationMaxAttempts</code></td><td>Model call (standard)</td><td>How many times an answer in the wrong form is asked for again in the <code>VALIDATED_CONVERTER</code> mode (default 1)</td></tr>
               <tr><td><code>structuredOutputPolicy</code></td><td>Model call, response parsing</td><td><code>ALLOW_RAW_FALLBACK</code> (default) or <code>RAW_FORBIDDEN</code> (fail without receiving text instead or falling back to a Map)</td></tr>
               <tr><td><code>responseType</code>, <code>outputConverter</code></td><td>Response parsing</td><td>The target type (when neither the template nor the run gives a response type)</td></tr>
               <tr><td><code>strictResponsePostprocessing</code></td><td>Postprocessing</td><td>With <code>true</code>, fail at once when the response processors cannot produce the response type</td></tr>
@@ -246,7 +254,7 @@ public class CatalogPreprocessingStep extends PreprocessingStep {
           <p>Model connection (provider, key, model name) is in <a href="../../install/configuration/ai.html">AI model configuration</a>, and streaming settings are in <a href="streaming.html#configuration">Streaming</a>.</p>
 
           <h2 id="soar">The SOAR step (not implemented in OSS)</h2>
-          <p>The step list of a configuration also has <code>SOAR_TOOL_EXECUTION</code>, but it does not insert one more step. When the request's context is a <code>SoarContext</code> and a bean named <code>pipelineSoarToolExecutionStep</code> exists, the model call step is replaced by that bean. The OSS modules have no such bean, so application features do not use it. A <code>SoarContext</code> request is also handled without streaming by the streaming executor. For SOAR extensions, see <a href="../soar/index.html">SOAR</a>.</p>
+          <p>The step list of a configuration also has <code>SOAR_TOOL_EXECUTION</code>, but it does not insert one more step. When the request's context is a <code>SoarContext</code> and a bean named <code>contexaPipelineSoarToolExecutionStep</code> exists, the model call step is replaced by that bean. The OSS modules have no such bean, so application features do not use it. A <code>SoarContext</code> request is also handled without streaming by the streaming executor. For SOAR extensions, see <a href="../soar/index.html">SOAR</a>.</p>
 
           <h2 id="api-reference">API summary</h2>
           <h3 id="api-orchestrator">PipelineOrchestrator</h3>
@@ -256,7 +264,7 @@ public class CatalogPreprocessingStep extends PreprocessingStep {
               <tr><td><code>PipelineOrchestrator(List&lt;PipelineExecutor&gt; executors)</code></td><td>Constructor. Keeps the executors in ascending <code>getPriority()</code></td></tr>
               <tr><td><code>execute(request, responseType)</code></td><td>Runs with the default standard configuration</td></tr>
               <tr><td><code>execute(request, config, responseType)</code></td><td>Runs with the given configuration. On failure, a fallback response or an error by the failure policy</td></tr>
-              <tr><td><code>executeStream(request)</code>, <code>executeStream(request, config)</code></td><td>Streams with the default streaming configuration or the given one. On failure, an <code>ERROR: cause</code> chunk</td></tr>
+              <tr><td><code>executeStream(request)</code>, <code>executeStream(request, config)</code></td><td>Streams with the default streaming configuration or the given one. On failure, the flow ends with that error</td></tr>
             </tbody>
           </table></div>
           <h3 id="api-configuration">PipelineConfiguration</h3>
