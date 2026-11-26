@@ -49,13 +49,12 @@
           </figure>
 
           <h2 id="enable">Enabling: connecting to requests</h2>
-          <p>URL policies apply to requests only while the manager is connected to the authorization step of the security filter chain. With <code>contexa-iam</code> present the manager bean always exists, but how it is connected depends on authentication ownership.</p>
+          <p>URL policies reach requests through the manager. With <code>contexa-iam</code> present the manager bean always exists, and on your application's paths (requests a chain of your application takes, or no chain takes) CONTEXA applies the named policies with it from the URL policy filter behind your chain (<code>UrlPolicyEnforcementFilter</code>), in all four combinations. You therefore do not have to connect the manager to your chain; connecting it is optional. How it is connected to CONTEXA's chain depends on the security mode.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Setup</th><th>URL policy connection</th></tr></thead>
             <tbody>
-              <tr><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code> (<code>CONTEXA_OWNED</code>)</td><td>The CONTEXA chain permits only the static paths <code>/contexa/css/**</code>, <code>/contexa/js/**</code>, <code>/contexa/img/**</code>, <code>/images/**</code>, <code>/favicon.ico</code> and the password change page <code>/contexa/password-change</code>, and connects every other request through <code>anyRequest().access(customDynamicAuthorizationManager)</code>. To change it, define your own <code>PlatformConfig</code> bean (<a href="../identity/dsl.html">Identity DSL</a>)</td></tr>
-              <tr><td>Default <code>@EnableAISecurity</code> (<code>HOST_OWNED</code>)</td><td>CONTEXA builds no chain. Connect it to your own chain as below</td></tr>
-              <tr><td><code>SANDBOX</code> + <code>contexa.bridge.ownership: CONTEXA_OWNED</code></td><td>Not a possible setup. The mode and the ownership disagree, and the application does not start (<a href="../identity/dsl.html#enable">How to turn it on</a>)</td></tr>
+              <tr><td><code>@EnableAISecurity(mode = SecurityMode.FULL)</code> (FULL, whatever the ownership)</td><td>CONTEXA's main chain permits only the static paths <code>/contexa/css/**</code>, <code>/contexa/js/**</code>, <code>/contexa/img/**</code>, <code>/images/**</code>, <code>/favicon.ico</code> and the password change page <code>/contexa/password-change</code>, and connects every other request through <code>anyRequest().access(customDynamicAuthorizationManager)</code>. To change it, define your own <code>PlatformConfig</code> bean (<a href="../identity/dsl.html">Identity DSL</a>)</td></tr>
+              <tr><td>Default <code>@EnableAISecurity</code> (SANDBOX, whatever the ownership)</td><td>CONTEXA builds no main chain. On your application's paths the URL policy filter behind your chain applies the named policies. A request no policy decides keeps your chain's decision, and a refusal is 401 for a request without a signed-in user and 403 for one with. Connecting the manager to your chain as below is optional. If you connect it, the decision for URLs no policy names also applies on that chain, and that evaluation runs before the authentication bridge, so it has no delegation stamp</td></tr>
             </tbody>
           </table></div>
           <pre><code class="language-java">import io.contexa.contexaiam.security.xacml.pep.CustomDynamicAuthorizationManager;
@@ -79,20 +78,20 @@ public class AppSecurityConfig {
     }
 }</code></pre>
           <div class="callout callout-info">
-            <strong>What URL policies cannot see under HOST_OWNED.</strong> The authentication bridge filter is a servlet filter ordered right after your security chain (the chain's order + 1), so it runs after your security chain has finished. URL policies connected to your chain therefore do not see the delegation stamp: agent expressions answer as for a person's request, and no delegator re-evaluation happens. Put agent conditions in <a href="protectable.html"><code>@Protectable</code></a> method policies.
+            <strong>What the manager connected to your chain cannot see.</strong> The authentication bridge runs first in CONTEXA's servlet filter slot, which runs after your security chain and all of your servlet filters (<code>contexaFilterSlot</code>), so it runs after your security chain has finished. URL policies evaluated by a manager you connected to your chain with <code>.access(...)</code> therefore do not see the delegation stamp: agent expressions answer as for a person's request, and no delegator re-evaluation happens. The URL policy filter, which runs after the bridge in the same slot, sees the stamp and re-evaluates as the delegator. To put agent conditions in URL policies, leave the manager off your chain; otherwise put them in <a href="protectable.html"><code>@Protectable</code></a> method policies.
           </div>
           <h3 id="static-rules">Using static rules alongside</h3>
           <ul>
             <li>Spring Security reads matchers from the top and uses the first that matches. Put static <code>requestMatchers</code> before <code>anyRequest()</code>.</li>
-            <li>A request caught by a static matcher never reaches the URL policy manager. A database policy aimed at an address opened with <code>permitAll()</code> is silently ignored, so do not cover the same address with both a static rule and a policy.</li>
-            <li>Requests allowed statically do not pass through URL policies, so they do not appear in the authorization audit log either.</li>
+            <li>A request caught by a static matcher does not reach the URL policy manager at that chain's authorization step. In CONTEXA's main chain (FULL) a database policy aimed at an address opened with <code>permitAll()</code> is silently ignored, so do not cover the same address with both a static rule and a policy. On an address your chain opens with <code>permitAll()</code>, the URL policy filter behind your chain applies the named policies.</li>
+            <li>Requests allowed statically in CONTEXA's main chain do not pass through URL policies, so they do not appear in the authorization audit log either. Requests allowed statically in your chain are recorded only when a named policy decides them.</li>
           </ul>
           <h3 id="patterns">Configuration patterns</h3>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Pattern</th><th>Inside <code>authorizeHttpRequests</code></th><th>When to use</th><th>Watch out</th></tr></thead>
             <tbody>
-              <tr><td>Public assets + policies for the rest</td><td><code>.requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()</code><br><code>.anyRequest().access(customDynamicAuthorizationManager)</code></td><td>Most applications. The same shape as the <code>FULL</code> default chain</td><td>Static assets skip policy lookups, so they are fast</td></tr>
-              <tr><td>Screens that must stay open + policies for the rest</td><td>Add <code>.requestMatchers("/home", "/user/list/**").permitAll()</code> above</td><td>When some screens must stay open whatever the policies say</td><td>The pinned addresses cannot be changed by policy</td></tr>
+              <tr><td>Public assets + policies for the rest</td><td><code>.requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()</code><br><code>.anyRequest().access(customDynamicAuthorizationManager)</code></td><td>Most applications. The same shape as the <code>FULL</code> default chain</td><td>In CONTEXA's main chain static assets skip policy lookups, so they are fast. In your chain the URL policy filter behind it still looks up the named policies</td></tr>
+              <tr><td>Screens that must stay open + policies for the rest</td><td>Add <code>.requestMatchers("/home", "/user/list/**").permitAll()</code> above</td><td>When some screens must stay open whatever the policies say</td><td>In CONTEXA's main chain the pinned addresses cannot be changed by policy. In your chain a pinned address is still refused when a named policy refuses it</td></tr>
               <tr><td>Policies for everything</td><td>Only <code>.anyRequest().access(customDynamicAuthorizationManager)</code></td><td>When every access rule is governed by policy</td><td>Static assets are evaluated every time. With the default decision <code>AUTHENTICATED</code> an address without a policy is open to a signed-in user and turned away otherwise; with <code>PERMIT</code> it is open to everyone; with <code>DENY</code> every address without a policy is blocked</td></tr>
             </tbody>
           </table></div>
@@ -228,7 +227,7 @@ isDelegatedAgent() and delegationAllowsOperation('READ')</code></pre>
           <ul>
             <li>The full list of usable expressions is in <a href="xacml.html#conditions">Authorization Overview &gt; What a condition can use</a>. The meaning of the <code>#ai</code> decision expressions and the agent expressions is in <a href="ai-security-expressions.html">AI Security Expressions</a>.</li>
             <li>Expressions can be called without <code>#ai.</code> (<code>isAllowed()</code> = <code>#ai.isAllowed()</code>). Agent expressions are usually written without the prefix.</li>
-            <li>An agent condition like the last line only means something under <code>CONTEXA_OWNED</code>, where the URL step sees the delegation stamp (<a href="#enable">Enabling</a>).</li>
+            <li>An agent condition like the last line only means something where the URL step sees the delegation stamp: CONTEXA's main chain under FULL and the URL policy filter behind your chain (all four combinations) see it; a manager you connected to your chain does not (<a href="#enable">Enabling</a>).</li>
           </ul>
 
           <h2 id="delegator-authority">Agents acting for a person</h2>
@@ -247,7 +246,7 @@ isDelegatedAgent() and delegationAllowsOperation('READ')</code></pre>
             <li>The delegator's authority is read from your <code>UserDetailsService</code>. A disabled or locked account delegates nothing. To read it from elsewhere (a directory, ...), declare a <code>DelegatorAuthoritySource</code> bean.</li>
             <li>When the operating mode is not <code>ENFORCE</code> (<code>SHADOW</code> or <code>DISABLED</code>, the old name <code>OBSERVE</code> included), nothing is refused; it is only recorded.</li>
             <li>A person's requests and an autonomous agent's requests are not re-evaluated.</li>
-            <li>URL policies are re-evaluated in the CONTEXA chain (<code>CONTEXA_OWNED</code>); method policies under both ownerships (<a href="../agent/overview.html#delegator-authority">Agent security</a>).</li>
+            <li>URL policies are re-evaluated where the delegation stamp is seen: in CONTEXA's main chain under FULL and in the URL policy filter behind your chain (all four combinations), not in a manager you connected to your chain. Method policies are re-evaluated in either mode, whatever the ownership (<a href="../agent/overview.html#delegator-authority">Agent security</a>).</li>
           </ul>
 
           <h2 id="reload">Changing and checking it took effect</h2>

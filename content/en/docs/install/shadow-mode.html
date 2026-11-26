@@ -55,7 +55,7 @@
               <li class="dg-node dg-allow"><span class="dg-node-tag"><code>SHADOW</code> and <code>ENFORCE</code></span><span class="dg-node-title">ALLOW decisions are learned</span><span class="dg-node-desc">Reflected in the behavioral baseline</span></li>
             </ol>
           </figure>
-          <p>A stored decision is applied in two places. One is a filter CONTEXA puts in front of requests (called the request-time filters in this page). The other is the check right before a <code>@Protectable</code> method runs. Both are used whether your application owns sign-in (<code>HOST_OWNED</code>) or CONTEXA does (<code>CONTEXA_OWNED</code>). "Both ownership modes" in this page means these two cases (see <a href="spring-boot.html">Add to an existing Spring Security application</a>).</p>
+          <p>A stored decision is applied in two places. One is a filter CONTEXA puts in front of requests (called the request-time filters in this page). The other is the check right before a <code>@Protectable</code> method runs. Both are used in <code>SANDBOX</code> (your application keeps its sign-in) and in <code>FULL</code> (CONTEXA provides the sign-in), whatever the authentication ownership. "Both security modes" in this page means these two cases (see <a href="spring-boot.html">Add to an existing Spring Security application</a>).</p>
 
           <h2 id="change-mode">Two ways to change the mode, and which wins</h2>
           <p>You set the mode by saving it in the admin console or by writing it in <code>application.yml</code>. When both exist, the value saved in the admin console wins. To change the mode on a running system, use the admin console: it needs no restart.</p>
@@ -91,9 +91,9 @@
           <ul>
             <li><strong>Not done:</strong> storing the decision in the enforcement store, sending the block signal that cuts responses in flight, writing the blocked-user record, sending the risk signal that tells your application's receivers a user's risk level changed, and narrowing an agent's allowed scope.</li>
             <li><strong><code>@Protectable</code> methods:</strong> even with a stored BLOCK, CHALLENGE or ESCALATE, the method runs and only a log line is written. <code>sync = true</code> makes a method wait, before it runs, for the decision made inside the request; under shadow mode the method runs even when that decision is BLOCK or the analysis fails.</li>
-            <li><strong>Request-time filters (both ownership modes):</strong> nothing is stopped. A BLOCK, CHALLENGE or ESCALATE stored during an <code>ENFORCE</code> period, or an administrator's block, is not enforced while <code>SHADOW</code> lasts, and applies again under <code>ENFORCE</code> if it has not expired.</li>
+            <li><strong>Request-time filters (both security modes):</strong> nothing is stopped. A BLOCK, CHALLENGE or ESCALATE stored during an <code>ENFORCE</code> period, or an administrator's block, is not enforced while <code>SHADOW</code> lasts, and applies again under <code>ENFORCE</code> if it has not expired.</li>
             <li><strong>Decision API (AuthZEN):</strong> under <code>SHADOW</code> it analyzes, but the <code>decision</code> in the answer is always <code>true</code>. Under <code>DISABLED</code> and <code>OBSERVE</code> it answers <code>true</code> without analysis.</li>
-            <li><strong>Agent request gate</strong> (both ownership modes): it checks whether an agent's request meets an ended delegation, a narrowed scope or a call limit. While enforcement is off (any mode other than <code>ENFORCE</code>) it records what it finds and lets the request through (<a href="../reference/agent/controls.html#shadow">SHADOW in agent controls</a>).</li>
+            <li><strong>Agent request gate</strong> (both security modes): it checks whether an agent's request meets an ended delegation, a narrowed scope or a call limit. While enforcement is off (any mode other than <code>ENFORCE</code>) it records what it finds and lets the request through (<a href="../reference/agent/controls.html#shadow">SHADOW in agent controls</a>).</li>
             <li><strong>Re-evaluation as the delegator:</strong> when an agent calls on behalf of a user, CONTEXA evaluates the call again as that user (the delegator) to see whether the user could have made it. While enforcement is off (any mode other than <code>ENFORCE</code>, or <code>enabled: false</code>) the result is only recorded and the call is not stopped.</li>
           </ul>
           <p><strong>What shadow mode still stops</strong></p>
@@ -121,7 +121,7 @@
             <li><code>CONDITIONS_UNMET</code>: "{count} criteria are not met: hold off applying."</li>
             <li><code>DATA_INSUFFICIENT</code>: "Not enough data to judge yet: the observation period or the decisions fall short of the recommended criteria."</li>
           </ul>
-          <p>CONTEXA protects the admin console in both ownership modes. When your application owns sign-in, you sign in there with a CONTEXA administrator account, not an application account (<a href="installation-guide.html#admin-console">installation guide</a>).</p>
+          <p>CONTEXA protects the admin console in both security modes, whatever the authentication ownership. In every combination but <code>FULL</code> + <code>CONTEXA_OWNED</code>, you sign in there with a CONTEXA administrator account, not an application account, with a password and then a passkey or a code by mail (<a href="installation-guide.html#admin-console">installation guide</a>).</p>
 
           <h2 id="go-enforce">Moving to <code>ENFORCE</code></h2>
           <p>First look at whether the verdict of the adoption screen is <code>RECOMMENDED</code>. With <code>CONDITIONS_UNMET</code> the table "Each criterion now" shows the criteria that are not met; with <code>DATA_INSUFFICIENT</code> the observation period or the number of decisions falls short. The screen weighs these criteria, with these recommended values by default:</p>
@@ -160,10 +160,10 @@
             <thead><tr><th>Decision</th><th>Answer</th><th>Where it is enforced</th></tr></thead>
             <tbody>
               <tr><td>ALLOW</td><td>Goes on</td><td>—</td></tr>
-              <tr><td>CHALLENGE</td><td><code>401</code>, with a demand for step-up authentication (MFA). When your application owns sign-in (<code>HOST_OWNED</code>), the user is sent to CONTEXA's step-up screen <code>/contexa/step-up</code>.</td><td>The request-time filters and before <code>@Protectable</code> methods, in both ownership modes</td></tr>
+              <tr><td>CHALLENGE</td><td><code>401</code>, with a demand for step-up authentication (MFA). In <code>SANDBOX</code> (your application keeps its sign-in) the user is sent to CONTEXA's step-up screen <code>/contexa/step-up</code>, and in <code>FULL</code> (CONTEXA provides the sign-in) to CONTEXA's MFA flow.</td><td>The request-time filters and before <code>@Protectable</code> methods, in both security modes</td></tr>
               <tr><td>BLOCK</td><td><code>403</code>. The request-time filters first offer a person block-release MFA. Only people go to the blocked-user records.</td><td>The same</td></tr>
               <tr><td>ESCALATE</td><td><code>423</code>, held for review</td><td>The same</td></tr>
-              <tr><td>No decision (<code>PENDING_ANALYSIS</code>)</td><td>The request goes on and analysis starts. The request-time filters wrap the response so that it can be cut if a block decision arrives during analysis.</td><td>The request-time filters, in both ownership modes</td></tr>
+              <tr><td>No decision (<code>PENDING_ANALYSIS</code>)</td><td>The request goes on and analysis starts. The request-time filters wrap the response so that it can be cut if a block decision arrives during analysis.</td><td>The request-time filters, in both security modes</td></tr>
             </tbody>
           </table></div>
 
@@ -174,13 +174,13 @@
             <tbody>
               <tr><td>Save <code>SHADOW</code> in the admin console</td><td>Applies at once (no restart). New decisions are not applied. Decision and audit records are still written, and ALLOW decisions are still learned.</td></tr>
               <tr><td>YAML <code>contexa.security.zerotrust.mode: SHADOW</code></td><td>Applies after a restart, and only when no value was saved in the admin console.</td></tr>
-              <tr><td><code>contexa.security.zerotrust.enabled: false</code></td><td>No AI analysis (the same as <code>mode: DISABLED</code>). In addition, where CONTEXA owns sign-in, it also stops changing authorities when the sign-in is read and stops session tracking. <code>mode: DISABLED</code> stops neither.</td></tr>
+              <tr><td><code>contexa.security.zerotrust.enabled: false</code></td><td>No AI analysis (the same as <code>mode: DISABLED</code>). In addition, in <code>FULL</code> (CONTEXA provides the sign-in), it also stops changing authorities when the sign-in is read and stops session tracking. <code>mode: DISABLED</code> stops neither.</td></tr>
               <tr><td><code>contexa.enabled: false</code></td><td>Turns none of CONTEXA on. Without a Spring Security filter chain of your own, Spring Boot's default security applies.</td></tr>
             </tbody>
           </table></div>
           <div class="callout callout-warning">
-            <p><strong>Decisions already stored stay, but are not enforced while you are rolled back.</strong> In both ownership modes the request-time filters and the check before <code>@Protectable</code> methods follow the operating mode and <code>contexa.security.zerotrust.enabled</code>. So after switching to <code>SHADOW</code>, or turning AI decisions off with <code>contexa.security.zerotrust.enabled: false</code>, these two stop nothing on the strength of a stored decision (the check before <code>@Protectable</code> methods only records).</p>
-          <p>A BLOCK, CHALLENGE or ESCALATE stored before the switch, an administrator's block included, stays and applies again after you switch back to <code>ENFORCE</code>, until it expires or an administrator releases it. One step does not follow the mode: where CONTEXA owns sign-in, it narrows a user's authorities by the stored decision when the sign-in is read, and only <code>enabled: false</code> stops that.</p>
+            <p><strong>Decisions already stored stay, but are not enforced while you are rolled back.</strong> In both security modes the request-time filters and the check before <code>@Protectable</code> methods follow the operating mode and <code>contexa.security.zerotrust.enabled</code>. So after switching to <code>SHADOW</code>, or turning AI decisions off with <code>contexa.security.zerotrust.enabled: false</code>, these two stop nothing on the strength of a stored decision (the check before <code>@Protectable</code> methods only records).</p>
+          <p>A BLOCK, CHALLENGE or ESCALATE stored before the switch, an administrator's block included, stays and applies again after you switch back to <code>ENFORCE</code>, until it expires or an administrator releases it. One step does not follow the mode: in <code>FULL</code> (CONTEXA provides the sign-in), it narrows a user's authorities by the stored decision when the sign-in is read, and only <code>enabled: false</code> stops that.</p>
           </div>
           <p>The behavioral baseline is not erased by changing the mode. In <code>standalone</code>, though, it lives in memory and is lost when the application restarts. Changing the mode in the admin console needs no restart, so the baseline is kept.</p>
 
@@ -203,9 +203,9 @@
             <thead><tr><th>Setting</th><th>Default</th><th>Meaning</th><th>When to change</th></tr></thead>
             <tbody>
               <tr><td><code>contexa.security.zerotrust.mode</code></td><td><code>ENFORCE</code></td><td>The operating mode. A value saved in the admin console wins.</td><td><code>SHADOW</code> when you first adopt CONTEXA</td></tr>
-              <tr><td><code>contexa.security.zerotrust.enabled</code></td><td><code>true</code></td><td><code>false</code> stops AI analysis, and where CONTEXA owns sign-in it also stops changing authorities and session tracking.</td><td>To turn AI decisions off entirely</td></tr>
+              <tr><td><code>contexa.security.zerotrust.enabled</code></td><td><code>true</code></td><td><code>false</code> stops AI analysis, and in <code>FULL</code> (CONTEXA provides the sign-in) it also stops changing authorities and session tracking.</td><td>To turn AI decisions off entirely</td></tr>
               <tr><td><code>contexa.security.zerotrust.baseline.learning.enabled</code></td><td><code>true</code></td><td>Behavioral baseline learning (from ALLOW decisions)</td><td>To stop learning</td></tr>
-              <tr><td><code>contexa.autonomous.enabled</code></td><td><code>true</code></td><td>The whole decision engine (autonomous security). When it is not <code>true</code>, all of CONTEXA goes off: an application that owns sign-in starts without CONTEXA, and where CONTEXA owns sign-in the start is refused.</td><td>To take CONTEXA out altogether. To turn off only the decisions, use <code>contexa.security.zerotrust.mode: DISABLED</code></td></tr>
+              <tr><td><code>contexa.autonomous.enabled</code></td><td><code>true</code></td><td>The whole decision engine (autonomous security). When it is not <code>true</code>, all of CONTEXA goes off: in <code>SANDBOX</code> (your application keeps its sign-in) the application starts without CONTEXA, and in <code>FULL</code> (CONTEXA provides the sign-in) the start is refused.</td><td>To take CONTEXA out altogether. To turn off only the decisions, use <code>contexa.security.zerotrust.mode: DISABLED</code></td></tr>
               <tr><td><code>contexa.infrastructure.mode</code></td><td><code>standalone</code></td><td>Keep decision and learning state in memory (<code>standalone</code>) or in Redis (<code>distributed</code>)</td><td>Several instances, keeping learning across restarts</td></tr>
             </tbody>
           </table></div>
@@ -232,7 +232,7 @@
               </a>
               <a href="spring-boot.html" class="related-link-card">
                 <h3>Add to an existing Spring Security application</h3>
-                <p>Who owns sign-in, and how decisions are enforced under each ownership.</p>
+                <p>Who handles sign-in, and how decisions are enforced in each security mode.</p>
               </a>
               <a href="configuration.html" class="related-link-card">
                 <h3>Configuration guide</h3>
