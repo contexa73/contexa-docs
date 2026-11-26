@@ -33,19 +33,19 @@
             </ol>
           </figure>
 
-          <h2 id="ownership">What works under each ownership</h2>
-          <p>Ownership means who handles sign-in: your application (<code>HOST_OWNED</code>) or CONTEXA (<code>CONTEXA_OWNED</code>). The gate (① to ④) runs under both modes. Under <code>CONTEXA_OWNED</code> it runs inside the security chain CONTEXA builds. Under the default <code>HOST_OWNED</code> it runs as a servlet filter right after the application's Spring Security chain, behind the authentication bridge that stamps the delegation. The <code>@Protectable</code> methods (⑤) and the handling after a decision work under both.</p>
+          <h2 id="ownership">What works in each security mode</h2>
+          <p>The security mode sets who handles sign-in: your application (<code>SANDBOX</code>) or CONTEXA (<code>FULL</code>). The authentication ownership (<code>HOST_OWNED</code>, <code>CONTEXA_OWNED</code>) is a separate setting and turns none of the controls below on or off. The gate (① to ④) runs under both modes. Under <code>FULL</code> it runs inside the security chain CONTEXA builds. Under the default <code>SANDBOX</code> it runs as a servlet filter after the application's Spring Security chain and its other servlet filters have all run, behind the authentication bridge that stamps the delegation. The <code>@Protectable</code> methods (⑤) and the handling after a decision work under both.</p>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>Control</th><th><code>CONTEXA_OWNED</code><br>(<code>@EnableAISecurity(mode = SecurityMode.FULL)</code>)</th><th><code>HOST_OWNED</code> (default)</th></tr></thead>
+            <thead><tr><th>Control</th><th><code>FULL</code><br>(<code>@EnableAISecurity(mode = SecurityMode.FULL)</code>)</th><th><code>SANDBOX</code> (default)</th></tr></thead>
             <tbody>
-              <tr><td>Enforcing stored decisions (BLOCK, CHALLENGE, ESCALATE)</td><td>At URL requests (a per-request filter inside the CONTEXA chain) and at <code>@Protectable</code></td><td>At URL requests (a per-request filter right after the application's chain) and at <code>@Protectable</code></td></tr>
+              <tr><td>Enforcing stored decisions (BLOCK, CHALLENGE, ESCALATE)</td><td>At URL requests (a per-request filter inside the CONTEXA chain) and at <code>@Protectable</code></td><td>At URL requests (a per-request filter after the application's security chain and all of its servlet filters) and at <code>@Protectable</code></td></tr>
               <tr><td>Deciding an agent request with no decision in place, limiting ALLOW reuse, decision merging</td><td>Works</td><td>Works (<code>@Protectable</code>)</td></tr>
               <tr><td>Stopping after a BLOCK (delegation revoked, tokens revoked, notice)</td><td>Works</td><td>Works. Tokens are revoked only with an <code>AgentTokenRevoker</code></td></tr>
               <tr><td>Confirmation by the accountable person (CHALLENGE, ended delegation)</td><td>Works</td><td>Works. An agent's CHALLENGE is answered with <code>403</code> <code>AGENT_CONFIRMATION_REQUIRED</code> and the confirmation status address</td></tr>
               <tr><td>Refusing revoked delegations, call limits and denial alarm, refusing outside a narrowed scope</td><td>Works</td><td>Works</td></tr>
-              <tr><td>Policy expression <code>agentRequestConfirmed()</code></td><td>Works in <code>@Protectable</code> method policies and in URL policies</td><td>Works in <code>@Protectable</code> method policies. It cannot be used in URL policies, because the application's chain evaluates URL policies before the agent gate</td></tr>
+              <tr><td>Policy expression <code>agentRequestConfirmed()</code></td><td>Works in <code>@Protectable</code> method policies and in URL policies</td><td>Works in <code>@Protectable</code> method policies and in the URL policies of CONTEXA's filter slot behind the application's chain. It cannot be used in URL policies evaluated inside the application's chain with <code>.access(...)</code>, because those run before the agent gate</td></tr>
               <tr><td>Refusing a suspended agent's token</td><td>CONTEXA resource server and authorization server</td><td>Up to your resource server</td></tr>
-              <tr><td>Evaluating again as the delegator</td><td>URL and method policies</td><td>Method policies</td></tr>
+              <tr><td>Evaluating again as the delegator</td><td>URL and method policies</td><td>Method policies, and the URL policies of CONTEXA's filter slot behind the application's chain</td></tr>
             </tbody>
           </table></div>
 
@@ -122,7 +122,7 @@ Content-Type: application/json
             <li><code>429</code>: the agent is past its call limit. This request counts as a call too.</li>
           </ul>
           <p><code>target</code> is the path with the query, starting with <code>/</code>. <code>bodySha256</code> is the SHA-256 (hexadecimal) of the body the agent will send. The body is announced by its hash only, and CONTEXA never sees the body on this route. <code>reason</code> is stored up to 1000 characters. Poll the status at <code>GET /contexa/api/agent-confirmations/{id}</code>; an agent can read only its own confirmations.</p>
-          <p>This API is open under both ownership modes. Where a policy reads an approved confirmation depends on the kind of policy. <code>@Protectable</code> method policies read approvals under both modes. URL policies read them only under <code>CONTEXA_OWNED</code>, because under <code>HOST_OWNED</code> the application's chain evaluates URL policies before the agent gate.</p>
+          <p>This API is open under both security modes. Where a policy reads an approved confirmation depends on the kind of policy. <code>@Protectable</code> method policies read approvals under both modes. URL policies read them in CONTEXA's chain (<code>FULL</code>) and in CONTEXA's filter slot behind the application's chain (both modes), where they are evaluated after the agent gate. Only URL policies evaluated inside the application's chain with <code>.access(...)</code> run before the agent gate and cannot read approvals.</p>
           <p>The start of the confirmation link in notices is set with <code>confirmation-link-base-url</code> (for example <code>https://app.example.com</code>). Left empty, the link is relative, with the application's path only. The Host header the agent sent is never used in the link.</p>
 
           <h2 id="stop">Stopping and releasing</h2>

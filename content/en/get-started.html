@@ -190,9 +190,9 @@ ollama pull mxbai-embed-large</code></pre>
             <div>
               <h2 class="step-title">Enable AI Security</h2>
               <p class="step-desc">Putting <code>@EnableAISecurity</code> on the main class turns CONTEXA on. Without it, none of CONTEXA's auto-configuration is applied, even with the starter on the classpath, so your application stays as it was.</p>
-              <p class="step-desc">Without attributes the annotation uses the default way, <code>SANDBOX</code>. This way adds CONTEXA to an application that already has its own sign-in, so your application's Spring Security keeps owning sign-in, sessions and access rules. In the code this is called <code>HOST_OWNED</code>, meaning that the application owns sign-in. <code>SANDBOX</code> is the name of this way, not a test environment.</p>
-          <p class="step-desc">CONTEXA builds no sign-in chain in this way. Its filters run right after your application's Spring Security filter chain has identified the user, and apply the stored decision on every path. Only CONTEXA's own admin console, <code>/contexa/admin/**</code>, is protected by a chain of CONTEXA's own.</p>
-              <p class="step-desc">To leave sign-in to CONTEXA as well (<code>CONTEXA_OWNED</code>), use <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>. CONTEXA's chain then handles sign-in, MFA and sessions, and some of your application's responses change (<a href="./docs/install/spring-boot.html">what changes</a>, <a href="./docs/reference/autoconfigure/ai-security.html">annotation reference</a>). The rest of this page assumes the default way.</p>
+              <p class="step-desc">Without attributes the annotation uses the default way, <code>SANDBOX</code>. This way adds CONTEXA to an application that already has its own sign-in, so your application's Spring Security keeps handling sign-in, sessions and access rules. The authentication ownership (<code>contexa.bridge.ownership</code>) is a setting separate from the security mode: it settles which of two components of the same kind serves your application when your application brings its own (its <code>UserDetailsService</code> and the like) and CONTEXA has one too. Left unset, it follows the mode (<code>SANDBOX</code> → <code>HOST_OWNED</code>, <code>FULL</code> → <code>CONTEXA_OWNED</code>). <code>SANDBOX</code> is the name of this way, not a test environment.</p>
+          <p class="step-desc">CONTEXA builds no sign-in chain in this way. Its filters run after your application's Spring Security filter chain and its other servlet filters have all run and identified the user, and apply the stored decision on every path. Only CONTEXA's own admin console, <code>/contexa/admin/**</code>, is protected by a chain of CONTEXA's own.</p>
+              <p class="step-desc">To leave sign-in to CONTEXA as well, use <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>. CONTEXA's chain then handles sign-in, MFA and sessions, and some of your application's responses change (<a href="./docs/install/spring-boot.html">what changes</a>, <a href="./docs/reference/autoconfigure/ai-security.html">annotation reference</a>). The rest of this page assumes the default way.</p>
 
               <div class="code-block" style="margin-top: var(--space-4);">
                 <div class="code-block-header">
@@ -213,14 +213,14 @@ public class MyApplication {
               </div>
 
               <div class="callout callout-warning" style="margin-top: var(--space-4);">
-                <p><strong>What your application must do when it owns sign-in (default)</strong> &mdash; CONTEXA can recognize your users only if your application does two things.</p>
-                <p style="margin-top: var(--space-2);">① Declare your own <code>SecurityFilterChain</code>. Without one, Spring Boot's default security asks every request for sign-in. CONTEXA reports this with a WARN log, and if the application has no way to sign users in either (no <code>UserDetailsService</code>, <code>AuthenticationProvider</code> or <code>AuthenticationManager</code> bean of its own), the start is refused.</p>
-                <p style="margin-top: var(--space-2);">② In a filter of that chain, put the signed-in user into the <code>SecurityContext</code> as an authenticated <code>Authentication</code>. CONTEXA's filters read it to learn whose request it is. Without it, CONTEXA sees an anonymous request and applies no decision.</p>
+                <p><strong>What your application must do in the default SANDBOX (your application keeps its sign-in)</strong> &mdash; CONTEXA can recognize your users only if your application tells it who is signed in. What it tells is one user, with a user id and a mail address required. What to do depends on how your application signs users in.</p>
+                <p style="margin-top: var(--space-2);">① An application that signs in with Spring Security keeps signing users in with its own <code>SecurityFilterChain</code>. CONTEXA's filters read the authenticated <code>Authentication</code> in the <code>SecurityContext</code> as it is to learn whose request it is. When the token carries no mail address (a form login and the like), add one mail address provider (<code>BridgeUserEmailProvider</code>) bean. Without a chain, when the application has users it can sign in (a <code>UserDetailsService</code>, <code>AuthenticationProvider</code> or <code>AuthenticationManager</code> bean of its own), Spring Boot's default security asks every request for sign-in, and CONTEXA reports this with a WARN log.</p>
+                <p style="margin-top: var(--space-2);">② An application without Spring Security declares no chain. With neither a chain nor users, CONTEXA puts an isolation chain in place that lets every request through, so access stays as it was before CONTEXA. The signed-in user is answered on every request by one <code>ContexaSubjectResolver</code> bean your application writes (10 to 20 lines). A request whose user CONTEXA does not know is taken as anonymous, and no decision is applied to it.</p>
                 <p style="margin-top: var(--space-2);">The admin console <code>/contexa/admin/**</code> is protected by CONTEXA's own chain and administrator sign-in, so your chain does not need to protect it. Example code is in <a href="./docs/install/installation-guide.html#legacy-integration">Connect your existing sign-in in the installation guide</a>.</p>
               </div>
 
               <div class="callout callout-info" style="margin-top: var(--space-4);">
-                <p><strong>Under the hood</strong> &mdash; <code>@EnableAISecurity</code> imports the configuration class <code>AiSecurityConfiguration</code> through <code>AiSecurityImportSelector</code>. When your application has no <code>PlatformConfig</code> bean, it creates a default <code>PlatformConfig</code>, but a sign-in chain is built from it only when CONTEXA owns sign-in (<code>CONTEXA_OWNED</code>).</p>
+                <p><strong>Under the hood</strong> &mdash; <code>@EnableAISecurity</code> imports the configuration class <code>AiSecurityConfiguration</code> through <code>AiSecurityImportSelector</code>. When your application has no <code>PlatformConfig</code> bean, it creates a default <code>PlatformConfig</code>, but a sign-in chain for your application's users is built from it only in <code>FULL</code> (CONTEXA provides the sign-in). In <code>SANDBOX</code> it builds only the administrators' sign-in flow of the admin console (<code>/contexa/admin</code>).</p>
               </div>
             </div>
           </div>
@@ -324,7 +324,7 @@ mvn spring-boot:run</code></pre>
               <p>When startup finishes, look for these lines in the log. The first two together show that CONTEXA is on.</p>
               <ul>
                 <li><code>[IamSeedData] OSS schema provenance verified.</code> &mdash; the tables in the dedicated CONTEXA database are ready. On the first start, CONTEXA creates them just before this line.</li>
-                <li><code>Skipping Contexa-owned authentication chain bootstrap in HOST_OWNED mode</code> &mdash; CONTEXA is on in the default way, where your application owns sign-in. CONTEXA skipped building a sign-in chain.</li>
+                <li><code>[Contexa] mode=SANDBOX ownership=HOST_OWNED data=application enforcement=...</code> &mdash; CONTEXA is on in the default <code>SANDBOX</code>. This INFO line, written once at start, shows the security mode, the authentication ownership, the application data (<code>contexa</code> when the CONTEXA database also serves as the application's) and the operating mode.</li>
                 <li>An ERROR-level <code>[ContexaCapability] ...</code> &mdash; a required part such as the chat model or the vector store is missing. The application keeps starting (it stops only when its name starts with <code>contexa-</code>), but as it is no decision will be made (<a href="./docs/install/troubleshooting.html#capability-missing">Troubleshooting</a>).</li>
               </ul>
 
@@ -358,7 +358,7 @@ curl http://localhost:8080/actuator/contexacapabilities</code></pre>
 
               <div class="callout callout-warning" style="margin-top: var(--space-4);">
                 <p><strong>Database required</strong> &mdash; CONTEXA stays off when it cannot use its dedicated database. What you see depends on the problem.</p>
-                <p style="margin-top: var(--space-2);">When CONTEXA cannot connect (it retries for about 5 seconds), or the database account is not allowed to create the extensions CONTEXA needs (such as <code>vector</code>): in the default way the application starts without CONTEXA, and the log has one ERROR line that begins <code>Contexa's database cannot be used</code>. When CONTEXA owns sign-in, the application does not start.</p>
+                <p style="margin-top: var(--space-2);">When CONTEXA cannot connect (it retries for about 5 seconds), or the database account is not allowed to create the extensions CONTEXA needs (such as <code>vector</code>): in the default <code>SANDBOX</code> the application starts without CONTEXA, and the log has one ERROR line that begins <code>Contexa's database cannot be used</code>. In <code>FULL</code> (CONTEXA provides the sign-in), the application does not start.</p>
                 <p style="margin-top: var(--space-2);">When only some CONTEXA tables exist in the database: the startup stops with <code>Contexa schema is partially installed</code>. Use an empty database, or restore a verified backup.</p>
                 <p style="margin-top: var(--space-2);">Before running, check that <code>contexa.datasource.*</code> is right and that the database and the <code>vector</code> extension exist.</p>
               </div>
@@ -399,7 +399,7 @@ public class OrderService {
 
         <p style="margin-top: var(--space-6);">When a protected method is called, CONTEXA checks in this order. If a check fails, the method does not run.</p>
         <ol>
-          <li><strong>Sign-in.</strong> The caller must be signed in: a Spring <code>Authentication</code> must exist at call time. A call without one, or with an anonymous one, is refused. This check applies only when the operating mode is shadow mode (<code>SHADOW</code>) or enforce mode (<code>ENFORCE</code>); the default is <code>ENFORCE</code>. A call on a thread that holds neither a web request nor a user (a scheduled job, for example) has no one to decide for, so it runs and only the fact that it ran is recorded.</li>
+          <li><strong>Sign-in.</strong> CONTEXA must know the caller: a user signed in to your application's Spring Security (an <code>Authentication</code>), or, for an application without Spring Security, a user named through a resolver or the request attribute. A call with neither, or with only an anonymous one, is refused. This check applies only when the operating mode is shadow mode (<code>SHADOW</code>) or enforce mode (<code>ENFORCE</code>); the default is <code>ENFORCE</code>. A call on a thread that holds neither a web request nor a user (a scheduled job, for example) has no one to decide for, so it runs and only the fact that it ran is recorded.</li>
           <li><strong>Policies.</strong> The policies written for this method are evaluated. If a policy denies the call, the method does not run. When no policy targets the method, the default decision applies, which is permit (<code>PERMIT</code>).</li>
           <li><strong>Stored decision.</strong> If a block (BLOCK), step-up (CHALLENGE) or review (ESCALATE) decision is stored for the user, the call is refused. In shadow mode the call is not refused: it passes and a log line is written.</li>
           <li><strong>Run and analysis request.</strong> When every check passes, the method runs, and when it ends CONTEXA sends a request to analyze the call. The response does not wait for the decision. The decision is made in the background and applies from the same user's next call (see <code>sync = true</code> below).</li>
@@ -469,36 +469,36 @@ public class OrderService {
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);"><code>BLOCK</code></td>
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">403</td>
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">No expiry</td>
-                <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">The request is refused. The decision stays in force until an administrator releases it, or, when the administrator has allowed it, until the user passes block-release MFA. When CONTEXA owns sign-in, the user's authorities become just <code>ROLE_BLOCKED</code>.</td>
+                <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">The request is refused. The decision stays in force until an administrator releases it, or, when the administrator has allowed it, until the user passes block-release MFA. In <code>FULL</code> (CONTEXA provides the sign-in), the user's authorities become just <code>ROLE_BLOCKED</code>.</td>
               </tr>
               <tr>
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);"><code>CHALLENGE</code></td>
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">401</td>
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">1,800 s</td>
-                <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">Step-up authentication (MFA) is required. An API request receives 401, and a browser is sent to the step-up page. When CONTEXA owns sign-in, the user's authorities become just <code>ROLE_MFA_REQUIRED</code>.</td>
+                <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">Step-up authentication (MFA) is required. An API request receives 401, and a browser is sent to the step-up page. In <code>FULL</code> (CONTEXA provides the sign-in), the user's authorities become just <code>ROLE_MFA_REQUIRED</code>.</td>
               </tr>
               <tr>
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);"><code>ESCALATE</code></td>
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">423</td>
                 <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">300 s</td>
-                <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">Held for review. The caller is told to wait until the review ends (an API request gets 423, a browser a waiting page). When CONTEXA owns sign-in, the user's authorities become just <code>ROLE_REVIEW_REQUIRED</code>.</td>
+                <td style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light);">Held for review. The caller is told to wait until the review ends (an API request gets 423, a browser a waiting page). In <code>FULL</code> (CONTEXA provides the sign-in), the user's authorities become just <code>ROLE_REVIEW_REQUIRED</code>.</td>
               </tr>
               <tr>
                 <td style="padding: var(--space-3) var(--space-4);"><code>PENDING_ANALYSIS</code></td>
                 <td style="padding: var(--space-3) var(--space-4);">Passes (503)</td>
                 <td style="padding: var(--space-3) var(--space-4);">&mdash;</td>
-                <td style="padding: var(--space-3) var(--space-4);">No decision is stored yet. The request goes on and analysis starts. An AI agent request or a <code>sync = true</code> method cannot go on without a decision, so it is decided in place and refused with 503 when no decision can be obtained. When CONTEXA owns sign-in, <code>ROLE_PENDING_ANALYSIS</code> is added to the user's original authorities.</td>
+                <td style="padding: var(--space-3) var(--space-4);">No decision is stored yet. The request goes on and analysis starts. An AI agent request or a <code>sync = true</code> method cannot go on without a decision, so it is decided in place and refused with 503 when no decision can be obtained. In <code>FULL</code> (CONTEXA provides the sign-in), <code>ROLE_PENDING_ANALYSIS</code> is added to the user's original authorities.</td>
               </tr>
             </tbody>
           </table>
         </div>
 
-        <p style="margin-top: var(--space-4);">The <code>ROLE_...</code> authorities in the table are decision markers. CONTEXA puts them in the user's authority list only when CONTEXA owns sign-in, and ALLOW keeps the original authorities. When your application owns sign-in (the default), CONTEXA does not change your application's authorities. Its filters and <code>@Protectable</code> read the stored decision and give the same responses.</p>
+        <p style="margin-top: var(--space-4);">The <code>ROLE_...</code> authorities in the table are decision markers. CONTEXA puts them in the user's authority list only in <code>FULL</code> (CONTEXA provides the sign-in), and ALLOW keeps the original authorities. In the default <code>SANDBOX</code> (your application keeps its sign-in), CONTEXA does not change your application's authorities. Its filters and <code>@Protectable</code> read the stored decision and give the same responses.</p>
         <p>The operating mode is set with <code>contexa.security.zerotrust.mode</code>. When you first adopt CONTEXA, you can use shadow mode (<code>SHADOW</code>): requests are analyzed and decisions are recorded, but no request is stopped (<a href="./docs/install/shadow-mode.html">Start Safely in Shadow Mode</a>).</p>
 
         <div class="callout callout-info" style="margin-top: var(--space-6);">
           <p><strong>An AI model makes the decision</strong> &mdash; the decision engine gathers the facts of the request (sign-in information, behavioral baseline, past decision records and more) and asks an AI model, so you get decisions without writing policy rules.</p>
-        <p>Analysis happens when a protected method (<code>@Protectable</code>) is called; by default the decision is made in the background after the method ends. A plain URL request that is not a protected method is not analyzed; it only has the stored decision applied. A stored decision is applied on every path even when your application owns sign-in (the default): CONTEXA's filters, which run right after your application's security chain has identified the user, check the stored decision, and CONTEXA checks it once more before a <code>@Protectable</code> method runs. When CONTEXA owns sign-in, the same filters run inside CONTEXA's chain. Details are in <a href="./docs/reference/architecture/decision-engine.html#storage">Decision engine</a>.</p>
+        <p>Analysis happens when a protected method (<code>@Protectable</code>) is called; by default the decision is made in the background after the method ends. A plain URL request that is not a protected method is not analyzed; it only has the stored decision applied. A stored decision is applied on every path even in the default <code>SANDBOX</code> (your application keeps its sign-in): CONTEXA's filters, which run after your application's security chain and its other servlet filters have all run and identified the user, check the stored decision, and CONTEXA checks it once more before a <code>@Protectable</code> method runs. In <code>FULL</code> (CONTEXA provides the sign-in), the same filters run inside CONTEXA's chain. Details are in <a href="./docs/reference/architecture/decision-engine.html#storage">Decision engine</a>.</p>
         </div>
       </div>
     </section>
@@ -508,12 +508,12 @@ public class OrderService {
       <div class="container-narrow">
         <div class="section-header">
           <h2>Next Steps</h2>
-          <p class="lead">Learn about sign-in ownership, operating modes, the decision engine and configuration in the full documentation.</p>
+          <p class="lead">Learn about the security modes, operating modes, the decision engine and configuration in the full documentation.</p>
         </div>
         <div class="grid grid-2 gap-6">
           <a href="./docs/install/spring-boot.html" class="card card-interactive" style="text-decoration: none;">
             <h3 class="card-title">Add to an Existing Spring Security Application</h3>
-            <p class="card-desc">Whether your application or CONTEXA owns sign-in, and what works in each case.</p>
+            <p class="card-desc">Whether your application keeps its sign-in (<code>SANDBOX</code>) or CONTEXA provides it (<code>FULL</code>), and what stays the same and what differs in each.</p>
             <span class="card-link">View docs &rarr;</span>
           </a>
           <a href="./docs/reference/core/overview.html" class="card card-interactive" style="text-decoration: none;">

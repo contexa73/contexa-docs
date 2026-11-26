@@ -16,7 +16,7 @@
           </div>
 
           <div class="callout callout-warning">
-            <strong>Check this first: authentication ownership.</strong> Authentication ownership (ownership for short) means who handles sign-in. When your application does, the mode is <code>HOST_OWNED</code> (the default). When CONTEXA does, it is <code>CONTEXA_OWNED</code> (<code>@EnableAISecurity(mode = SecurityMode.FULL)</code>). The agent gate, enforcement of stored decisions at URL requests and at <code>@Protectable</code> methods, and stopping after a BLOCK work under both modes. Only the place where the gate runs differs: right after the application's security chain under <code>HOST_OWNED</code>, and inside the chain CONTEXA builds under <code>CONTEXA_OWNED</code>. Only the controls on the token-issuing and token-checking side (the CONTEXA authorization server and resource server) work under <code>CONTEXA_OWNED</code> alone. The table for each mode is in <a href="controls.html#ownership">Stop, Confirm, Limit</a>.
+            <strong>Check this first: the security mode.</strong> The security mode sets who handles sign-in. When your application does, the mode is <code>SANDBOX</code> (the default). When CONTEXA does, it is <code>FULL</code> (<code>@EnableAISecurity(mode = SecurityMode.FULL)</code>). The authentication ownership (<code>HOST_OWNED</code>, <code>CONTEXA_OWNED</code>) is a separate setting and turns none of the controls below on or off. The agent gate, enforcement of stored decisions at URL requests and at <code>@Protectable</code> methods, and stopping after a BLOCK work under both modes. Only the place where the gate runs differs: after the application's security chain and all of its servlet filters under <code>SANDBOX</code>, and inside the chain CONTEXA builds under <code>FULL</code>. Only the controls on the token-issuing and token-checking side (the CONTEXA authorization server and resource server) work under <code>FULL</code> alone, whatever the ownership. The table for each mode is in <a href="controls.html#ownership">Stop, Confirm, Limit</a>.
           </div>
 
           <h2 id="menu">The agent security menu</h2>
@@ -83,7 +83,7 @@
               <div class="dg-side dg-host"><p class="dg-side-title">Agent account sign-in → autonomous agent</p><ul><li>A session sign-in with the agent account made at registration</li><li>No sign-in factors meant for people; controlled by decisions alone</li></ul></div>
             </div>
           </figure>
-          <p>An application can also state a delegation through session attributes, request attributes (<code>ctxa.delegation.*</code>) or gateway headers (<code>X-Contexa-*</code>, off by default). CONTEXA looks in the order <strong>access token → session → request attributes → headers → agent account</strong> and uses only the first one it finds (<a href="../common/bridge.html#order">the bridge's reading order</a>).</p>
+          <p>An application that signs in without Spring Security can also state a delegation through the delegation field (<code>ContexaDelegation</code>) of the <code>ContexaSubject</code> it passes to CONTEXA. For a request signed in with Spring Security, CONTEXA looks in the order <strong>access token → agent account</strong> and uses only the first one it finds. For a request whose identity came through a resolver or the request attribute, it uses the delegation field of that <code>ContexaSubject</code> (<a href="delegation.html#sources">How to tell CONTEXA about a delegation</a>).</p>
           <p>The markers that make a token point to an agent can be changed in settings.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Marker</th><th>Default</th><th>Meaning</th></tr></thead>
@@ -102,7 +102,7 @@
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>Situation</th><th>How</th><th>What is created</th></tr></thead>
             <tbody>
-              <tr><td>You use CONTEXA's authorization server (<code>CONTEXA_OWNED</code>)</td><td>Admin API <code>POST /contexa/admin/api/agents/register</code> or the console <code>/contexa/admin/agents/new</code></td><td>An OAuth2 client, a registry entry, and (optionally) an agent account</td></tr>
+              <tr><td>You use CONTEXA's authorization server (<code>FULL</code>)</td><td>Admin API <code>POST /contexa/admin/api/agents/register</code> or the console <code>/contexa/admin/agents/new</code></td><td>An OAuth2 client, a registry entry, and (optionally) an agent account</td></tr>
               <tr><td>An external IdP (Entra Agent ID, SCIM, ...) manages agents</td><td>Your code calls <code>AgentRegistry.register</code>, <code>deregister</code> and <code>transferSponsor</code></td><td>A registry entry</td></tr>
               <tr><td>Tokens only, no registration</td><td>Set <code>contexa.bridge.delegation.token.agent-client-ids</code> or <code>agent-actor-markers</code>, or declare an <code>AgentClientDirectory</code> bean</td><td>Nothing (recognized by markers only)</td></tr>
             </tbody>
@@ -147,7 +147,7 @@ Content-Type: application/json
               <tr><td><code>displayName</code> / <code>tenantId</code></td><td>None</td><td>Display name / tenant</td></tr>
             </tbody>
           </table></div>
-          <p>Under the same path are <code>GET</code> (list), <code>POST /secret</code> (issue a new secret), <code>/sponsor</code> (change the sponsor), <code>/deregister</code> (deregister: tokens revoked, secret unusable, account disabled) and <code>/remove</code> (agent, client, tokens and account deleted for good); all need the <code>ADMIN</code> role. Registration needs a <code>RegisteredClientRepository</code> and a <code>PasswordEncoder</code> bean and answers <code>503</code> without them. CONTEXA's authorization server client repository exists only under <code>CONTEXA_OWNED</code>.</p>
+          <p>Under the same path are <code>GET</code> (list), <code>POST /secret</code> (issue a new secret), <code>/sponsor</code> (change the sponsor), <code>/deregister</code> (deregister: tokens revoked, secret unusable, account disabled) and <code>/remove</code> (agent, client, tokens and account deleted for good); all need the <code>ADMIN</code> role. Registration needs a <code>RegisteredClientRepository</code> and a <code>PasswordEncoder</code> bean and answers <code>503</code> without them. CONTEXA's authorization server client repository exists only under <code>FULL</code> (whatever the ownership), so under <code>SANDBOX</code> the registration API answers <code>503</code> and the console offers no agent registration.</p>
           <div class="callout callout-info">
             <strong>To use tokens obtained for people</strong>, turn on the token exchange grant: <code>contexa.auth.oauth2.token-exchange-enabled: true</code> (default <code>false</code>).
           </div>
@@ -167,7 +167,7 @@ Content-Type: application/json
             <li>The delegator's authority is read from your <code>UserDetailsService</code>. A disabled or locked account delegates nothing. To read it from elsewhere (a directory, ...), declare a <code>DelegatorAuthoritySource</code> bean.</li>
             <li>A request that authenticated as the delegator through token exchange was already evaluated as the delegator, so it is not done again.</li>
             <li>When the operating mode is not <code>ENFORCE</code> (<code>SHADOW</code> or <code>DISABLED</code>, or <code>contexa.security.zerotrust.enabled=false</code>), nothing is refused; it is only recorded. The old name <code>OBSERVE</code> is read as <code>DISABLED</code>.</li>
-            <li>URL policies are re-evaluated in the CONTEXA chain (<code>CONTEXA_OWNED</code>); method policies under both ownerships.</li>
+            <li>Method policies, and URL policies evaluated in the CONTEXA chain (<code>FULL</code>) or in CONTEXA's filter slot behind the application's chain, are re-evaluated in both modes. URL policies evaluated inside the application's chain with <code>.access(...)</code> run before the authentication bridge, have no delegation stamp and are not re-evaluated.</li>
           </ul>
 
           <h2 id="prompt-facts">What the decision model receives</h2>
@@ -191,7 +191,7 @@ Content-Type: application/json
             <tbody>
               <tr><td>① AuthZEN evaluation API</td><td>The MCP server or gateway is outside CONTEXA</td><td>The enforcement point (the gateway or MCP server that receives the request and carries out allow or deny) asks for the decision at <code>POST /contexa/authzen/access/v1/evaluation</code> (several at <code>/evaluations</code>). A restriction already in force answers it; otherwise the request is analysed in place. The values of the request and the response are <a href="#authzen-details">below</a></td><td><code>contexa.security.zerotrust.authzen.enabled: true</code>; the caller's credential holds <code>SCOPE_contexa.authzen</code></td></tr>
               <tr><td>② Wrap the tool in a <code>@Protectable</code> method and pass argument origins</td><td>Tools run inside your application</td><td>States as a decision fact (the <code>ArgumentOrigin</code> line) an argument value that neither the user's request nor the company's records name and that first appeared in a tool output read earlier. What it means is the model's call</td><td>Your agent framework adapter fills <code>ArgumentOrigins</code></td></tr>
-              <tr><td>③ Confirmation-required policy</td><td>Tools a person must approve each time</td><td>The policy <code>!delegationRequiresApproval() or agentRequestConfirmed()</code> lets through, once, only the request its accountable person approved. <code>@Protectable</code> method policies work under both ownership modes. URL policies work only under <code>CONTEXA_OWNED</code>, because under <code>HOST_OWNED</code> the application's chain evaluates URL policies before the agent gate and cannot know of the confirmation</td><td>The agent follows the <a href="controls.html#confirm">confirmation flow</a></td></tr>
+              <tr><td>③ Confirmation-required policy</td><td>Tools a person must approve each time</td><td>The policy <code>!delegationRequiresApproval() or agentRequestConfirmed()</code> lets through, once, only the request its accountable person approved. <code>@Protectable</code> method policies, and URL policies evaluated in the CONTEXA chain (<code>FULL</code>) or in CONTEXA's filter slot behind the application's chain, work in both modes. URL policies evaluated inside the application's chain with <code>.access(...)</code> run before the agent gate and cannot know of the confirmation</td><td>The agent follows the <a href="controls.html#confirm">confirmation flow</a></td></tr>
             </tbody>
           </table></div>
           <h3 id="authzen-example">AuthZEN request example</h3>
@@ -252,7 +252,7 @@ exportService.exportCustomers(recipient, 500, ArgumentOrigins.of(
           </div>
 
           <h2 id="contexa-owned">Only with CONTEXA's authorization server</h2>
-          <p>When CONTEXA also runs the authorization server (<code>CONTEXA_OWNED</code>), agents are controlled on the token-issuing side as well.</p>
+          <p>When CONTEXA also runs the authorization server, in <code>FULL</code> whatever the ownership, agents are controlled on the token-issuing side as well.</p>
           <ul>
             <li>A suspended agent is issued no token (<code>unauthorized_client</code>).</li>
             <li>A token exchange under a revoked delegation is refused (<code>invalid_grant</code>).</li>

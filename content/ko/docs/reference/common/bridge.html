@@ -11,100 +11,154 @@
               <span class="badge badge-primary">contexa-common</span>
             </div>
             <h1>기존 로그인과 연결하기(인증 브리지)</h1>
-            <p class="lead">앱이 이미 가진 로그인 · 권한 · 위임 정보를 CONTEXA가 요청마다 읽어 판정의 사실로 쓰게 하는 방법입니다. 앱이 무엇을 해 두어야 하는지, CONTEXA가 어디서 어떤 순서로 읽는지, MFA를 어떻게 알려 주는지, 게이트웨이 헤더와 직접 넘기기, 확장점을 설명합니다.</p>
+            <p class="lead">앱이 이미 가진 로그인 정보를 CONTEXA가 요청마다 받아 판정의 사실로 쓰게 하는 방법입니다. 앱이 CONTEXA에 넘기는 값은 요청의 사용자 <code>ContexaSubject</code> 하나이고, 아이디와 메일이 필수, 나머지는 선택입니다. Spring Security를 쓰는 앱과 쓰지 않는 앱이 각각 무엇을 하는지, CONTEXA가 어떤 순서로 읽는지, MFA를 어떻게 알려 주는지, 선택 API(<code>ContexaBridge</code> · <code>ContexaUsers</code>), 확인 결과와 확장점을 설명합니다.</p>
           </div>
 
           <div class="callout callout-info">
-            <strong>이 페이지의 용어.</strong> <strong>도장</strong>은 인증 브리지가 요청에서 읽은 정보를 정리해 담은 기록입니다. 인증 도장(누구인가, 어떻게 로그인했나), 인가 도장(무엇을 할 수 있나), 위임 도장(누가 어떤 에이전트에게 무엇을 맡겼나) 세 가지가 있습니다. <strong>신뢰 프록시</strong>는 헤더에 담긴 사용자 정보를 믿어도 되는 서버(API 게이트웨이 등)입니다. <strong>직접 넘기기</strong>(handoff)는 앱의 로그인 코드가 CONTEXA에 사용자를 직접 알리는 호출입니다. <strong>사용자 거울</strong>은 앱에서 로그인한 사용자를 CONTEXA DB에 남기는 사본 행입니다. 인증 소유권(<code>HOST_OWNED</code> · <code>CONTEXA_OWNED</code>)은 <a href="overview.html#modes">공통 계약</a>에 있습니다.
+            <strong>이 페이지의 용어.</strong> <strong><code>ContexaSubject</code></strong>는 앱이 CONTEXA에 알리는 요청의 사용자입니다. 아이디와 메일이 필수이고, 표시 이름 · 조직 · 테넌트 · 권한 · 로그인 방식 · 세션 키 · 위임은 선택입니다. <strong>신원</strong>은 CONTEXA가 요청마다 사용자를 확인한 결과로, 그 사용자 · 출처(어디서 읽었나) · 확인 결과를 담습니다. <strong>리졸버</strong>(<code>ContexaSubjectResolver</code>)는 Spring Security를 쓰지 않는 앱이 자기 로그인 상태에서 요청의 사용자를 꺼내 주는 빈입니다. <strong>신뢰 프록시</strong>는 <code>X-Forwarded-For</code> 헤더에 담긴 클라이언트 IP를 믿어도 되는 서버(로드 밸런서, API 게이트웨이 등)입니다. <strong>사용자 사본</strong>은 앱에서 로그인한 사용자를 CONTEXA DB의 사용자 표에 남기는 행입니다. 보안 모드(<code>SANDBOX</code> · <code>FULL</code>)와 인증 소유권(<code>HOST_OWNED</code> · <code>CONTEXA_OWNED</code>)은 <a href="overview.html#modes">공통 계약</a>에 있습니다.
           </div>
 
           <h2 id="overview">개요</h2>
-          <p>CONTEXA를 기본 모드(<code>@EnableAISecurity</code>, 앱이 로그인을 소유하는 <code>HOST_OWNED</code>)로 켜면 로그인은 앱의 Spring Security가 그대로 맡습니다. CONTEXA는 요청마다 <strong>인증 브리지</strong>(<code>BridgeResolutionFilter</code>)로 그 결과를 읽어 세 장의 <strong>도장</strong>을 만들고, 이 도장이 판정 프롬프트의 사실이 됩니다.</p>
+          <p>CONTEXA를 기본 모드(<code>@EnableAISecurity</code>, 앱이 로그인을 맡는 <code>SANDBOX</code>)로 켜면 로그인은 앱이 원래 하던 방식(Spring Security, 또는 앱 자체 세션 · 토큰) 그대로 맡습니다. CONTEXA는 요청마다 <strong>인증 브리지</strong>(<code>BridgeResolutionFilter</code>)로 그 요청의 사용자를 <code>ContexaSubject</code>로 받아 <strong>신원</strong>을 만들고, 로그인 방식 · MFA 여부 · 권한 · 위임을 판정 프롬프트의 사실로 싣습니다.</p>
           <figure class="dg">
             <figcaption class="dg-caption"><strong>로그인 정보가 판정 사실이 되기까지</strong>브리지는 읽기만 합니다. 앱의 로그인 · 세션 · 응답을 바꾸지 않습니다.</figcaption>
             <ol class="dg-flow">
               <li class="dg-node dg-request"><span class="dg-node-title">요청</span></li>
-              <li class="dg-node dg-host"><span class="dg-node-tag">앱</span><span class="dg-node-title">Spring Security가 로그인 사용자를 <code>SecurityContext</code>에 둠</span><span class="dg-node-desc">앱이 원래 하던 인증</span></li>
-              <li class="dg-node"><span class="dg-node-tag">CONTEXA</span><span class="dg-node-title">인증 브리지가 도장 세 장을 만듦</span><span class="dg-node-desc">인증 도장 · 인가 도장 · 위임 도장 + 완성도 보고서. 요청 속성 <code>ctxa.bridge.*</code>에 둠</span></li>
+              <li class="dg-node dg-host"><span class="dg-node-tag">앱</span><span class="dg-node-title">앱이 원래 방식으로 로그인 사용자를 확인</span><span class="dg-node-desc">Spring Security의 <code>SecurityContext</code>, 또는 앱 자체 세션 · 토큰</span></li>
+              <li class="dg-node"><span class="dg-node-tag">CONTEXA</span><span class="dg-node-title">인증 브리지가 <code>ContexaSubject</code>를 받아 신원을 만듦</span><span class="dg-node-desc">아이디 · 메일 규칙 검사, 출처 · 확인 결과 기록. 요청 속성 <code>ctxa.bridge.*</code>에 둠</span></li>
               <li class="dg-node dg-model"><span class="dg-node-title">판정 프롬프트의 사실</span><span class="dg-node-desc">로그인 방식 · MFA 여부 · 권한 · 위임 범위 · 정보의 출처</span></li>
             </ol>
           </figure>
 
           <h2 id="host-tasks">앱이 해 두어야 할 일</h2>
+          <p>앱이 CONTEXA에 넘기는 값은 요청의 사용자 <code>ContexaSubject</code> 하나입니다(<a href="#subject">넘기는 값</a>). 넘기는 방법은 앱이 로그인에 Spring Security를 쓰는지에 따라 다릅니다.</p>
+          <figure class="dg">
+            <figcaption class="dg-caption"><strong>두 종류의 앱</strong>어느 쪽이든 CONTEXA는 앱의 서블릿 필터가 모두 끝난 뒤 요청마다 한 번 읽습니다.</figcaption>
+            <div class="dg-compare">
+              <div class="dg-side"><p class="dg-side-title">Spring Security를 쓰는 앱</p><ul><li>지금처럼 로그인한 사용자를 <code>SecurityContext</code>에 둠</li><li>CONTEXA가 표준 <code>Authentication</code>을 그대로 읽음(아이디는 <code>getName()</code>)</li><li>토큰에 메일이 없으면(폼 로그인 등) <code>BridgeUserEmailProvider</code> 빈</li><li>principal이 앱 고유 객체면 <code>ContexaSubjectMapper</code> 빈</li></ul></div>
+              <div class="dg-side"><p class="dg-side-title">Spring Security를 쓰지 않는 앱</p><ul><li><code>ContexaSubjectResolver</code> 빈 하나를 구현(권장)</li><li>또는 앱의 서블릿 필터에서 요청 속성 <code>ContexaSubject.REQUEST_ATTRIBUTE</code>에 넣음</li><li>로그인 체인을 따로 만들지 않음</li></ul></div>
+            </div>
+          </figure>
           <ol>
-            <li><strong>Spring Security와 자기 <code>SecurityFilterChain</code>을 둡니다.</strong> 앱의 체인이 없으면 Spring Boot 기본 보안(모든 요청 인증)이 걸리고, CONTEXA가 시작할 때 경고 로그로 알려 줍니다. 앱 사용자도 없으면 시작이 거부됩니다.</li>
-            <li><strong>로그인한 사용자를 <code>SecurityContext</code>에 인증된 <code>Authentication</code>으로 넣습니다.</strong> 브리지는 인증된(익명이 아닌) <code>Authentication</code>이 있을 때만 도장을 만듭니다. 없으면 아무것도 만들지 않고, 요청 안에서 부른 보호 메서드(<code>@Protectable</code>)는 <code>SHADOW</code> · <code>ENFORCE</code>(기본은 <code>ENFORCE</code>)에서 거부되며 <code>DISABLED</code>(옛 이름 <code>OBSERVE</code> 포함)에서는 거부되지 않습니다.</li>
-            <li><strong>MFA와 로그인 방식을 알려 줍니다.</strong> <code>Authentication</code>의 details나 principal에 <code>mfaVerified</code> 같은 값을 두거나, OAuth2 · OIDC라면 토큰의 <code>amr</code> 클레임으로 충분합니다(<a href="#mfa">MFA 알려 주기</a>).</li>
-            <li><strong>세션 객체에 역할 · 위임 정보가 있으면 키 이름만 맞춥니다.</strong> 브리지가 세션 속성 가운데 사용자 객체를 찾습니다(<a href="#session-object">세션 · 요청 속성에서 사용자 찾기</a>). 단, 권한(인가 도장)과 위임(위임 도장)은 이름을 지정한 속성만 읽습니다(<a href="#order">읽는 순서</a>).</li>
+            <li><strong>로그인한 사용자를 알려 줍니다.</strong> Spring Security를 쓰는 앱은 따로 할 일이 없습니다(<a href="#spring-security">Spring Security를 쓰는 앱</a>). 쓰지 않는 앱은 리졸버나 요청 속성으로 넘깁니다(<a href="#resolver">리졸버</a>, <a href="#request-attribute">요청 속성</a>). 사용자를 확인하지 못한 요청(신원 없음)에서 부른 보호 메서드(<code>@Protectable</code>)는 <code>SHADOW</code> · <code>ENFORCE</code>(기본은 <code>ENFORCE</code>)에서 거부되며 <code>DISABLED</code>(옛 이름 <code>OBSERVE</code> 포함)에서는 거부되지 않습니다.</li>
+            <li><strong>메일을 알려 줍니다.</strong> 추가 인증 코드가 이 주소로 갑니다. 메일이 없어도 신원은 성립하지만, 그 사용자에게는 메일로 추가 인증 코드를 보낼 수 없습니다.</li>
+            <li><strong>MFA와 로그인 방식을 알려 줍니다(선택).</strong> OAuth2 · OIDC 토큰이라면 표준 클레임(<code>amr</code> · <code>acr</code> · <code>auth_time</code>)으로 충분합니다. 폼 로그인처럼 표준 클레임이 없으면 <code>Authentication</code>의 details에 <code>ContexaAuthentication</code>을 두거나 요청 속성 <code>ctxa.context.authenticationType</code> · <code>ctxa.context.mfaVerified</code>를 넣습니다. 리졸버 · 요청 속성으로 넘기는 앱은 <code>ContexaSubject</code>에 <code>ContexaAuthentication</code>을 담습니다(<a href="#mfa">MFA 알려 주기</a>).</li>
+            <li><strong>권한과 위임은 선택입니다.</strong> Spring Security를 쓰는 앱은 <code>Authentication</code>의 권한과 접근 토큰의 위임 클레임을 그대로 읽습니다. 리졸버 · 요청 속성으로 넘기는 앱은 <code>ContexaSubject</code>의 <code>authorities</code> · <code>delegation</code>에 담습니다. CONTEXA는 권한의 뜻을 해석하지 않고 판정에 참고 사실로 보입니다.</li>
+            <li><strong>Spring Security 체인.</strong> 앱 사용자(<code>UserDetailsService</code> 등)는 있는데 앱의 체인이 없으면 Spring Boot 기본 보안(모든 요청 인증)이 걸리고, CONTEXA가 시작할 때 경고 로그로 알려 줍니다. 앱에 체인도 사용자도 없으면 CONTEXA가 Spring Boot 기본 보안 대신 모든 요청을 들이는 격리 체인을 두어, CONTEXA를 넣기 전의 접근이 그대로 유지됩니다.</li>
           </ol>
           <div class="callout callout-info">
-            <strong>Spring Security가 없는 레거시 앱.</strong> Spring Security 의존성을 넣고, 기존 접근 규칙을 그대로 두는 체인(예: <code>anyRequest().permitAll()</code>)을 선언한 뒤, 기존 로그인이 확인한 사용자를 그 체인 안의 필터에서 <code>SecurityContext</code>에 넣어 주면 됩니다. <a href="#handoff">직접 넘기기</a>만 부르는 방법은 그 요청의 증거만 남기고 <code>SecurityContext</code>를 채우지 않으므로 <code>@Protectable</code>을 쓰려면 부족합니다.
+            <strong>로그인에 Spring Security를 쓰지 않는 앱.</strong> <code>@EnableAISecurity</code>는 Spring Security 라이브러리를 요구하므로 의존성(<code>spring-boot-starter-security</code>)은 앱이 직접 넣습니다. 그 밖에 체인을 선언하거나 <code>SecurityContext</code>를 채울 필요는 없습니다. 기존 로그인이 확인한 사용자를 <a href="#resolver">리졸버</a>로 알려 주거나, 기존 인증 필터에서 <a href="#request-attribute">요청 속성</a>에 넣습니다. <code>SANDBOX</code>에서 앱에 체인도 사용자도 없으면 CONTEXA가 필터 없는 격리 체인을 두므로 기존 접근 규칙이 그대로입니다. 다만 Spring Security의 표준 방화벽(<code>StrictHttpFirewall</code>)은 체인과 상관없이 모든 요청에 적용되어, 예를 들어 경로에 <code>;jsessionid=</code>나 <code>//</code>가 든 요청은 400으로 거부됩니다. 바꾸려면 Spring 표준 방법(<code>HttpFirewall</code> 빈)을 씁니다.
           </div>
 
           <h2 id="does-not">브리지가 하지 않는 일</h2>
           <ul>
-            <li>앱이 로그인을 소유할 때(<code>HOST_OWNED</code>) 앱의 인증 · 인가 · 세션에 관여하지 않습니다. 세션에 저장하지 않고, 헤더를 쓰지 않습니다.</li>
-            <li>앱이 로그인을 소유할 때(<code>HOST_OWNED</code>) 브리지 필터는 <strong>앱의 Spring Security 체인이 끝난 뒤</strong>에 실행되는 서블릿 필터로 등록됩니다(체인 순서 + 1, CONTEXA 적용 필터보다 앞). 그래서 CONTEXA 적용 필터 · 컨트롤러 · <code>@Protectable</code> 메서드에서는 도장을 읽을 수 있지만, 앱 체인 안의 URL 인가 단계에서는 아직 도장이 없습니다. 로그인을 CONTEXA가 소유할 때(<code>CONTEXA_OWNED</code>)는 CONTEXA 체인 안에 들어갑니다(세션 흐름은 <code>SecurityContextHolderFilter</code> 다음, 토큰 흐름은 <code>BearerTokenAuthenticationFilter</code> 다음).</li>
-            <li>예외: <a href="#mirror">사용자 거울</a>은 앱이 소유할 때도 CONTEXA DB에 사용자 행을 씁니다.</li>
+            <li><code>SANDBOX</code>에서는 앱의 인증 · 인가 · 세션에 관여하지 않습니다. 세션에 저장하지 않고, 헤더를 쓰지 않습니다.</li>
+            <li>앱 고유 객체(세션의 사용자 객체, 표준 형식이 아닌 principal)의 필드를 추측해 사용자를 정하지 않습니다. 사용자는 앱이 넘긴 <code>ContexaSubject</code>와 Spring Security의 표준 형식에서만 읽습니다.</li>
+            <li>브리지 필터는 두 모드 모두 <strong>앱의 보안 체인과 서블릿 필터가 모두 끝난 뒤</strong>에 실행되는 서블릿 필터로 등록됩니다. CONTEXA 서블릿 필터 등록 <code>contexaFilterSlot</code>은 서블릿 표준의 "다른 모든 필터 매핑 뒤"로 매핑되어 앱의 필터가 앱이 준 순서와 상관없이 모두 먼저 돌고, 브리지는 그 안에서 첫째입니다(CONTEXA 적용 필터보다 앞). 그래서 CONTEXA 적용 필터 · 컨트롤러 · <code>@Protectable</code> 메서드에서는 신원을 읽을 수 있지만, 앱 체인 안의 URL 인가 단계에서는 아직 신원이 없습니다. <code>FULL</code>에서는 CONTEXA 체인 안에도 들어갑니다(세션 흐름은 <code>SecurityContextHolderFilter</code> 다음, 토큰 흐름은 <code>BearerTokenAuthenticationFilter</code> 다음). 한 요청에서는 한 번만 돕니다.</li>
+            <li>예외: <a href="#mirror">사용자 사본</a>은 <code>SANDBOX</code>에서도 CONTEXA DB에 사용자 행을 씁니다.</li>
           </ul>
 
           <h2 id="order">어디서 어떤 순서로 읽나</h2>
+          <p>CONTEXA는 <code>contexa.bridge.identity-sources</code>의 출처를 차례로 시도하고, 처음으로 사용자를 정한 출처가 그 요청의 신원이 됩니다. 사용자가 없는 출처는 건너뜁니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>도장</th><th>읽는 곳(순서)</th><th>여러 곳에서 나오면</th></tr></thead>
+            <thead><tr><th>순서(기본)</th><th>출처</th><th>읽는 것</th><th>기록되는 출처 이름</th></tr></thead>
             <tbody>
-              <tr><td>인증 도장<br>(누구인가, 어떻게 로그인했나)</td><td><code>SecurityContext</code> → 세션 → 요청 속성 → 헤더</td><td>사용자 ID가 있는 <strong>첫 결과</strong>를 씁니다.</td></tr>
-              <tr><td>인가 도장<br>(무엇을 할 수 있나)</td><td><code>SecurityContext</code> · 세션 · 요청 속성 · 헤더 모두</td><td><strong>모두 모아 합칩니다.</strong> 허용(ALLOW)과 거부(DENY)가 함께 나오면 거부로 정합니다. 아무 데도 없으면 인증 도장의 권한에서 만듭니다.</td></tr>
-              <tr><td>위임 도장<br>(누가 무엇을 맡겼나)</td><td>접근 토큰 → 세션 → 요청 속성 → 헤더 → 에이전트 자기 계정</td><td><strong>첫 결과</strong>를 씁니다.</td></tr>
+              <tr><td>1</td><td><code>spring-security</code></td><td>앱의 Spring Security가 로그인시킨 사용자(<code>SecurityContext</code>의 인증된 <code>Authentication</code>). CONTEXA 자신의 계정(관리 콘솔의 관리자 등)이면 그 계정으로, 다음으로 앱의 <code>ContexaSubjectMapper</code>, 그다음 표준 형식으로 읽습니다.</td><td><code>SPRING_SECURITY</code>(CONTEXA 계정은 <code>CONTEXA_ACCOUNT</code>)</td></tr>
+              <tr><td>2</td><td><code>resolver</code></td><td>앱의 <code>ContexaSubjectResolver</code> 빈. 요청당 한 번만 부르고, 앞 출처가 사용자를 정했으면 부르지 않습니다.</td><td><code>RESOLVER</code></td></tr>
+              <tr><td>3</td><td><code>request-attribute</code></td><td>앱이 요청 속성 <code>ctxa.subject</code>(<code>ContexaSubject.REQUEST_ATTRIBUTE</code>)에 넣은 <code>ContexaSubject</code>. 앞 출처가 사용자를 정했어도 읽어서, 두 출처가 서로 다른 사용자를 알리면 문제(<code>SOURCES_DISAGREE</code>)로 알립니다. 이때는 앞 출처의 사용자를 씁니다.</td><td><code>REQUEST_ATTRIBUTE</code></td></tr>
             </tbody>
           </table></div>
-          <p><code>@EnableAISecurity(authObjectLocation = ...)</code>는 인증 도장의 세션 · 요청 속성 · 헤더 시도 순서만 바꿉니다(다른 곳을 끄지 않습니다). 도장마다 출처(<code>SECURITY_CONTEXT</code>, <code>SESSION</code>, <code>REQUEST_ATTRIBUTE</code>, <code>HEADER</code>, <code>EXPLICIT_HANDOFF</code> 등)가 함께 기록되어, 프롬프트에 "이 사실은 어디서 왔는가"가 실립니다.</p>
-          <p>세션에서 읽는 방식은 도장마다 다릅니다. 인증 도장은 세션과 요청 속성에서 사용자 객체를 찾는 자동 탐색이 기본으로 켜져 있습니다(아래 절). 인가 도장과 위임 도장은 세션에서 이름을 지정한 속성(<code>contexa.bridge.authorization.session.attribute</code> · <code>contexa.bridge.delegation.session.attribute</code>)과 후보 이름 목록(<code>attribute-candidates</code>, 기본은 비어 있음)만 읽고, 자동 탐색(<code>auto-discover</code>)은 기본으로 꺼져 있습니다. 세션에는 앱이 다른 용도로 두는 값(검색 폼의 값 등)이 들어 있어서, 역할 · 권한 · 에이전트처럼 보이는 값을 사용자의 권한이나 위임으로 잘못 읽는 일을 막기 위해서입니다.</p>
+          <p>신원에는 출처와 확인 결과가 함께 기록되어 판정 이벤트와 관리 콘솔의 <a href="#diagnostics">사용자 연동 상태</a> 화면에 남습니다. 순서는 <code>contexa.bridge.identity-sources</code>로 바꾸며, 모르는 이름을 적거나 하나도 남기지 않으면 시작이 거부됩니다. 리졸버 · 요청 속성으로 넘긴 사용자는 <code>SANDBOX</code>에서 CONTEXA만의 신원으로 요청 안에만 두고 <code>SecurityContext</code>에 넣지 않습니다. <code>FULL</code>에서는 CONTEXA 주 체인이 로그인시킨 사용자를 읽습니다.</p>
+          <p>권한은 Spring Security를 쓰는 앱이면 <code>Authentication</code>의 권한(<code>getAuthorities()</code>)에서, 리졸버 · 요청 속성이면 <code>ContexaSubject</code>의 <code>authorities</code>에서 읽습니다. 위임은 접근 토큰의 클레임(<code>act</code> 등, <code>contexa.bridge.delegation.token.*</code>)에서 먼저 읽고, 승인된 에이전트의 자기 계정이면 그 계정에서 찾습니다(<a href="../agent/overview.html">에이전트 보안</a>). 리졸버 · 요청 속성으로 넘기는 앱은 <code>ContexaSubject</code>의 <code>delegation</code>(<code>ContexaDelegation</code>)에 담습니다.</p>
 
-          <h2 id="session-object">세션 · 요청 속성에서 사용자 찾기</h2>
-          <p>SecurityContext에서 사용자를 찾지 못하면 브리지는 세션, 그다음 요청 속성에서 사용자 객체를 찾습니다. 찾는 순서는 셋입니다.</p>
-          <ol>
-            <li><strong>지정한 이름.</strong> <code>contexa.bridge.authentication.session.attribute</code>(요청 속성은 <code>contexa.bridge.authentication.request-attributes.attribute</code>)에 이름을 주면 그 속성을 먼저 봅니다. 사용자 ID가 있으면 바로 씁니다.</li>
-            <li><strong>후보 이름.</strong> 세션은 <code>currentUser</code> · <code>authenticatedUser</code> · <code>sessionUser</code> · <code>userSession</code> · <code>principal</code> · <code>user</code> · <code>securityUser</code> · <code>authenticatedPrincipal</code>, 요청 속성은 <code>currentUser</code> · <code>authenticatedUser</code> · <code>requestUser</code> · <code>principal</code> · <code>user</code> · <code>authenticatedPrincipal</code> · <code>authUser</code>를 봅니다.</li>
-            <li><strong>자동 탐색.</strong> <code>auto-discover</code>(인증 도장의 세션 · 요청 속성에서는 기본 켬)이면 나머지 속성도 모두 살펴봅니다.</li>
-          </ol>
-          <p>2 · 3단계에서는 사용자 ID(<code>userId</code> · <code>username</code> · <code>id</code> · <code>loginId</code> · <code>email</code>)가 있는 객체만 후보가 되고, 아래 점수가 가장 높은 객체를 씁니다. 세션에 사용자처럼 보이는 객체가 여럿이면 1단계 이름이나 <code>object-type-name</code>(클래스의 전체 이름 또는 짧은 이름)을 알려 주는 것이 안전합니다.</p>
+          <h2 id="subject">넘기는 값: <code>ContexaSubject</code></h2>
+          <p>레거시 앱이 CONTEXA에 알리는 사용자입니다(패키지 <code>io.contexa.contexacommon.security.bridge.subject</code>). 만들 때 예외를 던지지 않고, 규칙을 어긴 값은 <code>getProblems()</code>에 문제로 담깁니다. 값의 앞뒤 공백은 지우고, 아이디의 대소문자는 준 그대로 둡니다.</p>
+          <pre><code class="language-java">ContexaSubject subject = ContexaSubject.of(userId, email)
+        .displayName(name)
+        .authentication(ContexaAuthentication.of("PASSWORD+OTP").mfa(true).authenticatedAt(loginAt))
+        .build();</code></pre>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>객체에 있는 것</th><th>점수</th></tr></thead>
+            <thead><tr><th>필드</th><th>필수</th><th>규칙</th><th>어기면</th></tr></thead>
             <tbody>
-              <tr><td>사용자 ID</td><td>10(없으면 후보가 아님)</td></tr>
-              <tr><td><code>object-type-name</code>과 같은 클래스</td><td>+8</td></tr>
-              <tr><td>권한(<code>roles</code> · <code>authorities</code> · <code>permissions</code> · <code>scopes</code>)</td><td>+4</td></tr>
-              <tr><td>표시 이름, 로그인 방식</td><td>각 +2</td></tr>
-              <tr><td>보증 수준, MFA 여부, 인증 시각, 추가 속성(<code>department</code> · <code>tenantId</code> 등)</td><td>각 +1</td></tr>
+              <tr><td><code>userId</code></td><td>필수</td><td>비어 있지 않고 255자 이하, 제어 문자 없음</td><td>그 요청은 CONTEXA 신원 없이 앱 그대로 진행합니다(<code>INVALID</code>).</td></tr>
+              <tr><td><code>email</code></td><td>필수</td><td>주소 형식(<code>@</code> 하나, 공백 · 제어 문자 없음), 255자 이하</td><td>신원은 성립하고 메일 결손(<code>EMAIL_MISSING</code> · <code>EMAIL_MALFORMED</code> · <code>EMAIL_TOO_LONG</code>)만 표시됩니다. 메일로 추가 인증 코드를 보낼 수 없습니다.</td></tr>
+              <tr><td><code>displayName</code></td><td>선택</td><td>100자 이하, 제어 문자 없음</td><td rowspan="6">그 값만 빠지고, 신원은 그대로 성립합니다. 문제로 기록됩니다.</td></tr>
+              <tr><td><code>organizationId</code> · <code>tenantId</code></td><td>선택</td><td>각 255자 이하, 제어 문자 없음. 다중 조직 · 테넌트에서 사용자를 구분</td></tr>
+              <tr><td><code>authorities</code></td><td>선택</td><td>최대 256개, 각 255자 이하. CONTEXA는 뜻을 해석하지 않습니다</td></tr>
+              <tr><td><code>authentication</code></td><td>선택</td><td><code>ContexaAuthentication</code>: 로그인 방식(<code>method</code>, 64자 이하) · MFA 여부(<code>mfa</code>) · 인증 시각(<code>authenticatedAt</code>) · 보증 수준(<code>assurance</code>, 64자 이하)</td></tr>
+              <tr><td><code>sessionKey</code></td><td>선택</td><td>255자 이하. 로그인 하나를 가리키고 토큰을 갱신해도 바뀌지 않는 값(세션이 없는 앱)</td></tr>
+              <tr><td><code>delegation</code></td><td>선택</td><td><code>ContexaDelegation</code>: 에이전트 ID(없으면 위임이 빠짐) · 목적 · 허용 작업 · 허용 자원(각 최대 64개) · 승인 필요 · 만료 시각</td></tr>
             </tbody>
           </table></div>
+          <p>아이디는 판정 · 차단 · 사용자 사본의 키가 되므로 한 사람에게 늘 같은 값(예: 로그인 아이디)을 씁니다. 판정 · 사용자 사본 · 추가 인증은 아이디를 같은 규칙으로 비교합니다(유니코드 NFKC 정규화와 대소문자 무시, <code>contexa.security.zerotrust.normalize-user-keys=false</code>로 끔).</p>
 
-          <h3 id="flat-attributes">요청 속성에 값을 하나씩 넣기</h3>
-          <p>사용자 객체 대신 값을 하나씩 요청 속성에 넣어도 됩니다. 인증 도장은 요청 속성에서 사용자 객체를 찾지 못했을 때 이 이름을 읽고, 인가 · 위임 도장은 늘 이 이름으로 읽습니다. 앱의 필터에서 넣으면 됩니다.</p>
-<pre><code class="language-java">request.setAttribute("ctxa.auth.principalId", user.getId());
-request.setAttribute("ctxa.auth.authenticated", true);
-request.setAttribute("ctxa.auth.authorities", "ROLE_USER,ROLE_FINANCE");
-request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
+          <h2 id="spring-security">Spring Security를 쓰는 앱</h2>
+          <p>로그인은 지금처럼 앱의 Spring Security가 맡고, CONTEXA는 <code>SecurityContext</code>의 인증된 <code>Authentication</code>을 읽습니다. 아이디는 늘 <code>Authentication.getName()</code>이고, 메일은 <code>contexa.bridge.email-sources</code> 순서(기본: 클레임 <code>email</code>, 다음 메일 공급자 빈)로 찾습니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>도장</th><th>요청 속성 이름</th></tr></thead>
+            <thead><tr><th>로그인 형태</th><th>아이디</th><th>메일</th></tr></thead>
             <tbody>
-              <tr><td>인증</td><td><code>ctxa.auth.principalId</code>(필수) · <code>displayName</code> · <code>authenticated</code> · <code>authorities</code> · <code>tenantId</code> · <code>organizationId</code> · <code>orgId</code> · <code>type</code> · <code>assurance</code> · <code>mfaCompleted</code> · <code>time</code></td></tr>
-              <tr><td>인가</td><td><code>ctxa.authz.effect</code> · <code>privileged</code> · <code>policyId</code> · <code>policyVersion</code> · <code>scopeTags</code> · <code>roles</code> · <code>authorities</code></td></tr>
-              <tr><td>위임</td><td><code>ctxa.delegation.enabled</code> · <code>agentId</code> · <code>objectiveId</code> · <code>objectiveFamily</code> · <code>objectiveSummary</code> · <code>allowedOperations</code> · <code>allowedResources</code> · <code>approvalRequired</code> · <code>privilegedExportAllowed</code> · <code>containmentOnly</code> · <code>expiresAt</code></td></tr>
+              <tr><td>폼 · Basic · 자동 로그인 등(principal이 <code>UserDetails</code>나 문자열)</td><td><code>getName()</code></td><td><code>BridgeUserEmailProvider</code> 빈</td></tr>
+              <tr><td>리소스 서버의 JWT · 불투명 토큰</td><td><code>getName()</code>(JWT는 기본 <code>sub</code>)</td><td>토큰의 <code>email</code> 클레임, 없으면 메일 공급자</td></tr>
+              <tr><td>OAuth2 · OIDC 로그인</td><td><code>getName()</code></td><td>사용자 속성의 <code>email</code>, 없으면 메일 공급자</td></tr>
             </tbody>
           </table></div>
+          <p>폼 로그인의 <code>UserDetails</code>처럼 로그인 정보에 메일이 없으면 메일 공급자 빈 하나를 둡니다. 메일이 없는 사용자의 요청에서 불리므로 빠르게 답해야 합니다. 리졸버 · 요청 속성으로 넘긴 사용자에게 메일이 없을 때도 같은 빈에 묻습니다.</p>
+          <pre><code class="language-java">@Bean
+BridgeUserEmailProvider contexaEmailProvider(EmployeeRepository employees) {
+    return userId -&gt; employees.findEmailByLoginId(userId);
+}</code></pre>
+          <p>principal이 Spring Security의 표준 형식(<code>UserDetails</code> · <code>Principal</code> · 문자열 · OAuth2 토큰 · 로그인 등)이 아닌 앱 고유 객체라면 CONTEXA는 그 필드를 읽지 않고, 그 요청은 신원 없이 진행합니다(<code>UNSUPPORTED_PRINCIPAL</code>). 이 문제는 <code>[Contexa] Bridge: the signed-in Spring Security principal is of none of the kinds Spring Security names a user by ...</code>(ERROR) 로그로 1분에 한 번까지 남습니다(<a href="#diagnostics">확인 결과</a>). 이때 <code>ContexaSubjectMapper</code> 빈으로 직접 바꿔 줍니다. 빈 값을 돌려주면 CONTEXA가 표준 형식으로 읽습니다.</p>
+          <pre><code class="language-java">@Bean
+ContexaSubjectMapper contexaSubjectMapper() {
+    return authentication -&gt; authentication.getPrincipal() instanceof MyLoginUser user
+            ? Optional.of(ContexaSubject.of(user.getEmpNo(), user.getMail()).build())
+            : Optional.empty();
+}</code></pre>
           <ul>
-            <li><code>ctxa.auth.authenticated</code>를 넣었는데 참이 아니면 사용자로 보지 않습니다.</li>
-            <li>권한처럼 값이 여럿이면 쉼표로 이은 글로 넣습니다.</li>
-            <li>이름은 설정으로 바꿀 수 있습니다(예: <code>contexa.bridge.authentication.request-attributes.flat-principal-id</code>). 전체는 <a href="../../install/configuration/index-all.html#contexa-bridge">설정 색인</a>에 있습니다.</li>
+            <li>매퍼 빈이 둘 이상이면 시작이 거부됩니다. 매퍼가 예외를 던지면 CONTEXA가 잡고, 그 요청은 신원 없이 진행합니다(<code>FAILED</code>).</li>
+            <li><code>SANDBOX</code>에서 인터셉터나 컨트롤러가 브리지 필터보다 늦게 로그인시키면, <code>@Protectable</code> 메서드가 불릴 때 다시 읽어 판정합니다(리졸버는 다시 부르지 않습니다).</li>
+          </ul>
+
+          <h2 id="resolver">Spring Security를 쓰지 않는 앱: 리졸버</h2>
+          <p>앱이 <code>ContexaSubjectResolver</code>를 빈 하나로 구현합니다. 구현은 앱의 로그인 상태(세션 객체, 자체 토큰 검증, 서블릿 컨테이너의 사용자)에서 요청의 사용자를 꺼내 돌려줍니다.</p>
+          <pre><code class="language-java">@Component
+class SessionLoginResolver implements ContexaSubjectResolver {
+
+    @Override
+    public Optional&lt;ContexaSubject&gt; resolve(ContexaRequestView request) {
+        return request.sessionAttribute("loginVO", LoginVO.class)
+                .map(vo -&gt; ContexaSubject.of(vo.getLoginId(), vo.getEmail())
+                        .displayName(vo.getName())
+                        .build());
+    }
+}</code></pre>
+          <ul>
+            <li><strong>부르는 때:</strong> 앱의 서블릿 필터가 모두 끝난 뒤 요청마다 한 번 부르고, 같은 요청의 포워드 · 인클루드 · 비동기 · 오류 디스패치에서는 처음 답을 다시 씁니다.</li>
+            <li><strong>요청 보기 <code>ContexaRequestView</code>는 읽기 전용입니다.</strong> <code>method()</code> · <code>path()</code> · <code>header(name)</code> · <code>headers(name)</code> · <code>cookie(name)</code> · <code>attribute(name[, type])</code> · <code>sessionAttribute(name[, type])</code> · <code>sessionId()</code> · <code>remoteUser()</code> · <code>userPrincipal()</code>를 씁니다. 세션은 만들지 않고, 본문과 파라미터는 읽을 수 없습니다(멀티파트나 스트림을 직접 읽는 앱을 보호하기 위해서입니다).</li>
+            <li><strong>빈 답:</strong> 로그인하지 않은 요청입니다. 앱이 로그아웃하면 빈 값을 돌려주면 됩니다. CONTEXA는 앱의 세션에 아무것도 쓰지 않으므로 신원이 앱의 로그인보다 오래 남지 않습니다.</li>
+            <li><strong>예외와 지연:</strong> 리졸버가 예외를 던지면 CONTEXA가 잡고, 그 요청은 신원 없이 앱 그대로 진행합니다(<code>FAILED</code>). 걸린 시간을 재어 <code>contexa.bridge.resolver.slow-threshold</code>(기본 100ms)를 넘으면 알리며(<code>RESOLVER_SLOW</code>), 호출을 끊지는 않습니다.</li>
+            <li><strong>다른 로그인 방식:</strong> 서블릿 컨테이너 인증을 쓰는 앱은 <code>request.remoteUser()</code>를 씁니다. 게이트웨이 헤더를 쓰는 앱은 게이트웨이를 검증하는 자기 코드를 거친 값만 돌려줍니다. CONTEXA는 헤더를 직접 믿지 않습니다.</li>
+            <li>정적 자원처럼 리졸버를 부를 필요가 없는 경로는 <code>contexa.bridge.resolver.exclude-paths</code>(서블릿 경로의 Ant 패턴)로 뺍니다. 리졸버 빈이 둘 이상이면 시작이 거부됩니다.</li>
+          </ul>
+
+          <h3 id="request-attribute">자기 필터에서 요청 속성으로 넘기기</h3>
+          <p>요청마다 인증 필터를 이미 도는 앱은 그 필터에서 요청 속성에 넣어도 됩니다. CONTEXA는 앱의 서블릿 필터가 모두 끝난 뒤 읽으므로 CONTEXA와의 순서는 신경 쓰지 않아도 됩니다. 넣는 코드는 앱이 사용자를 확인한 뒤에 돌아야 합니다.</p>
+          <pre><code class="language-java">request.setAttribute(ContexaSubject.REQUEST_ATTRIBUTE,
+        ContexaSubject.of(user.getLoginId(), user.getEmail()).build());</code></pre>
+          <ul>
+            <li>값은 <code>ContexaSubject</code>여야 합니다. 다른 타입이면 읽지 않고 문제(<code>NOT_A_SUBJECT</code>)로 알리며, 그 요청은 신원 없이 진행합니다(<code>INVALID</code>).</li>
+            <li>클라이언트는 요청 속성을 넣을 수 없으므로, 이 값은 앱의 코드만 정합니다.</li>
+            <li>리졸버와 함께 쓰면 기본 순서상 리졸버가 먼저이고, 둘이 다른 사용자를 알리면 <code>SOURCES_DISAGREE</code>로 알립니다(<a href="#order">읽는 순서</a>).</li>
           </ul>
 
           <h2 id="mfa">MFA와 로그인 방식 알려 주기</h2>
-          <p><code>SecurityContext</code>의 <code>Authentication</code>에서는 details를 먼저, 다음에 principal을 봅니다. 객체에 <code>claims</code> · <code>attributes</code> 맵이 있으면(JWT 클레임, OAuth2 사용자 속성) 그 맵에서 찾습니다.</p>
+          <p>로그인 방식 · MFA 여부 · 인증 시각 · 보증 수준은 모두 선택이며, 알려 준 것만 판정에 사실로 실립니다. Spring Security를 쓰는 앱은 아래 순서로 읽습니다.</p>
           <ol>
-            <li><strong>앱이 직접 준 값이 먼저입니다.</strong> MFA 완료는 <code>mfa</code> · <code>mfaVerified</code> · <code>mfaCompleted</code> · <code>secondFactorVerified</code>, 로그인 방식은 <code>authenticationType</code> · <code>authMethod</code> · <code>loginMethod</code> 등에서 읽습니다.</li>
-            <li><strong>없으면 <code>amr</code> 클레임(RFC 8176)에서 계산합니다.</strong> 출처는 <code>DERIVED_FROM_AMR</code>로 표시됩니다.</li>
+            <li><strong><code>Authentication</code>의 details에 <code>ContexaAuthentication</code>이 있으면 그것을 씁니다.</strong> 폼 로그인처럼 표준 클레임이 없을 때 앱이 직접 적는 방법입니다.</li>
+            <li><strong>없으면 토큰의 표준 클레임에서 읽습니다.</strong> <code>amr</code>(RFC 8176)에서 로그인 방식과 MFA 여부를 계산하고(출처는 <code>DERIVED_FROM_AMR</code>로 표시), <code>auth_time</code>은 인증 시각, <code>acr</code>은 보증 수준입니다.</li>
+            <li><strong>둘 다 없으면 요청 속성을 읽습니다.</strong> 앱의 필터가 <code>ctxa.context.authenticationType</code>(로그인 방식)과 <code>ctxa.context.mfaVerified</code>(<code>true</code> · <code>false</code>)에 넣은 값입니다.</li>
           </ol>
+          <p>판정 프롬프트에 싣는 로그인 사실은 <code>Authentication</code>의 details와 principal에서 정해진 키 이름으로 찾습니다. 앱이 MFA 완료나 로그인 방식을 다른 이름으로 두면 그 이름을 <a href="#security-context-keys">키 이름 설정</a>에 더합니다.</p>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th><code>amr</code> 값</th><th>로그인 방식</th></tr></thead>
             <tbody>
@@ -116,64 +170,53 @@ request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
           </table></div>
           <ul>
             <li><strong>MFA 완료 규칙:</strong> <code>amr</code>에 <code>mfa</code>가 있거나, 서로 다른 방식이 2개 이상이면 완료입니다. 예: <code>["pwd","otp"]</code> → MFA 완료, 방식 <code>PASSWORD+ONE_TIME_CODE</code>. <code>["otp","sms"]</code> → 같은 방식 하나라 MFA 아님.</li>
-            <li><strong>인증 시각</strong>은 <code>authenticationTime</code> · <code>authenticatedAt</code> · <code>loginTime</code> · <code>auth_time</code>에서 읽습니다. 토큰 발급 시각(<code>iat</code>)은 다시 발급될 때 바뀌므로 일부러 쓰지 않습니다.</li>
-            <li><strong>보증 수준</strong>은 <code>authenticationAssurance</code> · <code>authLevel</code> · <code>loa</code> · <code>acr</code>에 값이 있을 때만 씁니다(<code>amr</code>로 계산하지 않음).</li>
-            <li>세션 · 요청 속성 · 헤더에서는 <code>amr</code>을 해석하지 않고 MFA 플래그(<code>mfaVerified</code>, <code>ctxa.auth.mfaCompleted</code>, <code>X-Contexa-Mfa-Completed</code>)만 읽습니다.</li>
+            <li><strong>인증 시각</strong>은 <code>ContexaAuthentication</code>의 <code>authenticatedAt</code>이나 토큰의 <code>auth_time</code>에서 읽습니다. 토큰 발급 시각(<code>iat</code>)은 다시 발급될 때 바뀌므로 일부러 쓰지 않습니다. Spring Security 로그인에서 읽은 인증 시각이 이 서버의 지금 시각보다 60초 넘게 뒤(미래)면 판정 입력에서 뺍니다.</li>
+            <li><strong>보증 수준</strong>은 <code>ContexaAuthentication</code>의 <code>assurance</code>나 토큰의 <code>acr</code>에서 읽고, <code>amr</code>로 계산하지 않습니다.</li>
+            <li>리졸버 · 요청 속성으로 넘기는 앱은 <code>ContexaSubject</code>의 <code>authentication</code>에 <code>ContexaAuthentication</code>을 담습니다. <code>amr</code>을 해석하지 않으므로 MFA 여부는 <code>mfa(true)</code>로 직접 적고, 서로 다른 인증 수단을 둘 이상 확인했을 때만 <code>true</code>로 적습니다.</li>
           </ul>
 
-          <h2 id="headers">게이트웨이 헤더로 넘기기</h2>
-          <p>API 게이트웨이가 사용자 정보를 <code>X-Contexa-*</code> 헤더로 붙여 주는 구성이라면 헤더 읽기를 켭니다. 위조를 막기 위해 <strong>기본으로 꺼져 있고</strong>, 켜도 아래 조건을 모두 만족할 때만 믿습니다. 헤더만으로는 사용자가 로그인한 것으로 보지 않습니다. 앱이 이미 인증한 사용자에 대한 정보(MFA 여부, 권한, 위임)를 더하는 용도입니다.</p>
-          <ul>
-            <li>요청이 신뢰 프록시(<code>contexa.bridge.network.trusted-proxies</code>, IP · CIDR)에서 왔다. 목록이 비거나 신뢰 프록시 검사(<code>contexa.bridge.network.trusted-proxy-validation-enabled</code>)를 끄면 헤더는 늘 거부됩니다.</li>
-            <li>헤더의 사용자 ID가 앱이 인증한 사용자(<code>SecurityContext</code>)와 같고, 테넌트 · 조직 값도 맞다.</li>
-          </ul>
-          <pre><code class="language-yaml">contexa:
-  bridge:
-    network:
-      trusted-proxies: [10.0.0.0/8]
-    authentication:
-      headers:
-        enabled: true      # X-Contexa-Principal-Id, X-Contexa-Mfa-Completed, ...
-    authorization:
-      headers:
-        enabled: true      # X-Contexa-Authz-Effect, X-Contexa-Authz-Roles, ...
-    delegation:
-      headers:
-        enabled: true      # X-Contexa-Delegated, X-Contexa-Agent-Id, ...</code></pre>
-          <p>CONTEXA는 이 헤더를 읽기만 하고 응답에 쓰지 않습니다.</p>
-
-          <h2 id="handoff">직접 넘기기(handoff)</h2>
-          <p>앱의 로그인 코드에서 CONTEXA에 사용자를 직접 알려 줄 수 있습니다.</p>
-          <pre><code class="language-java">ContexaAuthBridge.handoff(request, response,
-        ContexaAuthHandoff.of(user, authorities, Map.of("department", "R&amp;D"))
-                .withAuthenticationType("PASSWORD+ONE_TIME_CODE")
-                .withMfaVerified(true));</code></pre>
-          <ul>
-            <li>그 요청의 인증 증거를 기록합니다(출처 <code>EXPLICIT_HANDOFF</code>). 같은 요청에서 브리지 필터가 다른 사용자를 찾으면 충돌로 표시합니다.</li>
-            <li>앱이 로그인을 소유할 때(<code>HOST_OWNED</code>)는 <code>SecurityContext</code>를 채우지 않습니다. CONTEXA가 소유할 때(<code>CONTEXA_OWNED</code>)만 <code>SecurityContext</code>를 채우고 세션에 저장합니다.</li>
-            <li><code>@EnableAISecurity</code>가 켜져 있지 않으면 <code>IllegalStateException</code>, 사용자 ID를 정할 수 없으면 <code>IllegalArgumentException</code>이 납니다.</li>
-          </ul>
-
-          <h2 id="coverage">완성도: 브리지가 얼마나 알았나</h2>
-          <p>브리지는 요청마다 얻은 정보의 완성도를 계산해 프롬프트에 함께 싣습니다(<code>bridge &lt;수준&gt;</code>). 모델은 이것으로 "모르는 것"을 알고 판정합니다.</p>
+          <h2 id="api">선택 API: 로그인 · 로그아웃 · 퇴사 알리기</h2>
+          <p>모두 선택입니다. CONTEXA는 이 호출 없이도 동작하고, 호출하면 Spring Security를 쓰지 않는 앱에서 앱만 아는 순간(로그인 성공 · 실패 · 로그아웃)이 판정에 더해집니다. Spring Security로 로그인하는 앱은 부를 것이 없습니다. CONTEXA가 Spring Security의 로그인 · 로그아웃 이벤트를 듣습니다.</p>
+          <pre><code class="language-java">ContexaBridge.signedIn(request, ContexaSubject.of(user.getLoginId(), user.getEmail()).build());
+ContexaBridge.signInFailed(request, loginId);
+ContexaBridge.signedOut(request, user.getLoginId());
+ContexaUsers.delete(user.getLoginId());</code></pre>
           <div class="table-scroll"><table class="api-table prose-table">
-            <thead><tr><th>수준</th><th>점수</th><th>뜻</th></tr></thead>
+            <thead><tr><th>API</th><th>부르는 곳</th><th>CONTEXA가 하는 일</th></tr></thead>
             <tbody>
-              <tr><td><code>NONE</code></td><td>0</td><td>인증된 사용자를 찾지 못함</td></tr>
-              <tr><td><code>AUTHENTICATION_ONLY</code></td><td>40</td><td>누구인지만 앎</td></tr>
-              <tr><td><code>AUTHORIZATION_CONTEXT</code></td><td>75에서 시작해 빠진 것마다 감점</td><td>권한 · 인가 결과까지 앎</td></tr>
-              <tr><td><code>DELEGATION_CONTEXT</code></td><td>90</td><td>위임 정보까지 앎</td></tr>
+              <tr><td><code>ContexaBridge.signedIn(request, subject)</code></td><td>로그인이 성공한 자리. 앱이 세션 ID를 바꾼 <strong>뒤</strong></td><td>그 사용자를 요청의 신원으로 두고, 사용자 사본을 기다려(최대 1초) 로그인 시각과 함께 만들거나 고칩니다. 로그인 사실을 판정에 한 번 보냅니다.</td></tr>
+              <tr><td><code>ContexaBridge.signInFailed(request, userId)</code></td><td>로그인이 실패한 자리</td><td>그 사용자의 로그인 실패로 셉니다(판정의 실패 횟수).</td></tr>
+              <tr><td><code>ContexaBridge.signedOut(request, userId)</code></td><td>로그아웃한 자리</td><td>그 요청 세션의 추적을 끝내고, 로그인 때 기억한 것을 놓습니다. 차단 · 추가 인증 · 검토 제한은 남습니다.</td></tr>
+              <tr><td><code>ContexaUsers.delete(userId)</code></td><td>퇴사 · 삭제(요청 밖에서도)</td><td>사용자 사본과 그 사용자의 판정 상태를 모두 지웁니다. 같은 아이디가 다시 오면 새 사용자로 봅니다. 관리 콘솔에서 지울 수도 있습니다.</td></tr>
             </tbody>
           </table></div>
-          <p><code>AUTHORIZATION_CONTEXT</code>에서는 인가 결과(허용 · 거부)가 없으면 10점, 역할 · 권한이 없으면 10점, 위임 도장이 있는데 에이전트 · 목표 · 허용 범위 가운데 빠진 것이 있으면 8점, 권한을 로그인 정보에서 만들어 낸 경우(출처가 <code>AUTHENTICATION_DERIVED</code>)면 7점을 뺍니다. <code>NONE</code>은 인증된 사용자나 사용자 ID가 없는 경우입니다.</p>
-
-          <h2 id="mirror">사용자 거울: 로그인한 사용자의 사본</h2>
-          <p>브리지는 앱에서 로그인한 사용자를 CONTEXA DB의 사용자 표에 사본 행(거울)으로 남깁니다. 관리 콘솔 · 정책에서 그 사용자를 다루기 위해서입니다. 동작은 다음과 같습니다.</p>
           <ul>
-            <li><strong>키와 비밀번호:</strong> 행의 키는 <code>brg_</code> + SHA-256(인증 출처 · 조직 · 사용자 ID)입니다. 비밀번호는 무작위 값이어서 이 행으로는 직접 로그인할 수 없습니다.</li>
-            <li><strong>다시 쓰는 간격:</strong> 같은 사용자가 60초(<code>contexa.bridge.sync.min-refresh-interval-seconds</code>) 안에 다시 오고 정보가 바뀌지 않았으면 다시 쓰지 않습니다. 같은 값은 그 확인의 결과를 기억하는 유효 시간으로도 쓰입니다. 앱이 로그인을 맡을 때(<code>HOST_OWNED</code>) 같은 사용자의 요청이 같은 정보(인증 출처 · 이름 · 권한 · 속성 · 클라이언트 IP 등 확인이 비교하는 값)로 오면, 그 시간이 지나기 전까지 CONTEXA DB를 읽지 않고 기억한 결과로 답합니다. 0 이하면 기억하지 않습니다.</li>
-            <li><strong>이메일:</strong> 인증 속성의 <code>email</code> · <code>mail</code> · <code>userEmail</code>에서 읽고, 없으면 <code>&lt;키&gt;@shadow.contexa.local</code>(<code>contexa.bridge.sync.synthetic-email-domain</code>)을 씁니다. 추가 인증 코드가 이 주소로 가므로 다음 규칙을 둡니다. 앱이 처음 보여 주는 실제 주소는 바로 저장합니다. 그 뒤 앱이 다른 주소를 보여 주면 바로 바꾸지 않고 대기 주소로 둡니다. 사용자가 기록된 주소와 대기 주소를 차례로 증명하거나 관리자가 주소를 입력해야 바뀝니다. 세션을 가진 사람은 누구나 앱의 프로필을 바꿀 수 있으므로, 남의 주소로 코드가 가는 일을 막기 위해서입니다.</li>
-            <li><strong>긴 값:</strong> 앱에서 온 값이 열 길이보다 길면(긴 조직 경로 형태의 부서, 내선이 붙은 전화번호, 긴 프로필 이미지 주소) 열 길이로 잘라 담으므로, 값 하나가 길다고 거울이 실패하지 않습니다. 255자를 넘는 이메일은 만든 주소로 대신합니다. 255자를 넘는 사용자 ID는 거울 행을 만들지 않고(경고 한 번), 그 사용자도 판정과 적용은 받지만 추가 인증에 쓸 자기 요인은 없습니다.</li>
+            <li>모든 호출은 예외를 던지지 않고 결과 <code>ContexaBridgeResult</code>의 <code>outcome</code>으로 알립니다. 결과에 상관없이 앱의 요청은 그대로 진행합니다.</li>
+            <li><code>DONE</code>: 한 일. <code>NOT_APPLICABLE</code>: <code>FULL</code>처럼 CONTEXA가 직접 로그인 · 로그아웃시키는 모드라 할 일이 없음(<code>ContexaBridge</code>의 세 호출). <code>NOT_INITIALIZED</code>: CONTEXA가 시작 전이거나 이 앱에서 켜지지 않음. <code>INVALID</code>: 요청이나 사용자가 없거나 아이디 규칙 위반. <code>FAILED</code>: CONTEXA가 하지 못함.</li>
+            <li>결과의 <code>reason</code>은 앱의 로그에 남기기 위한 이유이고, 아이디와 메일은 들어가지 않습니다.</li>
+          </ul>
+
+          <h2 id="diagnostics">확인 결과와 사용자 연동 상태 화면</h2>
+          <p>CONTEXA는 요청의 사용자를 확인할 때마다 네 결과 가운데 하나를 남깁니다. 어떤 결과든 앱의 요청은 실패하지 않습니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>결과</th><th>뜻</th><th>그 요청</th></tr></thead>
+            <tbody>
+              <tr><td><code>RESOLVED</code></td><td>신원 성립. 메일이 없으면 메일 결손이 함께 표시됩니다</td><td>CONTEXA가 그 사용자로 판정합니다.</td></tr>
+              <tr><td><code>ABSENT</code></td><td>로그인하지 않은 요청</td><td rowspan="3">CONTEXA 신원 없이 앱 그대로 진행합니다. 이 요청에서 부른 <code>@Protectable</code> 메서드는 <a href="#host-tasks">앱이 해 두어야 할 일</a>의 규칙대로 거부됩니다.</td></tr>
+              <tr><td><code>INVALID</code></td><td>앱이 넘긴 사용자가 표준을 어김(아이디 규칙 위반, CONTEXA가 읽지 않는 principal, 요청 속성의 값이 <code>ContexaSubject</code>가 아님)</td></tr>
+              <tr><td><code>FAILED</code></td><td>앱의 리졸버나 매퍼에서 예외</td></tr>
+            </tbody>
+          </table></div>
+          <p>CONTEXA는 결과 · 출처 · 문제(<code>SubjectProblem</code>)를 종류별로 세고, 같은 문제는 1분에 한 번 오류 로그로 남깁니다(아이디와 메일은 쓰지 않음). 관리 콘솔의 사이드바 <strong>제로 트러스트 → 사용자 연동 상태</strong>(<code>/contexa/admin/zero-trust/bridge</code>)에서 확인 결과, 확인 경로(출처), 발생한 문제와 권장 조치, 합치지 못한 사용자를 봅니다. 숫자는 그 서버(노드)가 시작한 뒤부터 센 값입니다.</p>
+
+          <h2 id="mirror">사용자 사본: 로그인한 사용자를 CONTEXA DB에 남기기</h2>
+          <p>브리지는 앱에서 로그인한 사용자를 CONTEXA DB의 사용자 표에 사본 행으로 남깁니다. 관리 콘솔 · 정책에서 그 사용자를 다루기 위해서입니다. 동작은 다음과 같습니다.</p>
+          <ul>
+            <li><strong>키와 비밀번호:</strong> 행의 키는 <code>brg_</code> + SHA-256(<code>SUBJECT</code> | 조직(없으면 <code>GLOBAL</code>) | 사용자 ID)입니다. 사용자 ID는 판정과 같은 규칙(NFKC 정규화와 대소문자 무시)으로 맞춘 값입니다. 신원의 출처(Spring Security · 리졸버 · 요청 속성)는 키에 들어가지 않습니다. 비밀번호는 무작위 값이어서 이 행으로는 직접 로그인할 수 없습니다.</li>
+            <li><strong>다시 쓰는 때:</strong> 사본이 저장하는 값(아이디와 로그인 출처, 표시 이름, 로그인 방식, 권한, 메일 · 조직 · 부서 등)이 바뀔 때만 씁니다. 요청의 IP, 갱신된 토큰, 요청의 인가 결과로는 쓰지 않고, 마지막 로그인 시각 · IP는 로그인 때와 사본을 만들 때만 씁니다. 같은 사용자가 같은 값으로 오면 <code>contexa.bridge.sync.min-refresh-interval-seconds</code>(기본 60초) 동안 CONTEXA DB를 읽지 않고 기억한 결과로 답합니다. 0 이하면 기억하지 않습니다. CONTEXA 자신의 계정(<code>FULL</code> + <code>CONTEXA_OWNED</code>에서 주 체인이 로그인시키는 계정, 콘솔 요청의 관리자)은 사본을 만들지 않습니다.</li>
+            <li><strong>이메일:</strong> 리졸버 · 요청 속성으로 넘긴 사용자는 <code>ContexaSubject</code>의 메일, Spring Security를 쓰는 앱은 인증 객체에서 찾은 <code>email</code>(<a href="#security-context-keys">키 이름</a>)을 쓰고, 없으면 메일 공급자 빈에 묻습니다. 앱이 메일을 주지 않으면 사본에 이미 있는 실제 주소를 두고, 없으면 비워 둡니다. 주소를 만들어 붙이지 않습니다. 추가 인증 코드가 이 주소로 가므로 다음 규칙을 둡니다. 앱이 처음 보여 주는 실제 주소는 바로 저장합니다. 그 뒤 앱이 다른 주소를 보여 주면 바로 바꾸지 않고 대기 주소로 둡니다. 사용자가 기록된 주소와 대기 주소를 차례로 증명하거나 관리자가 주소를 입력해야 바뀝니다. 세션을 가진 사람은 누구나 앱의 프로필을 바꿀 수 있으므로, 남의 주소로 코드가 가는 일을 막기 위해서입니다. 여러 사본이 같은 메일을 가져도 저장은 실패하지 않지만, 다른 사용자와 같은 메일인 사본에는 추가 인증 코드를 보내지 않습니다(메일이 고유해야 하는 것은 CONTEXA 계정끼리뿐입니다).</li>
+            <li><strong>긴 값:</strong> 앱에서 온 값이 열 길이보다 길면(긴 조직 경로 형태의 부서, 내선이 붙은 전화번호, 긴 프로필 이미지 주소) 열 길이로 잘라 담으므로, 값 하나가 길다고 사본 저장이 실패하지 않습니다. 255자를 넘는 이메일은 없는 것으로 봅니다(메일 결손). 255자를 넘는 사용자 ID는 아이디 규칙을 어기므로 사본 행을 만들지 않습니다(오류 로그 한 번).</li>
+            <li><strong>관리자가 끈 사본:</strong> 동기화가 다시 켜지 않습니다.</li>
             <li><strong>끄기:</strong> <code>contexa.bridge.sync.enabled=false</code>.</li>
           </ul>
 
@@ -181,34 +224,57 @@ request.setAttribute("ctxa.auth.mfaCompleted", true);</code></pre>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>설정</th><th>기본값</th><th>뜻</th><th>언제 바꾸나</th></tr></thead>
             <tbody>
-              <tr><td><code>contexa.bridge.enabled</code></td><td><code>true</code></td><td>브리지 필터 켜기(끄면 직접 넘기기만 동작)</td><td>브리지를 끌 때(판정 사실이 줄어듦)</td></tr>
-              <tr><td><code>contexa.bridge.ownership</code></td><td><code>HOST_OWNED</code>(<code>mode=FULL</code>이면 <code>CONTEXA_OWNED</code>)</td><td>로그인을 누가 소유하나. 모드와 같은 뜻이어야 하며(<code>FULL</code>과 <code>CONTEXA_OWNED</code>, <code>SANDBOX</code>와 <code>HOST_OWNED</code>), 어긋나면 시작이 거부됩니다</td><td>보통 적지 않습니다. CONTEXA가 로그인까지 맡게 하려면 이 값이 아니라 <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>을 씁니다</td></tr>
-              <tr><td><code>contexa.bridge.populate-security-context</code></td><td><code>true</code></td><td><code>CONTEXA_OWNED</code>일 때 SecurityContext가 비어 있으면 브리지가 찾은 사용자로 채움(<code>HOST_OWNED</code>에서는 채우지 않음)</td><td>CONTEXA가 소유하면서도 SecurityContext는 앱이 채울 때 <code>false</code></td></tr>
-              <tr><td><code>contexa.bridge.authentication.session.object-type-name</code></td><td>없음</td><td>세션 사용자 객체의 클래스 이름(점수 +8)</td><td>세션에 사용자처럼 보이는 객체가 여럿일 때</td></tr>
-              <tr><td><code>contexa.bridge.authentication.session.auto-discover</code></td><td><code>true</code></td><td>후보 이름 밖의 세션 속성까지 찾아보기(인증 도장)</td><td>지정한 이름 · 후보 이름만 보게 할 때 <code>false</code></td></tr>
-              <tr><td><code>contexa.bridge.authentication.prefer-security-context</code></td><td><code>true</code></td><td><code>false</code>면 <code>SecurityContext</code> 대신 세션 · 요청 속성 · 헤더의 사용자 객체로 인증 도장을 만듦</td><td>세션 · 헤더의 값을 먼저 읽게 할 때</td></tr>
-              <tr><td><code>contexa.bridge.authentication.security-context.mfa-keys</code></td><td><code>mfa, mfaVerified, mfaCompleted, secondFactorVerified</code></td><td>MFA 완료 플래그를 찾을 이름</td><td>앱이 MFA 완료를 다른 이름으로 둘 때</td></tr>
-              <tr><td><code>contexa.bridge.authentication.security-context.amr-keys</code></td><td><code>amr</code></td><td>MFA · 로그인 방식을 계산할 RFC 8176 값의 이름</td><td>토큰이 다른 클레임에 <code>amr</code>을 둘 때</td></tr>
-              <tr><td><code>contexa.bridge.authentication.session.attribute</code></td><td>없음</td><td>사용자 객체가 든 세션 속성 이름(없으면 후보 이름 → 자동 탐색)</td><td>세션의 사용자 객체 이름을 알려 줄 때</td></tr>
-              <tr><td><code>contexa.bridge.authorization.session.attribute</code> · <code>contexa.bridge.delegation.session.attribute</code></td><td>없음</td><td>권한(위임) 정보가 든 세션 속성 이름. 이 이름과 <code>attribute-candidates</code>에 있는 속성만 읽음</td><td>권한 · 위임 정보를 세션에 둘 때</td></tr>
-              <tr><td><code>contexa.bridge.authentication.headers.enabled</code></td><td><code>false</code></td><td>게이트웨이 헤더 읽기</td><td>게이트웨이가 헤더로 사용자를 넘길 때(신뢰 프록시와 함께)</td></tr>
-              <tr><td><code>contexa.bridge.network.trusted-proxies</code></td><td>없음</td><td>헤더 · <code>X-Forwarded-For</code>를 믿을 프록시</td><td>헤더를 켤 때 반드시</td></tr>
-              <tr><td><code>contexa.bridge.network.trusted-proxy-validation-enabled</code></td><td><code>true</code></td><td>신뢰 프록시 검사. 끄면 헤더 읽기는 늘 거부되고, 클라이언트 IP는 누가 보냈든 <code>X-Forwarded-For</code>를 믿는 옛 방식으로 정해짐</td><td>바꾸지 않습니다(끄면 IP를 위조할 수 있음)</td></tr>
-              <tr><td><code>contexa.bridge.step-up.reauthentication-url</code></td><td>없음</td><td><code>HOST_OWNED</code>에서 추가 인증 화면이 사용자를 앱 자체 MFA나 신원 공급자의 재인증으로 보내는 주소(예: <code>prompt=login</code>이나 <code>max_age=0</code>을 붙인 OIDC 인가 요청). 비어 있으면 이 방법을 보여 주지 않습니다. 그 뒤 인증 도장에 CHALLENGE보다 새로운 MFA 완료가 보이면 CHALLENGE가 풀립니다</td><td>앱이 사용자를 직접 다시 인증할 수 있을 때(<a href="../identity/zero-trust-filters.html#host-step-up">HOST_OWNED의 추가 인증</a>)</td></tr>
-              <tr><td><code>contexa.bridge.sync.synthetic-email-domain</code></td><td><code>shadow.contexa.local</code></td><td>이메일이 없는 거울 사용자에게 붙이는 이메일 도메인</td><td>회사 이메일 규칙에 맞출 때</td></tr>
-              <tr><td><code>contexa.bridge.sync.enabled</code></td><td><code>true</code></td><td>사용자 거울 동기화</td><td>사용자 거울 동기화를 끌 때</td></tr>
+              <tr><td><code>contexa.bridge.enabled</code></td><td><code>true</code></td><td>브리지 필터 켜기. 끄면 요청마다 사용자를 확인하지 않습니다</td><td>브리지를 끌 때(판정 사실이 줄어듦)</td></tr>
+              <tr><td><code>contexa.bridge.ownership</code></td><td><code>HOST_OWNED</code>(<code>mode=FULL</code>이면 <code>CONTEXA_OWNED</code>)</td><td>앱이 직접 둔 구성요소(<code>UserDetailsService</code> · <code>JwtDecoder</code> 등)와 CONTEXA의 같은 종류가 만날 때 어느 쪽을 앱에 쓰는지. <code>HOST_OWNED</code>는 앱 것을 쓰고, <code>CONTEXA_OWNED</code>는 앱에 없는 종류를 CONTEXA 것으로 채웁니다. 기능을 끄지 않으며 네 조합 모두 허용됩니다</td><td>보통 적지 않습니다. CONTEXA가 로그인까지 맡게 하려면 이 값이 아니라 <code>@EnableAISecurity(mode = SecurityMode.FULL)</code>을 씁니다</td></tr>
+              <tr><td><code>contexa.bridge.populate-security-context</code></td><td><code>true</code></td><td><code>FULL</code>에서 SecurityContext가 비어 있으면 브리지가 찾은 사용자로 채움(<code>SANDBOX</code>에서는 채우지 않음)</td><td><code>FULL</code>이면서 SecurityContext는 앱이 채울 때 <code>false</code></td></tr>
+              <tr><td><code>contexa.bridge.identity-sources</code></td><td><code>spring-security, resolver, request-attribute</code></td><td>신원을 찾는 출처와 순서. 사용자가 없는 출처는 건너뜁니다. 모르는 이름을 적거나 비우면 시작이 거부됩니다</td><td>출처의 순서를 바꾸거나 한 출처만 쓰게 할 때</td></tr>
+              <tr><td><code>contexa.bridge.email-sources</code></td><td><code>claim:email, provider</code></td><td>Spring Security 사용자의 메일을 찾는 곳과 순서. <code>claim:&lt;이름&gt;</code>은 토큰 · OAuth2 로그인의 클레임, <code>provider</code>는 <code>BridgeUserEmailProvider</code> 빈입니다. <code>provider</code>가 있으면 리졸버 · 요청 속성으로 넘긴 사용자의 메일이 없을 때도 그 빈에 묻습니다</td><td>메일이 다른 클레임에 있을 때(예: <code>claim:mail</code>)</td></tr>
+              <tr><td><code>contexa.bridge.resolver.exclude-paths</code></td><td>없음</td><td>리졸버를 부르지 않을 경로(서블릿 경로의 Ant 패턴)</td><td>정적 자원처럼 사용자가 필요 없는 경로가 많을 때</td></tr>
+              <tr><td><code>contexa.bridge.resolver.slow-threshold</code></td><td><code>100ms</code></td><td>리졸버 호출이 이보다 오래 걸리면 알림(<code>RESOLVER_SLOW</code>). 호출을 끊지는 않습니다. 음수면 시작이 거부됩니다</td><td>알림 기준을 앱에 맞출 때</td></tr>
+              <tr><td><code>contexa.bridge.network.trusted-proxies</code></td><td>없음</td><td>브리지가 요청의 클라이언트 IP를 정할 때 <code>X-Forwarded-For</code>를 믿을 프록시(IP · CIDR)</td><td>앱이 로드 밸런서 · 프록시 뒤에 있을 때</td></tr>
+              <tr><td><code>contexa.bridge.network.trusted-proxy-validation-enabled</code></td><td><code>true</code></td><td>신뢰 프록시 검사. 끄면 클라이언트 IP는 누가 보냈든 <code>X-Forwarded-For</code>를 믿는 옛 방식으로 정해짐</td><td>바꾸지 않습니다(끄면 IP를 위조할 수 있음)</td></tr>
+              <tr><td><code>contexa.bridge.step-up.reauthentication-url</code></td><td>없음</td><td><code>SANDBOX</code>에서 추가 인증 화면이 사용자를 앱 자체 MFA나 신원 공급자의 재인증으로 보내는 주소(예: <code>prompt=login</code>이나 <code>max_age=0</code>을 붙인 OIDC 인가 요청). 비어 있으면 이 방법을 보여 주지 않습니다. 그 뒤 요청의 로그인 사실에 CHALLENGE보다 새로운 MFA 완료가 보이면 CHALLENGE가 풀립니다</td><td>앱이 사용자를 직접 다시 인증할 수 있을 때(<a href="../identity/zero-trust-filters.html#host-step-up">SANDBOX의 추가 인증</a>)</td></tr>
+              <tr><td><code>contexa.bridge.sync.synthetic-email-domain</code></td><td><code>shadow.contexa.local</code></td><td>예전 판이 메일 없는 사용자에게 만들어 붙인 주소의 도메인. 지금은 주소를 만들지 않고, 이 도메인으로 끝나는 주소를 실제 메일이 아닌 것으로 보아 추가 인증 코드를 보내지 않으며, 다음에 사본을 쓸 때 비웁니다</td><td>예전 판에서 이 값을 바꿔 썼다면 그 값으로</td></tr>
+              <tr><td><code>contexa.bridge.sync.enabled</code></td><td><code>true</code></td><td>사용자 사본 동기화</td><td>사용자 사본 동기화를 끌 때</td></tr>
             </tbody>
           </table></div>
-          <p><code>contexa.bridge.*</code> 설정 전체(311개)는 <a href="../../install/configuration/index-all.html#contexa-bridge">설정 색인</a>에 있습니다.</p>
+
+          <h3 id="security-context-keys">Spring Security 로그인에서 사실을 찾는 키 이름</h3>
+          <p>Spring Security를 쓰는 앱의 principal과 details에서 로그인 방식 · MFA · 인증 시각 · 권한 같은 사실을 찾을 때 보는 키 이름입니다. <code>Authentication</code>의 details를 먼저, 다음에 principal을 보고, 객체에 <code>claims</code> · <code>attributes</code> 맵이 있으면(JWT 클레임, OAuth2 사용자 속성) 그 맵에서도 찾습니다. 값 하나를 찾는 키는 목록의 앞쪽 이름부터 처음 나온 값을 쓰고, 여러 값을 모으는 키(<code>amr</code> · 역할 · 권한 · 범위)는 details와 principal에서 모두 모읍니다. 앱이 같은 사실을 다른 이름으로 두면 그 이름을 목록에 더합니다.</p>
+          <div class="table-scroll"><table class="api-table prose-table">
+            <thead><tr><th>설정</th><th>기본값</th><th>찾는 사실</th></tr></thead>
+            <tbody>
+              <tr><td><code>contexa.bridge.authentication.prefer-security-context</code></td><td><code>true</code></td><td><code>false</code>면 Spring Security 로그인에서 로그인 사실을 찾지 않습니다(판정 사실이 줄어듦). <code>contexa.bridge.authentication.security-context.enabled=false</code>도 같습니다</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.display-name-keys</code></td><td><code>displayName, name, fullName, userName, username, preferred_username</code></td><td>표시 이름. 없으면 <code>UserDetails</code>의 사용자 이름, 그다음 사용자 ID</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.principal-type-keys</code></td><td><code>principalType, userType, actorType, token_use</code></td><td>사용자 종류. 없으면 principal의 클래스 이름</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.authentication-type-keys</code></td><td><code>authenticationType, authMethod, loginMethod, method, factorType</code></td><td>로그인 방식. 없으면 <code>amr</code>에서 계산하고, 그것도 없으면 인증 객체의 클래스 이름</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.authentication-assurance-keys</code></td><td><code>authenticationAssurance, authLevel, loa, acr</code></td><td>보증 수준</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.mfa-keys</code></td><td><code>mfa, mfaVerified, mfaCompleted, secondFactorVerified</code></td><td>MFA 완료 여부. 없으면 <code>amr</code>에서 계산</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.auth-time-keys</code></td><td><code>authenticationTime, authenticatedAt, loginTime, auth_time</code></td><td>인증 시각. 토큰 발급 시각(<code>iat</code>)은 넣지 않습니다</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.amr-keys</code></td><td><code>amr</code></td><td>로그인 방식 · MFA를 계산할 RFC 8176 값</td></tr>
+              <tr><td><code>contexa.bridge.authentication.security-context.attribute-keys</code></td><td><code>organizationId, orgId, tenantId, department, team, email, loginIp, authenticationType, authenticationAssurance, mfaVerified, mfaCompleted, authenticatedAt, loginTime, iss, aud, azp, scope, scp, amr, acr, challengeVerifiedAt</code></td><td>로그인 사실에 함께 담을 값. 사용자 사본의 조직 · 메일도 여기서 찾은 값을 씁니다</td></tr>
+              <tr><td><code>contexa.bridge.authorization.security-context.enabled</code></td><td><code>true</code></td><td><code>false</code>면 아래 키 이름으로 권한 사실을 찾지 않고, 로그인의 권한에서 만듭니다</td></tr>
+              <tr><td><code>contexa.bridge.authorization.security-context.role-keys</code></td><td><code>effectiveRoles, roles, roleSet, groups</code></td><td>역할</td></tr>
+              <tr><td><code>contexa.bridge.authorization.security-context.authority-keys</code></td><td><code>effectiveAuthorities, authorities, permissions, grantedAuthorities, scope, scp</code></td><td>권한. <code>Authentication</code>의 권한에 더합니다</td></tr>
+              <tr><td><code>contexa.bridge.authorization.security-context.authorization-effect-keys</code></td><td><code>authorizationEffect, effect, decision, decisionEffect</code></td><td>앱이 내린 인가 결과(허용 · 거부)</td></tr>
+              <tr><td><code>contexa.bridge.authorization.security-context.privileged-keys</code></td><td><code>privileged, isPrivileged, privilegedFlow</code></td><td>특권 요청인지</td></tr>
+              <tr><td><code>contexa.bridge.authorization.security-context.policy-id-keys</code></td><td><code>policyId, policy, decisionPolicy</code></td><td>앱의 정책 ID</td></tr>
+              <tr><td><code>contexa.bridge.authorization.security-context.policy-version-keys</code></td><td><code>policyVersion, version</code></td><td>앱의 정책 버전</td></tr>
+              <tr><td><code>contexa.bridge.authorization.security-context.scope-tag-keys</code></td><td><code>scopeTags, scopes, scope, permissionScopes, scp</code></td><td>권한 범위 표지</td></tr>
+              <tr><td><code>contexa.bridge.authorization.security-context.attribute-keys</code></td><td><code>authorizationEffect, effect, privileged, policyId, policyVersion, scopeTags, scopes, scope, scp, roles, effectiveRoles, permissions, effectiveAuthorities</code></td><td>권한 사실에 함께 담을 값</td></tr>
+            </tbody>
+          </table></div>
+          <p><code>contexa.bridge.*</code> 설정 전체는 <a href="../../install/configuration/index-all.html#contexa-bridge">설정 색인</a>에 있습니다.</p>
 
           <h2 id="extension">확장점</h2>
           <div class="table-scroll"><table class="api-table prose-table">
             <thead><tr><th>확장점</th><th>쓰는 때</th></tr></thead>
             <tbody>
-              <tr><td><code>AuthBridge</code></td><td>앱만의 방법으로 요청에서 사용자를 꺼낼 때. 빈 하나를 선언하면 기본 세션 · 요청 속성 · 헤더 브리지를 대신합니다.</td></tr>
-              <tr><td><code>AuthenticationStampResolver</code> · <code>AuthorizationStampResolver</code> · <code>DelegationStampResolver</code></td><td>도장을 만드는 곳을 더하거나 바꿀 때(<code>@Order</code>로 순서 지정)</td></tr>
-              <tr><td><code>ContexaAuthBridgeHandler</code></td><td>직접 넘기기 처리 자체를 바꿀 때</td></tr>
-              <tr><td><code>BridgeUserMirrorSyncService</code></td><td>사용자 거울을 다르게 남길 때</td></tr>
+              <tr><td><code>ContexaSubjectResolver</code></td><td>Spring Security를 쓰지 않는 앱이 자기 로그인 상태에서 요청의 사용자를 알려 줄 때(<a href="#resolver">리졸버</a>). 빈은 하나만 둡니다(둘이면 시작 거부).</td></tr>
+              <tr><td><code>ContexaSubjectMapper</code></td><td>Spring Security의 principal이 앱 고유 객체일 때 그 인증을 <code>ContexaSubject</code>로 바꿀 때(<a href="#spring-security">Spring Security를 쓰는 앱</a>). 빈은 하나만 둡니다(둘이면 시작 거부).</td></tr>
+              <tr><td><code>BridgeUserEmailProvider</code></td><td>로그인 정보에 메일이 없을 때 아이디로 메일을 알려 줄 때. 빈은 하나만 둡니다.</td></tr>
+              <tr><td><code>AuthenticationStampResolver</code> · <code>AuthorizationStampResolver</code> · <code>DelegationStampResolver</code></td><td>판정 사실(로그인 · 권한 · 위임)을 만드는 곳을 더하거나 바꿀 때(<code>@Order</code>로 순서 지정)</td></tr>
+              <tr><td><code>BridgeUserMirrorSyncService</code></td><td>사용자 사본을 다르게 남길 때</td></tr>
               <tr><td><code>AgentClientDirectory</code></td><td>어떤 클라이언트 · 계정이 승인된 에이전트인지 알려 줄 때(<a href="../agent/overview.html">에이전트 보안</a>)</td></tr>
             </tbody>
           </table></div>
