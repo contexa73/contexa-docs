@@ -22,6 +22,9 @@ const DIST_DIR = path.join(ROOT, 'dist');
 
 const LANGUAGES = ['en', 'ko'];
 const CACHE_BUST = '?v=' + Date.now();
+// The released version of CONTEXA these pages describe. Every {{contexa.version}} marker of the templates,
+// includes, locales and content is replaced with it, so a release changes this one line.
+const CONTEXA_VERSION = '0.2.0';
 const DOCS_BASE_URL = 'https://docs.ctxa.ai';
 const SITE_BASE_URL = 'https://ctxa.ai';
 
@@ -295,6 +298,7 @@ function build() {
 
         // 3. Resolve i18n markers
         html = resolveI18nMarkers(html, locale, lang, relPath);
+        html = html.split('{{contexa.version}}').join(CONTEXA_VERSION);
 
         // 4. Set <html lang="...">
         html = html.replace(/<html\s+lang="[^"]*"/, `<html lang="${lang}"`);
