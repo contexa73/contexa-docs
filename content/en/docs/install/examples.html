@@ -11,7 +11,7 @@
     <span class="badge badge-primary">contexa-examples</span>
   </div>
   <h1>Examples</h1>
-  <p class="lead">Seven runnable examples cover the typical situations in which you add CONTEXA to a Spring Boot application. They are in the GitHub examples repository <a href="https://github.com/contexa73/contexa-examples">contexa73/contexa-examples</a>, and each is an independent Spring Boot application built on the released CONTEXA 0.1.0. Choose the example that fits your situation and run it on your local PC to see how CONTEXA behaves. To run one you need Java 21, a dedicated PostgreSQL database for CONTEXA, and a local AI model server (Ollama).</p>
+  <p class="lead">Seven runnable examples cover the typical situations in which you add CONTEXA to a Spring Boot application. They are in the GitHub examples repository <a href="https://github.com/contexa73/contexa-examples">contexa73/contexa-examples</a>, and each is an independent Spring Boot application built on the released CONTEXA 0.2.0. Choose the example that fits your situation and run it on your local PC to see how CONTEXA behaves. To run one you need Java 21, a dedicated PostgreSQL database for CONTEXA, and a local AI model server (Ollama).</p>
 </div>
 
           <h2 id="overview">Choosing an example</h2>
@@ -51,7 +51,7 @@
           <p><strong>Prerequisites</strong></p>
           <ul>
             <li><strong>Java 21.</strong> The example build uses a Java 21 toolchain. Spring Boot is 3.5.11, Spring AI 1.1.8. An application that uses CONTEXA needs Java 17 at minimum (<a href="index.html#requirements">Prerequisites</a>).</li>
-            <li><strong>The CONTEXA dependency.</strong> The root <code>build.gradle</code> adds the released <code>ai.ctxa:spring-boot-starter-contexa:0.1.0</code> to every example, together with the Spring AI BOM, the Ollama model starter (<code>spring-ai-starter-model-ollama</code>), the PgVector starter (<code>spring-ai-starter-vector-store-pgvector</code>), Spring Web and Spring Data JPA. The <code>build.gradle</code> of each example adds only Thymeleaf. The 0.1.0 starter brings Spring Security with it, so the example build files do not list it. When you add CONTEXA to a new application, declare the dependencies as in <a href="installation-guide.html#step-dependencies">Step 1 · Add the dependencies</a>. The build looks for the starter in the local Maven repository first, then in Maven Central. If the build cannot find it, check out the <code>v0.1.0</code> tag of the <a href="https://github.com/contexa-security/contexa">CONTEXA repository</a> and run <code>./gradlew publishToMavenLocal</code> there to publish it to the local Maven repository.</li>
+            <li><strong>The CONTEXA dependency.</strong> The root <code>build.gradle</code> adds the released <code>ai.ctxa:spring-boot-starter-contexa:0.2.0</code> and <code>spring-boot-starter-security</code> to every example, together with the Spring AI BOM, the Ollama model starter (<code>spring-ai-starter-model-ollama</code>), the PgVector starter (<code>spring-ai-starter-vector-store-pgvector</code>), Spring Web and Spring Data JPA. The <code>build.gradle</code> of each example adds only Thymeleaf. The starter does not bring Spring Security, so the root build file declares it. When you add CONTEXA to a new application, declare the dependencies as in <a href="installation-guide.html#step-dependencies">Step 1 · Add the dependencies</a>. The build takes the starter from Maven Central.</li>
             <li><strong>PostgreSQL with the <code>vector</code> extension.</strong> The vector extension (pgvector) adds vector search to PostgreSQL. CONTEXA stores users and policies, decision records, audit records and system settings in this database, and it creates the vector store that finds similar past decision records there. Every example keeps CONTEXA's data in a dedicated database. The default address is <code>jdbc:postgresql://localhost:5432/contexa</code>, and the user and password are both <code>contexa</code>. To use another database, set <code>CONTEXA_DB_URL</code>, <code>CONTEXA_DB_USERNAME</code> and <code>CONTEXA_DB_PASSWORD</code>. On the first start CONTEXA creates its tables and default data in that database. If you run several examples, give each its own database.</li>
             <li><strong>AI models.</strong> The examples use two models on a local Ollama (<code>http://localhost:11434</code>, or the address in <code>OLLAMA_BASE_URL</code>). <code>qwen3:8b</code> produces the decisions. <code>mxbai-embed-large</code> turns text into vectors so that past decision records can be found. Download both with <code>ollama pull</code> before you run an example.</li>
             <li><strong>Values tuned for a local model.</strong> A local model answers slower than a hosted one, so the examples give the Layer 2 analysis 120 seconds (<code>contexa.security.tiered.layer2.timeout-ms</code>, 30 seconds by default). The Layer 2 analysis is the step that decides again a request that the Layer 1 analysis passed on as ESCALATE. CONTEXA also sends one Ollama server two calls at a time and switches its model only when the running calls are done (<a href="configuration/ai.html#model-server-gate">How many calls a model server takes</a>).</li>
@@ -225,60 +225,47 @@ cd contexa-examples
           </ul>
 
           <h3 id="legacy-system">legacy-system (9090): adding CONTEXA to a legacy login</h3>
-          <div class="callout callout-info">
-            <p><strong>This example uses the integration of CONTEXA 0.1.0.</strong> The application's Spring Security chain puts the legacy session's user into the SecurityContext, and the login filter hands the user over with <code>ContexaAuthBridge.handoff(...)</code>. The legacy integration described in this documentation is the current one, which hands the user over through a resolver (<code>ContexaSubjectResolver</code>) or a request attribute (<code>ctxa.subject</code>), so it differs from the example code. The current way is in <a href="../reference/common/bridge.html#resolver">An application that does not use Spring Security: resolver</a>.</p>
-          </div>
           <ul>
             <li><strong>When to use it:</strong> An existing application signs users in with its own filter, and you add CONTEXA decisions without changing the login code. The legacy login in this example is a servlet filter (<code>LegacyAuthFilter</code>) that does not use Spring Security. The application keeps its own sign-in (<code>SANDBOX</code>), and CONTEXA receives the signed-in user and makes the decisions. The legacy login accepts a form (<code>/legacy/login</code>), an <code>X-Auth-Token</code> header or a remember-me cookie, and a <code>@LegacyRole</code> interceptor checks roles.</li>
             <li><strong>What you add:</strong>
               <ol>
                 <li>Put <code>@EnableAISecurity(mode = SecurityMode.SANDBOX)</code> on the main class, and set <code>contexa.bridge.enabled: true</code> and the operating mode <code>contexa.security.zerotrust.mode: SHADOW</code> in <code>application.yml</code>.</li>
-                <li>Declare the application's own chain (<code>LegacySecurityConfig</code>), which keeps the existing access rules.</li>
-                <li>Put a filter (<code>LegacySessionAuthenticationFilter</code>) in that chain that puts the legacy session's user into the SecurityContext.</li>
-                <li>When the existing login filter (<code>LegacyAuthFilter</code>) creates the session after a successful sign-in, it keeps the user object in the session attribute <code>legacyUser</code> and hands the user, roles, department and login method over to CONTEXA with <code>ContexaAuthBridge.handoff(...)</code>.</li>
+                <li>A resolver bean (<code>LegacySubjectResolver</code>) reads the user the legacy login keeps in the session attribute <code>legacyUser</code> and names it with <code>ContexaSubject</code>: the user ID, the mail address, the display name, the roles and the sign-in method.</li>
+                <li>The existing login filter (<code>LegacyAuthFilter</code>) changes the session ID after a successful sign-in, keeps the user in the session attribute <code>legacyUser</code> and calls <code>ContexaBridge.signedIn(...)</code>. It calls <code>ContexaBridge.signInFailed(...)</code> for a failed form sign-in of a known user and <code>ContexaBridge.signedOut(...)</code> at sign-out. These three calls are optional.</li>
                 <li>Put <code>@Protectable</code> on the APIs you protect.</li>
               </ol>
             </li>
-            <li><strong>Why the application needs its own chain:</strong> In 0.1.0, when the application keeps its own sign-in (<code>SANDBOX</code>), CONTEXA builds no sign-in chain. Without an application chain, Spring Boot's default security would ask every request to sign in, so the example declares its own chain. <code>@Protectable</code> also needs an authenticated user in the SecurityContext; without one, the call is refused in <code>SHADOW</code> and <code>ENFORCE</code>. Items 2 and 3 are therefore needed, and this is the code:</li>
+            <li><strong>Why the application declares no chain:</strong> The application does not sign in with Spring Security and declares no security chain. With neither a chain nor Spring Security users, CONTEXA puts an isolation chain in place that lets every request through, so the access rules stay with the legacy filter and interceptor. <code>@Protectable</code> needs the user, and the resolver names it on every request; a call without one is refused in <code>SHADOW</code> and <code>ENFORCE</code>. This is the code:</li>
           </ul>
-<pre><code class="language-java">// LegacySecurityConfig: the application's chain, which leaves the access rules to the existing filter and interceptor
-@Bean
-public SecurityFilterChain legacyChain(HttpSecurity http) throws Exception {
-    return http
-            .csrf(csrf -&gt; csrf.disable())
-            .authorizeHttpRequests(auth -&gt; auth.anyRequest().permitAll())
-            .addFilterBefore(new LegacySessionAuthenticationFilter(), AnonymousAuthenticationFilter.class)
-            .build();
-}
-
-// LegacySessionAuthenticationFilter: puts the user the legacy login left in the session into the SecurityContext on every request
-public class LegacySessionAuthenticationFilter extends OncePerRequestFilter {
+<pre><code class="language-java">// LegacySubjectResolver: names the user the legacy login left in the session; empty for a request nobody signed in to
+@Component
+class LegacySubjectResolver implements ContexaSubjectResolver {
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
-            throws ServletException, IOException {
-        HttpSession session = request.getSession(false);
-        if (session != null
-                &amp;&amp; session.getAttribute(LegacyAuthFilter.SESSION_USER_KEY) instanceof LegacyUserSession user) {
-            List&lt;SimpleGrantedAuthority&gt; roles = user.getRoles().stream()
-                    .map(role -&gt; new SimpleGrantedAuthority("ROLE_" + role))
-                    .toList();
-            SecurityContextHolder.getContext().setAuthentication(
-                    UsernamePasswordAuthenticationToken.authenticated(user.getUserId(), null, roles));
-        }
-        chain.doFilter(request, response);
+    public Optional&lt;ContexaSubject&gt; resolve(ContexaRequestView request) {
+        return request.sessionAttribute(LegacyAuthFilter.SESSION_USER_KEY, LegacyUserSession.class)
+                .map(LegacySubjectResolver::subjectOf);
+    }
+
+    static ContexaSubject subjectOf(LegacyUserSession user) {
+        return ContexaSubject.of(user.getUserId(), user.getEmail())
+                .displayName(user.getDisplayName())
+                .authorities(user.getRoles())
+                .authentication(ContexaAuthentication.of(user.getAuthMethod()))
+                .build();
     }
 }
 
-// LegacyAuthFilter: after creating the session, hands the signed-in user over to CONTEXA
-// attributes holds principalId, displayName, department, loginIp, accessLevel, authenticationTime, authMethod and more
-ContexaAuthHandoff handoff = ContexaAuthHandoff
-        .of(userSession, userSession.getRoles(), attributes)
-        .withAuthenticationType(userSession.getAuthMethod())
-        .withAuthenticationAssurance(resolveAuthenticationAssurance(userSession.getAuthMethod()))
-        .withMfaVerified(false);
-ContexaAuthBridge.handoff(request, response, handoff);</code></pre>
-          <p>The chain permits every URL (<code>permitAll()</code>) and leaves the access rules to the existing application. On every request the filter reads the session's <code>LegacyUserSession</code> and puts the user into the SecurityContext with the roles as authorities prefixed with <code>ROLE_</code>. Whichever way a user signs in (the form, the <code>X-Auth-Token</code> header or the remember-me cookie), the login filter calls <code>handoff</code> when it creates the session, and it passes a trust level that depends on the login method (<code>HIGH</code> for the header, <code>LOW</code> for remember-me, <code>STANDARD</code> for the form). If the handoff fails, the sign-in still goes on.</p>
+// LegacyAuthFilter: after a successful sign-in
+HttpSession session = request.getSession(true);
+request.changeSessionId();
+session.setAttribute(SESSION_USER_KEY, userSession);
+ContexaBridge.signedIn(request, LegacySubjectResolver.subjectOf(userSession));
+
+// LegacyAuthFilter: a failed form sign-in of a known user, and the sign-out
+ContexaBridge.signInFailed(request, known.userId());
+ContexaBridge.signedOut(request, userSession.getUserId());</code></pre>
+          <p>The resolver only reads the session and never creates one, and CONTEXA writes nothing into the application's session or SecurityContext. Whichever way a user signs in (the form, the <code>X-Auth-Token</code> header or the remember-me cookie), the login filter keeps the user in the same session attribute, so the resolver reads one value. <code>ContexaBridge.signedIn</code> writes CONTEXA's copy of the user and the sign-in time before it returns, waiting at most one second, and answers a result without throwing, so the sign-in goes on whatever it answers. A sign-out removes the attribute, so the resolver answers empty from the next request on.</p>
           <ul>
             <li><strong>What you do:</strong>
               <ol>
@@ -291,6 +278,7 @@ ContexaAuthBridge.handoff(request, response, handoff);</code></pre>
               <ul>
                 <li>The application's existing filter and login methods handle sign-in, not a CONTEXA page.</li>
                 <li>The two API calls are decided on and recorded in the CONTEXA database. The example's operating mode is <code>SHADOW</code>, so the request is not blocked even when the decision is BLOCK. When the operating mode is <code>SHADOW</code> or <code>ENFORCE</code>, a call to <code>/api/customers</code> without sign-in is refused.</li>
+                <li>CONTEXA keeps a copy of the signed-in user with the mail address the resolver gave, which a step-up uses for the one-time code.</li>
                 <li>The application's data stays in its own (in-memory H2) database. CONTEXA's data goes to the dedicated CONTEXA database.</li>
                 <li>The CONTEXA admin console takes a CONTEXA administrator account, separate from the application's users, not an application account (<a href="installation-guide.html#admin-console">Looking at the admin console</a>).</li>
               </ul>
